@@ -239,6 +239,65 @@ def get_provider_info(concept_name: str, provider: str) -> Optional[Dict[str, An
     return providers.get(actual_provider)
 
 
+def _collect_codes_from_node(node: Any, seen: Set[str], out: List[str]) -> None:
+    """Recursively collect indicator codes from nested provider metadata."""
+    if isinstance(node, dict):
+        code = node.get("code")
+        if isinstance(code, str):
+            candidate = code.strip()
+            if candidate and candidate.lower() not in {"null", "none", "dynamic", "n/a"}:
+                normalized = candidate.upper()
+                if normalized not in seen:
+                    seen.add(normalized)
+                    out.append(candidate)
+
+        for value in node.values():
+            _collect_codes_from_node(value, seen, out)
+        return
+
+    if isinstance(node, list):
+        for item in node:
+            _collect_codes_from_node(item, seen, out)
+
+
+def get_indicator_codes(concept_name: str, provider: str) -> List[str]:
+    """
+    Get all known indicator codes for a concept/provider pair.
+
+    This includes primary and nested variant mappings (e.g., growth, alternates,
+    sector-specific codes), while skipping placeholders like ``dynamic``.
+    """
+    provider_info = get_provider_info(concept_name, provider)
+    if not provider_info:
+        return []
+
+    seen: Set[str] = set()
+    codes: List[str] = []
+    _collect_codes_from_node(provider_info, seen, codes)
+    return codes
+
+
+def is_indicator_code_for_concept(concept_name: str, provider: str, code: str) -> bool:
+    """Check whether a provider/code mapping belongs to a catalog concept."""
+    if not code:
+        return False
+
+    target = code.strip().upper()
+    return any(c.strip().upper() == target for c in get_indicator_codes(concept_name, provider))
+
+
+def find_concepts_by_code(provider: str, code: str) -> List[str]:
+    """Find catalog concepts that include a specific provider/code mapping."""
+    if not provider or not code:
+        return []
+
+    matches: List[str] = []
+    for concept_name in get_all_concepts():
+        if is_indicator_code_for_concept(concept_name, provider, code):
+            matches.append(concept_name)
+    return matches
+
+
 def get_available_providers(concept_name: str) -> List[str]:
     """Get list of providers that have this concept available."""
     concept = get_concept(concept_name)

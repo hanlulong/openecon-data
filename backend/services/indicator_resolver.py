@@ -38,6 +38,9 @@ from .indicator_translator import IndicatorTranslator, get_indicator_translator
 from .catalog_service import (
     find_concept_by_term,
     get_indicator_code,
+    get_indicator_codes,
+    get_all_synonyms,
+    get_exclusions,
     get_best_provider,
     is_provider_available,
 )
@@ -120,6 +123,14 @@ class IndicatorResolver:
 
         # Try resolution methods in priority order
         result = None
+        query_concept = find_concept_by_term(query)
+        preferred_catalog_codes: Set[str] = set()
+        if provider and query_concept:
+            preferred_catalog_codes = {
+                self._normalize_code(code)
+                for code in get_indicator_codes(query_concept, provider)
+                if code
+            }
 
         # 1. Try exact code match in database
         if provider:
@@ -153,20 +164,47 @@ class IndicatorResolver:
             except Exception as e:
                 logger.debug(f"Translator lookup failed: {e}")
 
-        # 3. Try FTS5 search in database (fallback for terms not in translator)
+        # 3. If query maps to a known catalog concept, try provider's catalog codes first.
+        # This guards against high-ranked but semantically wrong FTS candidates.
+        if not result and provider and query_concept and preferred_catalog_codes:
+            result = self._resolve_via_catalog_codes(
+                query=query,
+                provider=provider,
+                concept_name=query_concept,
+                preferred_codes=preferred_catalog_codes,
+            )
+
+        # 4. Try FTS5 search in database (fallback for terms not in translator/catalog)
         if not result:
             search_results = self.lookup.search(query, provider=provider, limit=5)
             if search_results:
-                best, best_confidence = self._pick_best_search_result(query, search_results)
+                best, best_confidence = self._pick_best_search_result(
+                    query,
+                    search_results,
+                    concept_name=query_concept,
+                    preferred_codes=preferred_catalog_codes if preferred_catalog_codes else None,
+                )
+                best_code = self._normalize_code(best.get("code")) if best else ""
+                best_is_catalog_code = bool(best_code and best_code in preferred_catalog_codes)
                 if best and best_confidence >= 0.35:
-                    result = ResolvedIndicator(
-                        code=best.get("code"),
-                        provider=best.get("provider", provider),
-                        name=best.get("name", query),
-                        confidence=best_confidence,
-                        source="database",
-                        metadata=best,
-                    )
+                    # Reject off-catalog low-confidence matches for known concepts/providers.
+                    # High-confidence off-catalog matches are still allowed (new series/variants).
+                    if preferred_catalog_codes and not best_is_catalog_code and best_confidence < 0.70:
+                        logger.info(
+                            "Rejecting off-catalog low-confidence FTS match for '%s': %s (conf=%.2f)",
+                            query,
+                            best.get("code"),
+                            best_confidence,
+                        )
+                    else:
+                        result = ResolvedIndicator(
+                            code=best.get("code"),
+                            provider=best.get("provider", provider),
+                            name=best.get("name", query),
+                            confidence=best_confidence,
+                            source="database",
+                            metadata=best,
+                        )
                 elif best:
                     logger.info(
                         "Rejecting low-confidence FTS match for '%s': %s (conf=%.2f)",
@@ -175,7 +213,7 @@ class IndicatorResolver:
                         best_confidence,
                     )
 
-        # 4. Try IndicatorTranslator again if FTS5 returned low confidence
+        # 5. Try IndicatorTranslator again if FTS5 returned low confidence
         if result and result.confidence < 0.7 and result.source == "database":
             try:
                 translated = self.translator.translate_indicator(query, target_provider=provider or "FRED")
@@ -195,33 +233,39 @@ class IndicatorResolver:
             except Exception as e:
                 logger.debug(f"IndicatorTranslator failed: {e}")
 
-        # 4. Try CatalogService
-        if not result or (result and result.confidence < 0.6):
-            concept = find_concept_by_term(query)
-            if concept:
-                if provider and is_provider_available(concept, provider):
-                    code = get_indicator_code(concept, provider)
-                    if code:
-                        result = ResolvedIndicator(
-                            code=code,
-                            provider=provider,
-                            name=concept.replace("_", " ").title(),
-                            confidence=0.85,
-                            source="catalog",
-                        )
-                elif not provider:
-                    # Find best provider for concept
-                    best_provider, code, confidence = get_best_provider(
-                        concept, [country] if country else None
+        # 6. Try CatalogService fallback
+        should_try_catalog = (not result) or (result and result.confidence < 0.6)
+        if result and query_concept and preferred_catalog_codes and result.source == "database":
+            result_code = self._normalize_code(result.code)
+            # If a known-concept/provider query resolved to an off-catalog code with only
+            # moderate confidence, fall back to catalog canonical mapping.
+            if result_code and result_code not in preferred_catalog_codes and result.confidence < 0.70:
+                should_try_catalog = True
+
+        if should_try_catalog and query_concept:
+            if provider and is_provider_available(query_concept, provider):
+                code = get_indicator_code(query_concept, provider)
+                if code:
+                    result = ResolvedIndicator(
+                        code=code,
+                        provider=provider,
+                        name=query_concept.replace("_", " ").title(),
+                        confidence=0.85,
+                        source="catalog",
                     )
-                    if best_provider and code:
-                        result = ResolvedIndicator(
-                            code=code,
-                            provider=best_provider,
-                            name=concept.replace("_", " ").title(),
-                            confidence=confidence,
-                            source="catalog",
-                        )
+            elif not provider:
+                # Find best provider for concept
+                best_provider, code, confidence = get_best_provider(
+                    query_concept, [country] if country else None
+                )
+                if best_provider and code:
+                    result = ResolvedIndicator(
+                        code=code,
+                        provider=best_provider,
+                        name=query_concept.replace("_", " ").title(),
+                        confidence=confidence,
+                        source="catalog",
+                    )
 
         # Cache successful result
         if result and use_cache:
@@ -356,8 +400,24 @@ class IndicatorResolver:
         """Tokenize text into normalized terms for lexical matching."""
         if not text:
             return set()
-        terms = set(re.findall(r"[a-z0-9]+", text.lower()))
-        return {t for t in terms if len(t) > 1 and t not in self._stop_words}
+        raw_terms = set(re.findall(r"[a-z0-9]+", text.lower()))
+        terms: Set[str] = set()
+        for term in raw_terms:
+            if len(term) <= 1 or term in self._stop_words:
+                continue
+            terms.add(term)
+            # Lightweight stemming for plural variants (imports/import, prices/price).
+            if term.endswith("ies") and len(term) > 4:
+                terms.add(term[:-3] + "y")
+            elif term.endswith("s") and len(term) > 3:
+                terms.add(term[:-1])
+        return terms
+
+    def _normalize_code(self, code: Optional[str]) -> str:
+        """Normalize indicator code for case-insensitive comparisons."""
+        if not code:
+            return ""
+        return str(code).strip().upper()
 
     def _score_search_match(self, query: str, candidate: Dict[str, Any], rank_index: int = 0) -> float:
         """
@@ -402,17 +462,121 @@ class IndicatorResolver:
 
         return max(0.0, min(1.0, confidence))
 
+    def _score_concept_alignment(self, concept_name: Optional[str], candidate: Dict[str, Any]) -> float:
+        """
+        Score how well a candidate aligns with a catalog concept.
+
+        Returns a bounded adjustment in [-0.5, 0.4] to be added to lexical score.
+        """
+        if not concept_name:
+            return 0.0
+
+        code = str(candidate.get("code") or "")
+        name = str(candidate.get("name") or "")
+        description = str(candidate.get("description") or "")
+        candidate_text = f"{name} {description} {code}".lower()
+
+        # Hard penalty for explicit concept exclusions.
+        for exclusion in get_exclusions(concept_name):
+            exclusion_text = str(exclusion).strip().lower()
+            if exclusion_text and exclusion_text in candidate_text:
+                return -0.45
+
+        synonyms = get_all_synonyms(concept_name)
+        if not synonyms:
+            synonyms = [concept_name.replace("_", " ")]
+
+        phrase_hits = 0
+        concept_terms: Set[str] = set()
+        for synonym in synonyms:
+            synonym_text = str(synonym).strip().lower()
+            if not synonym_text:
+                continue
+            concept_terms.update(self._tokenize_terms(synonym_text))
+            if len(synonym_text) >= 3 and synonym_text in candidate_text:
+                phrase_hits += 1
+
+        if not concept_terms:
+            return 0.0
+
+        candidate_terms = self._tokenize_terms(candidate_text)
+        overlap = len(concept_terms & candidate_terms) / max(len(concept_terms), 1)
+
+        score = 0.0
+        if phrase_hits:
+            score += min(0.25, 0.08 * phrase_hits)
+        score += min(0.20, overlap * 0.30)
+
+        if phrase_hits == 0 and overlap == 0:
+            score -= 0.10
+
+        return max(-0.5, min(0.4, score))
+
+    def _resolve_via_catalog_codes(
+        self,
+        query: str,
+        provider: str,
+        concept_name: str,
+        preferred_codes: Set[str],
+    ) -> Optional[ResolvedIndicator]:
+        """
+        Resolve using known catalog mappings for a concept/provider pair.
+
+        This keeps resolution general and deterministic by preferring known
+        concept codes when they are available in the local indicator database.
+        """
+        best_metadata: Optional[Dict[str, Any]] = None
+        best_score = 0.0
+
+        for code in sorted(preferred_codes):
+            metadata = self.lookup.get(provider, code)
+            if not metadata:
+                continue
+
+            score = self._score_search_match(query, metadata)
+            score += self._score_concept_alignment(concept_name, metadata)
+            score += 0.15  # boost known catalog mappings
+            score = max(0.0, min(1.0, score))
+
+            if score > best_score:
+                best_score = score
+                best_metadata = metadata
+
+        if best_metadata and best_score >= 0.45:
+            return ResolvedIndicator(
+                code=best_metadata.get("code"),
+                provider=best_metadata.get("provider", provider),
+                name=best_metadata.get("name", query),
+                confidence=best_score,
+                source="catalog",
+                metadata=best_metadata,
+            )
+
+        return None
+
     def _pick_best_search_result(
         self,
         query: str,
         search_results: List[Dict[str, Any]],
+        concept_name: Optional[str] = None,
+        preferred_codes: Optional[Set[str]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], float]:
-        """Select best search result using lexical confidence scoring."""
+        """Select best search result using lexical + concept-aware scoring."""
         best_result: Optional[Dict[str, Any]] = None
         best_confidence = 0.0
 
         for idx, candidate in enumerate(search_results):
             confidence = self._score_search_match(query, candidate, rank_index=idx)
+            confidence += self._score_concept_alignment(concept_name, candidate)
+
+            if preferred_codes:
+                candidate_code = self._normalize_code(candidate.get("code"))
+                if candidate_code in preferred_codes:
+                    confidence += 0.25
+                else:
+                    confidence -= 0.05
+
+            confidence = max(0.0, min(1.0, confidence))
             if confidence > best_confidence:
                 best_result = candidate
                 best_confidence = confidence

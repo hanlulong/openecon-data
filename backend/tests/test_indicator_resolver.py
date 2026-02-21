@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from backend.services.indicator_resolver import IndicatorResolver
 
@@ -106,7 +107,101 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertGreaterEqual(result.confidence, 0.0)
         self.assertLessEqual(result.confidence, 1.0)
 
+    @patch("backend.services.indicator_resolver.is_provider_available", return_value=True)
+    @patch("backend.services.indicator_resolver.get_indicator_code", return_value="BOPGSTB")
+    @patch("backend.services.indicator_resolver.get_indicator_codes", return_value=["BOPGSTB"])
+    @patch("backend.services.indicator_resolver.find_concept_by_term", return_value="trade_balance")
+    def test_prefers_catalog_guided_code_for_known_concept(
+        self,
+        _concept,
+        _codes,
+        _primary_code,
+        _provider_available,
+    ):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "VAPGDPW",
+                    "provider": "FRED",
+                    "name": "World value added indicator",
+                    "_score": 99.0,
+                }
+            ],
+            exact_results={
+                ("FRED", "BOPGSTB"): {
+                    "code": "BOPGSTB",
+                    "provider": "FRED",
+                    "name": "Trade Balance: Goods and Services, Balance of Payments Basis",
+                }
+            },
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("trade surplus", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "BOPGSTB")
+        self.assertEqual(result.source, "catalog")
+
+    @patch("backend.services.indicator_resolver.is_provider_available", return_value=True)
+    @patch("backend.services.indicator_resolver.get_indicator_code", return_value="NE.IMP.GNFS.ZS")
+    @patch("backend.services.indicator_resolver.get_indicator_codes", return_value=["NE.IMP.GNFS.ZS"])
+    @patch("backend.services.indicator_resolver.find_concept_by_term", return_value="imports")
+    def test_allows_high_confidence_off_catalog_match(
+        self,
+        _concept,
+        _codes,
+        _primary_code,
+        _provider_available,
+    ):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "TM.VAL.MRCH.XD.WD",
+                    "provider": "WorldBank",
+                    "name": "Merchandise imports by the reporting economy (current US$)",
+                    "_score": 90.0,
+                }
+            ]
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("import value", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "TM.VAL.MRCH.XD.WD")
+        self.assertEqual(result.source, "database")
+        self.assertGreaterEqual(result.confidence, 0.75)
+
+    @patch("backend.services.indicator_resolver.is_provider_available", return_value=True)
+    @patch("backend.services.indicator_resolver.get_indicator_code", return_value="NE.IMP.GNFS.ZS")
+    @patch("backend.services.indicator_resolver.get_indicator_codes", return_value=["NE.IMP.GNFS.ZS"])
+    @patch("backend.services.indicator_resolver.find_concept_by_term", return_value="imports")
+    def test_falls_back_to_catalog_for_weak_off_catalog_match(
+        self,
+        _concept,
+        _codes,
+        _primary_code,
+        _provider_available,
+    ):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "RANDOM_TRADE_SERIES",
+                    "provider": "WorldBank",
+                    "name": "Terms of trade adjustment index",
+                    "_score": 100.0,
+                }
+            ]
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("imports", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "NE.IMP.GNFS.ZS")
+        self.assertEqual(result.source, "catalog")
+
 
 if __name__ == "__main__":
     unittest.main()
-

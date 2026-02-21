@@ -108,6 +108,45 @@ Use this script:
 - `1`: Failure - one or more services failed to start
 - `130`: User interrupted (Ctrl+C)
 
+## benchmark_query_framework.py
+
+**Purpose**: Deterministic benchmark for query intelligence framework quality.
+
+### What It Measures
+
+1. **Routing accuracy**: query text -> provider selection (`UnifiedRouter`)
+2. **Series matching accuracy**: query + provider -> indicator selection quality (`IndicatorResolver`)
+
+Series scoring defaults to **concept-aware mode**:
+- Passes exact catalog code matches
+- Also passes semantically correct same-concept matches for the same provider
+
+Use strict mode to require exact code-only matching.
+
+### Usage
+
+```bash
+# Run full benchmark with defaults
+python3 scripts/benchmark_query_framework.py
+
+# Faster local iteration
+python3 scripts/benchmark_query_framework.py --routing-limit 30 --series-limit 80
+
+# Tighten quality gates for release checks
+python3 scripts/benchmark_query_framework.py \
+  --min-routing-accuracy 0.90 \
+  --min-series-accuracy 0.95
+
+# Enforce strict exact-code series scoring
+python3 scripts/benchmark_query_framework.py --strict-series-code-match
+```
+
+### Output
+
+- Console summary with pass rates and top failures
+- JSON report at `tests/benchmark_report.latest.json` (default)
+- Exit code `1` if configured thresholds are not met
+
 ## Other Scripts
 
 - `setup.sh` / `setup.ps1` / `setup.bat`: First-time project setup
