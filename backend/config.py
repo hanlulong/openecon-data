@@ -61,7 +61,7 @@ class Settings(BaseSettings):
         description="Use LangChain orchestrator with LangGraph for intelligent query routing and state persistence"
     )
     use_hybrid_router: bool = Field(
-        default=False,
+        default=True,
         alias="USE_HYBRID_ROUTER",
         description="Enable hybrid provider routing (deterministic candidates + LLM ranking)"
     )
