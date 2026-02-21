@@ -2,7 +2,7 @@
   <img src="packages/frontend/public/favicon.svg" width="80" height="80" alt="OpenEcon logo" />
 </p>
 
-<h1 align="center">OpenEcon</h1>
+<h1 align="center">OpenEcon Data</h1>
 
 <p align="center">
   <strong>Query economic data from 10+ sources using plain English.</strong><br/>
@@ -12,30 +12,26 @@
 <p align="center">
   <a href="https://openecon.ai"><img src="https://img.shields.io/badge/Live_Demo-openecon.ai-blue?style=flat-square" alt="Live Demo" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" /></a>
-  <a href="https://github.com/hanlulong/econ-data-mcp/issues"><img src="https://img.shields.io/github/issues/hanlulong/econ-data-mcp?style=flat-square" alt="Issues" /></a>
-  <a href="https://github.com/hanlulong/econ-data-mcp/stargazers"><img src="https://img.shields.io/github/stars/hanlulong/econ-data-mcp?style=flat-square" alt="Stars" /></a>
+  <a href="https://github.com/hanlulong/openecon-data/issues"><img src="https://img.shields.io/github/issues/hanlulong/openecon-data?style=flat-square" alt="Issues" /></a>
+  <a href="https://github.com/hanlulong/openecon-data/stargazers"><img src="https://img.shields.io/github/stars/hanlulong/openecon-data?style=flat-square" alt="Stars" /></a>
 </p>
 
 <p align="center">
   <a href="https://openecon.ai">Website</a> &middot;
-  <a href="https://data.openecon.io/chat">Live App</a> &middot;
+  <a href="https://data.openecon.ai/chat">Live App</a> &middot;
   <a href="docs/README.md">Docs</a> &middot;
   <a href="docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md">Contributing</a>
 </p>
 
 ---
 
-<!-- TODO: Replace with an actual GIF/screenshot of the app in action.
-     Record a 15-second GIF: type a query → see the chart appear.
-     Save as docs/assets/demo.gif and uncomment:
 <p align="center">
-  <img src="docs/assets/demo.gif" width="720" alt="OpenEcon demo — ask a question, get a chart" />
+  <img src="docs/assets/hero-screenshot.png" width="720" alt="OpenEcon Data — query economic data across providers instantly" />
 </p>
--->
 
-## Why OpenEcon?
+## Why OpenEcon Data?
 
-Getting economic data today means juggling APIs, reading docs for each provider, wrangling country codes, and normalizing date formats. OpenEcon fixes this:
+Getting economic data today means juggling APIs, reading docs for each provider, wrangling country codes, and normalizing date formats. OpenEcon Data fixes this:
 
 - **Ask in English** — "Compare US and Japan inflation since 2015" just works
 - **One interface, 10+ sources** — FRED, World Bank, IMF, Eurostat, BIS, UN Comtrade, and more, all unified
@@ -43,22 +39,26 @@ Getting economic data today means juggling APIs, reading docs for each provider,
 - **Self-hostable** — MIT-licensed, run locally or deploy your own instance
 - **330,000+ indicators** — full-text search across the world's major economic databases
 
+<p align="center">
+  <b>330K+</b> indicators indexed &nbsp;&middot;&nbsp; <b>10+</b> data providers &nbsp;&middot;&nbsp; <b>200+</b> countries covered &nbsp;&middot;&nbsp; <b>< 5s</b> avg. query time
+</p>
+
 ## Quick Start
 
 ### Use the hosted app (no setup)
 
-Try it now at **[data.openecon.io/chat](https://data.openecon.io/chat)** — no account required.
+Try it now at **[data.openecon.ai/chat](https://data.openecon.ai/chat)** — no account required.
 
 ### Add to your AI agent (one command)
 
 **Claude Code:**
 ```bash
-claude mcp add --transport sse econ-data-mcp https://data.openecon.io/mcp --scope user
+claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
 ```
 
 **Codex:**
 ```bash
-codex mcp add econ-data-mcp --url https://data.openecon.io/mcp
+codex mcp add openecon-data --url https://data.openecon.io/mcp
 ```
 
 Then ask your agent:
@@ -69,8 +69,8 @@ Use query_data to compare US, UK, and Japan inflation from 2015 to 2025.
 ### Self-host
 
 ```bash
-git clone https://github.com/hanlulong/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 cp .env.example .env          # Add your OPENROUTER_API_KEY
 pip install -r requirements.txt
 npm install
@@ -90,15 +90,23 @@ python3 scripts/restart_dev.py
 | "EU debt-to-GDP ratios across member states" | Eurostat |
 | "Bitcoin price history for the last year" | CoinGecko |
 
+## How It Works
+
+| Step | What happens |
+|------|-------------|
+| **1. Connect** | Choose providers (FRED, World Bank, Comtrade, ...). Set namespaces, units, and vintage preferences. |
+| **2. Ask** | Query by concept ("headline CPI, Canada"). The system maps to codes, joins geos, and aligns frequencies. |
+| **3. Share** | Get publication-ready charts with footnotes. Export CSV/JSON with provenance. Share reproducible query URLs. |
+
 ## Features
 
 **Natural Language Interface** — Ask questions in plain English. An LLM parses your intent, picks the right provider, and fetches the data.
 
 **Smart Indicator Discovery** — 330K+ indicators indexed with full-text search. No need to know series codes — just describe what you want.
 
-**Streaming Results** — Real-time progress via Server-Sent Events. See each step as it happens: parsing, routing, fetching, charting.
+**Smart Joins** — Auto-match country/industry/classification codes and align frequencies across providers.
 
-**Pro Mode** — For complex analysis, the system generates and executes Python code in a sandboxed environment, producing publication-ready visualizations.
+**Streaming Results** — Real-time progress via Server-Sent Events. See each step as it happens: parsing, routing, fetching, charting.
 
 **MCP Server** — First-class Model Context Protocol support. Any MCP-compatible AI agent can query economic data through the hosted endpoint.
 
@@ -127,7 +135,7 @@ python3 scripts/restart_dev.py
 │                 │     │                  │     │                          │
 │  "US inflation" │     │  LLM Parser      │     │  FRED · World Bank · IMF │
 │                 │◀────│  Query Router    │◀────│  Eurostat · BIS · ...    │
-│  📊 Chart + Data │     │  Normalizer      │     │                          │
+│  Chart + Data   │     │  Normalizer      │     │                          │
 └─────────────────┘     └──────────────────┘     └──────────────────────────┘
         │                        │
    React Frontend          MCP Endpoint
@@ -136,25 +144,20 @@ python3 scripts/restart_dev.py
 
 **Stack:** Python · FastAPI · React · TypeScript · Vite · Recharts · FAISS · OpenRouter
 
-## Pro Mode Examples
+## OpenEcon Ecosystem
 
-AI-generated analysis with Python code execution:
-
-<p align="center">
-  <img src="public_media/promode/promode_18a6ff9c_phillips_curve.png" width="380" alt="Phillips Curve analysis" />
-  <img src="public_media/promode/promode_299c8cdd_gdp_growth_top10_timeseries.png" width="380" alt="GDP growth top 10 economies" />
-</p>
-<p align="center">
-  <img src="public_media/promode/promode_05a396dc_eu_unemployment_timeseries.png" width="380" alt="EU unemployment trends" />
-  <img src="public_media/promode/promode_23f16b4f_renewable_energy_investment_by_region.png" width="380" alt="Renewable energy investment" />
-</p>
+| Project | Description |
+|---------|-------------|
+| **[OpenEcon Data](https://data.openecon.ai/chat)** | Query economic data in plain English, chart results, export CSV/JSON *(this repo)* |
+| **[Econ Writing Skill](https://github.com/hanlulong/econ-writing-skill)** | Reusable writing workflows for economists — prompt patterns, structure templates, analysis guardrails |
+| **[Awesome AI for Economists](https://github.com/hanlulong/awesome-ai-for-economists)** | Curated tools, papers, and references for applying AI in economic research |
 
 ## Contributing
 
 We welcome contributions! See the [Developer & Contributor Guide](docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md) for setup instructions, architecture overview, and code standards.
 
 **Quick links:**
-- [Open issues](https://github.com/hanlulong/econ-data-mcp/issues) — bug reports and feature requests
+- [Open issues](https://github.com/hanlulong/openecon-data/issues) — bug reports and feature requests
 - [Documentation](docs/README.md) — full docs index
 - [Security policy](.github/SECURITY.md) — responsible disclosure
 
