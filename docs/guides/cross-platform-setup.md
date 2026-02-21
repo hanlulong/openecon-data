@@ -436,4 +436,4 @@ After setup is complete:
 - [Project Documentation](../../README.md)
 - [Claude Code Instructions](../../CLAUDE.md)
 - [Security Policy](../../.github/SECURITY.md)
-- [Development Log](../development/AGENT_LOG.md)
+- [Agent Integration Notes](../development/agents.md)

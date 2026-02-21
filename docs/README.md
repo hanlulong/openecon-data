@@ -1,13 +1,15 @@
 # econ-data-mcp Documentation
 
-Welcome to the econ-data-mcp documentation. This index provides quick access to all documentation organized by topic.
+`econ-data-mcp` is a one-stop MCP + API layer for economic data across 10+ providers. This index provides quick access to setup, MCP integration, and technical references.
 
 ## Quick Links
 
 - **[Getting Started](guides/getting-started.md)** - First-time setup and basic usage
 - **[Cross-Platform Setup](guides/cross-platform-setup.md)** - Setup for Ubuntu/Linux, macOS, and Windows
+- **[MCP Setup (Claude Code + Codex)](mcp/setup.md)** - Add `econ-data-mcp` as an MCP server
 - **[API Quick Reference](providers/API_QUICK_REFERENCE.md)** - Quick reference for all supported APIs
 - **[Security Policy](../.github/SECURITY.md)** - Security features and best practices
+- **Hosted data app:** [https://data.openecon.io/chat](https://data.openecon.io/chat)
 
 ---
 
@@ -19,7 +21,8 @@ Welcome to the econ-data-mcp documentation. This index provides quick access to 
 4. [Development](#development)
 5. [Deployment](#deployment)
 6. [Architecture](#architecture)
-7. [Troubleshooting](#troubleshooting)
+7. [MCP Quick Start](#mcp-quick-start)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -88,6 +91,29 @@ The econ-data-mcp backend exposes a REST API at `/api/*`. See [backend/README.md
 econ-data-mcp exposes a Model Context Protocol (MCP) server for AI assistants:
 - **Endpoint:** `/mcp`
 - **Documentation:** [MCP Setup Guide](mcp/setup.md)
+
+---
+
+## MCP Quick Start
+
+Use one of these endpoints:
+- Hosted: `https://data.openecon.io/mcp`
+- Local: `http://localhost:3001/mcp`
+
+Add to Codex:
+```bash
+codex mcp add econ-data-mcp --url https://data.openecon.io/mcp
+codex mcp get econ-data-mcp
+```
+
+Add to Claude Code:
+```bash
+claude mcp add --transport sse econ-data-mcp https://data.openecon.io/mcp --scope user
+claude mcp get econ-data-mcp
+```
+
+Example prompt:
+- `Use query_data to compare US and Canada GDP growth since 2015.`
 
 ---
 

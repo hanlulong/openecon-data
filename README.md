@@ -1,16 +1,23 @@
 # econ-data-mcp
 
-**Open-source MCP and API engine behind OpenEcon.ai**
+**One-stop MCP + API layer for economic data across 10+ sources**
 
-`econ-data-mcp` lets users query economic data in plain English and get structured results, charts, and exportable datasets with provenance.
+`econ-data-mcp` unifies FRED, World Bank, IMF, UN Comtrade, Statistics Canada, BIS, Eurostat, OECD, FX, and crypto data behind a single interface. Query in plain English and get structured results, charts, exports, and source provenance.
 
 **For users (no setup):** use **[OpenEcon.ai](https://openecon.ai)**, then open the live data app at **[data.openecon.io/chat](https://data.openecon.io/chat)**.  
 **For developers (self-host/customize):** clone this repo and run locally.
 
+## 🎯 Why econ-data-mcp
+
+- **One-stop data access** - Multiple providers behind one MCP tool and one API
+- **Natural language to data** - Ask economics questions in plain English
+- **Traceable outputs** - Source metadata and API provenance included
+- **Agent-ready** - Works with MCP clients like Claude Code and Codex
+
 ## ✨ Features
 
 - **Natural Language Queries** - Ask questions in plain English, get structured data responses
-- **11+ Data Sources** - FRED, World Bank, UN Comtrade, Statistics Canada, IMF, BIS, Eurostat, OECD, ExchangeRate-API, CoinGecko
+- **10+ Data Sources** - FRED, World Bank, UN Comtrade, Statistics Canada, IMF, BIS, Eurostat, OECD, ExchangeRate-API, CoinGecko
 - **Interactive Charts** - Visualize data with line, bar, and scatter charts
 - **Data Export** - Download results as CSV or JSON
 - **Conversation Memory** - Follow-up questions that build on previous context
@@ -53,6 +60,8 @@ Edit `.env` and add your API keys:
 
 ```bash
 # Required
+LLM_PROVIDER=openrouter           # Recommended default for first-time setup
+LLM_MODEL=openai/gpt-4o-mini
 OPENROUTER_API_KEY=sk-or-...  # Get from https://openrouter.ai/keys
 JWT_SECRET=<random-string>     # Generate with: openssl rand -hex 32
 
@@ -60,6 +69,11 @@ JWT_SECRET=<random-string>     # Generate with: openssl rand -hex 32
 FRED_API_KEY=...               # Get from https://fred.stlouisfed.org/
 COMTRADE_API_KEY=...           # Get from https://comtradedeveloper.un.org/
 ```
+
+Local development is clone-ready:
+- No manual database bootstrap needed (`backend/data/indicators.db` is created if missing)
+- No manual vector index bootstrap needed (`backend/data/faiss_index` is created/rebuilt on demand when vector search is enabled)
+- Supabase is optional in development (mock auth is used when Supabase is not configured)
 
 ### Running
 
@@ -75,11 +89,53 @@ npm run dev
 
 Visit **http://localhost:5173** to use the application.
 
+## 🔌 MCP Setup (Claude Code + Codex)
+
+Use either endpoint:
+
+- **Hosted MCP endpoint:** `https://data.openecon.io/mcp`
+- **Local MCP endpoint:** `http://localhost:3001/mcp`
+
+### Add to Codex
+
+```bash
+# Hosted
+codex mcp add econ-data-mcp --url https://data.openecon.io/mcp
+
+# Or local
+codex mcp add econ-data-mcp-local --url http://localhost:3001/mcp
+
+# Verify
+codex mcp list
+codex mcp get econ-data-mcp
+```
+
+### Add to Claude Code
+
+```bash
+# Hosted
+claude mcp add --transport sse econ-data-mcp https://data.openecon.io/mcp --scope user
+
+# Or local
+claude mcp add --transport sse econ-data-mcp-local http://localhost:3001/mcp --scope user
+
+# Verify
+claude mcp get econ-data-mcp
+```
+
+### Example Prompts for Claude Code / Codex
+
+- `Use query_data to compare US, UK, and Japan inflation from 2015 to 2025. Return a compact table and key trend summary.`
+- `Use query_data to fetch China exports to the United States from 2020 to 2024 and provide CSV-ready output.`
+- `Use query_data to show US unemployment rate and CPI together since 2010, then explain major turning points.`
+- `Use query_data to retrieve EUR/USD exchange rate history for the last 24 months and highlight volatility periods.`
+
 ## 📖 Documentation
 
 - **[Complete Documentation](docs/README.md)** - Full documentation index
 - **[Getting Started Guide](docs/guides/getting-started.md)** - Detailed setup and usage
 - **[Cross-Platform Setup](docs/guides/cross-platform-setup.md)** - Platform-specific instructions
+- **[MCP Client Setup (Claude Code + Codex)](docs/mcp/setup.md)** - Add this server to MCP clients
 - **[API Reference](backend/README.md)** - Backend API endpoints
 - **[Security Policy](.github/SECURITY.md)** - Security features and best practices
 
@@ -148,7 +204,7 @@ See [Testing Guide](docs/guides/testing.md) for details.
 
 ## 🌍 Data Sources
 
-econ-data-mcp integrates with 11+ economic data providers:
+econ-data-mcp integrates with 10+ economic data providers:
 
 | Provider | Coverage | API Key |
 |----------|----------|---------|

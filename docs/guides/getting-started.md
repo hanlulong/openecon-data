@@ -28,6 +28,8 @@ pip install -r requirements.txt
 Create a `.env` file in the repository root:
 
 ```
+LLM_PROVIDER=openrouter
+LLM_MODEL=openai/gpt-4o-mini
 OPENROUTER_API_KEY=pk-...
 FRED_API_KEY=optional
 COMTRADE_API_KEY=optional
@@ -35,6 +37,11 @@ JWT_SECRET=generate_a_random_string
 ```
 
 Restart uvicorn after editing secrets.
+
+No manual database/index bootstrap is required for local setup:
+- `backend/data/indicators.db` is created if missing
+- `backend/data/faiss_index` is created/rebuilt on demand when vector search is enabled
+- Supabase is optional in development (mock auth is used when Supabase is not configured)
 
 ## 4. Run the stack
 
@@ -70,7 +77,9 @@ You should receive normalized data with provenance metadata (`source`, `unit`, `
 
 ## 6. Next steps
 
+- If you want to use this project as an MCP server in AI coding assistants, see [`docs/mcp/setup.md`](../mcp/setup.md).
+- Hosted MCP endpoint: `https://data.openecon.io/mcp`
+- Hosted user-facing app: `https://data.openecon.io/chat`
 - See [`docs/guides/testing.md`](./testing.md) for a manual verification checklist.
 - Review [`docs/reference/trade-data.md`](../reference/trade-data.md) for Comtrade/HS code hints.
-- Browse [`docs/AGENT_LOG.md`](../AGENT_LOG.md) for the latest automation notes.
-
+- Browse [`docs/development/agents.md`](../development/agents.md) for AI agent integration notes.
