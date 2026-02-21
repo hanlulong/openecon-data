@@ -1,0 +1,44 @@
+# Industrial Production Indicator Catalog
+concept: industrial_production
+category: output
+domain: macroeconomics
+
+description: |
+  Index of real output from manufacturing, mining, and utilities sectors.
+
+synonyms:
+  primary:
+    - industrial production
+    - industrial output
+    - production index
+  secondary:
+    - manufacturing output
+    - factory output
+    - ip index
+
+explicit_exclusions:
+  - gdp
+  - retail sales
+  - producer price index
+  - capacity utilization
+
+providers:
+  FRED:
+    primary:
+      code: INDPRO
+      name: "Industrial Production Index"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  WorldBank:
+    primary:
+      code: NV.IND.TOTL.KD.ZG
+      name: "Industry (including construction), value added (annual % growth)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

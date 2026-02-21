@@ -1,0 +1,38 @@
+# Retail Sales Indicator Catalog
+concept: retail_sales
+category: consumer_spending
+domain: macroeconomics
+
+description: |
+  Monthly sales of retail and food service businesses, used as a high-frequency
+  signal of consumer demand.
+
+synonyms:
+  primary:
+    - retail sales
+    - monthly retail sales
+    - retail trade sales
+  secondary:
+    - consumer spending
+    - retail spending
+    - advance retail sales
+    - retail and food services sales
+
+explicit_exclusions:
+  - wholesale sales
+  - industrial production
+  - gdp
+  - cpi
+
+providers:
+  FRED:
+    primary:
+      code: RSAFS
+      name: "Advance Retail and Food Services Sales"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

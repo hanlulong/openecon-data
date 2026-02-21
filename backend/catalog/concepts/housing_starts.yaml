@@ -1,0 +1,36 @@
+# Housing Starts Indicator Catalog
+concept: housing_starts
+category: housing
+domain: macroeconomics
+
+description: |
+  Number of privately owned housing units where construction began.
+
+synonyms:
+  primary:
+    - housing starts
+    - new home starts
+    - residential starts
+  secondary:
+    - new residential construction
+    - new housing construction
+    - home construction starts
+
+explicit_exclusions:
+  - home prices
+  - building permits
+  - mortgage rates
+  - housing affordability
+
+providers:
+  FRED:
+    primary:
+      code: HOUST
+      name: "Housing Starts: Total: New Privately Owned Housing Units Started"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

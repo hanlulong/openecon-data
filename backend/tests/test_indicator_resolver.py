@@ -142,6 +142,56 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertEqual(result.code, "EG.FEC.RNEW.ZS")
         self.assertEqual(result.source, "catalog")
 
+    def test_resolves_retail_sales_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("retail sales", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "RSAFS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_industrial_production_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("industrial production", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "INDPRO")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_housing_starts_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("housing starts", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "HOUST")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_consumer_confidence_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("consumer confidence", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "UMCSENT")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_pmi_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("manufacturing pmi", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "NAPM")
+        self.assertEqual(result.source, "catalog")
+
     def test_exact_code_match_keeps_max_confidence(self):
         lookup = _FakeLookup(
             exact_results={

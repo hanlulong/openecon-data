@@ -386,6 +386,105 @@ class IndicatorTranslator:
                 "STATSCAN": [],
             }
         },
+        "retail_sales": {
+            "aliases": [
+                "retail sales",
+                "monthly retail sales",
+                "retail trade sales",
+                "consumer spending",
+                "retail spending",
+                "advance retail sales",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["RSAFS", "RSXFS"],
+                "WORLDBANK": [],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "industrial_production": {
+            "aliases": [
+                "industrial production",
+                "industrial output",
+                "production index",
+                "manufacturing output",
+                "factory output",
+                "ip index",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["INDPRO"],
+                "WORLDBANK": ["NV.IND.TOTL.KD.ZG"],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "housing_starts": {
+            "aliases": [
+                "housing starts",
+                "new home starts",
+                "residential starts",
+                "new residential construction",
+                "home construction starts",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["HOUST"],
+                "WORLDBANK": [],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "consumer_confidence": {
+            "aliases": [
+                "consumer confidence",
+                "consumer sentiment",
+                "confidence index",
+                "consumer confidence index",
+                "household sentiment",
+                "sentiment index",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["UMCSENT"],
+                "WORLDBANK": [],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "pmi": {
+            "aliases": [
+                "pmi",
+                "purchasing managers index",
+                "manufacturing pmi",
+                "ism pmi",
+                "ism manufacturing pmi",
+                "purchasing managers' index",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["NAPM"],
+                "WORLDBANK": [],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
     }
 
     # Known IMF codes that should be translated to concepts

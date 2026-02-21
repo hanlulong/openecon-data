@@ -1,0 +1,37 @@
+# Consumer Confidence Indicator Catalog
+concept: consumer_confidence
+category: sentiment
+domain: macroeconomics
+
+description: |
+  Survey-based measure of households' assessment of current and future
+  economic conditions.
+
+synonyms:
+  primary:
+    - consumer confidence
+    - consumer sentiment
+    - confidence index
+  secondary:
+    - household sentiment
+    - consumer confidence index
+    - sentiment index
+
+explicit_exclusions:
+  - business confidence
+  - pmi
+  - inflation expectations
+  - retail sales
+
+providers:
+  FRED:
+    primary:
+      code: UMCSENT
+      name: "University of Michigan: Consumer Sentiment"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+not_available:
+  - CoinGecko
+  - ExchangeRate
