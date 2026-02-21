@@ -26,7 +26,7 @@
 ---
 
 <p align="center">
-  <img src="docs/assets/hero-screenshot.png" width="720" alt="OpenEcon Data — query economic data across providers instantly" />
+  <img src="docs/assets/demo.gif" width="720" alt="OpenEcon Data — query economic data across providers instantly" />
 </p>
 
 ## Why OpenEcon Data?
