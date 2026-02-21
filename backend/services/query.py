@@ -20,6 +20,7 @@ from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
 from ..routing.country_resolver import CountryResolver
+from ..routing.hybrid_router import HybridRouter
 from ..providers.fred import FREDProvider
 from ..providers.worldbank import WorldBankProvider
 from ..providers.comtrade import ComtradeProvider
@@ -141,7 +142,10 @@ class QueryService:
         coingecko_key: Optional[str] = None,
         settings: Optional[Settings] = None
     ) -> None:
-        self.openrouter = OpenRouterService(openrouter_key, settings)
+        from ..config import get_settings
+
+        self.settings = settings or get_settings()
+        self.openrouter = OpenRouterService(openrouter_key, self.settings)
 
         # Initialize metadata search service if LLM provider is available
         metadata_search = None
@@ -162,12 +166,16 @@ class QueryService:
         self.oecd_provider = OECDProvider(metadata_search_service=metadata_search)
 
         # ExchangeRate-API: Uses open access by default, API key optional
-        from ..config import get_settings
-        settings = get_settings()
-        self.exchangerate_provider = ExchangeRateProvider(settings.exchangerate_api_key)
+        self.exchangerate_provider = ExchangeRateProvider(self.settings.exchangerate_api_key)
 
         # CoinGecko: Cryptocurrency prices and market data
         self.coingecko_provider = CoinGeckoProvider(coingecko_key)
+
+        # Optional hybrid router: deterministic candidates + LLM ranking.
+        self.hybrid_router: Optional[HybridRouter] = None
+        if self.settings.use_hybrid_router:
+            self.hybrid_router = HybridRouter(llm_provider=self.openrouter.llm_provider)
+            logger.info("🧠 HybridRouter enabled (USE_HYBRID_ROUTER=true)")
 
     def _detect_explicit_provider(self, query: str) -> Optional[str]:
         """
@@ -279,6 +287,49 @@ class QueryService:
                 previous,
                 extracted_country,
             )
+
+    async def _select_routed_provider(self, intent: ParsedIntent, query: str) -> str:
+        """
+        Select provider using deterministic router, optionally enhanced by HybridRouter.
+        """
+        routed_provider = ProviderRouter.route_provider(intent, query)
+        routed_provider = ProviderRouter.correct_coingecko_misrouting(
+            routed_provider,
+            query,
+            intent.indicators,
+        )
+
+        if not self.hybrid_router:
+            return routed_provider
+
+        try:
+            params = intent.parameters or {}
+            raw_countries = params.get("countries")
+            countries = raw_countries if isinstance(raw_countries, list) else []
+            decision = await self.hybrid_router.route(
+                query=query,
+                indicators=intent.indicators,
+                country=params.get("country"),
+                countries=countries,
+                llm_provider_hint=intent.apiProvider,
+            )
+            hybrid_provider = normalize_provider_name(decision.provider)
+            hybrid_provider = ProviderRouter.correct_coingecko_misrouting(
+                hybrid_provider,
+                query,
+                intent.indicators,
+            )
+            if hybrid_provider != routed_provider:
+                logger.info(
+                    "🧠 Hybrid routing override: %s -> %s (%s)",
+                    routed_provider,
+                    hybrid_provider,
+                    decision.reasoning,
+                )
+            return hybrid_provider
+        except Exception as exc:
+            logger.warning("Hybrid routing failed, using deterministic provider: %s", exc)
+            return routed_provider
 
     def _extract_exchange_rate_params(self, params: dict, intent: ParsedIntent) -> dict:
         """
@@ -975,15 +1026,8 @@ class QueryService:
                 # FALLBACK: Extract explicit country references from query when LLM defaults to US/empty.
                 self._apply_country_overrides(intent, query)
 
-                # NEW: Use ProviderRouter for deterministic provider selection
-                # This ensures reliable routing based on explicit rules
-                routed_provider = ProviderRouter.route_provider(intent, query)
-
-                # CRITICAL: Correct CoinGecko misrouting for non-crypto queries
-                # This catches cases where LLM incorrectly suggests CoinGecko for fiscal queries
-                routed_provider = ProviderRouter.correct_coingecko_misrouting(
-                    routed_provider, query, intent.indicators
-                )
+                # Use deterministic routing (and optional HybridRouter enhancement)
+                routed_provider = await self._select_routed_provider(intent, query)
 
                 if routed_provider != intent.apiProvider:
                     logger.info(f"🔄 Provider routing: {intent.apiProvider} → {routed_provider} (ProviderRouter)")
@@ -3084,10 +3128,7 @@ class QueryService:
 
         # Keep fallback path behavior consistent with the main processing pipeline.
         self._apply_country_overrides(intent, query)
-        routed_provider = ProviderRouter.route_provider(intent, query)
-        routed_provider = ProviderRouter.correct_coingecko_misrouting(
-            routed_provider, query, intent.indicators
-        )
+        routed_provider = await self._select_routed_provider(intent, query)
         if routed_provider != intent.apiProvider:
             logger.info(
                 "🔄 Provider routing (standard path): %s -> %s",
