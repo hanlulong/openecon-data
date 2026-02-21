@@ -1,0 +1,38 @@
+# Government Expenditure Indicator Catalog
+concept: government_expenditure
+category: fiscal
+domain: public_finance
+
+description: |
+  Government final consumption expenditure as a share of GDP.
+
+synonyms:
+  primary:
+    - government expenditure
+    - public expenditure
+    - government spending
+    - public spending
+  secondary:
+    - fiscal spending
+    - government consumption
+    - public sector spending
+
+explicit_exclusions:
+  - tax revenue
+  - fiscal balance
+  - government debt
+  - military expenditure
+
+providers:
+  WorldBank:
+    primary:
+      code: NE.CON.GOVT.ZS
+      name: "General government final consumption expenditure (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

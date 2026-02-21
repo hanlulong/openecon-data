@@ -308,6 +308,84 @@ class IndicatorTranslator:
                 "STATSCAN": [],
             }
         },
+        "labor_force_participation": {
+            "aliases": [
+                "labor force participation",
+                "labor force participation rate",
+                "labour force participation",
+                "labour force participation rate",
+                "workforce participation",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": ["CIVPART"],
+                "WORLDBANK": ["SL.TLF.CACT.ZS"],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "foreign_exchange_reserves": {
+            "aliases": [
+                "foreign exchange reserves",
+                "fx reserves",
+                "forex reserves",
+                "international reserves",
+                "official reserves",
+                "reserve assets",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": [],
+                "WORLDBANK": ["FI.RES.TOTL.CD"],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "government_expenditure": {
+            "aliases": [
+                "government expenditure",
+                "public expenditure",
+                "government spending",
+                "public spending",
+                "government consumption",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": [],
+                "WORLDBANK": ["NE.CON.GOVT.ZS"],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
+        "renewable_energy": {
+            "aliases": [
+                "renewable energy",
+                "renewable energy share",
+                "renewable energy consumption",
+                "clean energy share",
+                "green energy share",
+                "renewables share",
+            ],
+            "imf_codes": [],
+            "providers": {
+                "FRED": [],
+                "WORLDBANK": ["EG.FEC.RNEW.ZS"],
+                "IMF": [],
+                "EUROSTAT": [],
+                "OECD": [],
+                "BIS": [],
+                "STATSCAN": [],
+            }
+        },
     }
 
     # Known IMF codes that should be translated to concepts

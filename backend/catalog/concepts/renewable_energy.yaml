@@ -1,0 +1,38 @@
+# Renewable Energy Indicator Catalog
+concept: renewable_energy
+category: environment
+domain: sustainability
+
+description: |
+  Share of renewable energy in total final energy consumption.
+
+synonyms:
+  primary:
+    - renewable energy
+    - renewable energy share
+    - renewable energy consumption
+  secondary:
+    - clean energy share
+    - green energy share
+    - renewables share
+    - renewable power share
+
+explicit_exclusions:
+  - co2 emissions
+  - fossil fuel consumption
+  - electricity access
+  - energy intensity
+
+providers:
+  WorldBank:
+    primary:
+      code: EG.FEC.RNEW.ZS
+      name: "Renewable energy consumption (% of total final energy consumption)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

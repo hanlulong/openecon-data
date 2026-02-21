@@ -102,6 +102,46 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertLess(result.confidence, 0.7)
 
+    def test_resolves_labor_force_participation_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("labor force participation rate", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "SL.TLF.CACT.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_foreign_exchange_reserves_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("fx reserves", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "FI.RES.TOTL.CD")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_government_expenditure_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("government spending", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "NE.CON.GOVT.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_renewable_energy_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("renewable energy share", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.code, "EG.FEC.RNEW.ZS")
+        self.assertEqual(result.source, "catalog")
+
     def test_exact_code_match_keeps_max_confidence(self):
         lookup = _FakeLookup(
             exact_results={

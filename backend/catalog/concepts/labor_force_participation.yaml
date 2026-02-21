@@ -1,0 +1,48 @@
+# Labor Force Participation Indicator Catalog
+concept: labor_force_participation
+category: labor_market
+domain: macroeconomics
+
+description: |
+  The share of the working-age population that is either employed
+  or actively looking for work.
+
+synonyms:
+  primary:
+    - labor force participation
+    - labor force participation rate
+    - labour force participation
+    - labour force participation rate
+  secondary:
+    - participation rate
+    - workforce participation
+    - labor market participation
+    - labour market participation
+
+explicit_exclusions:
+  - unemployment rate
+  - employment level
+  - labor productivity
+  - wages
+
+providers:
+  WorldBank:
+    primary:
+      code: SL.TLF.CACT.ZS
+      name: "Labor force participation rate, total (% of total population ages 15+)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: CIVPART
+      name: "Labor Force Participation Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

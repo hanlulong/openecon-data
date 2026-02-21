@@ -1,0 +1,40 @@
+# Foreign Exchange Reserves Indicator Catalog
+concept: foreign_exchange_reserves
+category: external_sector
+domain: international_economics
+
+description: |
+  Official reserve assets held by a country's monetary authority,
+  typically including foreign currency assets and gold.
+
+synonyms:
+  primary:
+    - foreign exchange reserves
+    - fx reserves
+    - forex reserves
+    - international reserves
+  secondary:
+    - reserve assets
+    - central bank reserves
+    - official reserves
+    - total reserves
+
+explicit_exclusions:
+  - required reserves ratio
+  - reserve requirement
+  - bank reserves
+  - household savings
+
+providers:
+  WorldBank:
+    primary:
+      code: FI.RES.TOTL.CD
+      name: "Total reserves (includes gold, current US$)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
