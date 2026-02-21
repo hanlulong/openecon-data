@@ -31,18 +31,6 @@
   <img src="docs/assets/demo.gif" width="800" alt="OpenEcon Data — type a query in plain English, get a chart with data from FRED, World Bank, and more" />
 </p>
 
-## Table of Contents
-
-- [Why OpenEcon Data?](#why-openecon-data)
-- [Quick Start](#quick-start)
-- [Example Queries](#example-queries)
-- [How It Works](#how-it-works)
-- [Features](#features)
-- [Data Sources](#data-sources)
-- [Architecture](#architecture)
-- [OpenEcon Ecosystem](#openecon-ecosystem)
-- [Contributing](#contributing)
-
 ## Why OpenEcon Data?
 
 Getting economic data today means juggling APIs, reading provider docs, wrangling country codes, and normalizing date formats. OpenEcon Data fixes this:
