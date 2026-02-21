@@ -68,6 +68,28 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(cached[0].metadata.indicator, "Real GDP")
 
+    def test_build_cache_params_adds_version_without_mutating_input(self) -> None:
+        raw_params = {"indicator": "NE.IMP.GNFS.ZS", "countries": ["China", "US"]}
+
+        cache_params = self.service._build_cache_params("World Bank", raw_params)  # pylint: disable=protected-access
+
+        self.assertNotIn("_cache_version", raw_params)
+        self.assertNotIn("_provider", raw_params)
+        self.assertEqual(cache_params["_cache_version"], self.service.CACHE_KEY_VERSION)
+        self.assertEqual(cache_params["_provider"], "WORLDBANK")
+        self.assertEqual(cache_params["indicator"], "NE.IMP.GNFS.ZS")
+
+    def test_cache_version_change_invalidates_prior_entries(self) -> None:
+        raw_params = {"seriesId": "GDP"}
+        version_1_params = self.service._build_cache_params("FRED", raw_params)  # pylint: disable=protected-access
+        cache_service.cache_data("FRED", version_1_params, sample_series())
+        self.assertIsNotNone(cache_service.get_data("FRED", version_1_params))
+
+        self.service.CACHE_KEY_VERSION = "test-next-version"
+        version_2_params = self.service._build_cache_params("FRED", raw_params)  # pylint: disable=protected-access
+
+        self.assertIsNone(cache_service.get_data("FRED", version_2_params))
+
     def test_process_query_records_processing_steps(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -127,10 +149,26 @@ class QueryServiceTests(unittest.TestCase):
                 return _Resolved()
 
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
+        self.assertTrue(fetch_mock.called)
+
+    def test_worldbank_fetch_prefers_resolved_indicator_param(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="World Bank",
+            indicators=["Import Share of GDP"],
+            parameters={"countries": ["China", "US"], "indicator": "NE.IMP.GNFS.ZS"},
+            clarificationNeeded=False,
+            originalQuery="import share of gdp China and US",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
 
 

@@ -135,6 +135,9 @@ def _safe_get_source(data: List[NormalizedData]) -> str:
 
 
 class QueryService:
+    # Bump when cache semantics change so stale entries from old logic are not reused.
+    CACHE_KEY_VERSION = "2026-02-21.1"
+
     def __init__(
         self,
         openrouter_key: str,
@@ -568,6 +571,18 @@ class QueryService:
 
         return params
 
+    def _build_cache_params(self, provider: str, params: dict) -> dict:
+        """
+        Build normalized cache parameters with explicit schema versioning.
+
+        This decouples cache validity from implementation details and allows safe,
+        global invalidation when routing/fetch semantics change.
+        """
+        cache_params = dict(params or {})
+        cache_params["_cache_version"] = self.CACHE_KEY_VERSION
+        cache_params["_provider"] = normalize_provider_name(provider)
+        return cache_params
+
     async def _get_from_cache(self, provider: str, params: dict):
         """
         Get data from cache (Redis first, then in-memory).
@@ -579,11 +594,13 @@ class QueryService:
         Returns:
             Cached data if available, None otherwise
         """
+        cache_params = self._build_cache_params(provider, params)
+
         # Try Redis cache first
         try:
             redis_cache = await get_redis_cache()
-            query_key = str(params)  # Simple key generation
-            cached_data = await redis_cache.get(provider, query_key, params)
+            query_key = str(cache_params)  # Simple key generation
+            cached_data = await redis_cache.get(provider, query_key, cache_params)
             if cached_data:
                 logger.info(f"Redis cache hit for {provider}")
                 return cached_data
@@ -591,7 +608,7 @@ class QueryService:
             logger.warning(f"Redis cache error: {e}, falling back to in-memory")
 
         # Fallback to in-memory cache
-        cached_data = cache_service.get_data(provider, params)
+        cached_data = cache_service.get_data(provider, cache_params)
         if cached_data:
             logger.info(f"In-memory cache hit for {provider}")
             return cached_data
@@ -607,17 +624,19 @@ class QueryService:
             params: Query parameters
             data: Data to cache
         """
+        cache_params = self._build_cache_params(provider, params)
+
         # Save to Redis cache
         try:
             redis_cache = await get_redis_cache()
-            query_key = str(params)
-            await redis_cache.set(provider, query_key, data, params)
+            query_key = str(cache_params)
+            await redis_cache.set(provider, query_key, data, cache_params)
             logger.debug(f"Saved to Redis cache: {provider}")
         except Exception as e:
             logger.warning(f"Failed to save to Redis: {e}")
 
         # Always save to in-memory cache as backup
-        cache_service.cache_data(provider, params, data)
+        cache_service.cache_data(provider, cache_params, data)
         logger.debug(f"Saved to in-memory cache: {provider}")
 
     def _get_fallback_providers(self, primary_provider: str, indicator: Optional[str] = None) -> List[str]:
@@ -1583,10 +1602,16 @@ class QueryService:
                     series = await self.fred_provider.fetch_series(params)
                     return [series]
             if provider in {"WORLDBANK", "WORLD BANK"}:
+                resolved_indicator = params.get("indicator")
                 # Handle multiple indicators for World Bank
                 if len(intent.indicators) > 1:
                     all_data = []
-                    for indicator in intent.indicators:
+                    indicators_to_fetch = intent.indicators
+                    if resolved_indicator and len(intent.indicators) > 1:
+                        # Prefer resolved indicator when available; it has passed resolver scoring.
+                        indicators_to_fetch = [str(resolved_indicator)]
+
+                    for indicator in indicators_to_fetch:
                         data = await self.world_bank_provider.fetch_indicator(
                             indicator=indicator,
                             country=params.get("country"),
@@ -1597,7 +1622,7 @@ class QueryService:
                         all_data.extend(data if isinstance(data, list) else [data])
                     return all_data
                 else:
-                    indicator = intent.indicators[0] if intent.indicators else ""
+                    indicator = str(resolved_indicator or (intent.indicators[0] if intent.indicators else ""))
                     return await self.world_bank_provider.fetch_indicator(
                         indicator=indicator,
                         country=params.get("country"),
