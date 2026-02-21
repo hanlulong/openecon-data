@@ -108,7 +108,7 @@ export function ChatPage() {
   const processingQuery = useRef<string | null>(null)
 
   useEffect(() => {
-    document.title = 'Chat | openecon.ai'
+    document.title = 'Chat | OpenEcon.ai'
   }, [])
 
   const scrollToBottom = () => {
@@ -716,7 +716,7 @@ Country: ${country}
 Source: ${source}
 Reference: ${sourceUrl}
 
-This data was retrieved from openecon.ai
+This data was retrieved from OpenEcon.ai
 For direct API access, visit the source URL above.
 """
 

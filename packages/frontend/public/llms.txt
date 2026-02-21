@@ -1,8 +1,10 @@
-# econ-data-mcp - AI Economic Data Platform
+# OpenEcon.ai - AI Economic Data Platform
 # https://openecon.ai
+# https://data.openecon.ai/chat
+# Source: https://github.com/hanlulong/econ-data-mcp
 
 ## About
-econ-data-mcp is an AI-powered economic data aggregation platform that allows users to query economic data using natural language. It provides access to 10+ authoritative data sources including FRED, World Bank, IMF, UN Comtrade, Statistics Canada, Eurostat, OECD, BIS, ExchangeRate-API, and CoinGecko.
+OpenEcon.ai is an AI-powered economic data aggregation platform that allows users to query economic data using natural language. It provides access to 10+ authoritative data sources including FRED, World Bank, IMF, UN Comtrade, Statistics Canada, Eurostat, OECD, BIS, ExchangeRate-API, and CoinGecko.
 
 ## Capabilities
 - Natural language queries for economic data
@@ -33,7 +35,7 @@ econ-data-mcp is an AI-powered economic data aggregation platform that allows us
 - "Bitcoin price for the last year"
 
 ## API Access
-econ-data-mcp provides an MCP (Model Context Protocol) server endpoint at:
+OpenEcon.ai provides an MCP (Model Context Protocol) server endpoint at:
 - Endpoint: https://openecon.ai/mcp
 - Transport: Server-Sent Events (SSE)
 - Available operation: query_data
@@ -49,4 +51,4 @@ Website: https://openecon.ai
 - Authentication: Supabase
 
 ## Usage
-Visit https://openecon.ai/chat to start querying economic data. No registration required for basic queries.
+Visit https://data.openecon.ai/chat to start querying economic data. No registration required for basic queries.

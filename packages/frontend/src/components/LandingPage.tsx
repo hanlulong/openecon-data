@@ -216,6 +216,7 @@ const buttonPulse = {
 
 const navItems = [
   { label: 'Features', href: '#features' },
+  { label: 'Tools', href: '#tools' },
   { label: 'Data Sources', href: '#integrations' },
   { label: 'How it works', href: '#how' },
   { label: 'Docs', href: '/docs' },
@@ -266,6 +267,27 @@ const features: Array<{ icon: ReactNode; title: string; desc: string }> = [
     desc: 'Fork it, extend it, self-host it. MCP server built in for AI agent integration.',
   },
 ]
+
+const tools = [
+  {
+    title: 'OpenEcon Data',
+    href: 'https://data.openecon.ai/chat',
+    tag: 'Live app',
+    desc: 'Query economic data in plain English, chart results instantly, and export CSV/JSON with source provenance.',
+  },
+  {
+    title: 'Econ Writing Skill',
+    href: 'https://github.com/hanlulong/econ-writing-skill',
+    tag: 'Open source',
+    desc: 'Reusable writing workflows for economists with prompt patterns, structure templates, and analysis guardrails.',
+  },
+  {
+    title: 'Awesome AI for Economists',
+    href: 'https://github.com/hanlulong/awesome-ai-for-economists',
+    tag: 'Resource list',
+    desc: 'Curated tools, papers, and references to help economists apply AI in research, writing, and production work.',
+  },
+] as const
 
 const check = (text: string) => (
   <li key={text} className="flex items-start gap-2">
@@ -595,8 +617,8 @@ export function LandingPage() {
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-5">
           <a href="#" className="flex items-center gap-2 text-lg sm:text-xl font-semibold">
             <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-xl bg-gradient-to-br from-indigo-500 via-sky-500 to-emerald-400" />
-            <span className="hidden xs:inline">openecon.ai</span>
-            <span className="inline xs:hidden">openecon.ai</span>
+            <span className="hidden xs:inline">OpenEcon.ai</span>
+            <span className="inline xs:hidden">OpenEcon.ai</span>
           </a>
           <nav className="hidden items-center gap-3 text-sm md:flex lg:gap-4">
             {navItems.map((item) => (
@@ -846,6 +868,53 @@ export function LandingPage() {
                 </div>
                 <div className="mt-1 text-xs text-gray-500 sm:text-sm">{stat.label}</div>
               </motion.div>
+            ))}
+          </div>
+        </div>
+      </motion.section>
+
+      <motion.section
+        id="tools"
+        className="py-8 sm:py-10 bg-gray-50/70"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: true, margin: '-100px' }}
+        variants={staggerContainer}
+      >
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-5">
+          <motion.div variants={fadeInUp}>
+            <h2 className="text-xl font-semibold sm:text-2xl lg:text-3xl">OpenEcon tools</h2>
+            <p className="mt-2 max-w-3xl text-sm text-gray-600 sm:text-base">
+              Start with the live data assistant, then use open-source skills and curated resources to build repeatable workflows.
+            </p>
+          </motion.div>
+
+          <div className="mt-5 grid gap-3 sm:mt-6 sm:grid-cols-2 lg:grid-cols-3">
+            {tools.map((tool, index) => (
+              <motion.a
+                key={tool.title}
+                variants={fadeInUp}
+                custom={index}
+                href={tool.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <Card className="h-full rounded-2xl border-gray-200 transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md">
+                  <CardContent className="p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-base font-semibold text-gray-900">{tool.title}</h3>
+                      <Badge variant="secondary" className="rounded-xl">
+                        {tool.tag}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-sm text-gray-600">{tool.desc}</p>
+                    <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-indigo-700">
+                      Open <ArrowRight className="h-3.5 w-3.5" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.a>
             ))}
           </div>
         </div>
@@ -1138,7 +1207,7 @@ export function LandingPage() {
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 text-xs text-gray-600 sm:flex-row sm:gap-4 sm:text-sm lg:px-5">
           <div className="flex items-center gap-2">
             <div className="h-5 w-5 rounded-lg bg-gradient-to-br from-indigo-500 via-sky-500 to-emerald-400 sm:h-6 sm:w-6" />
-            <span>openecon.ai © {new Date().getFullYear()}</span>
+            <span>OpenEcon.ai © {new Date().getFullYear()}</span>
           </div>
           <div className="flex items-center gap-3 sm:gap-4">
             <a href="/examples" className="hover:text-gray-900">

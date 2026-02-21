@@ -32,7 +32,7 @@ export function ShareModal({ isOpen, onClose, messages, singleQuery }: ShareModa
       setShareUrl(url)
 
       // Generate share text
-      let text = `Check out this economic data query on openecon.ai:\n\n"${singleQuery.query}"`
+      let text = `Check out this economic data query on OpenEcon.ai:\n\n"${singleQuery.query}"`
       if (singleQuery.data && singleQuery.data.length > 0) {
         const sources = [...new Set(singleQuery.data.map(d => d.metadata.source))]
         text += `\n\nData from: ${sources.join(', ')}`
@@ -51,7 +51,7 @@ export function ShareModal({ isOpen, onClose, messages, singleQuery }: ShareModa
         setShareUrl(url)
 
         // Generate share text with all queries
-        let text = `Check out my economic data analysis on openecon.ai:\n`
+        let text = `Check out my economic data analysis on OpenEcon.ai:\n`
         userQueries.slice(0, 3).forEach((q, i) => {
           text += `\n${i + 1}. "${q}"`
         })
@@ -92,7 +92,7 @@ export function ShareModal({ isOpen, onClose, messages, singleQuery }: ShareModa
 
     try {
       await navigator.share({
-        title: 'openecon.ai Data Query',
+        title: 'OpenEcon.ai Data Query',
         text: shareText,
         url: shareUrl,
       })

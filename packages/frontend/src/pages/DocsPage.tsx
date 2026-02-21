@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 export function DocsPage() {
   useEffect(() => {
-    document.title = 'Documentation | openecon.ai'
+    document.title = 'Documentation | OpenEcon.ai'
   }, [])
 
   return (
@@ -10,10 +10,18 @@ export function DocsPage() {
       <div className="mx-auto max-w-4xl px-4 sm:px-6">
         <h1 className="text-2xl font-semibold text-gray-900 sm:text-3xl">Documentation</h1>
         <p className="mt-3 text-sm text-gray-600 leading-relaxed sm:mt-4 sm:text-base">
-          openecon.ai combines large language models with curated macroeconomic data connectors. The
-          marketing site demonstrates the assistant experience: type a natural-language question,
-          review the structured response, and export the underlying dataset. This page captures the
-          basics. For SDKs, authentication, and deployment guides, visit{' '}
+          OpenEcon.ai combines large language models with curated macroeconomic data connectors.
+          The live data assistant is available at{' '}
+          <a
+            className="text-indigo-600 underline"
+            href="https://data.openecon.ai/chat"
+            target="_blank"
+            rel="noreferrer"
+          >
+            data.openecon.ai/chat
+          </a>{' '}
+          where you can type a natural-language question, review the structured response, and export
+          the underlying dataset. This page captures the basics. For SDKs, authentication, and deployment guides, visit{' '}
           <a
             className="text-indigo-600 underline"
             href="https://docs.openecon.ai"
@@ -64,11 +72,10 @@ export function DocsPage() {
           <section>
             <h2 className="text-lg font-semibold text-gray-900 sm:text-xl">Quick start</h2>
             <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm text-gray-600 sm:mt-3 sm:text-base">
-              <li>Click <em>Launch demo</em> and sign in using your OpenRouter API key (prompted on first query).</li>
-              <li>Submit a natural-language question such as “Canada unemployment rate SA, monthly, last 10 years”.</li>
+              <li>Open <em>data.openecon.ai/chat</em>.</li>
+              <li>Try a query such as “Canada unemployment rate SA, monthly, last 10 years”.</li>
               <li>
-                Inspect the assistant’s response, copy the source URL, or download the result as CSV/JSON for your
-                notebook.
+                Inspect the assistant response, copy the source URL, or download the result as CSV/JSON for your notebook.
               </li>
             </ol>
           </section>

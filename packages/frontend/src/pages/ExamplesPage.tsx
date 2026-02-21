@@ -96,7 +96,7 @@ const exampleCategories: ExampleCategory[] = [
 
 export function ExamplesPage() {
   useEffect(() => {
-    document.title = 'Economic Data Query Examples | openecon.ai'
+    document.title = 'Economic Data Query Examples | OpenEcon.ai'
   }, [])
 
   return (
@@ -104,7 +104,7 @@ export function ExamplesPage() {
       {/* Header */}
       <header className="bg-white border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link to="/" className="text-xl font-bold text-blue-600">openecon.ai</Link>
+          <Link to="/" className="text-xl font-bold text-blue-600">OpenEcon.ai</Link>
           <nav className="flex items-center gap-4">
             <Link to="/chat" className="text-gray-600 hover:text-gray-900">Chat</Link>
             <Link to="/docs" className="text-gray-600 hover:text-gray-900">Docs</Link>
@@ -121,11 +121,19 @@ export function ExamplesPage() {
           <p className="text-lg text-gray-600 max-w-2xl mx-auto mb-6">
             Explore sample queries across 10+ data sources. Click any example to try it in our AI-powered chat interface.
           </p>
+          <a
+            href="https://data.openecon.ai/chat"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex mb-4 items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700"
+          >
+            Live app: data.openecon.ai/chat
+          </a>
           <Link
             to="/chat"
             className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
           >
-            Try openecon.ai Free
+            Try OpenEcon.ai Free
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
@@ -188,7 +196,7 @@ export function ExamplesPage() {
         <div className="max-w-6xl mx-auto px-4">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="text-sm">
-              © 2025 openecon.ai. Query economic data with AI.
+              © {new Date().getFullYear()} OpenEcon.ai. Query economic data with AI.
             </div>
             <nav className="flex items-center gap-6 text-sm">
               <Link to="/" className="hover:text-white">Home</Link>

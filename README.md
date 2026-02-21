@@ -1,10 +1,11 @@
 # econ-data-mcp
 
-**AI-powered economic data MCP platform with natural language interface**
+**Open-source MCP and API engine behind OpenEcon.ai**
 
-econ-data-mcp lets you query economic data using plain English. Ask questions like "Show me US GDP for the last 5 years" and get structured data, charts, and exportable datasets with full provenance.
+`econ-data-mcp` lets users query economic data in plain English and get structured results, charts, and exportable datasets with provenance.
 
-**Live at:** [https://openecon.ai](https://openecon.ai)
+**For users (no setup):** use **[OpenEcon.ai](https://openecon.ai)** directly.  
+**For developers (self-host/customize):** clone this repo and run locally.
 
 ## ✨ Features
 

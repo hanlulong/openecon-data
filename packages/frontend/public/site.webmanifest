@@ -1,6 +1,6 @@
 {
-  "name": "econ-data-mcp - AI Economic Data Platform",
-  "short_name": "econ-data-mcp",
+  "name": "OpenEcon.ai - AI Economic Data Platform",
+  "short_name": "OpenEcon",
   "description": "Query economic data from FRED, World Bank, IMF, and 10+ sources using natural language",
   "start_url": "/",
   "display": "standalone",

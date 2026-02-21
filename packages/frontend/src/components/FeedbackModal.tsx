@@ -131,7 +131,7 @@ export function FeedbackModal({ isOpen, onClose, messages, conversationId }: Fee
         <div className="feedback-modal-header">
           <div className="feedback-modal-title-group">
             <h3>Report Bug / Request Feature</h3>
-            <span className="feedback-modal-subtitle">Help us improve openecon.ai</span>
+            <span className="feedback-modal-subtitle">Help us improve OpenEcon.ai</span>
           </div>
           <button className="feedback-modal-close" onClick={onClose} aria-label="Close">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
