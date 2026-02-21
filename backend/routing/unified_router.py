@@ -204,11 +204,49 @@ class UnifiedRouter:
                 reasoning="US trade balance (without partner) uses FRED BOPGSTB series",
             )
 
-        # 3d: Canadian query handling
+        # 3d: IMF for forecast/projection and global macro aggregates.
+        if self._is_forecast_or_projection_query(query_lower):
+            return self._create_decision(
+                provider="IMF",
+                confidence=0.90,
+                match_type="indicator",
+                matched_pattern="forecast/projection",
+                reasoning="Forecast/projection macro query routed to IMF",
+            )
+
+        if self._is_global_macro_imf_query(query_lower):
+            return self._create_decision(
+                provider="IMF",
+                confidence=0.86,
+                match_type="indicator",
+                matched_pattern="global macro aggregate",
+                reasoning="Global/aggregate macro query routed to IMF",
+            )
+
+        # 3e: Multi-country ratio comparisons are best covered by WorldBank.
+        if self._is_worldbank_cross_country_ratio_query(query_lower):
+            return self._create_decision(
+                provider="WorldBank",
+                confidence=0.84,
+                match_type="indicator",
+                matched_pattern="cross-country ratio",
+                reasoning="Cross-country ratio comparison routed to WorldBank",
+            )
+
+        if self._is_worldbank_group_current_account_query(query_lower):
+            return self._create_decision(
+                provider="WorldBank",
+                confidence=0.84,
+                match_type="indicator",
+                matched_pattern="group current account",
+                reasoning="Country-group current account history routed to WorldBank",
+            )
+
+        # 3f: Canadian query handling
         if CountryResolver.is_canadian_region(query):
             return self._handle_canadian_query(query, indicators, country)
 
-        # 3e: Property/house prices → BIS
+        # 3g: Property/house prices → BIS
         if self._is_property_price_query(query_lower, indicators):
             return self._create_decision(
                 provider="BIS",
@@ -217,6 +255,27 @@ class UnifiedRouter:
                 matched_pattern="property prices",
                 reasoning="Property/house prices best sourced from BIS",
             )
+
+        # 3h: Merchandise trade flow queries default to Comtrade.
+        if self._is_merchandise_trade_flow_query(query_lower):
+            return self._create_decision(
+                provider="Comtrade",
+                confidence=0.86,
+                match_type="indicator",
+                matched_pattern="merchandise trade flow",
+                reasoning="Import/export goods flow query routed to Comtrade",
+            )
+
+        # 3i: Prefer Eurostat for standard historical EU-country macro indicators.
+        if country and CountryResolver.is_eu_member(country):
+            if self._is_eurostat_country_indicator_query(query_lower):
+                return self._create_decision(
+                    provider="Eurostat",
+                    confidence=0.82,
+                    match_type="country",
+                    matched_pattern=country,
+                    reasoning=f"EU country ({country}) historical macro query routed to Eurostat",
+                )
 
         # Priority 4: Keyword-based indicator patterns
         match = KeywordMatcher.detect_indicator_provider(query, indicators)
@@ -391,7 +450,114 @@ class UnifiedRouter:
 
         return any(term in combined for term in [
             "property price", "house price", "property prices", "house prices",
-            "housing price", "real estate price"
+            "housing price", "real estate price", "real estate market",
+            "residential property", "housing market"
+        ])
+
+    def _is_forecast_or_projection_query(self, query_lower: str) -> bool:
+        """Check if query asks for forecasted/projected data."""
+        return any(term in query_lower for term in [
+            "forecast", "forecasts", "projection", "projections",
+            "outlook", "scenario", "expected", "expectation",
+        ])
+
+    def _is_global_macro_imf_query(self, query_lower: str) -> bool:
+        """Detect global/aggregate macro queries that are better served by IMF datasets."""
+        has_scope = any(term in query_lower for term in [
+            "world", "global", "emerging markets", "emerging economies",
+            "advanced economies", "developing economies", "developing countries",
+            "eurozone",
+        ])
+        if not has_scope:
+            return False
+
+        # IMF WEO-style aggregates and global macro monitoring.
+        if any(term in query_lower for term in [
+            "trade volume", "commodity price", "commodity prices index",
+            "world economic outlook",
+        ]):
+            return True
+
+        if "current account" in query_lower and any(term in query_lower for term in [
+            "world", "global", "emerging", "advanced",
+        ]):
+            return True
+
+        if "inflation" in query_lower and any(term in query_lower for term in [
+            "world", "global", "developing", "emerging", "advanced",
+        ]):
+            return True
+
+        return False
+
+    def _is_worldbank_cross_country_ratio_query(self, query_lower: str) -> bool:
+        """Detect cross-country indicator ratios that should default to WorldBank."""
+        has_group_scope = any(term in query_lower for term in [
+            " countries", "economies", "region", "regions",
+            "european countries", "oil exporting countries", "oecd countries",
+            "latin american countries", "middle eastern countries",
+            "african countries", "g7 countries", "brics countries",
+        ])
+        if not has_group_scope:
+            return False
+
+        ratio_patterns = [
+            "as % of gdp", "% of gdp", "as percentage of gdp", "as percent of gdp",
+            "to gdp ratio", "ratio to gdp", "share of gdp",
+        ]
+        has_ratio = any(pattern in query_lower for pattern in ratio_patterns)
+        if not has_ratio:
+            return False
+
+        # Trade ratios are handled separately in _is_trade_ratio_query.
+        if any(term in query_lower for term in ["import", "export", "trade as"]):
+            return False
+
+        # Forecast-style ratios should remain with IMF.
+        if self._is_forecast_or_projection_query(query_lower):
+            return False
+
+        return True
+
+    def _is_worldbank_group_current_account_query(self, query_lower: str) -> bool:
+        """Detect historical country-group current account queries for WorldBank."""
+        if "current account" not in query_lower:
+            return False
+        if self._is_forecast_or_projection_query(query_lower):
+            return False
+        if self._is_global_macro_imf_query(query_lower):
+            return False
+        return any(term in query_lower for term in [
+            "countries", "country", "oil exporting", "european countries",
+            "latin american", "african", "asian countries",
+        ])
+
+    def _is_merchandise_trade_flow_query(self, query_lower: str) -> bool:
+        """Detect merchandise import/export flow queries for Comtrade."""
+        has_flow = any(term in query_lower for term in [" exports", " export", " imports", " import"])
+        if not has_flow:
+            return False
+
+        # Keep macro trade indicators away from Comtrade routing.
+        blocked_patterns = [
+            "trade balance", "trade deficit", "trade surplus", "trade volume",
+            "current account", "% of gdp", "as percentage of gdp", "to gdp ratio",
+        ]
+        if any(pattern in query_lower for pattern in blocked_patterns):
+            return False
+
+        return True
+
+    def _is_eurostat_country_indicator_query(self, query_lower: str) -> bool:
+        """Detect historical EU-country macro queries that should use Eurostat."""
+        if self._is_forecast_or_projection_query(query_lower):
+            return False
+        if self._is_property_price_query(query_lower, []):
+            return False
+        return any(term in query_lower for term in [
+            "gdp", "inflation", "unemployment", "employment",
+            "government debt", "youth unemployment", "trade balance",
+            "energy consumption", "population",
         ])
 
     def _handle_canadian_query(
@@ -404,6 +570,18 @@ class UnifiedRouter:
         query_lower = query.lower()
         indicators_str = " ".join(indicators).lower()
         combined = f"{query_lower} {indicators_str}"
+
+        # Property market level queries are better served by BIS cross-country datasets.
+        if any(term in combined for term in [
+            "residential property", "property prices", "real estate market", "real estate prices",
+        ]):
+            return self._create_decision(
+                provider="BIS",
+                confidence=0.86,
+                match_type="indicator",
+                matched_pattern="canada property market",
+                reasoning="Canadian residential/property market query routed to BIS",
+            )
 
         # Check for trade queries
         is_trade = any(term in combined for term in ["import", "export", "trade"])
@@ -419,14 +597,14 @@ class UnifiedRouter:
                     matched_pattern="Canadian bilateral trade",
                     reasoning="Canadian bilateral trade (with partner) → Comtrade",
                 )
-            # Trade balance (no partner) → WorldBank
+            # Trade balance (no partner) → StatsCan
             if "trade balance" in combined:
                 return self._create_decision(
-                    provider="WorldBank",
+                    provider="StatsCan",
                     confidence=0.85,
                     match_type="indicator",
                     matched_pattern="Canadian trade balance",
-                    reasoning="Canadian trade balance (no partner) → WorldBank",
+                    reasoning="Canadian trade balance (no partner) → StatsCan",
                 )
             # Exports/Imports (no partner) → StatsCan
             return self._create_decision(

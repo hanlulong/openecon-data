@@ -394,15 +394,40 @@ class TestUnifiedRouter:
         decision = router.route("Canada exports to US")
         assert decision.provider == "Comtrade"
 
-    def test_canada_trade_balance_routes_to_worldbank(self, router):
-        """Canadian trade balance uses WorldBank."""
+    def test_canada_trade_balance_routes_to_statscan(self, router):
+        """Canadian trade balance uses StatsCan."""
         decision = router.route("Canada trade balance")
-        assert decision.provider == "WorldBank"
+        assert decision.provider == "StatsCan"
 
     def test_canada_exports_no_partner_routes_to_statscan(self, router):
         """Canadian exports (no partner) uses StatsCan."""
         decision = router.route("Canada total exports")
         assert decision.provider == "StatsCan"
+
+    def test_canada_residential_property_routes_to_bis(self, router):
+        """Canadian residential property market queries use BIS."""
+        decision = router.route("Canada residential property prices 2015-2024")
+        assert decision.provider == "BIS"
+
+    def test_goods_exports_without_partner_route_to_comtrade(self, router):
+        """Goods export flow queries route to Comtrade even without explicit partner."""
+        decision = router.route("Mexico auto parts exports 2018-2023")
+        assert decision.provider == "Comtrade"
+
+    def test_global_trade_volume_routes_to_imf(self, router):
+        """Global trade volume growth queries use IMF."""
+        decision = router.route("World trade volume growth 2018-2023")
+        assert decision.provider == "IMF"
+
+    def test_forecast_queries_route_to_imf(self, router):
+        """Projection/forecast queries use IMF."""
+        decision = router.route("Eurozone GDP growth projections 2024-2026")
+        assert decision.provider == "IMF"
+
+    def test_eu_country_government_debt_routes_to_eurostat(self, router):
+        """Historical EU-country macro debt query should use Eurostat."""
+        decision = router.route("Italy government debt 2015-2023")
+        assert decision.provider == "Eurostat"
 
     # ==========================================================================
     # Fallback Tests
