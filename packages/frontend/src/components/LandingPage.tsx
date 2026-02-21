@@ -222,6 +222,8 @@ const navItems = [
   { label: 'Docs', href: '/docs' },
 ] as const
 
+const LIVE_DATA_APP_URL = 'https://data.openecon.io/chat'
+
 const integrations = [
   { name: 'FRED', tag: 'Macro', desc: '90,000+ US economic series — GDP, CPI, employment, rates.' },
   { name: 'World Bank', tag: 'WDI', desc: '16,000+ global development indicators across 200+ countries.' },
@@ -271,7 +273,7 @@ const features: Array<{ icon: ReactNode; title: string; desc: string }> = [
 const tools = [
   {
     title: 'OpenEcon Data',
-    href: 'https://data.openecon.ai/chat',
+    href: LIVE_DATA_APP_URL,
     tag: 'Live app',
     desc: 'Query economic data in plain English, chart results instantly, and export CSV/JSON with source provenance.',
   },
@@ -611,6 +613,20 @@ export function LandingPage() {
     setProgress(0)
   }, [])
 
+  const openLiveDataApp = useCallback((options?: { query?: string; auth?: boolean }) => {
+    const params = new URLSearchParams()
+    const trimmedQuery = options?.query?.trim()
+    if (trimmedQuery) {
+      params.set('query', trimmedQuery)
+    }
+    if (options?.auth) {
+      params.set('auth', '1')
+    }
+
+    const query = params.toString()
+    window.location.href = query ? `${LIVE_DATA_APP_URL}?${query}` : LIVE_DATA_APP_URL
+  }, [])
+
   return (
     <div className="min-h-screen antialiased text-gray-900">
       <header className="sticky top-0 z-50 border-b bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
@@ -631,11 +647,11 @@ export function LandingPage() {
             <Button
               variant="ghost"
               className="hidden rounded-xl px-3 py-2 text-sm sm:inline-flex sm:px-4"
-              onClick={() => navigate('/chat?auth=1')}
+              onClick={() => openLiveDataApp({ auth: true })}
             >
               Sign in
             </Button>
-            <Button className="rounded-2xl px-3 py-2 text-sm sm:px-4" onClick={() => navigate('/chat')}>
+            <Button className="rounded-2xl px-3 py-2 text-sm sm:px-4" onClick={() => openLiveDataApp()}>
               Get started
             </Button>
           </div>
@@ -663,13 +679,16 @@ export function LandingPage() {
               Access FRED, World Bank, IMF, BIS, UN Comtrade, and more with natural language. Auto-join datasets, align frequencies, and get publication-ready charts.
             </p>
             <div className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:gap-4">
-              <Button className="rounded-2xl px-6 py-3 text-base font-semibold" onClick={() => navigate('/chat')}>
+              <Button className="rounded-2xl px-6 py-3 text-base font-semibold" onClick={() => openLiveDataApp()}>
                 Try it now
               </Button>
               <Button variant="outline" className="rounded-2xl px-6 py-3 text-base" onClick={() => navigate('/docs')}>
                 View documentation
               </Button>
             </div>
+            <p className="mt-3 text-xs text-gray-500">
+              Live app: <a href={LIVE_DATA_APP_URL} className="underline">{LIVE_DATA_APP_URL.replace('https://', '')}</a>
+            </p>
             <ul className="mt-6 grid max-w-md grid-cols-2 gap-3 text-sm sm:mt-8 text-gray-600">
               {['Cross-provider queries', 'Automatic data joins', 'Export to CSV/JSON', 'Full provenance tracking'].map((item) => (
                 <li key={item} className="flex items-center gap-2">
@@ -698,7 +717,7 @@ export function LandingPage() {
                         onChange={(e) => setSampleQuery(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && sampleQuery.trim()) {
-                            navigate(`/chat?query=${encodeURIComponent(sampleQuery.trim())}`)
+                            openLiveDataApp({ query: sampleQuery })
                           }
                         }}
                       />
@@ -707,7 +726,7 @@ export function LandingPage() {
                       className="rounded-xl px-4 bg-indigo-600 hover:bg-indigo-700 text-white"
                       onClick={() => {
                         if (sampleQuery.trim()) {
-                          navigate(`/chat?query=${encodeURIComponent(sampleQuery.trim())}`)
+                          openLiveDataApp({ query: sampleQuery })
                         }
                       }}
                     >
@@ -1168,7 +1187,7 @@ export function LandingPage() {
             >
               <Button
                 className="rounded-2xl px-8 py-3 text-base font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-shadow inline-flex items-center gap-2 whitespace-nowrap"
-                onClick={() => navigate('/chat')}
+                onClick={() => openLiveDataApp()}
               >
                 Get started
                 <ArrowRight className="h-4 w-4 flex-shrink-0" />

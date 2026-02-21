@@ -20,7 +20,7 @@ function randomNonce(): string {
 
 /**
  * Request auth/session payload from the old openecon.ai origin.
- * This is intended for one-time migration onto data.openecon.ai.
+ * This is intended for one-time migration onto data.openecon.ai/data.openecon.io.
  */
 export async function requestCrossDomainBridgePayload(): Promise<BridgePayload | null> {
   if (typeof window === 'undefined' || typeof document === 'undefined') {

@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useEffect } from 'react'
 
+const LIVE_DATA_APP_URL = 'https://data.openecon.io/chat'
+
 interface ExampleCategory {
   title: string
   description: string
@@ -99,6 +101,8 @@ export function ExamplesPage() {
     document.title = 'Economic Data Query Examples | OpenEcon.ai'
   }, [])
 
+  const buildQueryUrl = (query: string) => `${LIVE_DATA_APP_URL}?query=${encodeURIComponent(query)}`
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -106,7 +110,7 @@ export function ExamplesPage() {
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <Link to="/" className="text-xl font-bold text-blue-600">OpenEcon.ai</Link>
           <nav className="flex items-center gap-4">
-            <Link to="/chat" className="text-gray-600 hover:text-gray-900">Chat</Link>
+            <a href={LIVE_DATA_APP_URL} className="text-gray-600 hover:text-gray-900">Chat</a>
             <Link to="/docs" className="text-gray-600 hover:text-gray-900">Docs</Link>
           </nav>
         </div>
@@ -122,22 +126,22 @@ export function ExamplesPage() {
             Explore sample queries across 10+ data sources. Click any example to try it in our AI-powered chat interface.
           </p>
           <a
-            href="https://data.openecon.ai/chat"
+            href={LIVE_DATA_APP_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex mb-4 items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700"
           >
-            Live app: data.openecon.ai/chat
+            Live app: data.openecon.io/chat
           </a>
-          <Link
-            to="/chat"
+          <a
+            href={LIVE_DATA_APP_URL}
             className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
           >
             Try OpenEcon.ai Free
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
-          </Link>
+          </a>
         </div>
       </section>
 
@@ -151,9 +155,9 @@ export function ExamplesPage() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 {category.examples.map((example) => (
-                  <Link
+                  <a
                     key={example.query}
-                    to={`/chat?q=${encodeURIComponent(example.query)}`}
+                    href={buildQueryUrl(example.query)}
                     className="block p-4 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all group"
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -167,7 +171,7 @@ export function ExamplesPage() {
                         {example.source}
                       </span>
                     </div>
-                  </Link>
+                  </a>
                 ))}
               </div>
             </section>
@@ -182,12 +186,12 @@ export function ExamplesPage() {
           <p className="text-blue-100 mb-6">
             Query data from FRED, World Bank, IMF, UN Comtrade, and 6 more sources using natural language.
           </p>
-          <Link
-            to="/chat"
+          <a
+            href={LIVE_DATA_APP_URL}
             className="inline-flex items-center gap-2 bg-white text-blue-600 px-6 py-3 rounded-lg font-medium hover:bg-blue-50 transition-colors"
           >
             Start Querying Free
-          </Link>
+          </a>
         </div>
       </section>
 
@@ -200,7 +204,7 @@ export function ExamplesPage() {
             </div>
             <nav className="flex items-center gap-6 text-sm">
               <Link to="/" className="hover:text-white">Home</Link>
-              <Link to="/chat" className="hover:text-white">Chat</Link>
+              <a href={LIVE_DATA_APP_URL} className="hover:text-white">Chat</a>
               <Link to="/docs" className="hover:text-white">Docs</Link>
               <Link to="/examples" className="hover:text-white">Examples</Link>
               <a href="mailto:hanlulong@gmail.com" className="hover:text-white">Contact</a>

@@ -1,6 +1,6 @@
 # OpenEcon.ai - AI Economic Data Platform
 # https://openecon.ai
-# https://data.openecon.ai/chat
+# https://data.openecon.io/chat
 # Source: https://github.com/hanlulong/econ-data-mcp
 
 ## About
@@ -36,7 +36,7 @@ OpenEcon.ai is an AI-powered economic data aggregation platform that allows user
 
 ## API Access
 OpenEcon.ai provides an MCP (Model Context Protocol) server endpoint at:
-- Endpoint: https://openecon.ai/mcp
+- Endpoint: https://data.openecon.io/mcp
 - Transport: Server-Sent Events (SSE)
 - Available operation: query_data
 
@@ -51,4 +51,4 @@ Website: https://openecon.ai
 - Authentication: Supabase
 
 ## Usage
-Visit https://data.openecon.ai/chat to start querying economic data. No registration required for basic queries.
+Visit https://data.openecon.io/chat to start querying economic data. No registration required for basic queries.

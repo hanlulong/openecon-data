@@ -73,5 +73,9 @@ export function removeSharedCookie(name: string): void {
 }
 
 export function isDataDomainHost(): boolean {
-  return isBrowser() && window.location.hostname === 'data.openecon.ai'
+  if (!isBrowser()) {
+    return false
+  }
+
+  return window.location.hostname === 'data.openecon.ai' || window.location.hostname === 'data.openecon.io'
 }

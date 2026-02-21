@@ -97,7 +97,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
 
-      // One-time migration bridge from old origin to data.openecon.ai
+      // One-time migration bridge from old origin to data.openecon.ai/data.openecon.io
       const bridgePayload = await requestCrossDomainBridgePayload();
       if (bridgePayload) {
         if (bridgePayload.token) {

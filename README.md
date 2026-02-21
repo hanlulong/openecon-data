@@ -4,7 +4,7 @@
 
 `econ-data-mcp` lets users query economic data in plain English and get structured results, charts, and exportable datasets with provenance.
 
-**For users (no setup):** use **[OpenEcon.ai](https://openecon.ai)** directly.  
+**For users (no setup):** use **[OpenEcon.ai](https://openecon.ai)**, then open the live data app at **[data.openecon.io/chat](https://data.openecon.io/chat)**.  
 **For developers (self-host/customize):** clone this repo and run locally.
 
 ## ✨ Features

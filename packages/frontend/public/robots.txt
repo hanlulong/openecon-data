@@ -1,4 +1,4 @@
-# robots.txt for openecon.ai
+# robots.txt for data.openecon.io
 # AI-Powered Economic Data Platform
 
 User-agent: *
@@ -14,7 +14,7 @@ Disallow: /health
 Disallow: /mcp
 
 # Sitemap location
-Sitemap: https://openecon.ai/sitemap.xml
+Sitemap: https://data.openecon.io/sitemap.xml
 
 # Crawl delay (polite crawling)
 Crawl-delay: 1

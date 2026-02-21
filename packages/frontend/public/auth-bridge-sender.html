@@ -12,7 +12,7 @@
 
         var REQUEST_TYPE = 'OPENECON_AUTH_BRIDGE_REQUEST';
         var RESPONSE_TYPE = 'OPENECON_AUTH_BRIDGE_RESPONSE';
-        var ALLOWED_TARGET_ORIGINS = ['https://data.openecon.ai'];
+        var ALLOWED_TARGET_ORIGINS = ['https://data.openecon.ai', 'https://data.openecon.io'];
         var targetOriginParam = new URLSearchParams(window.location.search).get('target_origin') || '';
 
         function getCookie(name) {
