@@ -522,6 +522,22 @@ class IndicatorTranslator:
         upper = imf_code.upper().replace(" ", "_")
         return self.IMF_CODE_TO_CONCEPT.get(upper)
 
+    def infer_concept(self, indicator: str) -> Optional[str]:
+        """
+        Infer the universal concept for an indicator string.
+
+        This is provider-agnostic and is useful when provider selection should
+        be decided separately (e.g., by catalog coverage and country context).
+        """
+        if not indicator:
+            return None
+
+        concept = self.translate_imf_code(indicator)
+        if concept:
+            return concept
+
+        return self._fuzzy_match_concept(indicator)
+
     def get_provider_code(self, concept: str, provider: str) -> Optional[str]:
         """Get provider-specific code for a universal concept."""
         concept_lower = concept.lower()

@@ -32,6 +32,8 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from collections import OrderedDict
+from time import monotonic
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .indicator_lookup import IndicatorLookup, get_indicator_lookup
@@ -93,7 +95,21 @@ class IndicatorResolver:
     ):
         self.lookup = lookup or get_indicator_lookup()
         self.translator = translator or get_indicator_translator()
-        self._cache: Dict[str, ResolvedIndicator] = {}
+        self._cache: OrderedDict[str, Tuple[float, ResolvedIndicator]] = OrderedDict()
+        try:
+            self._cache_max_entries = max(
+                128,
+                int(os.getenv("INDICATOR_RESOLVER_CACHE_SIZE", "4096")),
+            )
+        except ValueError:
+            self._cache_max_entries = 4096
+        try:
+            self._cache_ttl_seconds = max(
+                30,
+                int(os.getenv("INDICATOR_RESOLVER_CACHE_TTL_SECONDS", "1800")),
+            )
+        except ValueError:
+            self._cache_ttl_seconds = 1800
         self._stop_words: Set[str] = {
             "the", "a", "an", "of", "for", "in", "to", "and", "or",
             "show", "get", "find", "data", "series", "indicator", "rate",
@@ -154,6 +170,7 @@ class IndicatorResolver:
         query: str,
         provider: Optional[str] = None,
         country: Optional[str] = None,
+        countries: Optional[List[str]] = None,
         use_cache: bool = True,
     ) -> Optional[ResolvedIndicator]:
         """
@@ -163,6 +180,7 @@ class IndicatorResolver:
             query: Indicator name, code, or description
             provider: Target provider (FRED, WorldBank, IMF, etc.)
             country: Country context for provider selection
+            countries: Multi-country context for provider selection
             use_cache: Whether to use cached results
 
         Returns:
@@ -171,11 +189,21 @@ class IndicatorResolver:
         if not query:
             return None
 
+        context_countries = [str(c) for c in (countries or []) if c]
+        if country and str(country) not in context_countries:
+            context_countries.append(str(country))
+
         # Check cache
-        cache_key = f"{provider or 'any'}:{query.lower()}"
-        if use_cache and cache_key in self._cache:
-            logger.debug(f"Cache hit for indicator: {query}")
-            return self._cache[cache_key]
+        cache_key = self._build_cache_key(
+            provider=provider,
+            query=query,
+            countries=context_countries,
+        )
+        if use_cache:
+            cached = self._get_cached_result(cache_key)
+            if cached is not None:
+                logger.debug(f"Cache hit for indicator: {query}")
+                return cached
 
         # Try resolution methods in priority order
         result = None
@@ -204,14 +232,14 @@ class IndicatorResolver:
         # 2. INFRASTRUCTURE FIX: Check IndicatorTranslator BEFORE FTS5 search
         # This ensures curated universal concepts (like consumer_credit -> TOTALSL)
         # take priority over raw database matches (which may include discontinued series)
-        if not result:
+        if not result and provider:
             try:
-                translated = self.translator.translate_indicator(query, target_provider=provider or "FRED")
+                translated = self.translator.translate_indicator(query, target_provider=provider)
                 if translated and translated[0]:
                     code, concept_name = translated
                     result = ResolvedIndicator(
                         code=code,
-                        provider=provider or "FRED",
+                        provider=provider,
                         name=concept_name or query,
                         confidence=0.75,  # Good confidence for curated mappings
                         source="translator",
@@ -219,6 +247,32 @@ class IndicatorResolver:
                     logger.debug(f"Translator match: {query} -> {code}")
             except Exception as e:
                 logger.debug(f"Translator lookup failed: {e}")
+
+        # Provider-agnostic translation path (prevents implicit FRED bias).
+        if not result and not provider:
+            try:
+                concept_name = self.translator.infer_concept(query)
+                if concept_name:
+                    best_provider, best_code, best_confidence = get_best_provider(
+                        concept_name,
+                        context_countries or None,
+                    )
+                    if best_provider and best_code:
+                        result = ResolvedIndicator(
+                            code=best_code,
+                            provider=best_provider,
+                            name=concept_name or query,
+                            confidence=max(0.72, min(0.90, float(best_confidence or 0.75))),
+                            source="translator",
+                        )
+                        logger.debug(
+                            "Translator concept match: %s -> %s:%s",
+                            query,
+                            best_provider,
+                            best_code,
+                        )
+            except Exception as e:
+                logger.debug(f"Provider-agnostic translator lookup failed: {e}")
 
         # 3. If query maps to a known catalog concept, try provider's catalog codes first.
         # This guards against high-ranked but semantically wrong FTS candidates.
@@ -277,16 +331,35 @@ class IndicatorResolver:
         # 5. Try IndicatorTranslator again if FTS5 returned low confidence
         if result and result.confidence < 0.7 and result.source == "database":
             try:
-                translated = self.translator.translate_indicator(query, target_provider=provider or "FRED")
+                translated = None
+                translated_provider = provider
+                if provider:
+                    translated = self.translator.translate_indicator(query, target_provider=provider)
+                else:
+                    concept_name = self.translator.infer_concept(query)
+                    if concept_name:
+                        translated_provider, translated_code, _ = get_best_provider(
+                            concept_name,
+                            context_countries or None,
+                        )
+                        if translated_provider and translated_code:
+                            translated = (translated_code, concept_name)
+                        else:
+                            translated = None
+                    else:
+                        translated = None
+
                 if translated and translated[0]:
                     code, concept_name = translated
-                    # Use a reasonable confidence score for translator results
                     trans_confidence = 0.75
+                    if translated_provider is None:
+                        translated_provider = provider
+
                     # Only use if better than current result
-                    if not result or trans_confidence > result.confidence:
+                    if translated_provider and trans_confidence > result.confidence:
                         result = ResolvedIndicator(
                             code=code,
-                            provider=provider or "FRED",
+                            provider=translated_provider,
                             name=concept_name or query,
                             confidence=trans_confidence,
                             source="translator",
@@ -317,7 +390,7 @@ class IndicatorResolver:
             elif not provider:
                 # Find best provider for concept
                 best_provider, code, confidence = get_best_provider(
-                    query_concept, [country] if country else None
+                    query_concept, context_countries or None
                 )
                 if best_provider and code:
                     result = ResolvedIndicator(
@@ -330,7 +403,7 @@ class IndicatorResolver:
 
         # Cache successful result
         if result and use_cache:
-            self._cache[cache_key] = result
+            self._set_cached_result(cache_key, result)
 
         return result
 
@@ -589,6 +662,53 @@ class IndicatorResolver:
 
         fused_candidates.sort(key=lambda c: c.get("_rrf_score", 0.0), reverse=True)
         return fused_candidates
+
+    @staticmethod
+    def _normalize_country_token(country: str) -> str:
+        """Normalize country/cache context tokens."""
+        return str(country or "").strip().upper()
+
+    def _build_cache_key(
+        self,
+        provider: Optional[str],
+        query: str,
+        countries: Optional[List[str]] = None,
+    ) -> str:
+        """Build a deterministic cache key that includes resolution context."""
+        provider_key = self._normalize_provider_key(provider) or "ANY"
+        country_tokens = sorted(
+            {
+                self._normalize_country_token(country)
+                for country in (countries or [])
+                if self._normalize_country_token(country)
+            }
+        )
+        country_key = ",".join(country_tokens) if country_tokens else "-"
+        query_key = str(query or "").strip().lower()
+        return f"{provider_key}:{country_key}:{query_key}"
+
+    def _get_cached_result(self, cache_key: str) -> Optional[ResolvedIndicator]:
+        """Return cached resolution result if present and not expired."""
+        cached = self._cache.get(cache_key)
+        if not cached:
+            return None
+
+        cached_at, result = cached
+        if (monotonic() - cached_at) > self._cache_ttl_seconds:
+            self._cache.pop(cache_key, None)
+            return None
+
+        # LRU touch
+        self._cache.move_to_end(cache_key)
+        return result
+
+    def _set_cached_result(self, cache_key: str, result: ResolvedIndicator) -> None:
+        """Store resolution result in bounded TTL/LRU cache."""
+        self._cache[cache_key] = (monotonic(), result)
+        self._cache.move_to_end(cache_key)
+
+        while len(self._cache) > self._cache_max_entries:
+            self._cache.popitem(last=False)
 
     def clear_cache(self):
         """Clear the resolution cache."""
@@ -901,6 +1021,7 @@ def resolve_indicator(
     query: str,
     provider: Optional[str] = None,
     country: Optional[str] = None,
+    countries: Optional[List[str]] = None,
 ) -> Optional[ResolvedIndicator]:
     """
     Convenience function to resolve an indicator.
@@ -913,4 +1034,4 @@ def resolve_indicator(
     Returns:
         ResolvedIndicator or None
     """
-    return get_indicator_resolver().resolve(query, provider, country)
+    return get_indicator_resolver().resolve(query, provider, country, countries)

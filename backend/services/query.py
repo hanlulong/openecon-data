@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import ValidationError
 
@@ -20,7 +21,9 @@ from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
 from ..routing.country_resolver import CountryResolver
+from ..routing.unified_router import UnifiedRouter
 from ..routing.hybrid_router import HybridRouter
+from ..routing.semantic_provider_router import SemanticProviderRouter
 from ..providers.fred import FREDProvider
 from ..providers.worldbank import WorldBankProvider
 from ..providers.comtrade import ComtradeProvider
@@ -175,11 +178,21 @@ class QueryService:
         # CoinGecko: Cryptocurrency prices and market data
         self.coingecko_provider = CoinGeckoProvider(coingecko_key)
 
+        # Semantic provider router (default): semantic-router + LiteLLM fallback.
+        self.semantic_provider_router: Optional[SemanticProviderRouter] = None
+        if self.settings.use_semantic_provider_router:
+            self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
+            logger.info("🧭 SemanticProviderRouter enabled (USE_SEMANTIC_PROVIDER_ROUTER=true)")
+
         # Optional hybrid router: deterministic candidates + LLM ranking.
+        # Kept as fallback/legacy path when semantic provider router is disabled.
         self.hybrid_router: Optional[HybridRouter] = None
-        if self.settings.use_hybrid_router:
+        if self.settings.use_hybrid_router and not self.settings.use_semantic_provider_router:
             self.hybrid_router = HybridRouter(llm_provider=self.openrouter.llm_provider)
             logger.info("🧠 HybridRouter enabled (USE_HYBRID_ROUTER=true)")
+
+        # Deterministic baseline router (single source of routing truth).
+        self.unified_router = UnifiedRouter()
 
     def _detect_explicit_provider(self, query: str) -> Optional[str]:
         """
@@ -294,22 +307,72 @@ class QueryService:
 
     async def _select_routed_provider(self, intent: ParsedIntent, query: str) -> str:
         """
-        Select provider using deterministic router, optionally enhanced by HybridRouter.
+        Select provider using deterministic router, optionally enhanced by
+        SemanticProviderRouter (default) or HybridRouter (legacy fallback path).
         """
-        routed_provider = ProviderRouter.route_provider(intent, query)
+        params = intent.parameters or {}
+        raw_countries = params.get("countries")
+        countries = raw_countries if isinstance(raw_countries, list) else []
+        routed_provider = normalize_provider_name(intent.apiProvider or "")
+        try:
+            deterministic_decision = self.unified_router.route(
+                query=query,
+                indicators=intent.indicators,
+                country=params.get("country"),
+                countries=countries,
+                llm_provider=intent.apiProvider,
+            )
+            routed_provider = normalize_provider_name(deterministic_decision.provider)
+            logger.info(
+                "🧭 UnifiedRouter baseline: %s (conf=%.2f, type=%s)",
+                routed_provider,
+                deterministic_decision.confidence,
+                deterministic_decision.match_type,
+            )
+        except Exception as exc:
+            logger.warning(
+                "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
+                exc,
+            )
+            routed_provider = ProviderRouter.route_provider(intent, query)
+
         routed_provider = ProviderRouter.correct_coingecko_misrouting(
             routed_provider,
             query,
             intent.indicators,
         )
 
+        if self.semantic_provider_router:
+            try:
+                decision = await self.semantic_provider_router.route(
+                    query=query,
+                    indicators=intent.indicators,
+                    country=params.get("country"),
+                    countries=countries,
+                    llm_provider_hint=intent.apiProvider,
+                )
+                semantic_provider = normalize_provider_name(decision.provider)
+                semantic_provider = ProviderRouter.correct_coingecko_misrouting(
+                    semantic_provider,
+                    query,
+                    intent.indicators,
+                )
+                if semantic_provider != routed_provider:
+                    logger.info(
+                        "🧭 Semantic routing override: %s -> %s (%s)",
+                        routed_provider,
+                        semantic_provider,
+                        decision.reasoning,
+                    )
+                return semantic_provider
+            except Exception as exc:
+                logger.warning("Semantic provider routing failed, using deterministic provider: %s", exc)
+                return routed_provider
+
         if not self.hybrid_router:
             return routed_provider
 
         try:
-            params = intent.parameters or {}
-            raw_countries = params.get("countries")
-            countries = raw_countries if isinstance(raw_countries, list) else []
             decision = await self.hybrid_router.route(
                 query=query,
                 indicators=intent.indicators,
@@ -583,6 +646,35 @@ class QueryService:
         cache_params["_provider"] = normalize_provider_name(provider)
         return cache_params
 
+    def _serialize_cache_query(self, cache_params: dict) -> str:
+        """Serialize cache params deterministically for Redis cache key input."""
+        try:
+            return json.dumps(cache_params, sort_keys=True, separators=(",", ":"), default=str)
+        except Exception:
+            # Keep a deterministic fallback for non-serializable values.
+            return str(sorted(cache_params.items()))
+
+    def _coerce_parsed_intent(self, raw_intent: Any, query: str) -> Optional[ParsedIntent]:
+        """
+        Convert parsed intent payloads (dict/model) to ParsedIntent and preserve original query.
+        """
+        if raw_intent is None:
+            return None
+
+        try:
+            if isinstance(raw_intent, ParsedIntent):
+                intent = raw_intent.model_copy(deep=True)
+            elif isinstance(raw_intent, dict):
+                intent = ParsedIntent.model_validate(raw_intent)
+            else:
+                return None
+        except ValidationError:
+            return None
+
+        if not intent.originalQuery:
+            intent.originalQuery = query
+        return intent
+
     async def _get_from_cache(self, provider: str, params: dict):
         """
         Get data from cache (Redis first, then in-memory).
@@ -599,7 +691,7 @@ class QueryService:
         # Try Redis cache first
         try:
             redis_cache = await get_redis_cache()
-            query_key = str(cache_params)  # Simple key generation
+            query_key = self._serialize_cache_query(cache_params)
             cached_data = await redis_cache.get(provider, query_key, cache_params)
             if cached_data:
                 logger.info(f"Redis cache hit for {provider}")
@@ -629,7 +721,7 @@ class QueryService:
         # Save to Redis cache
         try:
             redis_cache = await get_redis_cache()
-            query_key = str(cache_params)
+            query_key = self._serialize_cache_query(cache_params)
             await redis_cache.set(provider, query_key, data, cache_params)
             logger.debug(f"Saved to Redis cache: {provider}")
         except Exception as e:
@@ -658,23 +750,22 @@ class QueryService:
         Returns:
             List of fallback provider names to try in order
         """
-        # General multi-level fallback chains for better data availability
-        # These are provider-to-provider mappings regardless of indicator
-        general_fallback_chains = {
-            "WORLDBANK": ["OECD", "IMF", "EUROSTAT"],
-            "OECD": ["WORLDBANK", "EUROSTAT", "IMF"],
-            "EUROSTAT": ["WORLDBANK", "OECD", "IMF"],
-            "IMF": ["WORLDBANK", "OECD", "BIS"],
-            "BIS": ["IMF", "WORLDBANK", "OECD"],  # BIS -> IMF for financial data
-            "STATSCAN": ["WORLDBANK", "OECD", "IMF"],  # Added IMF for financial indicators
-            "FRED": ["WORLDBANK", "OECD", "IMF"],
-            "EXCHANGERATE": ["FRED", "BIS"],
-            "COINGECKO": ["FRED"],
-            "COMTRADE": ["WORLDBANK"],
-        }
-
-        fallback_list = general_fallback_chains.get(primary_provider.upper(), [])
         primary_upper = primary_provider.upper()
+        fallback_list = []
+        try:
+            fallback_list = [
+                normalize_provider_name(provider_name)
+                for provider_name in self.unified_router.get_fallbacks(primary_upper)
+            ]
+        except Exception as exc:
+            logger.debug("UnifiedRouter fallback lookup failed for %s: %s", primary_upper, exc)
+
+        # Ensure deterministic fallback list has no duplicates and excludes primary.
+        fallback_list = [
+            provider_name
+            for provider_name in dict.fromkeys(fallback_list)
+            if provider_name and provider_name != primary_upper
+        ]
 
         # INFRASTRUCTURE FIX: Use IndicatorResolver to find providers that have this indicator
         # This searches the 330K+ indicator database for actual matches
@@ -692,7 +783,12 @@ class QueryService:
                         continue  # Skip the provider that failed
 
                     # Check if this provider has the indicator
-                    resolved = resolver.resolve(indicator, provider=provider)
+                    resolved = resolver.resolve(
+                        indicator,
+                        provider=provider,
+                        country=None,
+                        countries=None,
+                    )
                     if resolved and resolved.confidence >= 0.6:
                         indicator_fallbacks.append((provider, resolved.confidence))
                         logger.debug(f"IndicatorResolver found '{indicator}' in {provider} (conf: {resolved.confidence:.2f})")
@@ -1130,6 +1226,9 @@ class QueryService:
             # Detect explicit provider requests BEFORE LLM parsing
             # This ensures user's explicit provider choice is always honored
             explicit_provider = self._detect_explicit_provider(query)
+            explicit_provider_normalized = (
+                normalize_provider_name(explicit_provider) if explicit_provider else None
+            )
             if explicit_provider:
                 logger.info(f"🎯 Explicit provider detected: {explicit_provider}")
 
@@ -1142,11 +1241,22 @@ class QueryService:
                 # FALLBACK: Extract explicit country references from query when LLM defaults to US/empty.
                 self._apply_country_overrides(intent, query)
 
-                # Use deterministic routing (and optional HybridRouter enhancement)
-                routed_provider = await self._select_routed_provider(intent, query)
+                # Explicit provider takes precedence over router/hybrid selection.
+                if explicit_provider_normalized:
+                    if intent.apiProvider != explicit_provider_normalized:
+                        logger.info(
+                            "🎯 Enforcing explicit provider request: %s → %s",
+                            intent.apiProvider,
+                            explicit_provider_normalized,
+                        )
+                    intent.apiProvider = explicit_provider_normalized
+                    routed_provider = explicit_provider_normalized
+                else:
+                    # Use deterministic routing (and optional HybridRouter enhancement)
+                    routed_provider = await self._select_routed_provider(intent, query)
 
                 if routed_provider != intent.apiProvider:
-                    logger.info(f"🔄 Provider routing: {intent.apiProvider} → {routed_provider} (ProviderRouter)")
+                    logger.info(f"🔄 Provider routing: {intent.apiProvider} → {routed_provider} (deterministic+semantic)")
                     intent.apiProvider = routed_provider
 
                 # Validate routing decision (logs warnings if routing seems incorrect)
@@ -1435,6 +1545,7 @@ class QueryService:
                 clarificationNeeded=False,
                 confidence=intent.confidence,
                 recommendedChartType=intent.recommendedChartType,
+                originalQuery=intent.originalQuery,
             )
 
             # Create fetch task with retry
@@ -1486,6 +1597,8 @@ class QueryService:
             if provider in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
                 # Try IndicatorResolver first for enhanced resolution
                 indicator_query = self._select_indicator_query_for_resolution(intent)
+                country_context = params.get("country")
+                countries_context = params.get("countries") if isinstance(params.get("countries"), list) else None
                 original_query_text = str(intent.originalQuery or "").strip()
                 selected_original_override = (
                     bool(original_query_text)
@@ -1493,7 +1606,12 @@ class QueryService:
                     and bool(intent.indicators)
                     and indicator_query != str(intent.indicators[0] or "").strip()
                 )
-                resolved = resolver.resolve(indicator_query, provider=provider)
+                resolved = resolver.resolve(
+                    indicator_query,
+                    provider=provider,
+                    country=country_context,
+                    countries=countries_context,
+                )
                 if resolved and resolved.confidence >= 0.7:
                     logger.info(f"🔍 IndicatorResolver: '{indicator_query}' → '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
                     params = {**params, "indicator": resolved.code}
@@ -1521,8 +1639,8 @@ class QueryService:
         # CRITICAL: Check if user explicitly requested this provider
         # If so, skip catalog override - user's explicit request has highest priority
         original_query = intent.originalQuery or ""
-        explicit_provider_requested = ProviderRouter.detect_explicit_provider(original_query)
-        if explicit_provider_requested and explicit_provider_requested.upper() == provider:
+        explicit_provider_requested = normalize_provider_name(self._detect_explicit_provider(original_query) or "")
+        if explicit_provider_requested and explicit_provider_requested == provider:
             logger.info(f"📋 Skipping catalog override - user explicitly requested {provider}")
         elif indicator_term and provider:
             try:
@@ -1531,14 +1649,33 @@ class QueryService:
                 logger.info(f"📋 Catalog concept: '{concept}' for term '{indicator_term}'")
                 if concept and not is_provider_available(concept, provider):
                     # Provider is in not_available list - find alternative
-                    country = params.get("country") or params.get("region")
-                    alt_result = get_best_provider(concept, country)
-                    if alt_result:
-                        alt_provider = alt_result[0] if isinstance(alt_result, tuple) else alt_result
-                        if alt_provider and alt_provider.upper() != provider:
-                            logger.info(f"📋 Catalog: {provider} not available for '{indicator_term}', routing to {alt_provider}")
-                            intent.apiProvider = alt_provider
-                            provider = normalize_provider_name(alt_provider)
+                    countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
+                    if not countries_ctx:
+                        country = params.get("country") or params.get("region")
+                        countries_ctx = [country] if country else None
+
+                    alt_provider, alt_code, _ = get_best_provider(concept, countries_ctx)
+                    if alt_provider and alt_provider.upper() != provider:
+                        logger.info(
+                            "📋 Catalog: %s not available for '%s', routing to %s",
+                            provider,
+                            indicator_term,
+                            alt_provider,
+                        )
+                        intent.apiProvider = alt_provider
+                        provider = normalize_provider_name(alt_provider)
+
+                        if alt_code:
+                            params = {**params, "indicator": alt_code}
+                            intent.parameters = params
+                            if not intent.indicators or len(intent.indicators) == 1:
+                                intent.indicators = [alt_code]
+                            logger.info(
+                                "📋 Catalog remapped indicator for %s: %s -> %s",
+                                provider,
+                                indicator_term,
+                                alt_code,
+                            )
             except Exception as e:
                 logger.warning(f"Catalog availability check failed: {e}")
 
@@ -1787,7 +1924,7 @@ class QueryService:
                             all_data.append(series)
                         return all_data
                     else:
-                        indicator = intent.indicators[0] if intent.indicators else ""
+                        indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
                         series = await self.imf_provider.fetch_indicator(
                             indicator=indicator,
                             country=country,
@@ -1970,7 +2107,7 @@ class QueryService:
                 )
                 return [series]
             if provider == "BIS":
-                indicator = intent.indicators[0] if intent.indicators else "POLICY_RATE"
+                indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "POLICY_RATE"))
                 # Add indicator to params for cache key differentiation
                 params["indicator"] = indicator
                 return await self.bis_provider.fetch_indicator(
@@ -1982,7 +2119,7 @@ class QueryService:
                     frequency=params.get("frequency", "M"),
                 )
             if provider == "EUROSTAT":
-                indicator = intent.indicators[0] if intent.indicators else "GDP"
+                indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "GDP"))
                 # Add indicator to params for cache key differentiation
                 params["indicator"] = indicator
 
@@ -2055,7 +2192,7 @@ class QueryService:
                 )
                 return [series]
             if provider == "OECD":
-                indicator = intent.indicators[0] if intent.indicators else "GDP"
+                indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "GDP"))
                 # Add indicator to params for cache key differentiation
                 params["indicator"] = indicator
 
@@ -3021,15 +3158,9 @@ class QueryService:
                 # Extract provider from parsed intent for fallback
                 if parsed_intent:
                     try:
-                        if isinstance(parsed_intent, dict):
-                            fallback_intent = ParsedIntent(
-                                apiProvider=parsed_intent.get("apiProvider", "Unknown"),
-                                indicators=parsed_intent.get("indicators", []),
-                                parameters=parsed_intent.get("parameters", {}),
-                                clarificationNeeded=False
-                            )
-                        else:
-                            fallback_intent = parsed_intent
+                        fallback_intent = self._coerce_parsed_intent(parsed_intent, query)
+                        if not fallback_intent:
+                            raise ValueError("Could not parse LangGraph fallback intent")
 
                         provider_name = fallback_intent.apiProvider or "Unknown"
                         logger.info(f"🔄 LangGraph error: Attempting fallback from {provider_name}...")
@@ -3174,16 +3305,9 @@ class QueryService:
                 # Try fallback providers before giving up (same as standard path)
                 if parsed_intent and provider_name != "Unknown":
                     try:
-                        # Build ParsedIntent if it's a dict
-                        if isinstance(parsed_intent, dict):
-                            fallback_intent = ParsedIntent(
-                                apiProvider=parsed_intent.get("apiProvider", provider_name),
-                                indicators=parsed_intent.get("indicators", []),
-                                parameters=parsed_intent.get("parameters", {}),
-                                clarificationNeeded=False
-                            )
-                        else:
-                            fallback_intent = parsed_intent
+                        fallback_intent = self._coerce_parsed_intent(parsed_intent, query)
+                        if not fallback_intent:
+                            raise ValueError("Could not parse LangGraph fallback intent")
 
                         logger.info(f"🔄 LangGraph: Attempting fallback from {provider_name}...")
                         fallback_data = await self._try_with_fallback(
@@ -3236,7 +3360,19 @@ class QueryService:
                 response.data = data
 
                 # Build intent from result
-                if data and len(data) > 0:
+                response_intent = self._coerce_parsed_intent(result.get("parsed_intent"), query)
+                if not response_intent:
+                    response_intent = self._coerce_parsed_intent(query_result.get("intent"), query)
+
+                if response_intent:
+                    response_intent.parameters = dict(response_intent.parameters or {})
+                    response_intent.parameters.setdefault(
+                        "merge_with_previous", query_result.get("merge_series", False)
+                    )
+                    if not response_intent.recommendedChartType and query_result.get("chart_type"):
+                        response_intent.recommendedChartType = query_result.get("chart_type")
+                    response.intent = response_intent
+                elif data and len(data) > 0:
                     first_data = data[0]
                     response.intent = ParsedIntent(
                         apiProvider=first_data.metadata.source if first_data.metadata else "UNKNOWN",
@@ -3246,6 +3382,7 @@ class QueryService:
                         },
                         clarificationNeeded=False,
                         recommendedChartType=query_result.get("chart_type", "line"),
+                        originalQuery=query,
                     )
 
             # If research query, add message

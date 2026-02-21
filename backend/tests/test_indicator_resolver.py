@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.services.indicator_resolver import IndicatorResolver
+from backend.services.indicator_translator import IndicatorTranslator
 
 
 class _FakeLookup:
@@ -43,6 +44,66 @@ class _FakeVectorService:
 
 
 class IndicatorResolverTests(unittest.TestCase):
+    def test_provider_agnostic_translation_avoids_default_fred_bias(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=IndicatorTranslator())
+
+        result = resolver.resolve("fx reserves", provider=None, use_cache=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.provider, "WorldBank")
+        self.assertEqual(result.code, "FI.RES.TOTL.CD")
+        self.assertEqual(result.source, "translator")
+
+    def test_cache_key_includes_country_context(self):
+        class _CountingLookup(_FakeLookup):
+            def __init__(self, exact_results):
+                super().__init__(search_results=[], exact_results=exact_results)
+                self.get_calls = 0
+
+            def get(self, provider: str, code: str):
+                self.get_calls += 1
+                return super().get(provider, code)
+
+        lookup = _CountingLookup(
+            exact_results={
+                ("FRED", "GDP"): {
+                    "code": "GDP",
+                    "provider": "FRED",
+                    "name": "Gross Domestic Product",
+                }
+            }
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        first = resolver.resolve("GDP", provider="FRED", country="US", use_cache=True)
+        second_same_country = resolver.resolve("GDP", provider="FRED", country="US", use_cache=True)
+        third_different_country = resolver.resolve("GDP", provider="FRED", country="CA", use_cache=True)
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second_same_country)
+        self.assertIsNotNone(third_different_country)
+        # First call populates cache, second call hits cache, third call misses due to country context.
+        self.assertEqual(lookup.get_calls, 2)
+
+    def test_cache_is_bounded_lru(self):
+        lookup = _FakeLookup(
+            exact_results={
+                ("FRED", "GDP"): {"code": "GDP", "provider": "FRED", "name": "GDP"},
+                ("FRED", "UNRATE"): {"code": "UNRATE", "provider": "FRED", "name": "Unemployment Rate"},
+                ("FRED", "CPIAUCSL"): {"code": "CPIAUCSL", "provider": "FRED", "name": "Consumer Price Index"},
+            }
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+        resolver._cache_max_entries = 2
+
+        resolver.resolve("GDP", provider="FRED", use_cache=True)
+        resolver.resolve("UNRATE", provider="FRED", use_cache=True)
+        resolver.resolve("CPIAUCSL", provider="FRED", use_cache=True)
+
+        self.assertLessEqual(len(resolver._cache), 2)
+        self.assertFalse(any(key.endswith(":gdp") for key in resolver._cache.keys()))
+
     def test_prefers_lexically_relevant_result_over_higher_raw_score(self):
         lookup = _FakeLookup(
             search_results=[
