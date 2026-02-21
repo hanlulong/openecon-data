@@ -202,11 +202,17 @@ def get_indicator_code(
 
     # Check if provider is in not_available list
     not_available = concept.get("not_available", [])
-    if provider in not_available:
+    not_available_lower = {p.lower() for p in not_available}
+    if provider.lower() in not_available_lower:
         return None
 
     providers = concept.get("providers", {})
-    provider_info = providers.get(provider, {})
+    providers_lower = {p.lower(): p for p in providers.keys()}
+    actual_provider = providers_lower.get(provider.lower())
+    if not actual_provider:
+        return None
+
+    provider_info = providers.get(actual_provider, {})
 
     if not provider_info:
         return None
@@ -226,7 +232,11 @@ def get_provider_info(concept_name: str, provider: str) -> Optional[Dict[str, An
         return None
 
     providers = concept.get("providers", {})
-    return providers.get(provider)
+    providers_lower = {p.lower(): p for p in providers.keys()}
+    actual_provider = providers_lower.get(provider.lower())
+    if not actual_provider:
+        return None
+    return providers.get(actual_provider)
 
 
 def get_available_providers(concept_name: str) -> List[str]:

@@ -14,6 +14,7 @@ This module provides:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Set, Optional, List, Dict, FrozenSet
 
 logger = logging.getLogger(__name__)
@@ -638,20 +639,10 @@ class CountryResolver:
         Returns:
             ISO Alpha-2 code of first country found, or None
         """
-        if not query:
+        country_positions = cls._find_country_codes_with_positions(query)
+        if not country_positions:
             return None
-
-        query_lower = query.lower()
-
-        # Check for country aliases (longer matches first to avoid partial matches)
-        sorted_aliases = sorted(cls.COUNTRY_ALIASES.keys(), key=len, reverse=True)
-
-        for alias in sorted_aliases:
-            # Use word boundaries to avoid partial matches
-            if f" {alias}" in f" {query_lower}" or f" {alias} " in f" {query_lower} ":
-                return cls.COUNTRY_ALIASES[alias]
-
-        return None
+        return min(country_positions.items(), key=lambda item: item[1])[0]
 
     @classmethod
     def detect_all_countries_in_query(cls, query: str) -> List[str]:
@@ -667,22 +658,63 @@ class CountryResolver:
         Returns:
             List of ISO Alpha-2 codes for all countries found
         """
-        if not query:
+        country_positions = cls._find_country_codes_with_positions(query)
+        if not country_positions:
             return []
+        return [code for code, _ in sorted(country_positions.items(), key=lambda item: item[1])]
 
-        query_lower = f" {query.lower()} "  # Add spaces for boundary matching
-        found_codes: Set[str] = set()
+    @classmethod
+    def _find_country_codes_with_positions(cls, query: str) -> Dict[str, int]:
+        """
+        Find all country aliases in query and return first-match position by ISO code.
 
-        # Check for country aliases with word boundaries
-        # Sorted by length (longest first) to match specific names before abbreviations
+        Implementation details:
+        - Uses regex word boundaries to avoid partial matches.
+        - Preserves query order (position sort) for deterministic multi-country extraction.
+        - Avoids false positives from short aliases (e.g., "in", "no", "can"):
+          short alphabetic aliases (<= 3 chars) require uppercase tokens unless allowlisted.
+        """
+        if not query:
+            return {}
+
+        query_lower = query.lower()
+        country_positions: Dict[str, int] = {}
+
+        # Track uppercase tokens from original query (for ISO code detection like "DE", "CAN")
+        uppercase_tokens = set(re.findall(r"\b[A-Z]{2,3}\b", query))
+
+        # Short aliases that are commonly used in lowercase and safe to match
+        # (exclude ambiguous tokens like "in", "no", "can", "tur", etc.)
+        short_allowlist = {"uk", "usa", "uae", "drc", "prc"}
+
+        # Longest aliases first to prioritize specific names over shorter variants
         sorted_aliases = sorted(cls.COUNTRY_ALIASES.keys(), key=len, reverse=True)
 
         for alias in sorted_aliases:
-            # Use word boundary matching: check for space/punctuation around the alias
-            if f" {alias}" in query_lower or f" {alias} " in query_lower:
-                found_codes.add(cls.COUNTRY_ALIASES[alias])
+            code = cls.COUNTRY_ALIASES[alias]
+            alias_lower = alias.lower()
 
-        return list(found_codes)
+            # Special handling for US to avoid pronoun false positives ("show us ...")
+            if alias_lower == "us":
+                for match in re.finditer(r"\bUS\b|\bU\.S\.A?\.\b", query):
+                    pos = match.start()
+                    if code not in country_positions or pos < country_positions[code]:
+                        country_positions[code] = pos
+                continue
+
+            # Short alphabetic aliases are often ambiguous in natural language.
+            # Require explicit uppercase token unless allowlisted.
+            if alias_lower.isalpha() and len(alias_lower) <= 3 and alias_lower not in short_allowlist:
+                if alias.upper() not in uppercase_tokens:
+                    continue
+
+            pattern = rf"(?<!\w){re.escape(alias_lower)}(?!\w)"
+            for match in re.finditer(pattern, query_lower):
+                pos = match.start()
+                if code not in country_positions or pos < country_positions[code]:
+                    country_positions[code] = pos
+
+        return country_positions
 
     # ==========================================================================
     # Region Expansion Methods (NEW - for multi-country query support)

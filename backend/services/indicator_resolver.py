@@ -29,8 +29,9 @@ Date: 2025-12-27
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .indicator_lookup import IndicatorLookup, get_indicator_lookup
 from .indicator_translator import IndicatorTranslator, get_indicator_translator
@@ -82,6 +83,12 @@ class IndicatorResolver:
         self.lookup = lookup or get_indicator_lookup()
         self.translator = translator or get_indicator_translator()
         self._cache: Dict[str, ResolvedIndicator] = {}
+        self._stop_words: Set[str] = {
+            "the", "a", "an", "of", "for", "in", "to", "and", "or",
+            "show", "get", "find", "data", "series", "indicator", "rate",
+            "index", "value", "values", "percent", "percentage",
+            "country", "countries", "from", "with", "by", "on", "at",
+        }
 
     def resolve(
         self,
@@ -150,15 +157,23 @@ class IndicatorResolver:
         if not result:
             search_results = self.lookup.search(query, provider=provider, limit=5)
             if search_results:
-                best = search_results[0]
-                result = ResolvedIndicator(
-                    code=best.get("code"),
-                    provider=best.get("provider", provider),
-                    name=best.get("name", query),
-                    confidence=best.get("_score", 0.8),
-                    source="database",
-                    metadata=best,
-                )
+                best, best_confidence = self._pick_best_search_result(query, search_results)
+                if best and best_confidence >= 0.35:
+                    result = ResolvedIndicator(
+                        code=best.get("code"),
+                        provider=best.get("provider", provider),
+                        name=best.get("name", query),
+                        confidence=best_confidence,
+                        source="database",
+                        metadata=best,
+                    )
+                elif best:
+                    logger.info(
+                        "Rejecting low-confidence FTS match for '%s': %s (conf=%.2f)",
+                        query,
+                        best.get("code"),
+                        best_confidence,
+                    )
 
         # 4. Try IndicatorTranslator again if FTS5 returned low confidence
         if result and result.confidence < 0.7 and result.source == "database":
@@ -336,6 +351,73 @@ class IndicatorResolver:
         """Clear the resolution cache."""
         self._cache.clear()
         logger.info("Indicator resolution cache cleared")
+
+    def _tokenize_terms(self, text: str) -> Set[str]:
+        """Tokenize text into normalized terms for lexical matching."""
+        if not text:
+            return set()
+        terms = set(re.findall(r"[a-z0-9]+", text.lower()))
+        return {t for t in terms if len(t) > 1 and t not in self._stop_words}
+
+    def _score_search_match(self, query: str, candidate: Dict[str, Any], rank_index: int = 0) -> float:
+        """
+        Score a candidate search result on a 0-1 relevance scale.
+
+        This avoids using raw FTS ranking scores directly, which are unbounded and
+        not true confidence probabilities.
+        """
+        query_text = (query or "").strip().lower()
+        code = str(candidate.get("code") or "")
+        name = str(candidate.get("name") or "")
+        description = str(candidate.get("description") or "")
+
+        # Exact code queries should resolve with maximum confidence.
+        if code and query_text == code.lower():
+            return 1.0
+
+        query_terms = self._tokenize_terms(query_text)
+        candidate_terms = self._tokenize_terms(f"{name} {code} {description}")
+
+        if not query_terms:
+            return 0.0
+
+        overlap_count = len(query_terms & candidate_terms)
+        overlap_ratio = overlap_count / max(len(query_terms), 1)
+
+        phrase_bonus = 0.0
+        name_lower = name.lower()
+        if query_text and query_text in name_lower:
+            phrase_bonus += 0.2
+        if query_text and code and query_text in code.lower():
+            phrase_bonus += 0.15
+
+        # Slightly favor higher-ranked FTS results while keeping lexical fit primary.
+        rank_bonus = max(0.0, 0.1 - (rank_index * 0.02))
+
+        confidence = 0.1 + (0.75 * overlap_ratio) + phrase_bonus + rank_bonus
+
+        # Strongly penalize candidates with zero lexical overlap.
+        if overlap_count == 0 and (query_text not in name_lower) and (query_text not in code.lower()):
+            confidence *= 0.2
+
+        return max(0.0, min(1.0, confidence))
+
+    def _pick_best_search_result(
+        self,
+        query: str,
+        search_results: List[Dict[str, Any]],
+    ) -> Tuple[Optional[Dict[str, Any]], float]:
+        """Select best search result using lexical confidence scoring."""
+        best_result: Optional[Dict[str, Any]] = None
+        best_confidence = 0.0
+
+        for idx, candidate in enumerate(search_results):
+            confidence = self._score_search_match(query, candidate, rank_index=idx)
+            if confidence > best_confidence:
+                best_result = candidate
+                best_confidence = confidence
+
+        return best_result, best_confidence
 
 
 # Singleton instance

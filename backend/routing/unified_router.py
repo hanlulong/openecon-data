@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
@@ -121,7 +122,16 @@ class UnifiedRouter:
             RoutingDecision with provider, confidence, fallbacks, and reasoning
         """
         indicators = indicators or []
+        countries = countries or []
         query_lower = query.lower()
+
+        # Fallback geography extraction when parser omits country information.
+        if not country and not countries:
+            detected_countries = CountryResolver.detect_all_countries_in_query(query)
+            if len(detected_countries) == 1:
+                country = detected_countries[0]
+            elif len(detected_countries) > 1:
+                countries = detected_countries
 
         # Priority 1: Explicit provider mention (ABSOLUTE HIGHEST)
         match = KeywordMatcher.detect_explicit_provider(query)
@@ -185,7 +195,7 @@ class UnifiedRouter:
             )
 
         # 3c: US trade balance (without partner) → FRED
-        if self._is_us_trade_balance_no_partner(query_lower, country):
+        if self._is_us_trade_balance_no_partner(query, country):
             return self._create_decision(
                 provider="FRED",
                 confidence=0.90,
@@ -196,7 +206,7 @@ class UnifiedRouter:
 
         # 3d: Canadian query handling
         if CountryResolver.is_canadian_region(query):
-            return self._handle_canadian_query(query_lower, indicators, country)
+            return self._handle_canadian_query(query, indicators, country)
 
         # 3e: Property/house prices → BIS
         if self._is_property_price_query(query_lower, indicators):
@@ -360,8 +370,9 @@ class UnifiedRouter:
 
         return has_trade and has_ratio
 
-    def _is_us_trade_balance_no_partner(self, query_lower: str, country: Optional[str]) -> bool:
+    def _is_us_trade_balance_no_partner(self, query: str, country: Optional[str]) -> bool:
         """Check if query is US trade balance without partner country."""
+        query_lower = query.lower()
         is_us = (
             (country and country.upper() in ["US", "USA", "UNITED STATES"]) or
             any(term in query_lower for term in ["us ", "u.s.", "united states", "america"])
@@ -369,9 +380,7 @@ class UnifiedRouter:
         is_trade_balance = any(term in query_lower for term in [
             "trade balance", "trade deficit", "trade surplus"
         ])
-        has_partner = any(term in query_lower for term in [
-            " to ", " from ", " with ", " between ", "bilateral", "partner"
-        ])
+        has_partner = self._has_bilateral_trade_partner(query)
 
         return is_us and is_trade_balance and not has_partner
 
@@ -387,11 +396,12 @@ class UnifiedRouter:
 
     def _handle_canadian_query(
         self,
-        query_lower: str,
+        query: str,
         indicators: List[str],
         country: Optional[str]
     ) -> RoutingDecision:
         """Handle Canadian-specific routing."""
+        query_lower = query.lower()
         indicators_str = " ".join(indicators).lower()
         combined = f"{query_lower} {indicators_str}"
 
@@ -400,9 +410,7 @@ class UnifiedRouter:
 
         if is_trade:
             # Bilateral trade with partner → Comtrade
-            has_partner = any(term in query_lower for term in [
-                " to ", " from ", " with ", " between ", "bilateral", "partner"
-            ])
+            has_partner = self._has_bilateral_trade_partner(query)
             if has_partner:
                 return self._create_decision(
                     provider="Comtrade",
@@ -437,6 +445,33 @@ class UnifiedRouter:
             matched_pattern="Canada",
             reasoning="Canadian query routed to StatsCan",
         )
+
+    def _has_bilateral_trade_partner(self, query: str) -> bool:
+        """
+        Detect explicit bilateral trade phrasing.
+
+        Avoids false positives from date ranges such as "from 2020 to 2024".
+        """
+        query_lower = query.lower()
+
+        if any(term in query_lower for term in ["bilateral", "trading partner", "trade partner"]):
+            return True
+
+        # "between X and Y" usually indicates bilateral trade relationship.
+        if re.search(r"\bbetween\b.+\band\b", query_lower):
+            return True
+
+        # Require a trade verb near to/from/with instead of matching any "to"/"from".
+        if re.search(r"\b(exports?|imports?|trade(?:\s+flow)?|trading)\s+(to|from|with)\b", query_lower):
+            return True
+
+        # Multiple explicit countries in a trade query usually implies bilateral context.
+        if any(term in query_lower for term in ["export", "import", "trade"]):
+            mentioned = CountryResolver.detect_all_countries_in_query(query)
+            if len(mentioned) >= 2:
+                return True
+
+        return False
 
     def _route_by_country(
         self,

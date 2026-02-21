@@ -19,6 +19,7 @@ from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
+from ..routing.country_resolver import CountryResolver
 from ..providers.fred import FREDProvider
 from ..providers.worldbank import WorldBankProvider
 from ..providers.comtrade import ComtradeProvider
@@ -199,120 +200,85 @@ class QueryService:
 
     def _extract_country_from_query(self, query: str) -> Optional[str]:
         """
-        Extract country name from query using pattern matching.
-        This serves as a fallback when LLM fails to extract the country.
+        Extract first country code from query using CountryResolver.
 
-        Returns the country name if found, None otherwise.
+        Returns:
+            ISO Alpha-2 country code if found, else None
         """
-        query_lower = query.lower()
+        countries = self._extract_countries_from_query(query)
+        return countries[0] if countries else None
 
-        # Common country names that might be missed by LLM
-        # Ordered by specificity (compound names first to avoid partial matches)
-        country_patterns = [
-            # Compound names (must be checked first)
-            ("south africa", "South Africa"),
-            ("south african", "South Africa"),
-            ("south korea", "South Korea"),
-            ("south korean", "South Korea"),
-            ("north korea", "North Korea"),
-            ("north korean", "North Korea"),
-            ("new zealand", "New Zealand"),
-            ("costa rica", "Costa Rica"),
-            ("saudi arabia", "Saudi Arabia"),
-            ("united arab emirates", "UAE"),
-            ("uae", "UAE"),
-            ("united kingdom", "UK"),
-            ("united states", "US"),
-            ("czech republic", "Czech Republic"),
-            ("dominican republic", "Dominican Republic"),
-            # Single word countries (common ones that might be missed)
-            ("indonesia", "Indonesia"),
-            ("indonesian", "Indonesia"),
-            ("nigeria", "Nigeria"),
-            ("nigerian", "Nigeria"),
-            ("brazil", "Brazil"),
-            ("brazilian", "Brazil"),
-            ("mexico", "Mexico"),
-            ("mexican", "Mexico"),
-            ("russia", "Russia"),
-            ("russian", "Russia"),
-            ("india", "India"),
-            ("indian", "India"),
-            ("japan", "Japan"),
-            ("japanese", "Japan"),
-            ("germany", "Germany"),
-            ("german", "Germany"),
-            ("france", "France"),
-            ("french", "France"),
-            ("italy", "Italy"),
-            ("italian", "Italy"),
-            ("spain", "Spain"),
-            ("spanish", "Spain"),
-            ("australia", "Australia"),
-            ("australian", "Australia"),
-            ("argentina", "Argentina"),
-            ("argentine", "Argentina"),
-            ("thailand", "Thailand"),
-            ("thai", "Thailand"),
-            ("vietnam", "Vietnam"),
-            ("vietnamese", "Vietnam"),
-            ("philippines", "Philippines"),
-            ("filipino", "Philippines"),
-            ("malaysia", "Malaysia"),
-            ("malaysian", "Malaysia"),
-            ("singapore", "Singapore"),
-            ("turkey", "Turkey"),
-            ("turkish", "Turkey"),
-            ("egypt", "Egypt"),
-            ("egyptian", "Egypt"),
-            ("kenya", "Kenya"),
-            ("kenyan", "Kenya"),
-            ("pakistan", "Pakistan"),
-            ("pakistani", "Pakistan"),
-            ("bangladesh", "Bangladesh"),
-            ("colombian", "Colombia"),
-            ("colombia", "Colombia"),
-            ("chile", "Chile"),
-            ("chilean", "Chile"),
-            ("peru", "Peru"),
-            ("peruvian", "Peru"),
-            ("venezuela", "Venezuela"),
-            ("venezuelan", "Venezuela"),
-            ("poland", "Poland"),
-            ("polish", "Poland"),
-            ("ukraine", "Ukraine"),
-            ("ukrainian", "Ukraine"),
-            ("netherlands", "Netherlands"),
-            ("dutch", "Netherlands"),
-            ("belgium", "Belgium"),
-            ("belgian", "Belgium"),
-            ("sweden", "Sweden"),
-            ("swedish", "Sweden"),
-            ("norway", "Norway"),
-            ("norwegian", "Norway"),
-            ("denmark", "Denmark"),
-            ("danish", "Denmark"),
-            ("finland", "Finland"),
-            ("finnish", "Finland"),
-            ("switzerland", "Switzerland"),
-            ("swiss", "Switzerland"),
-            ("austria", "Austria"),
-            ("austrian", "Austria"),
-            ("portugal", "Portugal"),
-            ("portuguese", "Portugal"),
-            ("greece", "Greece"),
-            ("greek", "Greece"),
-            ("ireland", "Ireland"),
-            ("irish", "Ireland"),
-        ]
+    def _extract_countries_from_query(self, query: str) -> List[str]:
+        """
+        Extract all country codes from query in appearance order.
 
-        # Check each pattern
-        for pattern, country in country_patterns:
-            if pattern in query_lower:
-                logger.info(f"🌍 Fallback country extraction: found '{country}' in query")
-                return country
+        Returns:
+            List of ISO Alpha-2 country codes.
+        """
+        countries = CountryResolver.detect_all_countries_in_query(query)
+        if countries:
+            logger.info("🌍 Fallback country extraction found countries: %s", countries)
+        return countries
 
-        return None
+    def _apply_country_overrides(self, intent: ParsedIntent, query: str) -> None:
+        """
+        Apply geography overrides when query text clearly specifies country context
+        but LLM output defaults to US/no country.
+
+        Rules:
+        - If query names 1 non-US country and intent defaults to US/no country -> set `country`.
+        - If query names multiple countries and intent defaults to US/no country -> set `countries`.
+        """
+        if intent.parameters is None:
+            intent.parameters = {}
+
+        extracted_countries = self._extract_countries_from_query(query)
+        if not extracted_countries:
+            return
+
+        current_country = str(intent.parameters.get("country", "") or "")
+        current_countries_raw = intent.parameters.get("countries")
+        current_countries = []
+        if isinstance(current_countries_raw, list):
+            current_countries = [str(c) for c in current_countries_raw if c is not None]
+
+        def _is_us(value: str) -> bool:
+            return value.strip().lower() in {"us", "usa", "united states", "america"}
+
+        defaulted_to_us_or_empty = (
+            (not current_country and not current_countries)
+            or (_is_us(current_country) and not current_countries)
+            or (len(current_countries) == 1 and _is_us(current_countries[0]))
+        )
+
+        if not defaulted_to_us_or_empty:
+            return
+
+        # Multi-country override (preserve query order from CountryResolver)
+        if len(extracted_countries) > 1:
+            non_us = [c for c in extracted_countries if c.upper() != "US"]
+            if non_us:
+                previous = current_country or (",".join(current_countries) if current_countries else "")
+                intent.parameters.pop("country", None)
+                intent.parameters["countries"] = extracted_countries
+                logger.info(
+                    "🌍 Country Override (multi): '%s' -> %s (query explicitly names multiple countries)",
+                    previous,
+                    extracted_countries,
+                )
+            return
+
+        # Single-country override
+        extracted_country = extracted_countries[0]
+        if extracted_country.upper() != "US":
+            previous = current_country or (current_countries[0] if current_countries else "")
+            intent.parameters["country"] = extracted_country
+            intent.parameters.pop("countries", None)
+            logger.info(
+                "🌍 Country Override: '%s' -> '%s' (query explicitly mentions non-US country)",
+                previous,
+                extracted_country,
+            )
 
     def _extract_exchange_rate_params(self, params: dict, intent: ParsedIntent) -> dict:
         """
@@ -1006,16 +972,8 @@ class QueryService:
                 intent = await self.openrouter.parse_query(query, history)
                 logger.debug("Parsed intent: %s", intent.model_dump())
 
-                # FALLBACK: Extract country from query and override LLM if it defaults to US/USA
-                # This prevents defaulting to USA when a specific country was mentioned
-                extracted_country = self._extract_country_from_query(query)
-                if extracted_country:
-                    current_country = intent.parameters.get("country", "")
-                    # Override if LLM set US/USA/United States as default but query mentions different country
-                    is_default_us = not current_country or current_country.lower() in ["us", "usa", "united states", "america"]
-                    if is_default_us and extracted_country.lower() not in ["us", "usa", "united states", "america"]:
-                        logger.info(f"🌍 Country Override: '{current_country}' → '{extracted_country}' (query explicitly mentions {extracted_country})")
-                        intent.parameters["country"] = extracted_country
+                # FALLBACK: Extract explicit country references from query when LLM defaults to US/empty.
+                self._apply_country_overrides(intent, query)
 
                 # NEW: Use ProviderRouter for deterministic provider selection
                 # This ensures reliable routing based on explicit rules
@@ -3123,6 +3081,20 @@ class QueryService:
                 intent = await self.openrouter.parse_query(query, history)
         else:
             intent = await self.openrouter.parse_query(query, history)
+
+        # Keep fallback path behavior consistent with the main processing pipeline.
+        self._apply_country_overrides(intent, query)
+        routed_provider = ProviderRouter.route_provider(intent, query)
+        routed_provider = ProviderRouter.correct_coingecko_misrouting(
+            routed_provider, query, intent.indicators
+        )
+        if routed_provider != intent.apiProvider:
+            logger.info(
+                "🔄 Provider routing (standard path): %s -> %s",
+                intent.apiProvider,
+                routed_provider,
+            )
+            intent.apiProvider = routed_provider
 
         conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
 

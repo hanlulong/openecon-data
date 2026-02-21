@@ -95,9 +95,9 @@ class ProviderRouter:
         "WorldBank": ["world bank", "worldbank", "from world bank", "wb data"],
         "Comtrade": ["comtrade", "un comtrade", "from comtrade", "united nations comtrade"],
         "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan"],
-        "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "imf data"],
+        "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "according to the imf", "imf data"],
         "BIS": ["from bis", "using bis", "bank for international settlements", "bis data"],
-        "Eurostat": ["from eurostat", "eu statistics", "european statistics"],
+        "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics"],
         "ExchangeRate": ["exchangerate", "exchange rate api"],
         "CoinGecko": ["coingecko", "coin gecko", "crypto prices"]
     }
@@ -206,7 +206,7 @@ class ProviderRouter:
         "COMTRADE": [
             "exports to", "imports from", "trade with",  # Bilateral trade with explicit partner
             "trade flow", "bilateral trade", "trade deficit", "trade surplus",
-            "top importers", "top exporters",
+            "top importers", "top exporters", "importers of", "exporters of",
             "electric vehicle export", "machinery export", "textile import",
             "coffee export", "oil export", "crude oil export",
             "iron ore export", "semiconductor export", "pharmaceutical export",
@@ -420,6 +420,34 @@ class ProviderRouter:
         return None
 
     @classmethod
+    def _has_bilateral_trade_partner(cls, query: str) -> bool:
+        """
+        Detect explicit bilateral trade phrasing.
+
+        Avoids false positives from date ranges such as "from 2020 to 2024".
+        """
+        query_lower = query.lower()
+
+        if any(term in query_lower for term in ["bilateral", "trading partner", "trade partner"]):
+            return True
+
+        # "between X and Y" usually indicates bilateral trade.
+        if re.search(r"\bbetween\b.+\band\b", query_lower):
+            return True
+
+        # Require a trade verb near to/from/with.
+        if re.search(r"\b(exports?|imports?|trade(?:\s+flow)?|trading)\s+(to|from|with)\b", query_lower):
+            return True
+
+        # Multiple countries in a trade query usually implies bilateral context.
+        if any(term in query_lower for term in ["export", "import", "trade"]):
+            mentioned = CountryResolver.detect_all_countries_in_query(query)
+            if len(mentioned) >= 2:
+                return True
+
+        return False
+
+    @classmethod
     def detect_keyword_provider(cls, query: str, indicators: List[str]) -> Optional[str]:
         """
         Detect provider based on specific keywords to fix WorldBank over-selection.
@@ -447,10 +475,7 @@ class ProviderRouter:
 
             if is_trade_query:
                 # Check if there's a partner country mentioned (bilateral trade → Comtrade)
-                has_partner = any(term in query_lower for term in [
-                    " to ", " from ", " with ", " between ",
-                    "bilateral", "partner"
-                ])
+                has_partner = cls._has_bilateral_trade_partner(query)
 
                 if has_partner:
                     # Bilateral trade with partner country → MUST use Comtrade
@@ -480,9 +505,7 @@ class ProviderRouter:
         # MUST come before COMTRADE patterns to catch "US trade deficit" before "trade deficit"
         is_us_query = any(term in query_lower for term in ["us ", "u.s.", "united states", "america"])
         is_trade_balance = any(term in combined_text for term in ["trade balance", "trade deficit", "trade surplus"])
-        has_partner = any(term in query_lower for term in [
-            " to ", " from ", " with ", " between ", "bilateral", "partner"
-        ])
+        has_partner = cls._has_bilateral_trade_partner(query)
         if is_us_query and is_trade_balance and not has_partner:
             logger.info(f"🇺🇸 US trade balance (no partner) → routing to FRED (has BOPGSTB)")
             return "FRED"
@@ -762,7 +785,7 @@ class ProviderRouter:
                     any(term in query_lower for term in ["us ", "u.s.", "united states", "america"])
             is_trade_balance = "trade balance" in indicators_str or "trade balance" in query_lower or \
                                "trade deficit" in indicators_str or "trade deficit" in query_lower
-            has_partner = any(term in query_lower for term in [" to ", " from ", " with ", " between ", "bilateral", "partner"])
+            has_partner = cls._has_bilateral_trade_partner(original_query)
 
             if is_us and is_trade_balance and not has_partner:
                 logger.info(f"🇺🇸 US trade balance (no partner) → routing to FRED (has BOPGSTB)")

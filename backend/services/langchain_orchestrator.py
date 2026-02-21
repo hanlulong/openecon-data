@@ -30,6 +30,7 @@ from ..config import get_settings
 from ..models import NormalizedData, ParsedIntent
 from ..utils.retry import retry_async, DataNotAvailableError
 from .parameter_mapper import ParameterMapper
+from ..routing.country_resolver import CountryResolver
 
 # Import new agent architecture
 from ..agents.router_agent import RouterAgent, RoutingResult
@@ -597,97 +598,15 @@ Only set needs_clarification to true if the query is truly ambiguous AND no prov
 
     def _extract_country_from_query(self, query: str) -> Optional[str]:
         """
-        Extract country name from query using pattern matching.
-        This serves as a fallback when LLM fails to extract the country.
+        Extract country code from query using CountryResolver.
 
-        Returns the country name if found, None otherwise.
+        Returns:
+            ISO Alpha-2 country code if found, else None
         """
-        query_lower = query.lower()
-
-        # Common country names that might be missed by LLM
-        # Ordered by specificity (compound names first to avoid partial matches)
-        country_patterns = [
-            # Compound names (must be checked first)
-            ("south africa", "South Africa"),
-            ("south african", "South Africa"),
-            ("south korea", "South Korea"),
-            ("south korean", "South Korea"),
-            ("north korea", "North Korea"),
-            ("north korean", "North Korea"),
-            ("new zealand", "New Zealand"),
-            ("costa rica", "Costa Rica"),
-            ("saudi arabia", "Saudi Arabia"),
-            ("united arab emirates", "UAE"),
-            ("uae", "UAE"),
-            ("united kingdom", "UK"),
-            ("united states", "US"),
-            ("czech republic", "Czech Republic"),
-            ("dominican republic", "Dominican Republic"),
-            # Single word countries (common ones that might be missed)
-            ("indonesia", "Indonesia"),
-            ("indonesian", "Indonesia"),
-            ("nigeria", "Nigeria"),
-            ("nigerian", "Nigeria"),
-            ("brazil", "Brazil"),
-            ("brazilian", "Brazil"),
-            ("mexico", "Mexico"),
-            ("mexican", "Mexico"),
-            ("russia", "Russia"),
-            ("russian", "Russia"),
-            ("india", "India"),
-            ("indian", "India"),
-            ("japan", "Japan"),
-            ("japanese", "Japan"),
-            ("germany", "Germany"),
-            ("german", "Germany"),
-            ("france", "France"),
-            ("french", "France"),
-            ("italy", "Italy"),
-            ("italian", "Italy"),
-            ("spain", "Spain"),
-            ("spanish", "Spain"),
-            ("australia", "Australia"),
-            ("australian", "Australia"),
-            ("argentina", "Argentina"),
-            ("argentine", "Argentina"),
-            ("thailand", "Thailand"),
-            ("thai", "Thailand"),
-            ("vietnam", "Vietnam"),
-            ("vietnamese", "Vietnam"),
-            ("philippines", "Philippines"),
-            ("filipino", "Philippines"),
-            ("malaysia", "Malaysia"),
-            ("malaysian", "Malaysia"),
-            ("singapore", "Singapore"),
-            ("turkey", "Turkey"),
-            ("turkish", "Turkey"),
-            ("egypt", "Egypt"),
-            ("egyptian", "Egypt"),
-            ("kenya", "Kenya"),
-            ("kenyan", "Kenya"),
-            ("pakistan", "Pakistan"),
-            ("pakistani", "Pakistan"),
-            ("bangladesh", "Bangladesh"),
-            ("colombian", "Colombia"),
-            ("colombia", "Colombia"),
-            ("chile", "Chile"),
-            ("chilean", "Chile"),
-            ("peru", "Peru"),
-            ("peruvian", "Peru"),
-            ("china", "China"),
-            ("chinese", "China"),
-            ("canada", "Canada"),
-            ("canadian", "Canada"),
-            ("uk", "UK"),
-            ("britain", "UK"),
-            ("british", "UK"),
-        ]
-
-        for pattern, country in country_patterns:
-            if pattern in query_lower:
-                logger.info(f"🌍 Fallback country extraction: found '{country}' in query")
-                return country
-        return None
+        country_code = CountryResolver.detect_country_in_query(query)
+        if country_code:
+            logger.info("🌍 Fallback country extraction: found '%s' in query", country_code)
+        return country_code
 
     def _fallback_parse_routing(self, routing_text: str) -> Dict[str, Any]:
         """Fallback parsing when JSON parsing fails."""

@@ -54,9 +54,9 @@ class KeywordMatcher:
         "WorldBank": ["world bank", "worldbank", "from world bank", "wb data"],
         "Comtrade": ["comtrade", "un comtrade", "from comtrade", "united nations comtrade"],
         "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan"],
-        "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "imf data"],
+        "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "according to the imf", "imf data"],
         "BIS": ["from bis", "using bis", "bank for international settlements", "bis data"],
-        "Eurostat": ["from eurostat", "eu statistics", "european statistics"],
+        "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics"],
         "ExchangeRate": ["exchangerate", "exchange rate api"],
         "CoinGecko": ["coingecko", "coin gecko", "crypto prices"]
     }
@@ -94,7 +94,7 @@ class KeywordMatcher:
         "Comtrade": [
             "exports to", "imports from", "trade with",
             "trade flow", "bilateral trade", "trade deficit", "trade surplus",
-            "top importers", "top exporters",
+            "top importers", "top exporters", "importers of", "exporters of",
             "electric vehicle export", "machinery export", "textile import",
             "coffee export", "oil export", "crude oil export",
             "iron ore export", "semiconductor export", "pharmaceutical export",
@@ -105,8 +105,8 @@ class KeywordMatcher:
         ],
 
         # US-specific + Commodity Prices → FRED (must come before OECD)
-        # NOTE: FRED has Producer Price Index for commodities (PPIACO) but NOT gold/silver spot prices
-        # Gold/silver spot prices are not available from any of our providers
+        # NOTE: Keep FRED commodity matching focused on PPI-style indicators.
+        # Broad "commodity prices" matching is handled by IMF patterns below.
         "FRED": [
             "us gdp", "us unemployment", "us inflation", "us cpi",
             "us housing", "us retail", "us industrial", "us consumer",
@@ -117,8 +117,7 @@ class KeywordMatcher:
             "s&p 500", "s&p500", "dow jones", "nasdaq",
             "us trade balance", "u.s. trade balance", "us trade deficit",
             "u.s. trade deficit", "united states trade balance",
-            # Commodity price indices - FRED has PPI data (not spot prices)
-            "commodity price", "commodity prices", "commodity index",
+            # Commodity-related PPI indices
             "producer price index", "ppi commodities", "ppi all commodities",
             "metal price index", "base metal", "base metals",
             "agricultural price", "agricultural commodity",
@@ -162,8 +161,7 @@ class KeywordMatcher:
         ],
 
         # Fiscal/financial → IMF
-        # NOTE: IMF DataMapper API does NOT have commodity prices (those are in PCPS which is inaccessible)
-        # Commodity queries are routed to FRED for Producer Price Indices as fallback
+        # Includes macro + broad commodity indices
         "IMF": [
             "current account balance", "current account deficit", "current account surplus",
             "current account", "balance of payments",
@@ -175,6 +173,8 @@ class KeywordMatcher:
             "public debt", "sovereign debt", "national debt",
             "government spending", "public spending", "fiscal policy",
             "government balance", "deficit to gdp", "debt to gdp",
+            "commodity price index", "commodity prices index",
+            "primary commodity", "primary commodity prices", "commodity prices",
         ],
 
         # Housing/property/Banking → BIS
@@ -478,18 +478,39 @@ class KeywordMatcher:
         indicators_str = " ".join(indicators).lower() if indicators else ""
         combined = f"{query_lower} {indicators_str}"
 
-        # Check indicator keywords in priority order
+        # Score all matched keywords and pick the most specific match instead of
+        # relying on provider iteration order.
+        best_provider: Optional[str] = None
+        best_keyword: Optional[str] = None
+        best_score: float = 0.0
+
         for provider, keywords in cls.INDICATOR_KEYWORDS.items():
             for keyword in keywords:
                 if cls._keyword_matches(keyword, combined):
-                    logger.info(f"🎯 Indicator keyword: {keyword} → {provider}")
-                    return MatchResult(
-                        provider=provider,
-                        confidence=0.85,
-                        matched_keyword=keyword,
-                        match_type="indicator",
-                        reasoning=f"Keyword '{keyword}' indicates {provider} as best source"
-                    )
+                    # Specificity score: prioritize longer/more informative keywords.
+                    token_count = len(re.findall(r"[a-z0-9]+", keyword))
+                    char_count = len(keyword)
+                    score = (token_count * 10.0) + min(char_count, 60) / 10.0
+
+                    # Small boost if phrase appears directly in original query text.
+                    if keyword in query_lower:
+                        score += 2.0
+
+                    if score > best_score:
+                        best_score = score
+                        best_provider = provider
+                        best_keyword = keyword
+
+        if best_provider and best_keyword:
+            confidence = min(0.95, 0.6 + (best_score / 100.0))
+            logger.info(f"🎯 Indicator keyword: {best_keyword} → {best_provider}")
+            return MatchResult(
+                provider=best_provider,
+                confidence=confidence,
+                matched_keyword=best_keyword,
+                match_type="indicator",
+                reasoning=f"Keyword '{best_keyword}' indicates {best_provider} as best source"
+            )
 
         return None
 
