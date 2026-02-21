@@ -1,0 +1,121 @@
+/**
+ * CSS Custom Properties (Variables)
+ * Define reusable design tokens for consistent styling
+ */
+
+:root {
+  /* Colors - Primary */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-light: #60a5fa;
+  --color-primary-dark: #1e40af;
+
+  /* Colors - Secondary */
+  --color-secondary: #8b5cf6;
+  --color-secondary-hover: #7c3aed;
+  --color-secondary-light: #a78bfa;
+
+  /* Colors - Neutral */
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+
+  /* Colors - Semantic */
+  --color-success: #10b981;
+  --color-success-light: #34d399;
+  --color-success-dark: #059669;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fbbf24;
+  --color-warning-dark: #d97706;
+  --color-error: #ef4444;
+  --color-error-light: #f87171;
+  --color-error-dark: #dc2626;
+  --color-info: #3b82f6;
+  --color-info-light: #60a5fa;
+  --color-info-dark: #2563eb;
+
+  /* Spacing */
+  --spacing-xs: 0.25rem;     /* 4px */
+  --spacing-sm: 0.5rem;      /* 8px */
+  --spacing-md: 1rem;        /* 16px */
+  --spacing-lg: 1.5rem;      /* 24px */
+  --spacing-xl: 2rem;        /* 32px */
+  --spacing-2xl: 3rem;       /* 48px */
+  --spacing-3xl: 4rem;       /* 64px */
+
+  /* Border Radius */
+  --radius-sm: 0.25rem;      /* 4px */
+  --radius-md: 0.375rem;     /* 6px */
+  --radius-lg: 0.5rem;       /* 8px */
+  --radius-xl: 0.75rem;      /* 12px */
+  --radius-2xl: 1rem;        /* 16px */
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+  /* Typography */
+  --font-family-base: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --font-family-mono: 'Courier New', Courier, monospace;
+
+  --font-size-xs: 0.75rem;   /* 12px */
+  --font-size-sm: 0.875rem;  /* 14px */
+  --font-size-base: 1rem;    /* 16px */
+  --font-size-lg: 1.125rem;  /* 18px */
+  --font-size-xl: 1.25rem;   /* 20px */
+  --font-size-2xl: 1.5rem;   /* 24px */
+  --font-size-3xl: 1.875rem; /* 30px */
+  --font-size-4xl: 2.25rem;  /* 36px */
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* Transitions */
+  --transition-fast: 150ms;
+  --transition-base: 200ms;
+  --transition-slow: 300ms;
+
+  /* Z-index */
+  --z-dropdown: 1000;
+  --z-sticky: 1020;
+  --z-fixed: 1030;
+  --z-modal-backdrop: 1040;
+  --z-modal: 1050;
+  --z-popover: 1060;
+  --z-tooltip: 1070;
+
+  /* Container widths */
+  --container-sm: 640px;
+  --container-md: 768px;
+  --container-lg: 1024px;
+  --container-xl: 1280px;
+  --container-2xl: 1536px;
+}
+
+/* Dark mode support (optional - can be extended later) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Override colors for dark mode if needed */
+    /* --color-background: var(--color-gray-900); */
+    /* --color-text: var(--color-gray-100); */
+  }
+}

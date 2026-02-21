@@ -1,0 +1,150 @@
+{
+  "DF_WITS_Tariff_TRAINS": {
+    "id": "TARIFF_TRAINS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Freq",
+        "codelist": "CL_FREQ_WITS"
+      },
+      {
+        "id": "REPORTER",
+        "name": "Reporter_ISO_N",
+        "codelist": "CL_COUNTRY_WITS"
+      },
+      {
+        "id": "PARTNER",
+        "name": "Partner",
+        "codelist": "CL_COUNTRY_WITS"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Year",
+        "codelist": "None"
+      },
+      {
+        "id": "PRODUCTCODE",
+        "name": "ProductCode",
+        "codelist": "CL_PRODUCTCODE_WITS"
+      },
+      {
+        "id": "DATATYPE",
+        "name": "DataType",
+        "codelist": "CL_DATATYPE_WITS"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_WITS_TradeStats_Development": {
+    "id": "TRADESTATS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Freq",
+        "codelist": "CL_TS_FREQ_WITS"
+      },
+      {
+        "id": "REPORTER",
+        "name": "Reporter",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "PARTNER",
+        "name": "Partner",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Year",
+        "codelist": "None"
+      },
+      {
+        "id": "PRODUCTCODE",
+        "name": "ProductCode",
+        "codelist": "CL_TS_PRODUCTCODE_WITS"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Indicator",
+        "codelist": "CL_TS_INDICATOR_WITS"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_WITS_TradeStats_Tariff": {
+    "id": "TRADESTATS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Freq",
+        "codelist": "CL_TS_FREQ_WITS"
+      },
+      {
+        "id": "REPORTER",
+        "name": "Reporter",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "PARTNER",
+        "name": "Partner",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Year",
+        "codelist": "None"
+      },
+      {
+        "id": "PRODUCTCODE",
+        "name": "ProductCode",
+        "codelist": "CL_TS_PRODUCTCODE_WITS"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Indicator",
+        "codelist": "CL_TS_INDICATOR_WITS"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_WITS_TradeStats_Trade": {
+    "id": "TRADESTATS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Freq",
+        "codelist": "CL_TS_FREQ_WITS"
+      },
+      {
+        "id": "REPORTER",
+        "name": "Reporter",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "PARTNER",
+        "name": "Partner",
+        "codelist": "CL_TS_COUNTRY_WITS"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Year",
+        "codelist": "None"
+      },
+      {
+        "id": "PRODUCTCODE",
+        "name": "ProductCode",
+        "codelist": "CL_TS_PRODUCTCODE_WITS"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Indicator",
+        "codelist": "CL_TS_INDICATOR_WITS"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

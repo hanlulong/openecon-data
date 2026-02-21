@@ -1,0 +1,42 @@
+# Imports Indicator Catalog
+concept: imports
+category: international_trade
+domain: macroeconomics
+
+description: |
+  Goods and services produced in other countries and purchased domestically.
+
+synonyms:
+  primary:
+    - merchandise imports
+    - goods imports
+  secondary:
+    - import value
+    - inbound trade
+    - import volume
+
+explicit_exclusions:
+  - exports
+  - trade balance
+  - net imports
+
+providers:
+  WorldBank:
+    primary:
+      code: NE.IMP.GNFS.ZS
+      name: "Imports of goods and services (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  Comtrade:
+    primary:
+      code: dynamic
+      name: "Merchandise imports by partner and commodity"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

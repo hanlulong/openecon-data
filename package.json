@@ -1,0 +1,34 @@
+{
+  "name": "econ-data-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "econ-data-mcp: AI-powered economic data aggregation with MCP support",
+  "workspaces": [
+    "packages/frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "uvicorn backend.main:app --reload --port 3001",
+    "dev:frontend": "npm run dev --workspace=packages/frontend",
+    "build": "npm run build --workspace=packages/frontend",
+    "build:frontend": "npm run build --workspace=packages/frontend",
+    "test": "npm run test --workspace=packages/frontend",
+    "lint": "npm run lint --workspace=packages/frontend",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,js,jsx,json,md}\"",
+    "clean": "rimraf packages/frontend/dist packages/frontend/build packages/frontend/node_modules node_modules",
+    "setup:venv": "python -m venv backend/.venv",
+    "setup:deps": "npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "prettier": "^3.2.5",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

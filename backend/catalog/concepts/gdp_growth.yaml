@@ -1,0 +1,74 @@
+# GDP Growth Indicator Catalog
+concept: gdp_growth
+category: national_accounts
+domain: macroeconomics
+
+description: |
+  The annual percentage change in real GDP, measuring the rate
+  of economic expansion or contraction.
+
+synonyms:
+  primary:
+    - economic growth
+    - gdp growth rate
+    - gdp_growth  # underscore version for LLM parsing
+    - GDP_GROWTH  # uppercase underscore version
+  secondary:
+    - output growth
+    - real gdp growth
+    - growth rate
+    - economic expansion
+
+explicit_exclusions:
+  - population growth
+  - employment growth
+  - wage growth
+  - gdp level
+  - gdp per capita
+  # Monetary aggregates - prevent "M2 Growth" false positive matching
+  - m1 growth
+  - m2 growth
+  - m3 growth
+  - money supply growth
+  - monetary growth
+  - money stock growth
+
+providers:
+  WorldBank:
+    primary:
+      code: NY.GDP.MKTP.KD.ZG
+      name: "GDP growth (annual %)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: NGDP_RPCH
+      name: "Real GDP growth"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: A191RL1Q225SBEA
+      name: "Real Gross Domestic Product growth rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: quarterly
+
+  OECD:
+    primary:
+      code: B1_GA
+      name: "Gross domestic product, growth rate"
+      confidence: 0.90
+      coverage: OECD  # All OECD member countries including Canada
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+  - StatsCan  # StatsCan has GDP level but not growth rate - use IMF/WorldBank for Canada GDP growth

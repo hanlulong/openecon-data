@@ -1,0 +1,38 @@
+# Life Expectancy Indicator Catalog
+concept: life_expectancy
+category: health
+domain: social
+
+description: |
+  The average number of years a newborn is expected to live
+  if current mortality rates continue to apply.
+
+synonyms:
+  primary:
+    - life expectancy at birth
+    - lifespan
+  secondary:
+    - longevity
+    - average lifespan
+    - expected lifespan
+
+explicit_exclusions:
+  - mortality
+  - death rate
+  - infant mortality
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.DYN.LE00.IN
+      name: "Life expectancy at birth, total (years)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+  - FRED

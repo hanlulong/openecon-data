@@ -1,0 +1,26 @@
+{
+  "DF_WITS_Tariff_TRAINS": {
+    "id": "DF_WITS_Tariff_TRAINS",
+    "name": "WITS - UNCTAD TRAINS Tariff Data",
+    "description": "Data flow to access WITS - UNCTAD TRAINS Preferential and most-favored-nation (MFN) tariff rates",
+    "structure": "TARIFF_TRAINS"
+  },
+  "DF_WITS_TradeStats_Development": {
+    "id": "DF_WITS_TradeStats_Development",
+    "name": "WITS TradeStats Devlopment",
+    "description": "Development indicators such as GDP, GNI per capita, Trade Balance, Trade and Services trade as percentage of GPD is available from WDI",
+    "structure": "TRADESTATS"
+  },
+  "DF_WITS_TradeStats_Tariff": {
+    "id": "DF_WITS_TradeStats_Tariff",
+    "name": "WITS TradeStats Tariff",
+    "description": "Tariff information like number of trade agreements, simple and weighted average tariff, duty free imports value and duty free goods share in percentage are available",
+    "structure": "TRADESTATS"
+  },
+  "DF_WITS_TradeStats_Trade": {
+    "id": "DF_WITS_TradeStats_Trade",
+    "name": "WITS TradeStats Trade",
+    "description": "Trade data such as total exports, number or products exported, exporting and importing partner countries and exported and imported product groups are available",
+    "structure": "TRADESTATS"
+  }
+}

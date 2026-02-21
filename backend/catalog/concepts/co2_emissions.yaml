@@ -1,0 +1,38 @@
+# CO2 Emissions Indicator Catalog
+concept: co2_emissions
+category: environment
+domain: sustainability
+
+description: |
+  Carbon dioxide emissions from burning fossil fuels and manufacturing,
+  typically measured in metric tons per capita.
+
+synonyms:
+  primary:
+    - carbon emissions
+    - carbon dioxide emissions
+  secondary:
+    - greenhouse gas
+    - ghg emissions
+    - emissions per capita
+    - carbon footprint
+
+explicit_exclusions:
+  - air pollution
+  - particulate matter
+  - methane emissions
+
+providers:
+  WorldBank:
+    primary:
+      code: EN.GHG.CO2.PC.CE.AR5
+      name: "CO2 emissions (metric tons per capita)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS

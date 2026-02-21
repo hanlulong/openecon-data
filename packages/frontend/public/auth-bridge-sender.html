@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>econ-data-mcp Auth Bridge Sender</title>
+  </head>
+  <body>
+    <script>
+      (function () {
+        'use strict';
+
+        var REQUEST_TYPE = 'OPENECON_AUTH_BRIDGE_REQUEST';
+        var RESPONSE_TYPE = 'OPENECON_AUTH_BRIDGE_RESPONSE';
+        var ALLOWED_TARGET_ORIGINS = ['https://data.openecon.ai'];
+        var targetOriginParam = new URLSearchParams(window.location.search).get('target_origin') || '';
+
+        function getCookie(name) {
+          var prefix = name + '=';
+          var entries = document.cookie.split(';');
+          for (var i = 0; i < entries.length; i += 1) {
+            var entry = entries[i].trim();
+            if (entry.indexOf(prefix) === 0) {
+              return decodeURIComponent(entry.substring(prefix.length));
+            }
+          }
+          return null;
+        }
+
+        function readSharedValue(key) {
+          var fromStorage = null;
+          try {
+            fromStorage = window.localStorage.getItem(key);
+          } catch (error) {
+            fromStorage = null;
+          }
+          return fromStorage || getCookie(key);
+        }
+
+        function extractSupabaseTokens() {
+          var result = null;
+          try {
+            for (var i = 0; i < window.localStorage.length; i += 1) {
+              var key = window.localStorage.key(i);
+              if (!key || key.indexOf('sb-') !== 0 || key.lastIndexOf('-auth-token') !== key.length - 11) {
+                continue;
+              }
+
+              var raw = window.localStorage.getItem(key);
+              if (!raw) {
+                continue;
+              }
+
+              var parsed = JSON.parse(raw);
+              var session = (parsed && parsed.currentSession) || (parsed && parsed.session) || parsed;
+              if (session && session.access_token && session.refresh_token) {
+                result = {
+                  supabaseAccessToken: session.access_token,
+                  supabaseRefreshToken: session.refresh_token
+                };
+                break;
+              }
+            }
+          } catch (error) {
+            result = null;
+          }
+          return result;
+        }
+
+        window.addEventListener('message', function (event) {
+          if (ALLOWED_TARGET_ORIGINS.indexOf(event.origin) === -1) {
+            return;
+          }
+
+          if (event.origin !== targetOriginParam) {
+            return;
+          }
+
+          var data = event.data;
+          if (!data || data.type !== REQUEST_TYPE || data.targetOrigin !== targetOriginParam) {
+            return;
+          }
+
+          var payload = {
+            token: readSharedValue('openecon_auth_token') || undefined,
+            anonSessionId: readSharedValue('anon_session_id') || undefined
+          };
+
+          var supabaseTokens = extractSupabaseTokens();
+          if (supabaseTokens) {
+            payload.supabaseAccessToken = supabaseTokens.supabaseAccessToken;
+            payload.supabaseRefreshToken = supabaseTokens.supabaseRefreshToken;
+          }
+
+          if (event.source && typeof event.source.postMessage === 'function') {
+            event.source.postMessage(
+              {
+                type: RESPONSE_TYPE,
+                nonce: data.nonce,
+                payload: payload
+              },
+              event.origin
+            );
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

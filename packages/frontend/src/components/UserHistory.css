@@ -1,0 +1,258 @@
+.history-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.history-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 900px;
+  width: 95%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 640px) {
+  .history-modal {
+    padding: 32px;
+    width: 90%;
+    max-height: 85vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .history-modal {
+    width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    padding: 16px;
+  }
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.history-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #1a1a1a;
+}
+
+@media (min-width: 640px) {
+  .history-header h2 {
+    font-size: 24px;
+  }
+}
+
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-clear-btn {
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  /* Larger touch target for mobile */
+  min-height: 44px;
+}
+
+@media (min-width: 640px) {
+  .history-clear-btn {
+    padding: 8px 16px;
+    font-size: 14px;
+    min-height: auto;
+  }
+}
+
+.history-clear-btn:hover:not(:disabled) {
+  background: #d32f2f;
+}
+
+.history-clear-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.history-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background 0.2s;
+  /* Larger touch target for mobile */
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (min-width: 640px) {
+  .history-close {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+    min-width: auto;
+    min-height: auto;
+  }
+}
+
+.history-close:hover {
+  background: #f0f0f0;
+}
+
+.history-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+}
+
+.history-loading,
+.history-empty {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.history-empty p {
+  margin: 8px 0;
+}
+
+.history-error {
+  padding: 16px;
+  background: #fee;
+  border: 1px solid #fcc;
+  border-radius: 8px;
+  color: #c33;
+  margin-bottom: 16px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-item {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: box-shadow 0.2s;
+}
+
+.history-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.history-item-header {
+  padding: 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fafafa;
+  transition: background 0.2s;
+}
+
+.history-item-header:hover {
+  background: #f5f5f5;
+}
+
+.history-item-query {
+  font-size: 15px;
+  color: #1a1a1a;
+}
+
+.history-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #666;
+}
+
+.history-item-date {
+  flex: 1;
+}
+
+.history-item-count {
+  padding: 3px 8px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.history-expand-btn {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Larger touch target for mobile */
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (min-width: 640px) {
+  .history-expand-btn {
+    font-size: 12px;
+    padding: 4px;
+    width: 24px;
+    height: 24px;
+    min-width: auto;
+    min-height: auto;
+  }
+}
+
+.history-item-details {
+  padding: 16px;
+  background: white;
+  border-top: 1px solid #e0e0e0;
+}
+
+.history-item-summary {
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #555;
+}
+
+.history-series {
+  padding: 4px 0;
+}

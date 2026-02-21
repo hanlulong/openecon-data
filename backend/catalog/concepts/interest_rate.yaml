@@ -1,0 +1,55 @@
+# Interest Rate Indicator Catalog
+concept: interest_rate
+category: monetary_policy
+domain: finance
+
+description: |
+  The rate at which central banks lend to commercial banks,
+  serving as a key tool for monetary policy.
+
+synonyms:
+  primary:
+    - policy rate
+    - central bank rate
+  secondary:
+    - benchmark rate
+    - base rate
+    - key rate
+    - overnight rate
+
+explicit_exclusions:
+  - mortgage rate
+  - lending rate
+  - deposit rate
+  - bond yield
+  - interest payments
+
+providers:
+  BIS:
+    primary:
+      code: WS_CBPOL
+      name: "Central bank policy rates"
+      confidence: 0.95
+      coverage: global
+      frequency: monthly
+
+  IMF:
+    primary:
+      code: FPOLM
+      name: "Monetary policy rate"
+      confidence: 0.90
+      coverage: global
+      frequency: monthly
+
+  FRED:
+    primary:
+      code: FEDFUNDS
+      name: "Federal Funds Effective Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: daily
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - WorldBank

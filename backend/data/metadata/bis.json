@@ -1,0 +1,831 @@
+{
+  "provider": "BIS",
+  "last_updated": "2025-11-15T20:24:55.666171Z",
+  "total_indicators": 29,
+  "verified_indicators": 18,
+  "unverified_indicators": 11,
+  "base_url": "https://stats.bis.org/api/v1",
+  "categories": {
+    "Other": {
+      "count": 3,
+      "indicators": [
+        "BIS_BIS_REL_CAL",
+        "BIS_WS_EER",
+        "BIS_WS_GLI"
+      ]
+    },
+    "Monetary Policy": {
+      "count": 1,
+      "indicators": [
+        "BIS_WS_CBPOL"
+      ]
+    },
+    "Banking Statistics": {
+      "count": 3,
+      "indicators": [
+        "BIS_WS_CBS_PUB",
+        "BIS_WS_CBTA",
+        "BIS_WS_LBS_D_PUB"
+      ]
+    },
+    "Payments": {
+      "count": 8,
+      "indicators": [
+        "BIS_WS_CPMI_CASHLESS",
+        "BIS_WS_CPMI_CT1",
+        "BIS_WS_CPMI_CT2",
+        "BIS_WS_CPMI_DEVICES",
+        "BIS_WS_CPMI_INSTITUT",
+        "BIS_WS_CPMI_MACRO",
+        "BIS_WS_CPMI_PARTICIP",
+        "BIS_WS_CPMI_SYSTEMS"
+      ]
+    },
+    "Prices": {
+      "count": 4,
+      "indicators": [
+        "BIS_WS_CPP",
+        "BIS_WS_DPP",
+        "BIS_WS_LONG_CPI",
+        "BIS_WS_SPP"
+      ]
+    },
+    "Credit": {
+      "count": 2,
+      "indicators": [
+        "BIS_WS_CREDIT_GAP",
+        "BIS_WS_TC"
+      ]
+    },
+    "Debt": {
+      "count": 4,
+      "indicators": [
+        "BIS_WS_DEBT_SEC2_PUB",
+        "BIS_WS_DSR",
+        "BIS_WS_NA_SEC_C3",
+        "BIS_WS_NA_SEC_DSS"
+      ]
+    },
+    "Derivatives": {
+      "count": 2,
+      "indicators": [
+        "BIS_WS_DER_OTC_TOV",
+        "BIS_WS_OTC_DERIV2"
+      ]
+    },
+    "Exchange Rates": {
+      "count": 2,
+      "indicators": [
+        "BIS_WS_XRU",
+        "BIS_WS_XTD_DERIV"
+      ]
+    }
+  },
+  "indicators": [
+    {
+      "id": "BIS_BIS_REL_CAL",
+      "code": "BIS_REL_CAL",
+      "name": "BIS_RELEASE_CALENDAR",
+      "description": "",
+      "category": "Other",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:23:32.714138",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_CBPOL",
+      "code": "WS_CBPOL",
+      "name": "Central bank policy rates",
+      "description": "The interest rate which best captures the monetary authorities' policy intentions.",
+      "category": "Monetary Policy",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:33.599913",
+      "test_query": "M.US",
+      "test_frequency": "M",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CBS_PUB",
+      "code": "WS_CBS_PUB",
+      "name": "Consolidated banking",
+      "description": "",
+      "category": "Banking Statistics",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:23:39.765764",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_CBTA",
+      "code": "WS_CBTA",
+      "name": "Central bank total assets",
+      "description": "",
+      "category": "Banking Statistics",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:40.438526",
+      "test_query": "M.US",
+      "test_frequency": "M",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_CASHLESS",
+      "code": "WS_CPMI_CASHLESS",
+      "name": "CPMI cashless payments",
+      "description": "CPMI cashless payments (T5,T6)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:43.638373",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_CT1",
+      "code": "WS_CPMI_CT1",
+      "name": "CPMI comparative tables type 1",
+      "description": "CPMI comparative tables type 1",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:46.176422",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_CT2",
+      "code": "WS_CPMI_CT2",
+      "name": "CPMI comparative tables type 2",
+      "description": "CPMI comparative tables type 2",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:49.349709",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_DEVICES",
+      "code": "WS_CPMI_DEVICES",
+      "name": "CPMI payment devices",
+      "description": "CPMI payment devices (T4)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:53.032631",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_INSTITUT",
+      "code": "WS_CPMI_INSTITUT",
+      "name": "CPMI institutions",
+      "description": "CPMI institutions (T3)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:23:55.502386",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_MACRO",
+      "code": "WS_CPMI_MACRO",
+      "name": "CPMI macro",
+      "description": "CPMI macro (T1,T2)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:00.913799",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_CPMI_PARTICIP",
+      "code": "WS_CPMI_PARTICIP",
+      "name": "CPMI participants",
+      "description": "CPMI participants (T7,T10,T12,T15)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:03.446586",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPMI_SYSTEMS",
+      "code": "WS_CPMI_SYSTEMS",
+      "name": "CPMI systems",
+      "description": "CPMI systems (T8-9-11-13-14-16-17-18-19)",
+      "category": "Payments",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:07.090810",
+      "test_query": "A.US",
+      "test_frequency": "A",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CPP",
+      "code": "WS_CPP",
+      "name": "Commercial property prices",
+      "description": "",
+      "category": "Prices",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:08.728490",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_CREDIT_GAP",
+      "code": "WS_CREDIT_GAP",
+      "name": "Credit-to-GDP gaps",
+      "description": "",
+      "category": "Credit",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:10.082803",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_DEBT_SEC2_PUB",
+      "code": "WS_DEBT_SEC2_PUB",
+      "name": "International debt securities (BIS-compiled)",
+      "description": "",
+      "category": "Debt",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:12.684533",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_DER_OTC_TOV",
+      "code": "WS_DER_OTC_TOV",
+      "name": "OTC derivatives turnover",
+      "description": "OTC derivatives and FX spot - turnover",
+      "category": "Derivatives",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:17.563692",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_DPP",
+      "code": "WS_DPP",
+      "name": "Detailed residential property prices",
+      "description": "",
+      "category": "Prices",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:18.360761",
+      "test_query": "M.GB",
+      "test_frequency": "M",
+      "test_country": "GB"
+    },
+    {
+      "id": "BIS_WS_DSR",
+      "code": "WS_DSR",
+      "name": "Debt service ratios",
+      "description": "Debt service costs - comprising interest payments and debt amortisations - as a proportion of income. The DSR is a measure of the financial constraints imposed by indebtedness.",
+      "category": "Debt",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:19.817737",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_EER",
+      "code": "WS_EER",
+      "name": "Effective exchange rates",
+      "description": "",
+      "category": "Other",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:24.750958",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_GLI",
+      "code": "WS_GLI",
+      "name": "Global liquidity indicators",
+      "description": "",
+      "category": "Other",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:28.364850",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_LBS_D_PUB",
+      "code": "WS_LBS_D_PUB",
+      "name": "Locational banking",
+      "description": "",
+      "category": "Banking Statistics",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:32.227567",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_LONG_CPI",
+      "code": "WS_LONG_CPI",
+      "name": "Consumer prices statistics",
+      "description": "An index that measures the average change in the price of consumer items (goods and services) purchased by households in a given period. It is based on regular surveys of representative consumption baskets.",
+      "category": "Prices",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:32.875655",
+      "test_query": "M.US",
+      "test_frequency": "M",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_NA_SEC_C3",
+      "code": "WS_NA_SEC_C3",
+      "name": "BIS debt securities statistics",
+      "description": "",
+      "category": "Debt",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:37.116346",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_NA_SEC_DSS",
+      "code": "WS_NA_SEC_DSS",
+      "name": "Debt securities statistics",
+      "description": "",
+      "category": "Debt",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:40.832255",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_OTC_DERIV2",
+      "code": "WS_OTC_DERIV2",
+      "name": "OTC derivatives outstanding",
+      "description": "",
+      "category": "Derivatives",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:45.200431",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    },
+    {
+      "id": "BIS_WS_SPP",
+      "code": "WS_SPP",
+      "name": "Selected residential property prices",
+      "description": "",
+      "category": "Prices",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:48.274076",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_TC",
+      "code": "WS_TC",
+      "name": "Total credit",
+      "description": "",
+      "category": "Credit",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:51.081570",
+      "test_query": "Q.US",
+      "test_frequency": "Q",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_XRU",
+      "code": "WS_XRU",
+      "name": "US dollar exchange rates",
+      "description": "The price of one country's currency in relation to another.",
+      "category": "Exchange Rates",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": true,
+      "validation_date": "2025-11-15T20:24:51.728758",
+      "test_query": "M.US",
+      "test_frequency": "M",
+      "test_country": "US"
+    },
+    {
+      "id": "BIS_WS_XTD_DERIV",
+      "code": "WS_XTD_DERIV",
+      "name": "Exchange-traded derivatives",
+      "description": "",
+      "category": "Exchange Rates",
+      "agency": "BIS",
+      "type": "bis_dataset",
+      "source": "BIS",
+      "verified": false,
+      "validation_date": "2025-11-15T20:24:55.165788",
+      "test_query": "",
+      "test_frequency": "",
+      "test_country": ""
+    }
+  ],
+  "search_index": {
+    "bis_release_calendar": [
+      "BIS_BIS_REL_CAL"
+    ],
+    "other": [
+      "BIS_BIS_REL_CAL",
+      "BIS_WS_EER",
+      "BIS_WS_GLI"
+    ],
+    "bis_rel_cal": [
+      "BIS_BIS_REL_CAL"
+    ],
+    "bis_bis_rel_cal": [
+      "BIS_BIS_REL_CAL"
+    ],
+    "central bank policy rates": [
+      "BIS_WS_CBPOL"
+    ],
+    "ws_cbpol": [
+      "BIS_WS_CBPOL"
+    ],
+    "bis_ws_cbpol": [
+      "BIS_WS_CBPOL"
+    ],
+    "monetary policy": [
+      "BIS_WS_CBPOL"
+    ],
+    "banking statistics": [
+      "BIS_WS_CBS_PUB",
+      "BIS_WS_CBTA",
+      "BIS_WS_LBS_D_PUB"
+    ],
+    "consolidated banking": [
+      "BIS_WS_CBS_PUB"
+    ],
+    "bis_ws_cbs_pub": [
+      "BIS_WS_CBS_PUB"
+    ],
+    "ws_cbs_pub": [
+      "BIS_WS_CBS_PUB"
+    ],
+    "ws_cbta": [
+      "BIS_WS_CBTA"
+    ],
+    "bis_ws_cbta": [
+      "BIS_WS_CBTA"
+    ],
+    "central bank total assets": [
+      "BIS_WS_CBTA"
+    ],
+    "bis_ws_cpmi_cashless": [
+      "BIS_WS_CPMI_CASHLESS"
+    ],
+    "ws_cpmi_cashless": [
+      "BIS_WS_CPMI_CASHLESS"
+    ],
+    "cpmi cashless payments": [
+      "BIS_WS_CPMI_CASHLESS"
+    ],
+    "payments": [
+      "BIS_WS_CPMI_CASHLESS",
+      "BIS_WS_CPMI_CT1",
+      "BIS_WS_CPMI_CT2",
+      "BIS_WS_CPMI_DEVICES",
+      "BIS_WS_CPMI_INSTITUT",
+      "BIS_WS_CPMI_MACRO",
+      "BIS_WS_CPMI_PARTICIP",
+      "BIS_WS_CPMI_SYSTEMS"
+    ],
+    "ws_cpmi_ct1": [
+      "BIS_WS_CPMI_CT1"
+    ],
+    "cpmi comparative tables type 1": [
+      "BIS_WS_CPMI_CT1"
+    ],
+    "bis_ws_cpmi_ct1": [
+      "BIS_WS_CPMI_CT1"
+    ],
+    "cpmi comparative tables type 2": [
+      "BIS_WS_CPMI_CT2"
+    ],
+    "bis_ws_cpmi_ct2": [
+      "BIS_WS_CPMI_CT2"
+    ],
+    "ws_cpmi_ct2": [
+      "BIS_WS_CPMI_CT2"
+    ],
+    "ws_cpmi_devices": [
+      "BIS_WS_CPMI_DEVICES"
+    ],
+    "bis_ws_cpmi_devices": [
+      "BIS_WS_CPMI_DEVICES"
+    ],
+    "cpmi payment devices": [
+      "BIS_WS_CPMI_DEVICES"
+    ],
+    "cpmi institutions": [
+      "BIS_WS_CPMI_INSTITUT"
+    ],
+    "ws_cpmi_institut": [
+      "BIS_WS_CPMI_INSTITUT"
+    ],
+    "bis_ws_cpmi_institut": [
+      "BIS_WS_CPMI_INSTITUT"
+    ],
+    "ws_cpmi_macro": [
+      "BIS_WS_CPMI_MACRO"
+    ],
+    "cpmi macro": [
+      "BIS_WS_CPMI_MACRO"
+    ],
+    "bis_ws_cpmi_macro": [
+      "BIS_WS_CPMI_MACRO"
+    ],
+    "cpmi participants": [
+      "BIS_WS_CPMI_PARTICIP"
+    ],
+    "ws_cpmi_particip": [
+      "BIS_WS_CPMI_PARTICIP"
+    ],
+    "bis_ws_cpmi_particip": [
+      "BIS_WS_CPMI_PARTICIP"
+    ],
+    "ws_cpmi_systems": [
+      "BIS_WS_CPMI_SYSTEMS"
+    ],
+    "cpmi systems": [
+      "BIS_WS_CPMI_SYSTEMS"
+    ],
+    "bis_ws_cpmi_systems": [
+      "BIS_WS_CPMI_SYSTEMS"
+    ],
+    "prices": [
+      "BIS_WS_CPP",
+      "BIS_WS_DPP",
+      "BIS_WS_LONG_CPI",
+      "BIS_WS_SPP"
+    ],
+    "ws_cpp": [
+      "BIS_WS_CPP"
+    ],
+    "commercial property prices": [
+      "BIS_WS_CPP"
+    ],
+    "bis_ws_cpp": [
+      "BIS_WS_CPP"
+    ],
+    "credit": [
+      "BIS_WS_CREDIT_GAP",
+      "BIS_WS_TC"
+    ],
+    "credit-to-gdp gaps": [
+      "BIS_WS_CREDIT_GAP"
+    ],
+    "ws_credit_gap": [
+      "BIS_WS_CREDIT_GAP"
+    ],
+    "bis_ws_credit_gap": [
+      "BIS_WS_CREDIT_GAP"
+    ],
+    "international debt securities (bis-compiled)": [
+      "BIS_WS_DEBT_SEC2_PUB"
+    ],
+    "ws_debt_sec2_pub": [
+      "BIS_WS_DEBT_SEC2_PUB"
+    ],
+    "debt": [
+      "BIS_WS_DEBT_SEC2_PUB",
+      "BIS_WS_DSR",
+      "BIS_WS_NA_SEC_C3",
+      "BIS_WS_NA_SEC_DSS"
+    ],
+    "bis_ws_debt_sec2_pub": [
+      "BIS_WS_DEBT_SEC2_PUB"
+    ],
+    "otc derivatives turnover": [
+      "BIS_WS_DER_OTC_TOV"
+    ],
+    "bis_ws_der_otc_tov": [
+      "BIS_WS_DER_OTC_TOV"
+    ],
+    "derivatives": [
+      "BIS_WS_DER_OTC_TOV",
+      "BIS_WS_OTC_DERIV2"
+    ],
+    "ws_der_otc_tov": [
+      "BIS_WS_DER_OTC_TOV"
+    ],
+    "bis_ws_dpp": [
+      "BIS_WS_DPP"
+    ],
+    "ws_dpp": [
+      "BIS_WS_DPP"
+    ],
+    "detailed residential property prices": [
+      "BIS_WS_DPP"
+    ],
+    "bis_ws_dsr": [
+      "BIS_WS_DSR"
+    ],
+    "ws_dsr": [
+      "BIS_WS_DSR"
+    ],
+    "debt service ratios": [
+      "BIS_WS_DSR"
+    ],
+    "bis_ws_eer": [
+      "BIS_WS_EER"
+    ],
+    "effective exchange rates": [
+      "BIS_WS_EER"
+    ],
+    "ws_eer": [
+      "BIS_WS_EER"
+    ],
+    "ws_gli": [
+      "BIS_WS_GLI"
+    ],
+    "bis_ws_gli": [
+      "BIS_WS_GLI"
+    ],
+    "global liquidity indicators": [
+      "BIS_WS_GLI"
+    ],
+    "bis_ws_lbs_d_pub": [
+      "BIS_WS_LBS_D_PUB"
+    ],
+    "locational banking": [
+      "BIS_WS_LBS_D_PUB"
+    ],
+    "ws_lbs_d_pub": [
+      "BIS_WS_LBS_D_PUB"
+    ],
+    "bis_ws_long_cpi": [
+      "BIS_WS_LONG_CPI"
+    ],
+    "consumer prices statistics": [
+      "BIS_WS_LONG_CPI"
+    ],
+    "ws_long_cpi": [
+      "BIS_WS_LONG_CPI"
+    ],
+    "ws_na_sec_c3": [
+      "BIS_WS_NA_SEC_C3"
+    ],
+    "bis debt securities statistics": [
+      "BIS_WS_NA_SEC_C3"
+    ],
+    "bis_ws_na_sec_c3": [
+      "BIS_WS_NA_SEC_C3"
+    ],
+    "debt securities statistics": [
+      "BIS_WS_NA_SEC_DSS"
+    ],
+    "ws_na_sec_dss": [
+      "BIS_WS_NA_SEC_DSS"
+    ],
+    "bis_ws_na_sec_dss": [
+      "BIS_WS_NA_SEC_DSS"
+    ],
+    "ws_otc_deriv2": [
+      "BIS_WS_OTC_DERIV2"
+    ],
+    "bis_ws_otc_deriv2": [
+      "BIS_WS_OTC_DERIV2"
+    ],
+    "otc derivatives outstanding": [
+      "BIS_WS_OTC_DERIV2"
+    ],
+    "bis_ws_spp": [
+      "BIS_WS_SPP"
+    ],
+    "selected residential property prices": [
+      "BIS_WS_SPP"
+    ],
+    "ws_spp": [
+      "BIS_WS_SPP"
+    ],
+    "bis_ws_tc": [
+      "BIS_WS_TC"
+    ],
+    "ws_tc": [
+      "BIS_WS_TC"
+    ],
+    "total credit": [
+      "BIS_WS_TC"
+    ],
+    "us dollar exchange rates": [
+      "BIS_WS_XRU"
+    ],
+    "ws_xru": [
+      "BIS_WS_XRU"
+    ],
+    "exchange rates": [
+      "BIS_WS_XRU",
+      "BIS_WS_XTD_DERIV"
+    ],
+    "bis_ws_xru": [
+      "BIS_WS_XRU"
+    ],
+    "exchange-traded derivatives": [
+      "BIS_WS_XTD_DERIV"
+    ],
+    "bis_ws_xtd_deriv": [
+      "BIS_WS_XTD_DERIV"
+    ],
+    "ws_xtd_deriv": [
+      "BIS_WS_XTD_DERIV"
+    ]
+  }
+}

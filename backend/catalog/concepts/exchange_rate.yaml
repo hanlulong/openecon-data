@@ -1,0 +1,52 @@
+# Exchange Rate Indicator Catalog
+concept: exchange_rate
+category: currency
+domain: finance
+
+description: |
+  The rate at which one currency can be exchanged for another.
+
+synonyms:
+  primary:
+    - currency exchange
+    - forex
+  secondary:
+    - fx rate
+    - foreign exchange
+    - currency rate
+    - dollar exchange
+    - euro exchange
+
+explicit_exclusions:
+  - interest rate
+  - inflation rate
+  - exchange traded
+
+providers:
+  ExchangeRate:
+    primary:
+      code: dynamic
+      name: "Currency exchange rates"
+      confidence: 0.95
+      coverage: global
+      frequency: daily
+
+  FRED:
+    primary:
+      code: DEXUSEU
+      name: "U.S. / Euro Foreign Exchange Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: daily
+
+  BIS:
+    primary:
+      code: WS_XRU
+      name: "Effective exchange rate indices"
+      confidence: 0.90
+      coverage: global
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - IMF

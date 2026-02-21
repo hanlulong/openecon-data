@@ -1,0 +1,42 @@
+# Cryptocurrency Indicator Catalog
+concept: cryptocurrency
+category: digital_assets
+domain: finance
+
+description: |
+  Digital or virtual currencies that use cryptography for security
+  and operate on decentralized networks.
+
+synonyms:
+  primary:
+    - crypto
+    - bitcoin
+    - ethereum
+  secondary:
+    - digital currency
+    - crypto price
+    - crypto market
+    - btc
+    - eth
+
+explicit_exclusions:
+  - digital payments
+  - cbdc
+  - central bank digital
+
+providers:
+  CoinGecko:
+    primary:
+      code: dynamic
+      name: "Cryptocurrency prices and market data"
+      confidence: 0.95
+      coverage: global
+      frequency: realtime
+
+not_available:
+  - WorldBank
+  - IMF
+  - FRED
+  - Eurostat
+  - BIS
+  - Comtrade

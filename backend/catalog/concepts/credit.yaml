@@ -1,0 +1,45 @@
+# Credit Indicator Catalog
+concept: credit
+category: financial_stability
+domain: finance
+
+description: |
+  Total credit extended to the private non-financial sector,
+  including both bank and non-bank lending.
+
+synonyms:
+  primary:
+    - total credit
+    - private credit
+  secondary:
+    - bank credit
+    - credit to private sector
+    - domestic credit
+    - credit to non-financial sector
+
+explicit_exclusions:
+  - credit rating
+  - credit score
+  - credit card
+
+providers:
+  BIS:
+    primary:
+      code: WS_TC
+      name: "Total credit to private non-financial sector"
+      confidence: 0.95
+      coverage: global
+      frequency: quarterly
+
+  WorldBank:
+    primary:
+      code: FS.AST.PRVT.GD.ZS
+      name: "Domestic credit to private sector (% of GDP)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

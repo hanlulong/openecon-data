@@ -1,0 +1,80 @@
+# Household Debt Indicator Catalog
+concept: household_debt
+category: credit
+domain: finance
+
+description: |
+  Total debt owed by households, including mortgages, consumer credit,
+  and other loans. Often expressed as a percentage of GDP or disposable income.
+
+synonyms:
+  primary:
+    - household debt
+    - consumer debt
+    - private household debt
+  secondary:
+    - household credit
+    - household loans
+    - consumer credit
+    - private debt households
+    - household debt ratio
+    - household debt to gdp
+
+explicit_exclusions:
+  - government debt
+  - public debt
+  - sovereign debt
+  - national debt
+  - corporate debt
+  - non-financial corporate debt
+  - nfc debt
+  - external debt
+  - business debt
+
+providers:
+  BIS:
+    primary:
+      code: WS_TC
+      name: "Household debt, all instruments"
+      confidence: 0.95
+      coverage: 44_countries
+      frequency: quarterly
+    alternates:
+      - code: HH_ALL
+        name: "Household debt, all sectors"
+        confidence: 0.90
+
+  IMF:
+    primary:
+      code: HH_ALL
+      name: "Household debt, all instruments"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: HDTGPDUSQ163N
+      name: "Household Debt to GDP for United States"
+      confidence: 0.95
+      coverage: us_only
+      frequency: quarterly
+    alternates:
+      - code: HDTGPDQ163N
+        name: "Household Debt to Gross Domestic Product"
+        confidence: 0.85
+
+  WorldBank:
+    primary:
+      code: FS.AST.DOMS.GD.ZS
+      name: "Domestic credit provided by financial sector (% of GDP)"
+      confidence: 0.70
+      coverage: global
+      frequency: annual
+      note: "Proxy - includes all domestic credit, not just household"
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - StatsCan

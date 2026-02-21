@@ -1,0 +1,150 @@
+{
+  "DF_UNDATA_COUNTRYDATA": {
+    "id": "CountryData",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ_MDG"
+      },
+      {
+        "id": "SERIES",
+        "name": "Series",
+        "codelist": "CL_SERIES_COUNTRY_DATA"
+      },
+      {
+        "id": "UNIT",
+        "name": "Units of measurement",
+        "codelist": "CL_UNIT_COUNTRY_DATA"
+      },
+      {
+        "id": "LOCATION",
+        "name": "Location",
+        "codelist": "CL_LOCATION_MDG"
+      },
+      {
+        "id": "AGE_GROUP",
+        "name": "Age group",
+        "codelist": "CL_AGE_GROUP_COUNTRY_DATA"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX_MDG"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Area",
+        "codelist": "CL_REF_AREA_MDG"
+      },
+      {
+        "id": "SOURCE_TYPE",
+        "name": "Source type",
+        "codelist": "CL_SOURCE_TYPE_MDG"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_UNDATA_ENERGY": {
+    "id": "DSD_ENERGY",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Area",
+        "codelist": "CL_AREA_NRG"
+      },
+      {
+        "id": "COMMODITY",
+        "name": "Commodity",
+        "codelist": "CL_COMMODITY_NRG"
+      },
+      {
+        "id": "TRANSACTION",
+        "name": "Transaction",
+        "codelist": "CL_TRANSACTION_NRG"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_UNData_EnergyBalance": {
+    "id": "DSD_ENERGY_BALANCE_UNDATA",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference Area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "COMMODITY",
+        "name": "Commodity",
+        "codelist": "CL_COMMODITY_ENERGY_BALANCE_UNDATA"
+      },
+      {
+        "id": "TRANSACTION",
+        "name": "Transactions",
+        "codelist": "CL_TRANS_ENERGY_BALANCE_UNDATA"
+      },
+      {
+        "id": "UNIT",
+        "name": "Unit",
+        "codelist": "CL_UNIT_ENERGY_UNDATA"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_UNData_UNFCC": {
+    "id": "DSD_GHG_UNDATA",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "UNIT",
+        "name": "Unit",
+        "codelist": "CL_UNIT"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

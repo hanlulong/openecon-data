@@ -1,0 +1,108 @@
+# Productivity Indicator Catalog
+# This file defines the "productivity" economic concept and its mappings
+
+concept: productivity
+category: labor_market
+domain: macroeconomics
+
+description: |
+  Output per unit of labor input. Typically measured as GDP per worker
+  (labor productivity) or GDP per hour worked (hourly productivity).
+
+  NOT to be confused with:
+  - Production index (volume of output, not efficiency)
+  - Total factor productivity (includes capital, harder to measure)
+
+synonyms:
+  primary:
+    - labor productivity
+    - labour productivity
+    - worker productivity
+  secondary:
+    - gdp per worker
+    - gdp per employed
+    - output per worker
+    - economic efficiency
+    - workforce productivity
+    - output per hour
+    - gdp per hour
+    - hourly productivity
+
+explicit_exclusions:
+  - production index
+  - production volume
+  - agricultural production
+  - industrial production
+  - manufacturing production
+  - output index
+  - gross production
+  - capacity utilization
+  - production capacity
+
+providers:
+  WorldBank:
+    primary:
+      code: SL.GDP.PCAP.EM.KD
+      name: "GDP per person employed (constant 2021 PPP $)"
+      unit: "constant 2021 PPP $"
+      frequency: annual
+      coverage: global
+      confidence: 0.95
+    sectoral:
+      agriculture:
+        code: NV.AGR.EMPL.KD
+        name: "Agriculture value added per worker"
+      industry:
+        code: NV.IND.EMPL.KD
+        name: "Industry value added per worker"
+      services:
+        code: NV.SRV.EMPL.KD
+        name: "Services value added per worker"
+
+  OECD:
+    primary:
+      code: DSD_PDB@DF_PDB_LV
+      name: "Productivity levels"
+      frequency: annual
+      coverage: oecd_plus
+      confidence: 0.98
+    growth:
+      code: DSD_PDB@DF_PDB_GR
+      name: "Productivity growth rates"
+
+  FRED:
+    primary:
+      code: OPHNFB
+      name: "Nonfarm Business Sector: Labor Productivity"
+      frequency: quarterly
+      coverage: [US]
+      confidence: 0.99
+    manufacturing:
+      code: MPU4900063
+      name: "Manufacturing Sector: Labor Productivity"
+    unit_labor_cost:
+      code: ULCNFB
+      name: "Nonfarm Business Sector: Unit Labor Cost"
+
+  Eurostat:
+    primary:
+      code: nama_10_lp_ulc
+      name: "Labour productivity and unit labour costs"
+      frequency: annual
+      coverage: eu_members
+      confidence: 0.90
+
+  StatsCan:
+    primary:
+      code: null  # Use dynamic discovery
+      name: "Labour productivity, business sector"
+      frequency: annual
+      coverage: [CA]
+      notes: "Use Table 36-10-0480-01"
+
+not_available:
+  - IMF  # No productivity data in DataMapper API
+  - Comtrade  # Trade data only
+  - CoinGecko  # Cryptocurrency only
+  - ExchangeRate  # Exchange rates only
+  - BIS  # Financial stability data only

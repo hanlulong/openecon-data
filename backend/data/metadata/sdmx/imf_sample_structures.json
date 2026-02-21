@@ -1,0 +1,187 @@
+{
+  "01R": {
+    "id": "ECOFIN_DSD",
+    "dimensions": [
+      {
+        "id": "DATA_DOMAIN",
+        "name": "Data Domain",
+        "codelist": "CL_DATADOMAIN"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Country or area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Economic Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "1DI": {
+    "id": "ECOFIN_DSD",
+    "dimensions": [
+      {
+        "id": "DATA_DOMAIN",
+        "name": "Data Domain",
+        "codelist": "CL_DATADOMAIN"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Country or area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Economic Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "1PI": {
+    "id": "ECOFIN_DSD",
+    "dimensions": [
+      {
+        "id": "DATA_DOMAIN",
+        "name": "Data Domain",
+        "codelist": "CL_DATADOMAIN"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Country or area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Economic Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "1SR": {
+    "id": "ECOFIN_DSD",
+    "dimensions": [
+      {
+        "id": "DATA_DOMAIN",
+        "name": "Data Domain",
+        "codelist": "CL_DATADOMAIN"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Country or area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Economic Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "2SR": {
+    "id": "ECOFIN_DSD",
+    "dimensions": [
+      {
+        "id": "DATA_DOMAIN",
+        "name": "Data Domain",
+        "codelist": "CL_DATADOMAIN"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference Country or area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "INDICATOR",
+        "name": "Economic Indicator",
+        "codelist": "CL_INDICATOR"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart Area",
+        "codelist": "CL_REF_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

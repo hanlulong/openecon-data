@@ -1,0 +1,78 @@
+# Unemployment Indicator Catalog
+concept: unemployment
+category: labor_market
+domain: macroeconomics
+
+description: |
+  The percentage of the labor force that is jobless and actively
+  seeking employment.
+
+synonyms:
+  primary:
+    - unemployment rate
+    - jobless rate
+  secondary:
+    - joblessness
+    - out of work
+    - job seekers
+    - labor market slack
+
+explicit_exclusions:
+  - employment
+  - employed
+  - job creation
+  - labor force participation
+
+providers:
+  WorldBank:
+    primary:
+      code: SL.UEM.TOTL.ZS
+      name: "Unemployment, total (% of total labor force)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: LUR
+      name: "Unemployment rate"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: UNRATE
+      name: "Civilian Unemployment Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: une_rt_a
+      name: "Unemployment rate - annual average"
+      confidence: 0.95
+      coverage: eu_members
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "2062815"
+      name: "Unemployment rate, both sexes, 15 years and over"
+      confidence: 0.95
+      coverage: [CA]
+      frequency: monthly
+
+  OECD:
+    primary:
+      code: DSD_LFS@DF_IALFS_UNE_M
+      name: "Unemployment rate"
+      confidence: 0.90
+      coverage: oecd_members
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

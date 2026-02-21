@@ -1,0 +1,65 @@
+# robots.txt for openecon.ai
+# AI-Powered Economic Data Platform
+
+User-agent: *
+Allow: /
+
+# Allow AI agents to discover capabilities
+Allow: /llms.txt
+Allow: /.well-known/ai-plugin.json
+
+# Disallow backend API endpoints (not useful for crawlers)
+Disallow: /api/
+Disallow: /health
+Disallow: /mcp
+
+# Sitemap location
+Sitemap: https://openecon.ai/sitemap.xml
+
+# Crawl delay (polite crawling)
+Crawl-delay: 1
+
+# AI/LLM specific crawlers
+User-agent: GPTBot
+Allow: /
+Allow: /llms.txt
+Allow: /.well-known/ai-plugin.json
+
+User-agent: ChatGPT-User
+Allow: /
+Allow: /llms.txt
+Allow: /.well-known/ai-plugin.json
+
+User-agent: Claude-Web
+Allow: /
+Allow: /llms.txt
+Allow: /.well-known/ai-plugin.json
+
+User-agent: Anthropic-AI
+Allow: /
+Allow: /llms.txt
+Allow: /.well-known/ai-plugin.json
+
+User-agent: CCBot
+Allow: /
+Allow: /llms.txt
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /llms.txt
+
+# Common search engine bots
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+User-agent: Slurp
+Allow: /

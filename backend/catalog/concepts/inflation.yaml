@@ -1,0 +1,75 @@
+# Inflation Indicator Catalog
+concept: inflation
+category: prices
+domain: macroeconomics
+
+description: |
+  The rate at which the general level of prices for goods and services
+  is rising, measured as an annual percentage change.
+
+synonyms:
+  primary:
+    - consumer prices
+    - cpi
+    - price inflation
+  secondary:
+    - price level
+    - price increase
+    - cost of living
+    - consumer price index
+    - hicp
+    - price growth
+    - rising prices
+
+explicit_exclusions:
+  - deflation
+  - disinflation
+  - price index level
+  - price index value
+  - base year prices
+
+providers:
+  WorldBank:
+    primary:
+      code: FP.CPI.TOTL.ZG
+      name: "Inflation, consumer prices (annual %)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: PCPIPCH
+      name: "Inflation rate, average consumer prices"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: CPIAUCSL
+      name: "Consumer Price Index for All Urban Consumers"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: prc_hicp_aind
+      name: "HICP - annual data (index)"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "41690973"
+      name: "CPI, all-items, year-over-year percentage change"
+      confidence: 0.95
+      coverage: [CA]
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

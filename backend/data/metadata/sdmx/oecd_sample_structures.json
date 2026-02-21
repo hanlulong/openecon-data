@@ -1,0 +1,352 @@
+{
+  "SEEA_AEA_A": {
+    "id": "SEEAAIR",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency of observation",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "DEMAND_PROD",
+        "name": "Demand or Production",
+        "codelist": "CL_DEMAND_PROD"
+      },
+      {
+        "id": "ACCOUNTING_ENTRY",
+        "name": "Accounting entry",
+        "codelist": "CL_ACCOUNT_ENTRY"
+      },
+      {
+        "id": "COUNTERPART_AREA",
+        "name": "Counterpart area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "INTERACTORS",
+        "name": "Units interacting with the environment",
+        "codelist": "CL_INTERACTORS"
+      },
+      {
+        "id": "BRIDGE_ITEMS",
+        "name": "Bridging items",
+        "codelist": "CL_BRIDGE_ITEM"
+      },
+      {
+        "id": "AIRPOL",
+        "name": "Air pollutants and greenhouse gasses",
+        "codelist": "CL_AIRPOL"
+      },
+      {
+        "id": "STO",
+        "name": "Stocks, transactions and other flows",
+        "codelist": "CL_SEEA_STO"
+      },
+      {
+        "id": "UNIT_MEASURE",
+        "name": "Unit of measure",
+        "codelist": "CL_UNIT"
+      },
+      {
+        "id": "PRODUCT",
+        "name": "Product",
+        "codelist": "CL_PRODUCT"
+      },
+      {
+        "id": "SECTOR",
+        "name": "Sector",
+        "codelist": "CL_SECTOR"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_SDG_GLC": {
+    "id": "SDG",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency of observation",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REPORTING_TYPE",
+        "name": "Reporting type",
+        "codelist": "CL_REPORTING_TYPE"
+      },
+      {
+        "id": "SERIES",
+        "name": "SDG Series",
+        "codelist": "CL_SERIES"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "URBANISATION",
+        "name": "Degree of urbanisation",
+        "codelist": "CL_URBANISATION"
+      },
+      {
+        "id": "INCOME_WEALTH_QUANTILE",
+        "name": "Income or wealth quantile",
+        "codelist": "CL_QUANTILE"
+      },
+      {
+        "id": "EDUCATION_LEV",
+        "name": "Education level",
+        "codelist": "CL_EDUCATION_LEV"
+      },
+      {
+        "id": "OCCUPATION",
+        "name": "Occupation",
+        "codelist": "CL_OCCUPATION"
+      },
+      {
+        "id": "CUST_BREAKDOWN",
+        "name": "Custom Breakdown",
+        "codelist": "CL_CUST_BREAKDOWN"
+      },
+      {
+        "id": "COMPOSITE_BREAKDOWN",
+        "name": "Composite breakdown",
+        "codelist": "CL_COMP_BREAKDOWN"
+      },
+      {
+        "id": "DISABILITY_STATUS",
+        "name": "Disability status",
+        "codelist": "CL_DISABILITY"
+      },
+      {
+        "id": "ACTIVITY",
+        "name": "Economic activity",
+        "codelist": "CL_ACTIVITY"
+      },
+      {
+        "id": "PRODUCT",
+        "name": "Type of product",
+        "codelist": "CL_PRODUCT"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_SDG_GLH": {
+    "id": "SDG",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency of observation",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REPORTING_TYPE",
+        "name": "Reporting type",
+        "codelist": "CL_REPORTING_TYPE"
+      },
+      {
+        "id": "SERIES",
+        "name": "SDG Series",
+        "codelist": "CL_SERIES"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "URBANISATION",
+        "name": "Degree of urbanisation",
+        "codelist": "CL_URBANISATION"
+      },
+      {
+        "id": "INCOME_WEALTH_QUANTILE",
+        "name": "Income or wealth quantile",
+        "codelist": "CL_QUANTILE"
+      },
+      {
+        "id": "EDUCATION_LEV",
+        "name": "Education level",
+        "codelist": "CL_EDUCATION_LEV"
+      },
+      {
+        "id": "OCCUPATION",
+        "name": "Occupation",
+        "codelist": "CL_OCCUPATION"
+      },
+      {
+        "id": "CUST_BREAKDOWN",
+        "name": "Custom Breakdown",
+        "codelist": "CL_CUST_BREAKDOWN"
+      },
+      {
+        "id": "COMPOSITE_BREAKDOWN",
+        "name": "Composite breakdown",
+        "codelist": "CL_COMP_BREAKDOWN"
+      },
+      {
+        "id": "DISABILITY_STATUS",
+        "name": "Disability status",
+        "codelist": "CL_DISABILITY"
+      },
+      {
+        "id": "ACTIVITY",
+        "name": "Economic activity",
+        "codelist": "CL_ACTIVITY"
+      },
+      {
+        "id": "PRODUCT",
+        "name": "Type of product",
+        "codelist": "CL_PRODUCT"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DSD_FUA_CLIM@DF_CLIM_PROJ": {
+    "id": "DSD_FUA_CLIM",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_FUA_CITY"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency of observation",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE_FUA"
+      },
+      {
+        "id": "UNIT_MEASURE",
+        "name": "Unit of measure",
+        "codelist": "CL_UNIT_MEASURE"
+      },
+      {
+        "id": "RET_PERIOD",
+        "name": "Return period",
+        "codelist": "CL_RET_PERIOD"
+      },
+      {
+        "id": "HEAT_STRESS",
+        "name": "Heat stress threshold",
+        "codelist": "CL_HEAT_STRESS"
+      },
+      {
+        "id": "TERRITORIAL_LEVEL",
+        "name": "Territorial level",
+        "codelist": "CL_TERRITORIAL_LEVEL"
+      },
+      {
+        "id": "PROJ_SCENARIO",
+        "name": "Projection scenario",
+        "codelist": "CL_PROJ_SCENARIO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DSD_FUA_CLIM@DF_COASTAL_FLOOD": {
+    "id": "DSD_FUA_CLIM",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_FUA_CITY"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency of observation",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE_FUA"
+      },
+      {
+        "id": "UNIT_MEASURE",
+        "name": "Unit of measure",
+        "codelist": "CL_UNIT_MEASURE"
+      },
+      {
+        "id": "RET_PERIOD",
+        "name": "Return period",
+        "codelist": "CL_RET_PERIOD"
+      },
+      {
+        "id": "HEAT_STRESS",
+        "name": "Heat stress threshold",
+        "codelist": "CL_HEAT_STRESS"
+      },
+      {
+        "id": "TERRITORIAL_LEVEL",
+        "name": "Territorial level",
+        "codelist": "CL_TERRITORIAL_LEVEL"
+      },
+      {
+        "id": "PROJ_SCENARIO",
+        "name": "Projection scenario",
+        "codelist": "CL_PROJ_SCENARIO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

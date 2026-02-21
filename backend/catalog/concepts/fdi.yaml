@@ -1,0 +1,47 @@
+# FDI Indicator Catalog
+concept: fdi
+category: international_finance
+domain: finance
+
+description: |
+  Foreign Direct Investment - cross-border investment where a resident
+  in one economy obtains a lasting interest in an enterprise in another economy.
+
+synonyms:
+  primary:
+    - foreign direct investment
+    - fdi inflows
+  secondary:
+    - foreign investment
+    - direct investment
+    - inward fdi
+    - fdi net inflows
+
+explicit_exclusions:
+  - portfolio investment
+  - domestic investment
+  - gross capital formation
+  - fdi outflows
+
+providers:
+  WorldBank:
+    primary:
+      code: BX.KLT.DINV.CD.WD
+      name: "Foreign direct investment, net inflows (BoP, current US$)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  OECD:
+    primary:
+      code: DSD_FDI@DF_FDI_FLOW_PARTNER
+      name: "FDI flows by partner country"
+      confidence: 0.90
+      coverage: oecd_members
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS

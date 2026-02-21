@@ -1,0 +1,32 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+pydantic-settings>=2.2.1
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+fastapi-mcp>=0.4.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+supabase>=2.0.0
+postgrest>=0.13.0
+
+# LangChain Integration (2025-12-24 - Upgraded to 1.2 + LangGraph 1.0.5 + Deep Agents)
+langchain>=1.2.0
+langchain-core>=1.2.5
+langchain-openai>=1.1.6
+langgraph>=1.0.5
+langsmith>=0.4.42
+tiktoken>=0.12.0
+faiss-cpu>=1.8.0
+deepagents>=0.3.1
+
+# Redis Integration (2025-11-22)
+redis[hiredis]>=5.0.0
+
+# Rate Limiting (2025-11-26)
+slowapi>=0.1.9
+
+# Data Export (2025-11-29)
+pandas>=2.0.0

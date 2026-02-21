@@ -1,0 +1,42 @@
+# Exports Indicator Catalog
+concept: exports
+category: international_trade
+domain: macroeconomics
+
+description: |
+  Goods and services produced domestically and sold to other countries.
+
+synonyms:
+  primary:
+    - merchandise exports
+    - goods exports
+  secondary:
+    - export value
+    - outbound trade
+    - export volume
+
+explicit_exclusions:
+  - imports
+  - trade balance
+  - net exports
+
+providers:
+  WorldBank:
+    primary:
+      code: NE.EXP.GNFS.ZS
+      name: "Exports of goods and services (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  Comtrade:
+    primary:
+      code: dynamic
+      name: "Merchandise exports by partner and commodity"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

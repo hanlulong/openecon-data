@@ -1,0 +1,232 @@
+{
+  "LFST_R_E2SGANU": {
+    "id": "LFST_R_E2SGANU",
+    "dimensions": [
+      {
+        "id": "freq",
+        "name": "Time frequency",
+        "codelist": "FREQ"
+      },
+      {
+        "id": "deg_urb",
+        "name": "Degree of urbanisation",
+        "codelist": "DEG_URB"
+      },
+      {
+        "id": "wstatus",
+        "name": "Labour force and employment status",
+        "codelist": "WSTATUS"
+      },
+      {
+        "id": "citizen",
+        "name": "Country of citizenship",
+        "codelist": "CITIZEN"
+      },
+      {
+        "id": "age",
+        "name": "Age class",
+        "codelist": "AGE"
+      },
+      {
+        "id": "sex",
+        "name": "Sex",
+        "codelist": "SEX"
+      },
+      {
+        "id": "unit",
+        "name": "Unit of measure",
+        "codelist": "UNIT"
+      },
+      {
+        "id": "geo",
+        "name": "Geopolitical entity (reporting)",
+        "codelist": "GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "LFST_R_E2TGAEDCU": {
+    "id": "LFST_R_E2TGAEDCU",
+    "dimensions": [
+      {
+        "id": "freq",
+        "name": "Time frequency",
+        "codelist": "FREQ"
+      },
+      {
+        "id": "deg_urb",
+        "name": "Degree of urbanisation",
+        "codelist": "DEG_URB"
+      },
+      {
+        "id": "c_birth",
+        "name": "Country/region of birth",
+        "codelist": "C_BIRTH"
+      },
+      {
+        "id": "isced11",
+        "name": "International Standard Classification of Education (ISCED 2011)",
+        "codelist": "ISCED11"
+      },
+      {
+        "id": "age",
+        "name": "Age class",
+        "codelist": "AGE"
+      },
+      {
+        "id": "sex",
+        "name": "Sex",
+        "codelist": "SEX"
+      },
+      {
+        "id": "unit",
+        "name": "Unit of measure",
+        "codelist": "UNIT"
+      },
+      {
+        "id": "geo",
+        "name": "Geopolitical entity (reporting)",
+        "codelist": "GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "LFST_R_E2TGAEDNU": {
+    "id": "LFST_R_E2TGAEDNU",
+    "dimensions": [
+      {
+        "id": "freq",
+        "name": "Time frequency",
+        "codelist": "FREQ"
+      },
+      {
+        "id": "deg_urb",
+        "name": "Degree of urbanisation",
+        "codelist": "DEG_URB"
+      },
+      {
+        "id": "citizen",
+        "name": "Country of citizenship",
+        "codelist": "CITIZEN"
+      },
+      {
+        "id": "isced11",
+        "name": "International Standard Classification of Education (ISCED 2011)",
+        "codelist": "ISCED11"
+      },
+      {
+        "id": "age",
+        "name": "Age class",
+        "codelist": "AGE"
+      },
+      {
+        "id": "sex",
+        "name": "Sex",
+        "codelist": "SEX"
+      },
+      {
+        "id": "unit",
+        "name": "Unit of measure",
+        "codelist": "UNIT"
+      },
+      {
+        "id": "geo",
+        "name": "Geopolitical entity (reporting)",
+        "codelist": "GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "LFST_R_EDATD_16": {
+    "id": "LFST_R_EDATD_16",
+    "dimensions": [
+      {
+        "id": "freq",
+        "name": "Time frequency",
+        "codelist": "FREQ"
+      },
+      {
+        "id": "unit",
+        "name": "Unit of measure",
+        "codelist": "UNIT"
+      },
+      {
+        "id": "statinfo",
+        "name": "Statistical information",
+        "codelist": "STATINFO"
+      },
+      {
+        "id": "age",
+        "name": "Age class",
+        "codelist": "AGE"
+      },
+      {
+        "id": "geo",
+        "name": "Geopolitical entity (reporting)",
+        "codelist": "GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "LFST_R_EDATD_22": {
+    "id": "LFST_R_EDATD_22",
+    "dimensions": [
+      {
+        "id": "freq",
+        "name": "Time frequency",
+        "codelist": "FREQ"
+      },
+      {
+        "id": "unit",
+        "name": "Unit of measure",
+        "codelist": "UNIT"
+      },
+      {
+        "id": "statinfo",
+        "name": "Statistical information",
+        "codelist": "STATINFO"
+      },
+      {
+        "id": "age",
+        "name": "Age class",
+        "codelist": "AGE"
+      },
+      {
+        "id": "geo",
+        "name": "Geopolitical entity (reporting)",
+        "codelist": "GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

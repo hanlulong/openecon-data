@@ -1,0 +1,56 @@
+# Government Debt Indicator Catalog
+concept: government_debt
+category: fiscal_policy
+domain: finance
+
+description: |
+  Total debt owed by the central or general government,
+  often expressed as a percentage of GDP.
+
+synonyms:
+  primary:
+    - public debt
+    - national debt
+  secondary:
+    - sovereign debt
+    - central government debt
+    - debt to gdp
+    - debt ratio
+
+explicit_exclusions:
+  - household debt
+  - corporate debt
+  - private debt
+  - external debt
+  - consumer debt
+
+providers:
+  IMF:
+    primary:
+      code: GGXWDG_NGDP
+      name: "General government gross debt (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  WorldBank:
+    primary:
+      code: GC.DOD.TOTL.GD.ZS
+      name: "Central government debt, total (% of GDP)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+  Eurostat:
+    primary:
+      code: gov_10q_ggdebt
+      name: "Government debt"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: quarterly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - FRED

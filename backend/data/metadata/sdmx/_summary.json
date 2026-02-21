@@ -1,0 +1,16 @@
+{
+  "total_providers": 9,
+  "successful": 9,
+  "failed": 0,
+  "results": {
+    "IMF": "success",
+    "WB": "success",
+    "OECD": "success",
+    "ESTAT": "success",
+    "BIS": "success",
+    "ECB": "success",
+    "UNSD": "success",
+    "ILO": "success",
+    "ABS": "success"
+  }
+}

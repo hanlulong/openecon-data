@@ -1,0 +1,1796 @@
+{
+  "01R": {
+    "id": "01R",
+    "name": "Exchange Rates and International Reserves (01R) for Collection",
+    "description": "Exchange Rates and International Reserves (01R) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "1DI": {
+    "id": "1DI",
+    "name": "Coordinated Direct Investment Survey (CDIS) for Collection",
+    "description": "Coordinated Direct Investment Survey (CDIS) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "1PI": {
+    "id": "1PI",
+    "name": "Coordinated Portfolio Investment Survey (CPIS) for Collection",
+    "description": "Coordinated Portfolio Investment Survey (CPIS) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "1SR": {
+    "id": "1SR",
+    "name": "M&B: Central Bank (1SR) for Collection",
+    "description": "M&B: Central Bank (1SR) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "2SR": {
+    "id": "2SR",
+    "name": "M&B: Other Depository Corporations (2SR) for Collection",
+    "description": "M&B: Other Depository Corporations (2SR) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "4SR": {
+    "id": "4SR",
+    "name": "M&B: Other Financial Corporations (4SR) for Collection",
+    "description": "M&B: Other Financial Corporations (4SR) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "5SR": {
+    "id": "5SR",
+    "name": "M&B: Monetary Aggregates (5SR) for Collection",
+    "description": "M&B: Monetary Aggregates (5SR) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "60R": {
+    "id": "60R",
+    "name": "RES: Prices, Production, Labor and Trade (60R) for Collection",
+    "description": "RES: Prices, Production, Labor and Trade (60R) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "6SR": {
+    "id": "6SR",
+    "name": "M&B: Interest Rates and Share Prices (6SR) for Collection",
+    "description": "M&B: Interest Rates and Share Prices (6SR) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "90R": {
+    "id": "90R",
+    "name": "RES: National Accounts (90R) for Collection",
+    "description": "RES: National Accounts (90R) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "BCG": {
+    "id": "BCG",
+    "name": "Budgetary Central Government Operations",
+    "description": "Government Finance Operations Statement Central Government",
+    "structure": "ECOFIN_DSD"
+  },
+  "BCGO_ALT_FISCAL": {
+    "id": "BCGO_ALT_FISCAL",
+    "name": "Budgetary Central Government Operations",
+    "description": "Government Finance Budgetary Central Government Operations  FISCAL",
+    "structure": "ALT_FISCAL_DSD"
+  },
+  "BOP5_COLLECTION": {
+    "id": "BOP5_COLLECTION",
+    "name": "Balance of Payments (BPM5) for Collection",
+    "description": "Balance of Payments (BPM5) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "BOP6": {
+    "id": "BOP6",
+    "name": "Balance of Payments (BPM6) for Collection",
+    "description": "Balance of Payments (BPM6) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "BOP_BPM5": {
+    "id": "BOP_BPM5",
+    "name": "Balance of Payments -- BPM5",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "BOP_BPM6": {
+    "id": "BOP_BPM6",
+    "name": "Balance of Payments -- BPM6",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "BOP_GBPM6": {
+    "id": "BOP_GBPM6",
+    "name": "Balance of Payments _Global use_BOP_BPM6",
+    "description": "",
+    "structure": "BOP"
+  },
+  "BPM6_BOP_Q": {
+    "id": "BPM6_BOP_Q",
+    "name": "Balance of Payments --BPM6--Global DSD",
+    "description": "",
+    "structure": "BOP"
+  },
+  "BPM6_RA_M": {
+    "id": "BPM6_RA_M",
+    "name": "Template on International Reserves and Foreign Currency Liquidity--Global DSD",
+    "description": "",
+    "structure": "BOP"
+  },
+  "CBS": {
+    "id": "CBS",
+    "name": "Central Bank Survey",
+    "description": "Central Bank Survey",
+    "structure": "ECOFIN_DSD"
+  },
+  "CBS_NSTD": {
+    "id": "CBS_NSTD",
+    "name": "Central Bank Survey_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "CGD": {
+    "id": "CGD",
+    "name": "Central Government debt (CGD)",
+    "description": "Government Finance Central Government debt",
+    "structure": "ECOFIN_DSD"
+  },
+  "CGD_ALT_FISCAL": {
+    "id": "CGD_ALT_FISCAL",
+    "name": "Central Government debt (CGD) FISCAL",
+    "description": "Government Finance Central Government debt FISCAL",
+    "structure": "ALT_FISCAL_DSD"
+  },
+  "CGD_GNA": {
+    "id": "CGD_GNA",
+    "name": "Central Government Debt (CGD) - Global Use NA_SEC DSD V1.5",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "CGD_NSTD": {
+    "id": "CGD_NSTD",
+    "name": "Central Government Debt_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "CGO": {
+    "id": "CGO",
+    "name": "Central Government Operations (CGO)",
+    "description": "Government Finance Operations Statement Central Government",
+    "structure": "ECOFIN_DSD"
+  },
+  "CGO_ALT_FISCAL": {
+    "id": "CGO_ALT_FISCAL",
+    "name": "Central Government operations (CGO) FISCAL",
+    "description": "Government Finance Central Government operations FISCAL",
+    "structure": "ALT_FISCAL_DSD"
+  },
+  "CGO_GNA": {
+    "id": "CGO_GNA",
+    "name": "Central Government operations (CGO) - Global Use NA_SEC DSD V1.4",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "CGO_NSTD": {
+    "id": "CGO_NSTD",
+    "name": "Central government operations_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "COF": {
+    "id": "COF",
+    "name": "COFER: Currency Composition of Foreign Exchange Reserves",
+    "description": "COFER: Currency Composition of Foreign Exchange Reserves",
+    "structure": "ECOFIN_DSD"
+  },
+  "CPI": {
+    "id": "CPI",
+    "name": "Consumer Price Index",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "CPIH": {
+    "id": "CPIH",
+    "name": "Consumer Price Index Harmonized (CPIH) for collection",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "DCS": {
+    "id": "DCS",
+    "name": "Depository Corporations Survey",
+    "description": "Depository Corporations Survey",
+    "structure": "ECOFIN_DSD"
+  },
+  "DCS_NSTD": {
+    "id": "DCS_NSTD",
+    "name": "Depository Corporations Survey_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "DOTS": {
+    "id": "DOTS",
+    "name": "Direction of Trade Statistics (DOTS) for Collection",
+    "description": "Direction of Trade Statistics (DOTS) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "DSE": {
+    "id": "DSE",
+    "name": "Debt Securities",
+    "description": "Debt Securities",
+    "structure": "ECOFIN_DSD"
+  },
+  "DSE_GBPM6": {
+    "id": "DSE_GBPM6",
+    "name": "Debt Securities - Global Use BPM6 DSD",
+    "description": "",
+    "structure": "BOP"
+  },
+  "DSE_GNA": {
+    "id": "DSE_GNA",
+    "name": "Debt Securities - Global Use NA_SEC DSD V1.12",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "ECC": {
+    "id": "ECC",
+    "name": "Climate Change",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "EMP": {
+    "id": "EMP",
+    "name": "Employment",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "EXD": {
+    "id": "EXD",
+    "name": "External debt",
+    "description": "External debt",
+    "structure": "ECOFIN_DSD"
+  },
+  "EXD_BPM6": {
+    "id": "EXD_BPM6",
+    "name": "External Debt (EXD_BPM6)",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "EXD_GBPM6": {
+    "id": "EXD_GBPM6",
+    "name": "External Debt (EXD)- Global Use BOP_BPM6",
+    "description": "",
+    "structure": "BOP"
+  },
+  "EXR": {
+    "id": "EXR",
+    "name": "Exchange rates",
+    "description": "Exchange rates",
+    "structure": "ECOFIN_DSD"
+  },
+  "FAS_COLLECTION": {
+    "id": "FAS_COLLECTION",
+    "name": "Financial Access Survey (FAS) for Collection",
+    "description": "Financial Access Survey (FAS) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "FLI": {
+    "id": "FLI",
+    "name": "Forward looking Indicators",
+    "description": "Forward looking Indicators",
+    "structure": "ECOFIN_DSD"
+  },
+  "FS1": {
+    "id": "FS1",
+    "name": "FSI: Institution of Deposit Takers and OFCs (FS1) for Collection",
+    "description": "FSI: Institution of Deposit Takers and OFCs (FS1) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "FS2": {
+    "id": "FS2",
+    "name": "FSI: Sectoral Financial Statements (FS2) for Collection",
+    "description": "FSI: Sectoral Financial Statements (FS2) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "FSD": {
+    "id": "FSD",
+    "name": "FSI: Data Report Form (FSD) for Collection",
+    "description": "FSI: Data Report Form (FSD) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "FSD_NSTD": {
+    "id": "FSD_NSTD",
+    "name": "FSI: Data Report Form_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "FSI": {
+    "id": "FSI",
+    "name": "Financial Soundness Indicators",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "FXI": {
+    "id": "FXI",
+    "name": "Foreign Exchange Intervention",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "GFB": {
+    "id": "GFB",
+    "name": "GFS: Budgetary Central Govt: Operational Statement, Cash Statement, Balance Sheet (GFB) for Collection",
+    "description": "Budgetary Central Govt: Operational Statement, Cash Statement, Balance Sheet (GFB) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "GFC": {
+    "id": "GFC",
+    "name": "GFS: Consolidated Central Govt: Operational Statement, Cash Statement, Balance Sheet (GFC) for Collection",
+    "description": "Consolidated Central Govt: Operational Statement, Cash Statement, Balance Sheet (GFC) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "GFG": {
+    "id": "GFG",
+    "name": "GFS: Consolidated General Govt: Operational Statement, Cash Statement, Balance Sheet (GFG) for Collection",
+    "description": "GFS: Consolidated General Govt: Operational Statement, Cash Statement, Balance Sheet (GFG) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "GGD": {
+    "id": "GGD",
+    "name": "General Government gross debt (GGD)",
+    "description": "Government Finance General Government gross debt",
+    "structure": "ECOFIN_DSD"
+  },
+  "GGD_ALT_FISCAL": {
+    "id": "GGD_ALT_FISCAL",
+    "name": "General Government debt (GGD) FISCAL",
+    "description": "Government Finance General Government debt FISCAL",
+    "structure": "ALT_FISCAL_DSD"
+  },
+  "GGD_GNA": {
+    "id": "GGD_GNA",
+    "name": "General Government debt - Global Use NA_SEC DSD V1.7",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "GGO": {
+    "id": "GGO",
+    "name": "General Government Operations (GGO)",
+    "description": "Government Finance Operations Statement General Government",
+    "structure": "ECOFIN_DSD"
+  },
+  "GGO_ALT_FISCAL": {
+    "id": "GGO_ALT_FISCAL",
+    "name": "General Government operations (GGO) FISCAL",
+    "description": "Government Finance General Government operations FISCAL",
+    "structure": "ALT_FISCAL_DSD"
+  },
+  "GGO_GNA": {
+    "id": "GGO_GNA",
+    "name": "General Government operations (GGO) - Global Use NA_SEC DSD V1.5",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "GYQ": {
+    "id": "GYQ",
+    "name": "GFS: Yearkbook Questionnaire (GYQ) for Collection",
+    "description": "GFS: Yearkbook Questionnaire (GYQ) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "IIP5_COLLECTION": {
+    "id": "IIP5_COLLECTION",
+    "name": "International Investment Position (BPM5) for Collection",
+    "description": "International Investment Position (BPM5) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "IIP6": {
+    "id": "IIP6",
+    "name": "International Investment Position (BPM6) for Collection",
+    "description": "International Investment Position (BPM6) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "IIP_BPM5": {
+    "id": "IIP_BPM5",
+    "name": "International Investment Position -- BPM5",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "IIP_BPM6": {
+    "id": "IIP_BPM6",
+    "name": "International Investment Position -- BPM6",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "IIP_GBPM6": {
+    "id": "IIP_GBPM6",
+    "name": "International Investment Position (IIP) - Global Use BOP_BPM6",
+    "description": "",
+    "structure": "BOP"
+  },
+  "ILV1": {
+    "id": "ILV1",
+    "name": "Official reserve assets",
+    "description": "Official reserve assets",
+    "structure": "ECOFIN_DSD"
+  },
+  "ILV1_GBPM6": {
+    "id": "ILV1_GBPM6",
+    "name": "Official Reserve Assets (ILV1)-Global Use BOP_BPM6",
+    "description": "",
+    "structure": "BOP"
+  },
+  "ILV2": {
+    "id": "ILV2",
+    "name": "Template on International Reserves and Foreign Currency Liquidity",
+    "description": "Template on International Reserves and Foreign Currency Liquidity",
+    "structure": "ECOFIN_DSD"
+  },
+  "ILV2_GBPM6": {
+    "id": "ILV2_GBPM6",
+    "name": "Reserves Template (ILV2)-Global Use BPM6",
+    "description": "",
+    "structure": "BOP"
+  },
+  "IND": {
+    "id": "IND",
+    "name": "Index of Industrial Production",
+    "description": "Index of Industrial Production",
+    "structure": "ECOFIN_DSD"
+  },
+  "IND_NSTD": {
+    "id": "IND_NSTD",
+    "name": "Index of Industrial Production_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "INF": {
+    "id": "INF",
+    "name": "Instrument Composition of Transactions in Foreign Exchange Reserves (INFER) for Collection",
+    "description": "Instrument Composition of Transactions in Foreign Exchange Reserves (INFER) for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "INR": {
+    "id": "INR",
+    "name": "Interest rates",
+    "description": "Interest rates",
+    "structure": "ECOFIN_DSD"
+  },
+  "INR_NSTD": {
+    "id": "INR_NSTD",
+    "name": "Interest rates_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "LMI": {
+    "id": "LMI",
+    "name": "Labor Market Indicators",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "LMI_NSTD": {
+    "id": "LMI_NSTD",
+    "name": "Labor Market Indicators_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "MET": {
+    "id": "MET",
+    "name": "Merchandise trade",
+    "description": "Merchandise trade",
+    "structure": "ECOFIN_DSD"
+  },
+  "MET_NSTD": {
+    "id": "MET_NSTD",
+    "name": "Merchandise Trade_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "MSG": {
+    "id": "MSG",
+    "name": "Monetary and Financial Statistics Aggregates",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "NAG": {
+    "id": "NAG",
+    "name": "National Accounts",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "NAG_08": {
+    "id": "NAG_08",
+    "name": "National Accounts -- 08'",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "NAG_93": {
+    "id": "NAG_93",
+    "name": "National Accounts -- 93'",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "NAG_GNA": {
+    "id": "NAG_GNA",
+    "name": "National Accounts 2008 (NAG08) - Global Use NA_MAIN v1.11",
+    "description": "",
+    "structure": "NA_MAIN"
+  },
+  "NAG_NSTD": {
+    "id": "NAG_NSTD",
+    "name": "National Accounts - GDP_Non-Standard",
+    "description": "Non-Standard_ISO Codes",
+    "structure": "ECOFIN_DSD"
+  },
+  "NASEC_T0720_Q": {
+    "id": "NASEC_T0720_Q",
+    "name": "Sectoral Balance Sheets",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "OFS": {
+    "id": "OFS",
+    "name": "Other Financial Corporations (OFC) survey",
+    "description": "Other Financial Corporations (OFC) survey",
+    "structure": "ECOFIN_DSD"
+  },
+  "OFS_GNA": {
+    "id": "OFS_GNA",
+    "name": "Other Financial Corporations (OFC) - Global Use NA_SEC v1.5",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "POP": {
+    "id": "POP",
+    "name": "Population",
+    "description": "Population",
+    "structure": "ECOFIN_DSD"
+  },
+  "PPI": {
+    "id": "PPI",
+    "name": "Producer Price Index",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "RTD": {
+    "id": "RTD",
+    "name": "Reserves Template for Collection",
+    "description": "Reserves Template for Collection",
+    "structure": "ECOFIN_DSD"
+  },
+  "SBS": {
+    "id": "SBS",
+    "name": "Accumulation Accounts (Sectoral Balance Sheets)",
+    "description": "Accumulation Accounts (Sectoral Balance Sheets)",
+    "structure": "ECOFIN_DSD"
+  },
+  "SBS_GNA": {
+    "id": "SBS_GNA",
+    "name": "Sectoral Balance Sheets (SBS) - Global Use NA_SEC v1.12",
+    "description": "Sectoral Balance Sheets (SBS) - Global Use NA_SEC v1.12",
+    "structure": "NA_SEC"
+  },
+  "SOC": {
+    "id": "SOC",
+    "name": "Socio-Demographic",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "SPI": {
+    "id": "SPI",
+    "name": "Stock Market: Share Price Index",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "UEM": {
+    "id": "UEM",
+    "name": "Unemployment",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "WOE": {
+    "id": "WOE",
+    "name": "Wages and Earnings",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "YGG": {
+    "id": "YGG",
+    "name": "Gender",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "ZZZNL_TEST": {
+    "id": "ZZZNL_TEST",
+    "name": "ZZZ_TEST_ECOFIN",
+    "description": "Netherlands Test Provision Agreement EcoFin DSD",
+    "structure": "BOP"
+  },
+  "ZZZ_TEST_ECOFIN": {
+    "id": "ZZZ_TEST_ECOFIN",
+    "name": "Test Dataflow EcoFin DSD",
+    "description": "",
+    "structure": "ECOFIN_DSD"
+  },
+  "NGDP_RPCH": {
+    "id": "NGDP_RPCH",
+    "name": "Real GDP growth",
+    "description": "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at constant prices of final goods and services produced within a country during a specified time period, such as one year.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Annual percent change"
+  },
+  "NGDPD": {
+    "id": "NGDPD",
+    "name": "GDP, current prices",
+    "description": "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at current prices of final goods and services produced within a country during a specified time period, such as one year.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Billions of U.S. dollars"
+  },
+  "NGDPDPC": {
+    "id": "NGDPDPC",
+    "name": "GDP per capita, current prices\n",
+    "description": "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at current prices of final goods and services produced within a country during a specified time period divided by the average population for the same one year.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "U.S. dollars per capita"
+  },
+  "PPPGDP": {
+    "id": "PPPGDP",
+    "name": "GDP, current prices",
+    "description": "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value in PPP terms of final goods and services produced within a country during a specified time period.\n\nPurchasing Power Parity (PPP) is a theory which relates changes in the nominal exchange rate between two countries currencies to changes in the countries' price levels. More information on PPP methodology can be found on the World Economic Outlook FAQ - <a href=\"https://data.imf.org/en/Datasets/WEO/Frequently-Asked-Questions\" target=\"new\">click here</a>",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Purchasing power parity; billions of international dollars"
+  },
+  "PPPPC": {
+    "id": "PPPPC",
+    "name": "GDP per capita, current prices",
+    "description": "Gross domestic product (GDP) is the most commonly used single measure of a country's overall economic activity. Per capita GDP represents the total value in PPP terms of final goods and services produced within a country during a specified time period divided by the average population for the same one year.\n\nPurchasing Power Parity (PPP) is a theory which relates changes in the nominal exchange rate between two countries currencies to changes in the countries' price levels. More information on PPP methodology can be found on the World Economic Outlook FAQ - <a href=\"https://data.imf.org/en/Datasets/WEO/Frequently-Asked-Questions\" target=\"new\">click here</a>",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Purchasing power parity; international dollars per capita"
+  },
+  "PPPSH": {
+    "id": "PPPSH",
+    "name": "GDP based on PPP, share of world",
+    "description": "Purchasing Power Parity (PPP) weights are individual countries' share of total World gross domestic product at purchasing power parities.\n\nPurchasing Power Parity (PPP) is a theory which relates changes in the nominal exchange rate between two countries currencies to changes in the countries' price levels. More information on PPP methodology can be found on the World Economic Outlook FAQ - <a href=\"https://data.imf.org/en/Datasets/WEO/Frequently-Asked-Questions\" target=\"new\">click here</a>",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of World"
+  },
+  "PPPEX": {
+    "id": "PPPEX",
+    "name": "Implied PPP conversion rate",
+    "description": "Purchasing Power Parity (PPP) is a theory which relates changes in the nominal exchange rate between two countries currencies to changes in the countries' price levels. More information on PPP methodology can be found on the World Economic Outlook FAQ - <a href=\"https://data.imf.org/en/Datasets/WEO/Frequently-Asked-Questions\" target=\"new\">click here</a>",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "National currency per international dollar"
+  },
+  "PCPIPCH": {
+    "id": "PCPIPCH",
+    "name": "Inflation rate, average consumer prices",
+    "description": "The average consumer price index (CPI) is a measure of a country's average level of prices based on the cost of a typical basket of consumer goods and services in a given period. The rate of inflation is the percent change in the average CPI.\n \n",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Prices & Inflation",
+    "unit": "Annual percent change"
+  },
+  "PCPIEPCH": {
+    "id": "PCPIEPCH",
+    "name": "Inflation rate, end of period consumer prices",
+    "description": "The end of period consumer price index (CPI) is a measure of a country's general level of prices based on the cost of a typical basket of consumer goods and services at the end of a given period. The rate of inflation is the percent change in the end of period CPI.\n \n",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Prices & Inflation",
+    "unit": "Annual percent change"
+  },
+  "LP": {
+    "id": "LP",
+    "name": "Population",
+    "description": "Total population of a country, region, or group of countries.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Demographics",
+    "unit": "Millions of people"
+  },
+  "BCA": {
+    "id": "BCA",
+    "name": "Current account balance\nU.S. dollars",
+    "description": "The current account is the record of all transactions in the balance of payments covering the exports and imports of goods and services, payments of income, and current transfers between residents of a country and nonresidents.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "External Sector",
+    "unit": "Billions of U.S. dollars"
+  },
+  "BCA_NGDPD": {
+    "id": "BCA_NGDPD",
+    "name": "Current account balance, percent of GDP",
+    "description": "The current account is the record of all transactions in the balance of payments covering the exports and imports of goods and services, payments of income, and current transfers between residents of a country and nonresidents.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "LUR": {
+    "id": "LUR",
+    "name": "Unemployment rate",
+    "description": "The number of unemployed persons as a percentage of the total labor force.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Labor Market",
+    "unit": "Percent"
+  },
+  "GGXCNL_NGDP": {
+    "id": "GGXCNL_NGDP",
+    "name": "General government net lending/borrowing",
+    "description": "Net lending (+)/ borrowing (\u0096) is calculated as revenue minus total expenditure. This is a core GFS balance that measures the extent to which general government is either putting financial resources at the disposal of other sectors in the economy and nonresidents (net lending), or utilizing the financial resources generated by other sectors and nonresidents (net borrowing). This balance may be viewed as an indicator of the financial impact of general government activity on the rest of the economy and nonresidents (GFSM 2001, paragraph 4.17). Note: Net lending (+)/borrowing (\u0096) is also equal to net acquisition of financial assets minus net incurrence of liabilities.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "GGXWDG_NGDP": {
+    "id": "GGXWDG_NGDP",
+    "name": "General government gross debt",
+    "description": "Gross debt consists of all liabilities that require payment or payments of interest and/or principal by the debtor to the creditor at a date or dates in the future. This includes debt liabilities in the form of SDRs, currency and deposits, debt securities, loans, insurance, pensions and standardized guarantee schemes, and other accounts payable. Thus, all liabilities in the GFSM 2001 system are debt, except for equity and investment fund shares and financial derivatives and employee stock options. Debt can be valued at current market, nominal, or face values (GFSM 2001, paragraph 7.110).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "rev": {
+    "id": "rev",
+    "name": "Government revenue, percent of GDP",
+    "description": "Government revenue, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "exp": {
+    "id": "exp",
+    "name": "Government expenditure, percent of GDP",
+    "description": "Government expenditure, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "prim_exp": {
+    "id": "prim_exp",
+    "name": "Government primary expenditure, percent of GDP",
+    "description": "Government primary expenditure, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "ie": {
+    "id": "ie",
+    "name": "Interest paid on public debt, percent of GDP",
+    "description": "Interest paid on public debt, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "pb": {
+    "id": "pb",
+    "name": "Government primary balance, percent of GDP",
+    "description": "Government primary balance, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "d": {
+    "id": "d",
+    "name": "Gross public debt, percent of GDP",
+    "description": "Gross public debt, percent of GDP",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "% of GDP"
+  },
+  "rgc": {
+    "id": "rgc",
+    "name": "Real GDP growth rate, percent",
+    "description": "Real GDP growth rate, percent",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": null
+  },
+  "rltir": {
+    "id": "rltir",
+    "name": "Real long term government bond yield, percent",
+    "description": "Real long term government bond yield, percent",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": null
+  },
+  "extensive": {
+    "id": "extensive",
+    "name": "Extensive Margin",
+    "description": "Extensive margin of export diversification",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "intensive": {
+    "id": "intensive",
+    "name": "Intensive Margin",
+    "description": "Intensive margin of export diversification",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "total_theil": {
+    "id": "total_theil",
+    "name": "Export Diversification Index",
+    "description": "Overall index of export diversification. Measured by Theil lindex.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_0": {
+    "id": "SITC1_0",
+    "name": "Food and live animals",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_1": {
+    "id": "SITC1_1",
+    "name": "Beverages and tobacco",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_2": {
+    "id": "SITC1_2",
+    "name": "Crude materials, inedible, except fuels",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_3": {
+    "id": "SITC1_3",
+    "name": "Mineral fuels, lubricants and related materials",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_4": {
+    "id": "SITC1_4",
+    "name": "Animal and vegetable oils and fats",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_5": {
+    "id": "SITC1_5",
+    "name": "Chemicals",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_6": {
+    "id": "SITC1_6",
+    "name": "Manufact goods classified chiefly by material",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_7": {
+    "id": "SITC1_7",
+    "name": "Machinery and transport equipment",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_8": {
+    "id": "SITC1_8",
+    "name": "Miscellaneous manufactured articles",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_9": {
+    "id": "SITC1_9",
+    "name": "Commodity & transactions not classified accord to kind",
+    "description": "description if any. Otherwise, this can be the same as the label",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "SITC1_total": {
+    "id": "SITC1_total",
+    "name": "Export Quality Index",
+    "description": "Overall index of export quality ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "DirectAbroad": {
+    "id": "DirectAbroad",
+    "name": "Direct Investment Abroad",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "DirectIn": {
+    "id": "DirectIn",
+    "name": "Direct Investment In Country",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "PrivInexDI": {
+    "id": "PrivInexDI",
+    "name": "Private Inflows excluding Direct Investment",
+    "description": "Private Inflows Excluding Direct Investment: Portfolio Liabilities + Financial Derivatives + Other Investment Liabilities - Proxy for Official Other Investment Liabilities ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "PrivInexDIGDP": {
+    "id": "PrivInexDIGDP",
+    "name": "Private Inflows excluding Direct Investment (% of GDP)",
+    "description": "Private Inflows excluding Direct Investment (% of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent"
+  },
+  "PrivOutexDI": {
+    "id": "PrivOutexDI",
+    "name": "Private Outflows excluding Direct Investment",
+    "description": "Private Outflows Excluding Direct Investment: Portfolio Assets + Other Investment Assets",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "PrivOutexDIGDP": {
+    "id": "PrivOutexDIGDP",
+    "name": "Private Outflows excluding Direct Investment (% of GDP)",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent"
+  },
+  "Portfa": {
+    "id": "Portfa",
+    "name": "Portfolio Investment Assets",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "Portfl": {
+    "id": "Portfl",
+    "name": "Portfolio Investment Liabilities",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "EquityA": {
+    "id": "EquityA",
+    "name": "Equity Securities Assets",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "EquityL": {
+    "id": "EquityL",
+    "name": "Equity Securities Liabilities",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "DebtA": {
+    "id": "DebtA",
+    "name": "Debt Securities Assets",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Millions of US Dollars"
+  },
+  "DebtL": {
+    "id": "DebtL",
+    "name": "Debt Securities Liabilities",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Millions of US Dollars"
+  },
+  "OtherGov": {
+    "id": "OtherGov",
+    "name": "Proxy for Official Other Investment Liabilities",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "OtherA": {
+    "id": "OtherA",
+    "name": "Other Investment Assets",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "OtherL": {
+    "id": "OtherL",
+    "name": "Other Investment Liabilities",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "Deriv": {
+    "id": "Deriv",
+    "name": "Financial Derivatives",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Millions of US Dollars"
+  },
+  "DebtForg": {
+    "id": "DebtForg",
+    "name": "Debt Forgiveness",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Millions of US Dollars"
+  },
+  "GDP": {
+    "id": "GDP",
+    "name": "Nominal GDP",
+    "description": null,
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Millions of US Dollars"
+  },
+  "ka_new": {
+    "id": "ka_new",
+    "name": "Overall Openness Index (all asset categories)",
+    "description": "Overall Openness Index is the unweighted average of the openness of twelve types of  asset categories: equity, bond, money market, collective investment, derivates and other instruments, commercial credit, financial credit, direct investment, direct investment liquidation, guarantees, real estate and personal capital transaction. Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "ka_in": {
+    "id": "ka_in",
+    "name": "Openness of Capital Inflows Index  (1=fully liberalized)",
+    "description": "Openness of Capital Inflows Index captures the ability to the purchase locally by non-residents and sale or issue abroad by residents across nine types of asset categories: equity, bond, money market, collective investment, derivates and other instruments, commercial credit, financial credit, direct investment, and guarantees. Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "ka_out": {
+    "id": "ka_out",
+    "name": "Openness of Capital Outflows Index   (1=fully liberalized)",
+    "description": "Openness of Capital Outflows Index captures the ability to sale or issue locally by nonresidents and purchase abroad by residents across nine types of asset categories: equity, bond, money market, collective investment, derivates and other instruments, commercial credit, financial credit, direct investment, and guarantees Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "FM_ka": {
+    "id": "FM_ka",
+    "name": "Financial Market Openness Index (equity, bond, money market, collective investment, derivates) 1=fully liberalized",
+    "description": "Financial Market Openness Index is the unweighted average of the openness of twelve types of asset categories: equity, bond, money market, collective investment, derivates and other instruments. Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Nonres_ka": {
+    "id": "Nonres_ka",
+    "name": "Nonresident Openness Index (1=fully liberalized)",
+    "description": "Nonresident Openness captures the ability of nonresidents to purchase locally (inflow) and sale or issue locally (outflow) across five asset categories: equity, bonds, money market instruments, collective investment, and derivatives and other instruments transaction.   Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Res_ka": {
+    "id": "Res_ka",
+    "name": "Resident Openness Index (1=fully liberalized)",
+    "description": "Resident Openness Index captures the ability of residents to purchase abroad (outflow) and sale or issue abroad (inflow) across five asset categories: equity, bonds, money market instruments, collective investment, and derivatives and other instruments transaction. Range between 0 to 1 (1 indicates fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_eq": {
+    "id": "Ka_eq",
+    "name": "Equity openness index (1=fully liberalized)",
+    "description": "Equity openness index captures the ability to conduct transactions involving shares and other securities of a participating nature, excluding those investments for the purpose of acquiring a lasting economic interest which are addressed as a foreign direct investment. It has four sub-components: Purchase locally by nonresidents (equity) | Sale or issue locally by nonresidents (equity) | Purchase abroad by residents (equity) | Sale or issue abroad by residents (equity). (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_bo": {
+    "id": "Ka_bo",
+    "name": "Bond openness index (1=fully liberalized)",
+    "description": "Bond openness index captures the ability to conduct operations with bonds or other debt securities (notes and debentures) with an original maturity of more than one year. It has four sub-components: Purchase locally by nonresidents (bond) | Sale or issue locally by nonresidents (bond) | Purchase abroad by residents (bond) | Sale or issue abroad by residents (bond). (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_mm": {
+    "id": "Ka_mm",
+    "name": "Money market openness index (1=fully liberalized)",
+    "description": "Money market openness index captures the ability to conduct operations with securities with an original maturity of one year or less, including short-term instruments like certificates of deposits and bills of exchange, among others. It has four sub-components: Purchase locally by nonresidents (money market) | Sale or issue locally by nonresidents (money market) | Purchase abroad by residents (money market) | Sale or issue abroad by residents (money market). (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_ci": {
+    "id": "Ka_ci",
+    "name": "Collective investment openness index (1=fully liberalized)",
+    "description": "Collective investment openness index captures the ability to conduct operations through share certificates and registry entries or other evidence of investor in an institution for collective investment such as mutual funds and investment trusts. It has four sub-components: Purchase locally by nonresidents (collective investment) | Sale or issue locally by nonresidents (collective investment) | Purchase abroad by residents (collective investment) | Sale or issue abroad by residents (collective investment). (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_dr": {
+    "id": "Ka_dr",
+    "name": "Derivative investment openness index (1=fully liberalized)",
+    "description": "Derivative investment openness index captures the ability to conduct operations in rights, warrants, financial options and futures, secondary market operations in other financial claims (including sovereign loans, receivables, and discounted bills of trade), forward operations, swaps of bonds and other debt securities, and operations in foreign exchange without any other underlying transaction (spot or forward trading on the foreign exchange markets, forward cover operations). It has four sub-components: Purchase locally by nonresidents (derivative investment) | Sale or issue locally by nonresidents (derivative investment) | Purchase abroad by residents (derivative investment) | Sale or issue abroad by residents (derivative investment). (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_cc": {
+    "id": "Ka_cc",
+    "name": "Commercial credit openness index (1=fully liberalized)",
+    "description": "Commercial credit openness index captures the ability to conduct operations directly linked with international trade transactions or with the rendering of international services. It has two sub-components: Commercial credit inflow liberalization | Commercial credit outflow liberalization. (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_fc": {
+    "id": "Ka_fc",
+    "name": "Financial credit openness index (1=fully liberalized)",
+    "description": "Financial credit openness index captures the ability to conduct operations through credits other than commercial credits granted by all residents, including banks to nonresidents or vice versa. It has two sub-components: Financial credit inflow liberalization | Financial credit outflow liberalization. (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_gu": {
+    "id": "Ka_gu",
+    "name": "Guarantee openness index (1=fully liberalized)",
+    "description": "Guarantee openness index captures the ability to conduct operations through guarantees, sureties, and financial backup facilities provided by residents to nonresidents and vice versa. It also includes securities pledged for payment or performance of a contract\u2014such as warrants, performance bonds, and standby letters of credit\u2014and financial backup facilities that are credit facilities used as a guarantee for independent financial operations. It has two sub-components: Guarantee inflow liberalization | Guarantee outflow liberalization. (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Ka_di": {
+    "id": "Ka_di",
+    "name": "Direct investment openness index (1=fully liberalized)",
+    "description": "Direct investment openness index captures the ability to conduct investments for the purpose of establishing lasting economic relations both abroad by residents and domestically by non residents (for example, for the purpose of producing goods and services, and, to allow investor participation in the management of an enterprise). The index is the average of its two sub-components: direct investment inflow index and direct investment outflow index. Direct investment inflow liberalization | Direct investment outflow liberalization. (1=fully liberalized)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "ka_ldi": {
+    "id": "ka_ldi",
+    "name": "Direct investment liquidation openness index (1=fully liberalized)",
+    "description": "Direct investment liquidation openness index captures the ability to transfer principal, including the initial capital and capital gains of a foreign direct investment. The index does not have sub- components. (1=fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "ka_ret": {
+    "id": "ka_ret",
+    "name": "Real estate capital transaction openness index (1=fully liberalized)",
+    "description": "Real estate capital transaction openness index captures the ability to acquire real estate not associated with direct investment, including, for example investment of a purely financial nature in real estate or the acquisition of real estate for personal use. The index does not have sub- components. (1=fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "ka_pct": {
+    "id": "ka_pct",
+    "name": "Personal capital transaction openness index (1=fully liberalized)",
+    "description": "Personal capital transaction openness index captures the ability to conduct transactions initiated on behalf of private persons and intended to benefit other private persons. It includes transactions involving property to which the promise of a return to the owner with payments of interest is attached (e.g., loans or settlements of debt in their country of origin by immigrants) and transfers effected free of charge to the beneficiary (for example, gifts and endowments, loans, inheritances and legacies, and emigrants' assets). The index does not have sub- components. (1=fully liberalized).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Units"
+  },
+  "Reserves_ARA": {
+    "id": "Reserves_ARA",
+    "name": "Ratio of reserve/ARA metric ",
+    "description": "The ratio of reserves to the ARA metric: a ratio between 1 and 1.5 suggests that the level of reserves is adequate. Specific characteristics and circumstances, such as capital account openness, may warrant changes to the baseline ARA metric for certain countries. Any adjustments made to the baseline ARA metric are detailed in the published staff reports.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Unit"
+  },
+  "Reserves_M2": {
+    "id": "Reserves_M2",
+    "name": "Reserves/Broad Money",
+    "description": "Reserves/Broad money \u0096 typically M2",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Unit"
+  },
+  "Reserves_STD": {
+    "id": "Reserves_STD",
+    "name": "Reserves/Short-term Debt (STD)",
+    "description": "Reserves/Short-term Debt (STD) \u0096 \u0093Greenspan-Guidotti\u0094 rule of 100% cover of STD is a widely-used standard of adequacy for EMs",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Unit"
+  },
+  "Reserves_M": {
+    "id": "Reserves_M",
+    "name": "Reserve/(Import/12) ",
+    "description": "Import cover \u0096 A measure of the number of months imports can be sustained should all inflows cease.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Unit"
+  },
+  "GRB_dummy": {
+    "id": "GRB_dummy",
+    "name": "Gender Budgeting Indicator",
+    "description": "GB: Gender budgeting\n3 - Prominent GB countries covered in the surveys\n2 - Other GB countries covered in the surveys\n1 - Other countries\n<b>Note</b>: Line charts below indicate number of countries in each GB group",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "GDI_TC": {
+    "id": "GDI_TC",
+    "name": "Gender Development Index (GDI) Time Consistent",
+    "description": "The GDI generally ranges from 0-1, with higher numbers signifying more equality\n<b>Note</b>: Line charts below indicate average index value in each group",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "GII_TC": {
+    "id": "GII_TC",
+    "name": "Gender Inequality Index (GII) Time Consistent",
+    "description": "The GII generally ranges from 0-1, with higher numbers signifying more inequality\n<b>Note</b>: Line charts below indicate average index value in each group+B4",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "DEBT1": {
+    "id": "DEBT1",
+    "name": "DEBT",
+    "description": "DEBT\r\n<br/> Note: Median value reported for country groupings",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "% of GDP"
+  },
+  "Privatedebt_all": {
+    "id": "Privatedebt_all",
+    "name": "Private debt, all instruments",
+    "description": "Total stock of debt liabilities issued by households and nonfinancial corporations, including all debt instruments, as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "HH_ALL": {
+    "id": "HH_ALL",
+    "name": "Household debt, all instruments",
+    "description": "Total stock of debt liabilities issued by households, including all debt instruments, as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "NFC_ALL": {
+    "id": "NFC_ALL",
+    "name": "Nonfinancial corporate debt, all instruments",
+    "description": "Total stock of debt liabilities issued by nonfinancial corporations, including all debt instruments, as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "PVD_LS": {
+    "id": "PVD_LS",
+    "name": "Private debt, loans and debt securities",
+    "description": "Total stock of loans and debt securities issued by households and nonfinancial corporations as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "HH_LS": {
+    "id": "HH_LS",
+    "name": "Household debt, loans and debt securities",
+    "description": "Total stock of loans and debt securities issued by households as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "NFC_LS": {
+    "id": "NFC_LS",
+    "name": "Nonfinancial corporate debt, loans and debt securities",
+    "description": "Total stock of loans and debt securities issued by nonfinancial corporations as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "PS_DEBT_GDP": {
+    "id": "PS_DEBT_GDP",
+    "name": "Public Sector Debt",
+    "description": "Total stock of debt liabilities issued by the public sector as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "NFPS_DEBT_GDP": {
+    "id": "NFPS_DEBT_GDP",
+    "name": "Nonfinancial Public Sector Debt",
+    "description": "Total stock of debt liabilities issued by the nonfinancial public sector as a share of GDP. ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "GG_DEBT_GDP": {
+    "id": "GG_DEBT_GDP",
+    "name": "General Government Debt",
+    "description": "Total stock of debt liabilities issued by the general government as a share of GDP. ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "CG_DEBT_GDP": {
+    "id": "CG_DEBT_GDP",
+    "name": "Central Government Debt",
+    "description": "Total stock of debt liabilities issued by the central government as a share of GDP.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Percent of GDP"
+  },
+  "GGXCNL_G01_GDP_PT": {
+    "id": "GGXCNL_G01_GDP_PT",
+    "name": "Net lending/borrowing (also referred as overall balance)",
+    "description": "Defined as the difference between revenue and total expenditure, using the 2014 edition of the IMF\u0092s Government Finance Statistics Manual (GFSM 2014). Does not include policy lending. For some countries, the overall balance continues to be based on GFSM 1986, which is defined as total revenue and grants minus total expenditure and net lending.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of GDP"
+  },
+  "GGXONLB_G01_GDP_PT": {
+    "id": "GGXONLB_G01_GDP_PT",
+    "name": "Primary net lending/borrowing (also referred as primary balance)",
+    "description": "Overall balance excluding net interest payment (interest expenditure minus interest revenue).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of GDP"
+  },
+  "GGCB_G01_PGDP_PT": {
+    "id": "GGCB_G01_PGDP_PT",
+    "name": "Cyclically adjusted balance",
+    "description": "Difference between the overall balance and the automatic stabilizers; equivalently, an estimate of the fiscal balance that would apply under current policies if output were equal to potential.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of Potential GDP"
+  },
+  "GGCBP_G01_PGDP_PT": {
+    "id": "GGCBP_G01_PGDP_PT",
+    "name": "Cyclically adjusted primary balance",
+    "description": "Cyclically adjusted balance excluding net interest payment (interest expenditure minus interest revenue).",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of Potential GDP"
+  },
+  "GGR_G01_GDP_PT": {
+    "id": "GGR_G01_GDP_PT",
+    "name": "Revenue",
+    "description": "Revenue",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of GDP"
+  },
+  "G_X_G01_GDP_PT": {
+    "id": "G_X_G01_GDP_PT",
+    "name": "Expenditure",
+    "description": "Expenditure",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "% of GDP"
+  },
+  "G_XWDG_G01_GDP_PT": {
+    "id": "G_XWDG_G01_GDP_PT",
+    "name": "Gross debt position",
+    "description": "All liabilities that require future payment of interest and/or principal by the debtor to the creditor. This includes debt liabilities in the form of special drawing rights, currency, and deposits; debt securities; loans; insurance, pension, and standardized guarantee schemes; and other accounts payable. (See the 2014 edition of the IMF\u0092s Government Finance Statistics Manual and Public Sector Debt Statistics Manual). The term \u0093public debt\u0094 is used in the Fiscal Monitor, for simplicity, as synonymous with gross debt of the general government, unless otherwise specified. (Strictly speaking, the term \u0093public debt\u0094 refers to the debt of the public sector as a whole, which includes financial and nonfinancial public enterprises and the central bank.)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "% of GDP"
+  },
+  "GGXWDN_G01_GDP_PT": {
+    "id": "GGXWDN_G01_GDP_PT",
+    "name": "Net debt",
+    "description": "Gross debt minus financial assets corresponding to debt instruments. These financial assets are: monetary gold and SDRs, currency and deposits, debt securities, loans, insurance, pension, and standardized guarantee schemes, and other accounts receivable. In some countries the reported net debt can deviate from this definition on the basis of available information and national fiscal accounting practices.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "% of GDP"
+  },
+  "NGDP_R_PCH": {
+    "id": "NGDP_R_PCH",
+    "name": "Real GDP Growth",
+    "description": "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at constant prices of final goods and services produced within a country during a specified time period, such as one year.",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Annual percent change"
+  },
+  "NGDPXO_RPCH": {
+    "id": "NGDPXO_RPCH",
+    "name": "Real Non-Oil GDP Growth",
+    "description": "     ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Annual percent change"
+  },
+  "NGDPRPC_PCH": {
+    "id": "NGDPRPC_PCH",
+    "name": "Real Per Capita GDP Growth",
+    "description": "      ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Annual percent change"
+  },
+  "NI_GDP": {
+    "id": "NI_GDP",
+    "name": "Total Investment (% of GDP)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "NGS_GDP": {
+    "id": "NGS_GDP",
+    "name": "Gross National Savings (% of GDP)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "GGXCNL_GDP": {
+    "id": "GGXCNL_GDP",
+    "name": "Overall Fiscal Balance, Including Grants (% of GDP)",
+    "description": "Overall Fiscal Balance, Including Grants (Percent of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "GGXCNLXG_GDP": {
+    "id": "GGXCNLXG_GDP",
+    "name": "Overall Fiscal Balance, Excluding Grants (% of GDP)",
+    "description": "Overall Fiscal Balance, Excluding Grants (Percent of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "GGRXG_GDP": {
+    "id": "GGRXG_GDP",
+    "name": "Government Revenue, Excluding Grants (% of GDP)",
+    "description": "Government Revenue, Excluding Grants (Percent of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "GGX_GDP": {
+    "id": "GGX_GDP",
+    "name": "Government Expenditure (% of GDP)",
+    "description": "Government Expenditure (Percent of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "GGXWDG_GDP": {
+    "id": "GGXWDG_GDP",
+    "name": "Government Debt (% of GDP)",
+    "description": "Government Debt (Percent of GDP)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "FMB_GDP": {
+    "id": "FMB_GDP",
+    "name": "Broad Money (% of GDP)",
+    "description": "   ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "FDSAOP_PCH": {
+    "id": "FDSAOP_PCH",
+    "name": "Claims on Nonfinancial Private Sector (%)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Annual percent change"
+  },
+  "FDSAOP_GDP": {
+    "id": "FDSAOP_GDP",
+    "name": "Claims on Nonfinancial Private Sector (% of GDP)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "FMB_PCH": {
+    "id": "FMB_PCH",
+    "name": "Broad Money Growth",
+    "description": "   ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Annual percent change"
+  },
+  "BX_GDP": {
+    "id": "BX_GDP",
+    "name": "Exports of Goods and Services (% of GDP)",
+    "description": "     ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "BCA_GDP": {
+    "id": "BCA_GDP",
+    "name": "External Current Account, Incl.Grants (% of GDP)",
+    "description": "  ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "BM_GDP": {
+    "id": "BM_GDP",
+    "name": "Imports of Goods and Services (% of GDP)",
+    "description": "     ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "BT_GDP": {
+    "id": "BT_GDP",
+    "name": "Trade Balance (% of GDP)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "BFD_GDP": {
+    "id": "BFD_GDP",
+    "name": "Net Foreign Direct Investment (% of GDP)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "BRASS_MI": {
+    "id": "BRASS_MI",
+    "name": "Reserves (Months of Imports) ",
+    "description": "Reserves (Months of imports of goods and services)",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Months of imports of goods and services"
+  },
+  "EREER": {
+    "id": "EREER",
+    "name": "Real Effective Exchange Rates (2010=100)",
+    "description": "   ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Exchange Rates",
+    "unit": "Annual Average Index, 2010 = 100"
+  },
+  "ENEER": {
+    "id": "ENEER",
+    "name": "Nominal Effective Exchange Rates (2010=100)",
+    "description": "  ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Exchange Rates",
+    "unit": "Annual Average Index, 2010 = 100"
+  },
+  "DG_GDP": {
+    "id": "DG_GDP",
+    "name": "External Debt, Official Debt, Debtor Based (% of GDP)",
+    "description": "   ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "GDP & Economic Growth",
+    "unit": "Percent of GDP"
+  },
+  "PCPI_PCH": {
+    "id": "PCPI_PCH",
+    "name": "Consumer Prices, Average (Annual % Change)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Prices & Inflation",
+    "unit": "Annual average percent change"
+  },
+  "PCPIE_PCH": {
+    "id": "PCPIE_PCH",
+    "name": "Consumer Prices, End of Period (Annual % Change)",
+    "description": "    ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Prices & Inflation",
+    "unit": "Annual average percent change"
+  },
+  "TTT": {
+    "id": "TTT",
+    "name": "Terms of Trade (Index, 2010 = 100)",
+    "description": "     ",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "External Sector",
+    "unit": "Index, 2010 = 100"
+  },
+  "FR_ind": {
+    "id": "FR_ind",
+    "name": "Fiscal Rule Indicator",
+    "description": "Indicates whether the country has a national or supranational fiscal rule, both or neither. \n<b>Note</b>: Line charts below indicate number of countries with fiscal rule in each group",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Index"
+  },
+  "FC_dummy": {
+    "id": "FC_dummy",
+    "name": "Fiscal Council Indicator",
+    "description": "FC: Fiscal councils\n<b>Note</b>: Line charts below indicate number of countries with fiscal council in each group",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Fiscal & Debt",
+    "unit": "Index"
+  },
+  "AI_PI": {
+    "id": "AI_PI",
+    "name": "AI Preparedness Index",
+    "description": "AI Preparedness Index",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "DI": {
+    "id": "DI",
+    "name": "Digital Infrastructure",
+    "description": "Digital Infrastructure",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "IEI": {
+    "id": "IEI",
+    "name": "Innovation and Economic Integration",
+    "description": "Innovation and Economic Integration",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  },
+  "HCLMP": {
+    "id": "HCLMP",
+    "name": "Human Capital and Labor Market Policies",
+    "description": "Human Capital and Labor Market Policies",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Labor Market",
+    "unit": "Index"
+  },
+  "RE": {
+    "id": "RE",
+    "name": "Regulation and Ethics",
+    "description": "Regulation and Ethics",
+    "structure": "DataMapper",
+    "type": "datamapper_indicator",
+    "category": "Other Economic Indicators",
+    "unit": "Index"
+  }
+}

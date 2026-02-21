@@ -1,0 +1,262 @@
+{
+  "AGR": {
+    "id": "ECB_BCS1",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "ADJUSTMENT",
+        "name": "Adjustment indicator",
+        "codelist": "CL_ADJUSTMENT"
+      },
+      {
+        "id": "BCS_CONCEPT",
+        "name": "Concept - BCS context",
+        "codelist": "CL_BCS_CONCEPT"
+      },
+      {
+        "id": "BCS_CLASS",
+        "name": "Classification - BCS context",
+        "codelist": "CL_BCS_CLASS"
+      },
+      {
+        "id": "DATA_PROVIDER",
+        "name": "Data provider",
+        "codelist": "CL_ORGANISATION"
+      },
+      {
+        "id": "TRANSFORMATION",
+        "name": "Transformation",
+        "codelist": "CL_TRANSFORMATION"
+      },
+      {
+        "id": "UNIT_MEASURE",
+        "name": "Unit of measure",
+        "codelist": "CL_UNIT"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "AME": {
+    "id": "ECB_AME1",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "AME_REF_AREA",
+        "name": "Ameco reference area",
+        "codelist": "CL_AME_AREA_EE"
+      },
+      {
+        "id": "AME_TRANSFORMATION",
+        "name": "Ameco transformation",
+        "codelist": "CL_AME_TRANSFORM"
+      },
+      {
+        "id": "AME_AGG_METHOD",
+        "name": "Ameco aggregation method",
+        "codelist": "CL_AME_AGG_METHOD"
+      },
+      {
+        "id": "AME_UNIT",
+        "name": "Ameco unit",
+        "codelist": "CL_AME_UNIT"
+      },
+      {
+        "id": "AME_REFERENCE",
+        "name": "Ameco reference",
+        "codelist": "CL_AME_REFERENCE"
+      },
+      {
+        "id": "AME_ITEM",
+        "name": "Ameco item",
+        "codelist": "CL_AME_ITEM"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "BKN": {
+    "id": "ECB_BKN1",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA_EE"
+      },
+      {
+        "id": "BKN_ITEM",
+        "name": "Banknote & coin related items",
+        "codelist": "CL_BKN_ITEM"
+      },
+      {
+        "id": "BKN_TYPE",
+        "name": "Banknote or coin",
+        "codelist": "CL_BKN_TYPE"
+      },
+      {
+        "id": "BKN_DENOM",
+        "name": "BKN denomination breakdown",
+        "codelist": "CL_BKN_DENOM"
+      },
+      {
+        "id": "BKN_SERIES",
+        "name": "Banknote/coin series",
+        "codelist": "CL_BKN_SERIES"
+      },
+      {
+        "id": "DATA_TYPE_BKN",
+        "name": "Banknote & coin data type",
+        "codelist": "CL_DATA_TYPE_BKN"
+      },
+      {
+        "id": "SERIES_DENOM",
+        "name": "Series denominat/spec calcul",
+        "codelist": "CL_SERIES_DENOM"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "BLS": {
+    "id": "ECB_BLS1",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA_EE"
+      },
+      {
+        "id": "BANK_SELECTION",
+        "name": "Bank selection",
+        "codelist": "CL_BANK_SELECTION"
+      },
+      {
+        "id": "BLS_ITEM",
+        "name": "Bank lending survey item",
+        "codelist": "CL_BLS_ITEM"
+      },
+      {
+        "id": "BLS_COUNT",
+        "name": "BLS contract counterpart",
+        "codelist": "CL_BLS_COUNT"
+      },
+      {
+        "id": "BLS_COUNT_DETAIL",
+        "name": "BLS counterpart motivation",
+        "codelist": "CL_BLS_COUNT_DTL"
+      },
+      {
+        "id": "TIME_HORIZON",
+        "name": "Time horizon",
+        "codelist": "CL_TIME_HORIZON"
+      },
+      {
+        "id": "EFFECT_DOMAIN",
+        "name": "Effect domain",
+        "codelist": "CL_EFFECT_DOMAIN"
+      },
+      {
+        "id": "MARKET_ROLE",
+        "name": "Market role",
+        "codelist": "CL_MARKET_ROLE"
+      },
+      {
+        "id": "BLS_AGG_METHOD",
+        "name": "BLS aggregation method",
+        "codelist": "CL_BLS_AGG_METHOD"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "BNT": {
+    "id": "ECB_BOP_BNT",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "ADJUSTMENT",
+        "name": "Adjustment indicator",
+        "codelist": "CL_ADJUSTMENT"
+      },
+      {
+        "id": "DATA_TYPE_BOP",
+        "name": "Data type - BoP related data",
+        "codelist": "CL_DATA_TYPE_BOP"
+      },
+      {
+        "id": "BKN_DENOM",
+        "name": "BKN denomination breakdown",
+        "codelist": "CL_BKN_DENOM"
+      },
+      {
+        "id": "COUNT_AREA",
+        "name": "Counterpart area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "SERIES_DENOM",
+        "name": "Series denominat/spec calcul",
+        "codelist": "CL_SERIES_DENOM"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

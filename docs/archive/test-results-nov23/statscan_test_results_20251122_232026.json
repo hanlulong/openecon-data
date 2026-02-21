@@ -1,0 +1,766 @@
+{
+  "summary": {
+    "total_queries": 30,
+    "passed": 0,
+    "failed": 30,
+    "success_rate": 0.0,
+    "avg_response_time_ms": 6230.75
+  },
+  "failed_queries": [
+    {
+      "query": "Show me Canada's GDP for the last 5 years",
+      "category": "National GDP",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 4342.31
+    },
+    {
+      "query": "What is Canada's CPI inflation rate?",
+      "category": "National CPI",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2547.82
+    },
+    {
+      "query": "Get Canada's unemployment rate for 2023",
+      "category": "National Unemployment",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5535.67
+    },
+    {
+      "query": "Canada population growth over time",
+      "category": "National Population",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 3514.16
+    },
+    {
+      "query": "Show me Canada's retail sales data",
+      "category": "National Retail Sales",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 9972.55
+    },
+    {
+      "query": "Canada's international trade balance last 3 years",
+      "category": "National Trade",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 7310.79
+    },
+    {
+      "query": "Canadian housing starts nationwide",
+      "category": "National Housing Starts",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2498.43
+    },
+    {
+      "query": "Get Canada's manufacturing sales data",
+      "category": "National Manufacturing",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5575.64
+    },
+    {
+      "query": "Ontario GDP last 5 years",
+      "category": "Provincial - Ontario GDP",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2616.62
+    },
+    {
+      "query": "What is the unemployment rate in Quebec?",
+      "category": "Provincial - Quebec Unemployment",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2692.49
+    },
+    {
+      "query": "Alberta population growth",
+      "category": "Provincial - Alberta Population",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 6058.91
+    },
+    {
+      "query": "British Columbia housing starts",
+      "category": "Provincial - BC Housing",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 3007.23
+    },
+    {
+      "query": "Saskatchewan retail sales data",
+      "category": "Provincial - Saskatchewan Retail",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5011.97
+    },
+    {
+      "query": "Manitoba CPI inflation",
+      "category": "Provincial - Manitoba CPI",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 3087.12
+    },
+    {
+      "query": "Nova Scotia GDP data",
+      "category": "Provincial - Nova Scotia GDP",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 4204.94
+    },
+    {
+      "query": "New Brunswick unemployment rate",
+      "category": "Provincial - New Brunswick Unemployment",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2829.78
+    },
+    {
+      "query": "Canada housing price index last 3 years",
+      "category": "Sector - Housing Prices",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5622.41
+    },
+    {
+      "query": "Agricultural production in Canada",
+      "category": "Sector - Agriculture",
+      "issues": [
+        "Clarification needed"
+      ],
+      "api_provider": null,
+      "response_time_ms": 2702.81
+    },
+    {
+      "query": "Energy production statistics Canada",
+      "category": "Sector - Energy",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5168.97
+    },
+    {
+      "query": "Canadian construction spending",
+      "category": "Sector - Construction",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5264.49
+    },
+    {
+      "query": "Tourism revenue in Canada",
+      "category": "Sector - Tourism",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 4454.49
+    },
+    {
+      "query": "Canadian automotive sales data",
+      "category": "Sector - Automotive",
+      "issues": [
+        "Clarification needed"
+      ],
+      "api_provider": null,
+      "response_time_ms": 23184.67
+    },
+    {
+      "query": "Wholesale trade in Canada",
+      "category": "Sector - Wholesale",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 7196.37
+    },
+    {
+      "query": "Canadian employment by industry",
+      "category": "Sector - Employment",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 22132.64
+    },
+    {
+      "query": "Canada GDP quarterly data for 2024",
+      "category": "Time - Quarterly",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 28997.05
+    },
+    {
+      "query": "Monthly CPI data for Canada in 2023",
+      "category": "Time - Monthly",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 2882.93
+    },
+    {
+      "query": "Annual unemployment rate Canada 2010-2024",
+      "category": "Time - Annual Long Range",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 5374.72
+    },
+    {
+      "query": "Find housing starts data for Toronto",
+      "category": "Search - City Level",
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "api_provider": "",
+      "response_time_ms": 3134.41
+    },
+    {
+      "query": "Get retail sales for all provinces in Canada",
+      "category": "Search - Multi-Province",
+      "issues": [
+        "Request timeout (60s)"
+      ],
+      "api_provider": null,
+      "response_time_ms": 0
+    },
+    {
+      "query": "Consumer price index for food in Canada",
+      "category": "Search - Subcategory CPI",
+      "issues": [
+        "Request timeout (60s)"
+      ],
+      "api_provider": null,
+      "response_time_ms": 0
+    }
+  ],
+  "warnings": [],
+  "provider_distribution": {
+    "Unknown": 30
+  },
+  "detailed_results": [
+    {
+      "query": "Show me Canada's GDP for the last 5 years",
+      "category": "National GDP",
+      "timestamp": "2025-11-22T23:14:50.595007",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 4342.31,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "What is Canada's CPI inflation rate?",
+      "category": "National CPI",
+      "timestamp": "2025-11-22T23:14:55.937763",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2547.82,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Get Canada's unemployment rate for 2023",
+      "category": "National Unemployment",
+      "timestamp": "2025-11-22T23:14:59.486156",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5535.67,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canada population growth over time",
+      "category": "National Population",
+      "timestamp": "2025-11-22T23:15:06.028359",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 3514.16,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Show me Canada's retail sales data",
+      "category": "National Retail Sales",
+      "timestamp": "2025-11-22T23:15:10.543193",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 9972.55,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canada's international trade balance last 3 years",
+      "category": "National Trade",
+      "timestamp": "2025-11-22T23:15:21.516348",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 7310.79,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canadian housing starts nationwide",
+      "category": "National Housing Starts",
+      "timestamp": "2025-11-22T23:15:29.827642",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2498.43,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Get Canada's manufacturing sales data",
+      "category": "National Manufacturing",
+      "timestamp": "2025-11-22T23:15:33.327026",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5575.64,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Ontario GDP last 5 years",
+      "category": "Provincial - Ontario GDP",
+      "timestamp": "2025-11-22T23:15:39.903215",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2616.62,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "What is the unemployment rate in Quebec?",
+      "category": "Provincial - Quebec Unemployment",
+      "timestamp": "2025-11-22T23:15:43.520454",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2692.49,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Alberta population growth",
+      "category": "Provincial - Alberta Population",
+      "timestamp": "2025-11-22T23:15:47.213614",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 6058.91,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "British Columbia housing starts",
+      "category": "Provincial - BC Housing",
+      "timestamp": "2025-11-22T23:15:54.273155",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 3007.23,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Saskatchewan retail sales data",
+      "category": "Provincial - Saskatchewan Retail",
+      "timestamp": "2025-11-22T23:15:58.280868",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5011.97,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Manitoba CPI inflation",
+      "category": "Provincial - Manitoba CPI",
+      "timestamp": "2025-11-22T23:16:04.293425",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 3087.12,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Nova Scotia GDP data",
+      "category": "Provincial - Nova Scotia GDP",
+      "timestamp": "2025-11-22T23:16:08.381428",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 4204.94,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "New Brunswick unemployment rate",
+      "category": "Provincial - New Brunswick Unemployment",
+      "timestamp": "2025-11-22T23:16:13.586966",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2829.78,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canada housing price index last 3 years",
+      "category": "Sector - Housing Prices",
+      "timestamp": "2025-11-22T23:16:17.417631",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5622.41,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Agricultural production in Canada",
+      "category": "Sector - Agriculture",
+      "timestamp": "2025-11-22T23:16:24.040603",
+      "passed": false,
+      "issues": [
+        "Clarification needed"
+      ],
+      "response_time_ms": 2702.81,
+      "api_provider": null,
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {},
+      "clarification_questions": [
+        "What specific aspect of agricultural production are you interested in?",
+        "What time period would you like to see?"
+      ]
+    },
+    {
+      "query": "Energy production statistics Canada",
+      "category": "Sector - Energy",
+      "timestamp": "2025-11-22T23:16:27.743953",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5168.97,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canadian construction spending",
+      "category": "Sector - Construction",
+      "timestamp": "2025-11-22T23:16:33.913343",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5264.49,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Tourism revenue in Canada",
+      "category": "Sector - Tourism",
+      "timestamp": "2025-11-22T23:16:40.178345",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 4454.49,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canadian automotive sales data",
+      "category": "Sector - Automotive",
+      "timestamp": "2025-11-22T23:16:45.633489",
+      "passed": false,
+      "issues": [
+        "Clarification needed"
+      ],
+      "response_time_ms": 23184.67,
+      "api_provider": null,
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {},
+      "clarification_questions": [
+        "What time period are you interested in?"
+      ]
+    },
+    {
+      "query": "Wholesale trade in Canada",
+      "category": "Sector - Wholesale",
+      "timestamp": "2025-11-22T23:17:09.818767",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 7196.37,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canadian employment by industry",
+      "category": "Sector - Employment",
+      "timestamp": "2025-11-22T23:17:18.016444",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 22132.64,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Canada GDP quarterly data for 2024",
+      "category": "Time - Quarterly",
+      "timestamp": "2025-11-22T23:17:41.149659",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 28997.05,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Monthly CPI data for Canada in 2023",
+      "category": "Time - Monthly",
+      "timestamp": "2025-11-22T23:18:11.147126",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 2882.93,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Annual unemployment rate Canada 2010-2024",
+      "category": "Time - Annual Long Range",
+      "timestamp": "2025-11-22T23:18:15.030471",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 5374.72,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Find housing starts data for Toronto",
+      "category": "Search - City Level",
+      "timestamp": "2025-11-22T23:18:21.405881",
+      "passed": false,
+      "issues": [
+        "Wrong provider:  (expected StatsCan)",
+        "No data returned"
+      ],
+      "response_time_ms": 3134.41,
+      "api_provider": "",
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Get retail sales for all provinces in Canada",
+      "category": "Search - Multi-Province",
+      "timestamp": "2025-11-22T23:18:25.540823",
+      "passed": false,
+      "issues": [
+        "Request timeout (60s)"
+      ],
+      "response_time_ms": 0,
+      "api_provider": null,
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    },
+    {
+      "query": "Consumer price index for food in Canada",
+      "category": "Search - Subcategory CPI",
+      "timestamp": "2025-11-22T23:19:26.607982",
+      "passed": false,
+      "issues": [
+        "Request timeout (60s)"
+      ],
+      "response_time_ms": 0,
+      "api_provider": null,
+      "data_points": 0,
+      "sample_values": [],
+      "metadata": {}
+    }
+  ]
+}

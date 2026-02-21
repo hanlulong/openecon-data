@@ -1,0 +1,54 @@
+# Trade Balance Indicator Catalog
+concept: trade_balance
+category: international_trade
+domain: macroeconomics
+
+description: |
+  The difference between a country's exports and imports
+  of goods and services.
+
+synonyms:
+  primary:
+    - net exports
+    - balance of trade
+  secondary:
+    - trade surplus
+    - trade deficit
+    - external balance
+    - trade gap
+
+explicit_exclusions:
+  - trade volume
+  - total trade
+  - exports
+  - imports
+  - trade as percent of gdp
+
+providers:
+  WorldBank:
+    primary:
+      code: BN.GSR.GNFS.CD
+      name: "External balance on goods and services"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: BOPGSTB
+      name: "Trade Balance: Goods and Services, Balance of Payments Basis"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: tet00034
+      name: "Trade balance"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+not_available:
+  - CoinGecko
+  - BIS

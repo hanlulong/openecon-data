@@ -1,0 +1,52 @@
+# Population Indicator Catalog
+concept: population
+category: demographics
+domain: social
+
+description: |
+  The total number of people living in a country or region.
+
+synonyms:
+  primary:
+    - total population
+    - inhabitants
+  secondary:
+    - residents
+    - demographic
+    - population count
+
+explicit_exclusions:
+  - population growth
+  - population density
+  - urban population
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.POP.TOTL
+      name: "Population, total"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: LP
+      name: "Population (millions)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "1"
+      name: "Population estimates"
+      confidence: 0.95
+      coverage: [CA]
+      frequency: quarterly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS

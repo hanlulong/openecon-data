@@ -1,0 +1,602 @@
+{
+  "AGR": {
+    "id": "AGR",
+    "name": "AGR",
+    "description": "",
+    "structure": "ECB_BCS1"
+  },
+  "AME": {
+    "id": "AME",
+    "name": "AMECO",
+    "description": "",
+    "structure": "ECB_AME1"
+  },
+  "BKN": {
+    "id": "BKN",
+    "name": "Banknotes statistics",
+    "description": "",
+    "structure": "ECB_BKN1"
+  },
+  "BLS": {
+    "id": "BLS",
+    "name": "Bank Lending Survey Statistics",
+    "description": "",
+    "structure": "ECB_BLS1"
+  },
+  "BNT": {
+    "id": "BNT",
+    "name": "Shipments of Euro Banknotes Statistics (ESCB)",
+    "description": "",
+    "structure": "ECB_BOP_BNT"
+  },
+  "BOP": {
+    "id": "BOP",
+    "name": "Euro Area Balance of Payments and International Investment Position Statistics",
+    "description": "",
+    "structure": "ECB_BOP1"
+  },
+  "BSI": {
+    "id": "BSI",
+    "name": "Balance Sheet Items",
+    "description": "",
+    "structure": "ECB_BSI1"
+  },
+  "BSP": {
+    "id": "BSP",
+    "name": "Balance Sheet Items Statistics (tables 2 to 5 of the Blue Book)",
+    "description": "",
+    "structure": "ECB_BSI1"
+  },
+  "CAR": {
+    "id": "CAR",
+    "name": "CAR",
+    "description": "",
+    "structure": "ECB_CAR1"
+  },
+  "CBD": {
+    "id": "CBD",
+    "name": "Statistics on Consolidated Banking Data",
+    "description": "",
+    "structure": "ECB_CBD1"
+  },
+  "CBD2": {
+    "id": "CBD2",
+    "name": "Consolidated Banking data",
+    "description": "",
+    "structure": "ECB_CBD2"
+  },
+  "CCP": {
+    "id": "CCP",
+    "name": "Central Counterparty Clearing Statistics",
+    "description": "",
+    "structure": "ECB_CCP1"
+  },
+  "CES": {
+    "id": "CES",
+    "name": "Consumer Expectations Survey",
+    "description": "",
+    "structure": "ECB_CES1"
+  },
+  "CISS": {
+    "id": "CISS",
+    "name": "Composite Indicator of Systemic Stress",
+    "description": "",
+    "structure": "ECB_FMD2"
+  },
+  "CLIFS": {
+    "id": "CLIFS",
+    "name": "Country-Level Index of Financial Stress (CLIFS)",
+    "description": "",
+    "structure": "ECB_FMD2"
+  },
+  "CPP": {
+    "id": "CPP",
+    "name": "Commercial Property Price Statistics",
+    "description": "",
+    "structure": "ECB_CPP3"
+  },
+  "CSEC": {
+    "id": "CSEC",
+    "name": "CSEC",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "DCM": {
+    "id": "DCM",
+    "name": "Dealogic DCM analytics data",
+    "description": "",
+    "structure": "ECB_DCM1"
+  },
+  "DD": {
+    "id": "DD",
+    "name": "Derived Data",
+    "description": "",
+    "structure": "ECB_DD1"
+  },
+  "DWA": {
+    "id": "DWA",
+    "name": "DWA",
+    "description": "",
+    "structure": "ECB_DWA1"
+  },
+  "ECB_STBS1": {
+    "id": "ECB_STBS1",
+    "name": "ECB_STBS1",
+    "description": "",
+    "structure": "ECB_BCS1"
+  },
+  "ECS": {
+    "id": "ECS",
+    "name": "ECS",
+    "description": "",
+    "structure": "ECB_SUR2"
+  },
+  "EON": {
+    "id": "EON",
+    "name": "EONIA: Euro Interbank Offered Rate",
+    "description": "",
+    "structure": "ECB_EON1"
+  },
+  "ESA": {
+    "id": "ESA",
+    "name": "ESA95 National Accounts",
+    "description": "",
+    "structure": "ECB_ESA1"
+  },
+  "ESB": {
+    "id": "ESB",
+    "name": "European Union Balance of Payments (Source Eurostat)",
+    "description": "",
+    "structure": "EUROSTAT_BOP_01"
+  },
+  "EST": {
+    "id": "EST",
+    "name": "Euro Short-Term Rate",
+    "description": "",
+    "structure": "ECB_EST1"
+  },
+  "EWT": {
+    "id": "EWT",
+    "name": "ECB wage tracker",
+    "description": "",
+    "structure": "ECB_EWT1"
+  },
+  "EXR": {
+    "id": "EXR",
+    "name": "Exchange Rates",
+    "description": "",
+    "structure": "ECB_EXR1"
+  },
+  "FM": {
+    "id": "FM",
+    "name": "Financial market data",
+    "description": "",
+    "structure": "ECB_FMD2"
+  },
+  "FVC": {
+    "id": "FVC",
+    "name": "Financial Vehicle Corporation",
+    "description": "",
+    "structure": "ECB_FVC1"
+  },
+  "FXI": {
+    "id": "FXI",
+    "name": "Foreign Exchange Statistics",
+    "description": "",
+    "structure": "ECB_FXS1"
+  },
+  "GST": {
+    "id": "GST",
+    "name": "Government Statistics",
+    "description": "",
+    "structure": "ECB_GST1"
+  },
+  "ICB": {
+    "id": "ICB",
+    "name": "Insurance Corporations Assets and Liabilities",
+    "description": "",
+    "structure": "ECB_ICPF1"
+  },
+  "ICO": {
+    "id": "ICO",
+    "name": "Insurance Corporations Operations",
+    "description": "",
+    "structure": "ECB_ICO1"
+  },
+  "ICP": {
+    "id": "ICP",
+    "name": "Indices of Consumer prices",
+    "description": "",
+    "structure": "ECB_ICP1"
+  },
+  "IFI": {
+    "id": "IFI",
+    "name": "Indicators of Financial Integration",
+    "description": "",
+    "structure": "ECB_IFI1"
+  },
+  "ILM": {
+    "id": "ILM",
+    "name": "Internal Liquidity Management",
+    "description": "",
+    "structure": "ECB_ILM1"
+  },
+  "IRS": {
+    "id": "IRS",
+    "name": "Interest rate statistics",
+    "description": "",
+    "structure": "ECB_IRS1"
+  },
+  "IVF": {
+    "id": "IVF",
+    "name": "Investment Funds Balance Sheet Statistics",
+    "description": "",
+    "structure": "ECB_IVF1"
+  },
+  "KRI": {
+    "id": "KRI",
+    "name": "EBA Key Risk Indicators",
+    "description": "",
+    "structure": "ECB_CBD1"
+  },
+  "LIG": {
+    "id": "LIG",
+    "name": "Large Insurance Groups Statistics",
+    "description": "",
+    "structure": "ECB_LIG1"
+  },
+  "MFI": {
+    "id": "MFI",
+    "name": "List of MFIs",
+    "description": "",
+    "structure": "ECB_MFI1"
+  },
+  "MIR": {
+    "id": "MIR",
+    "name": "MFI Interest Rate Statistics",
+    "description": "",
+    "structure": "ECB_MIR1"
+  },
+  "MMS": {
+    "id": "MMS",
+    "name": "Money Market Survey",
+    "description": "",
+    "structure": "ECB_MMS1"
+  },
+  "MMSR": {
+    "id": "MMSR",
+    "name": "Money Market Statistical Reporting",
+    "description": "",
+    "structure": "ECB_MMSR1"
+  },
+  "MPD": {
+    "id": "MPD",
+    "name": "Macroeconomic Projection Database",
+    "description": "",
+    "structure": "ECB_MPD1"
+  },
+  "NEC": {
+    "id": "NEC",
+    "name": "NEC",
+    "description": "",
+    "structure": "ECB_BCS1"
+  },
+  "OFI": {
+    "id": "OFI",
+    "name": "Other Financial Intermediaries",
+    "description": "",
+    "structure": "ECB_OFI1"
+  },
+  "OMO": {
+    "id": "OMO",
+    "name": "Open market operations",
+    "description": "",
+    "structure": "ECB_OMO1"
+  },
+  "PAY": {
+    "id": "PAY",
+    "name": "PAY",
+    "description": "",
+    "structure": "ECB_PAY1"
+  },
+  "PCN": {
+    "id": "PCN",
+    "name": "PCN",
+    "description": "",
+    "structure": "ECB_PAY11"
+  },
+  "PCP": {
+    "id": "PCP",
+    "name": "PCP",
+    "description": "",
+    "structure": "ECB_PAY5"
+  },
+  "PCT": {
+    "id": "PCT",
+    "name": "PCT",
+    "description": "",
+    "structure": "ECB_PAY2"
+  },
+  "PDD": {
+    "id": "PDD",
+    "name": "PDD",
+    "description": "",
+    "structure": "ECB_PAY3"
+  },
+  "PEM": {
+    "id": "PEM",
+    "name": "PEM",
+    "description": "",
+    "structure": "ECB_PAY4"
+  },
+  "PFB": {
+    "id": "PFB",
+    "name": "Pension Fund Assets and Liabilities",
+    "description": "",
+    "structure": "ECB_ICPF1"
+  },
+  "PFBM": {
+    "id": "PFBM",
+    "name": "Pension funds number of members",
+    "description": "",
+    "structure": "ECB_PFM1"
+  },
+  "PFBR": {
+    "id": "PFBR",
+    "name": "Pension funds Regulation",
+    "description": "",
+    "structure": "ECB_ICPF1"
+  },
+  "PIS": {
+    "id": "PIS",
+    "name": "PIS",
+    "description": "",
+    "structure": "ECB_PAY6"
+  },
+  "PLB": {
+    "id": "PLB",
+    "name": "Losses due to fraud by liability bearer",
+    "description": "",
+    "structure": "ECB_PAY7"
+  },
+  "PMC": {
+    "id": "PMC",
+    "name": "PMC",
+    "description": "",
+    "structure": "ECB_PAY10"
+  },
+  "PPC": {
+    "id": "PPC",
+    "name": "PPC",
+    "description": "",
+    "structure": "ECB_PAY9"
+  },
+  "PSN": {
+    "id": "PSN",
+    "name": "PSN",
+    "description": "",
+    "structure": "ECB_PAY13"
+  },
+  "PSS": {
+    "id": "PSS",
+    "name": "Payments and Settlement Systems Statistics",
+    "description": "",
+    "structure": "ECB_PSS1"
+  },
+  "PST": {
+    "id": "PST",
+    "name": "PST",
+    "description": "",
+    "structure": "ECB_PAY14"
+  },
+  "PTN": {
+    "id": "PTN",
+    "name": "PTN",
+    "description": "",
+    "structure": "ECB_PAY12"
+  },
+  "PTT": {
+    "id": "PTT",
+    "name": "PTT",
+    "description": "",
+    "structure": "ECB_PAY8"
+  },
+  "RA": {
+    "id": "RA",
+    "name": "International Reserves of the Eurosystem",
+    "description": "",
+    "structure": "ECB_BOP1"
+  },
+  "RAI": {
+    "id": "RAI",
+    "name": "Risk Assessment Indicators",
+    "description": "",
+    "structure": "ECB_RAI1"
+  },
+  "RDE": {
+    "id": "RDE",
+    "name": "Risk Dashboard data",
+    "description": "",
+    "structure": "ECB_FMD2"
+  },
+  "RDF": {
+    "id": "RDF",
+    "name": "Risk Dashboard data",
+    "description": "",
+    "structure": "ECB_FMD2"
+  },
+  "RESC": {
+    "id": "RESC",
+    "name": "Commercial Property Prices",
+    "description": "",
+    "structure": "ECB_RES1"
+  },
+  "RESH": {
+    "id": "RESH",
+    "name": "Structural Housing Indicators",
+    "description": "",
+    "structure": "ECB_RES1"
+  },
+  "RESR": {
+    "id": "RESR",
+    "name": "Real Estate Statistics",
+    "description": "",
+    "structure": "ECB_RES1"
+  },
+  "RESV": {
+    "id": "RESV",
+    "name": "Residential Property Valuation",
+    "description": "",
+    "structure": "ECB_RES1"
+  },
+  "RIR": {
+    "id": "RIR",
+    "name": "Retail Interest Rates",
+    "description": "",
+    "structure": "ECB_RIR2"
+  },
+  "RPP": {
+    "id": "RPP",
+    "name": "Residential Property Price Index Statistics",
+    "description": "",
+    "structure": "ECB_RPP1"
+  },
+  "RPV": {
+    "id": "RPV",
+    "name": "Residential Property Valuation",
+    "description": "",
+    "structure": "ECB_RPP1"
+  },
+  "RTD": {
+    "id": "RTD",
+    "name": "Real Time Database (research database)",
+    "description": "",
+    "structure": "ECB_RTD1"
+  },
+  "SAFE": {
+    "id": "SAFE",
+    "name": "Survey on the Access to Finance of SMEs",
+    "description": "",
+    "structure": "ECB_SAFE"
+  },
+  "SEC": {
+    "id": "SEC",
+    "name": "Securities",
+    "description": "",
+    "structure": "ECB_SEC1"
+  },
+  "SEE": {
+    "id": "SEE",
+    "name": "Securities exchange - Trading Statistics",
+    "description": "",
+    "structure": "ECB_SEE1"
+  },
+  "SESFOD": {
+    "id": "SESFOD",
+    "name": "Survey on credit terms and conditions in euro-denominated securities financing and over-the-counter derivatives markets",
+    "description": "",
+    "structure": "ECB_SESFOD"
+  },
+  "SHI": {
+    "id": "SHI",
+    "name": "Structural Housing Indicators Statistics",
+    "description": "",
+    "structure": "ECB_SHI1"
+  },
+  "SHS": {
+    "id": "SHS",
+    "name": "Securities Holding Statistics",
+    "description": "",
+    "structure": "ECB_SHS6"
+  },
+  "SHSS": {
+    "id": "SHSS",
+    "name": "SHSS",
+    "description": "",
+    "structure": "NA_SEC"
+  },
+  "SPF": {
+    "id": "SPF",
+    "name": "Survey of Professional Forecasters",
+    "description": "",
+    "structure": "ECB_FCT1"
+  },
+  "SSI": {
+    "id": "SSI",
+    "name": "Banking structural statistical indicators",
+    "description": "",
+    "structure": "ECB_SSI1"
+  },
+  "SSP": {
+    "id": "SSP",
+    "name": "Structural Financial Indicators for Payments",
+    "description": "",
+    "structure": "ECB_SSI1"
+  },
+  "SST": {
+    "id": "SST",
+    "name": "Securities Settlement Statistics",
+    "description": "",
+    "structure": "ECB_SSS1"
+  },
+  "ST1": {
+    "id": "ST1",
+    "name": "Balance of Payments statistics, national data",
+    "description": "",
+    "structure": "ECB_BOP1"
+  },
+  "ST3": {
+    "id": "ST3",
+    "name": "Euro Area Balance of Payments and International Investment Position Statistics, Geographical Breakdown",
+    "description": "",
+    "structure": "ECB_BOP1"
+  },
+  "STP": {
+    "id": "STP",
+    "name": "STEP data",
+    "description": "",
+    "structure": "ECB_STP1"
+  },
+  "STS": {
+    "id": "STS",
+    "name": "Short-Term Statistics",
+    "description": "",
+    "structure": "ECB_STS1"
+  },
+  "SUP": {
+    "id": "SUP",
+    "name": "Supervisory Banking Statistics",
+    "description": "",
+    "structure": "ECB_SUP1"
+  },
+  "SUR": {
+    "id": "SUR",
+    "name": "Opinion Surveys",
+    "description": "",
+    "structure": "ECB_SUR1"
+  },
+  "TGB": {
+    "id": "TGB",
+    "name": "Target Balances",
+    "description": "",
+    "structure": "ECB_TGB1"
+  },
+  "TRD": {
+    "id": "TRD",
+    "name": "External Trade",
+    "description": "",
+    "structure": "ECB_TRD1"
+  },
+  "WTS": {
+    "id": "WTS",
+    "name": "Trade weights",
+    "description": "",
+    "structure": "ECB_WTS1"
+  },
+  "YC": {
+    "id": "YC",
+    "name": "Financial market data - yield curve",
+    "description": "",
+    "structure": "ECB_FMD2"
+  }
+}

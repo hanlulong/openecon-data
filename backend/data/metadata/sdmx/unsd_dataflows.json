@@ -1,0 +1,26 @@
+{
+  "DF_UNDATA_COUNTRYDATA": {
+    "id": "DF_UNDATA_COUNTRYDATA",
+    "name": "SDMX-CountryData",
+    "description": "",
+    "structure": "CountryData"
+  },
+  "DF_UNDATA_ENERGY": {
+    "id": "DF_UNDATA_ENERGY",
+    "name": "UNSD Energy Statistics",
+    "description": "",
+    "structure": "DSD_ENERGY"
+  },
+  "DF_UNData_EnergyBalance": {
+    "id": "DF_UNData_EnergyBalance",
+    "name": "Energy Balance DataFlow",
+    "description": "",
+    "structure": "DSD_ENERGY_BALANCE_UNDATA"
+  },
+  "DF_UNData_UNFCC": {
+    "id": "DF_UNData_UNFCC",
+    "name": "SDMX_GHG_UNDATA",
+    "description": "",
+    "structure": "DSD_GHG_UNDATA"
+  }
+}

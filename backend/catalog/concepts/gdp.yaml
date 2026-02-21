@@ -1,0 +1,70 @@
+# GDP Indicator Catalog
+concept: gdp
+category: national_accounts
+domain: macroeconomics
+
+description: |
+  Gross Domestic Product - the total monetary value of all goods
+  and services produced within a country's borders in a specific time period.
+
+synonyms:
+  primary:
+    - gross domestic product
+    - economic output
+  secondary:
+    - national output
+    - total output
+    - economic production
+    - national income
+
+explicit_exclusions:
+  - consumer price
+  - trade balance
+  - current account
+  - budget deficit
+
+providers:
+  WorldBank:
+    primary:
+      code: NY.GDP.MKTP.CD
+      name: "GDP (current US$)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: NGDP
+      name: "GDP, current prices"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: GDP
+      name: "Gross Domestic Product"
+      confidence: 0.95
+      coverage: [US]
+      frequency: quarterly
+
+  Eurostat:
+    primary:
+      code: nama_10_gdp
+      name: "GDP and main components"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "65201210"
+      name: "GDP at basic prices, all industries"
+      confidence: 0.95
+      coverage: [CA]
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

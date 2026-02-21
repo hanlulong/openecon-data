@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="48" fill="url(#grad)"/>
+  <!-- Chart bars representing economic data -->
+  <rect x="20" y="55" width="12" height="25" rx="2" fill="white" opacity="0.9"/>
+  <rect x="36" y="40" width="12" height="40" rx="2" fill="white" opacity="0.9"/>
+  <rect x="52" y="30" width="12" height="50" rx="2" fill="white" opacity="0.9"/>
+  <rect x="68" y="45" width="12" height="35" rx="2" fill="white" opacity="0.9"/>
+  <!-- Trend line -->
+  <path d="M26 52 L42 38 L58 28 L74 42" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Data points -->
+  <circle cx="26" cy="52" r="3" fill="white"/>
+  <circle cx="42" cy="38" r="3" fill="white"/>
+  <circle cx="58" cy="28" r="3" fill="white"/>
+  <circle cx="74" cy="42" r="3" fill="white"/>
+</svg>

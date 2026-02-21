@@ -1,0 +1,43 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Python
+*.py text eol=lf
+
+# JavaScript/TypeScript
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Documentation
+*.txt text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+
+# Language statistics - exclude vendored code and generated files
+package-lock.json linguist-generated=true
+*.min.js linguist-generated=true
+*.min.css linguist-generated=true

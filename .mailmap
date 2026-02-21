@@ -1,0 +1,6 @@
+# Git mailmap file for proper contributor attribution
+# Format: Proper Name <proper@email.com> <commit@email.com>
+
+# Main contributors
+hanlulong <hanlulong@gmail.com> OpenEcon <deploy@openecon.ai>
+hanlulong <hanlulong@gmail.com>

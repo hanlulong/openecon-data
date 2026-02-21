@@ -1,0 +1,39 @@
+# Poverty Indicator Catalog
+concept: poverty
+category: welfare
+domain: social
+
+description: |
+  The proportion of the population living below the international
+  poverty line, typically measured at $2.15/day (2017 PPP).
+
+synonyms:
+  primary:
+    - poverty rate
+    - poverty headcount
+  secondary:
+    - extreme poverty
+    - people in poverty
+    - poverty level
+
+explicit_exclusions:
+  - inequality
+  - gini coefficient
+  - income distribution
+
+providers:
+  WorldBank:
+    primary:
+      code: SI.POV.DDAY
+      name: "Poverty headcount ratio at $2.15 a day (2017 PPP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+  - FRED
+  - IMF

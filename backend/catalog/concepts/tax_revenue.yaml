@@ -1,0 +1,61 @@
+# Tax Revenue Indicator Catalog
+concept: tax_revenue
+category: fiscal
+domain: public_finance
+
+description: |
+  Government tax revenue as a percentage of GDP, measuring the
+  tax burden and fiscal capacity of a country.
+
+synonyms:
+  primary:
+    - tax revenue
+    - tax to gdp
+    - taxation
+  secondary:
+    - tax receipts
+    - government revenue
+    - tax burden
+    - fiscal revenue
+    - tax as percent of gdp
+
+explicit_exclusions:
+  - tax rate
+  - tax bracket
+  - income tax
+  - corporate tax
+  - sales tax
+
+providers:
+  OECD:
+    primary:
+      code: REV
+      name: "Total tax revenue as % of GDP"
+      confidence: 0.95
+      coverage: oecd_members
+      frequency: annual
+
+  WorldBank:
+    primary:
+      code: GC.TAX.TOTL.GD.ZS
+      name: "Tax revenue (% of GDP)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: GGR_NGDP
+      name: "General government revenue (% of GDP)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+  - Eurostat
+  - StatsCan

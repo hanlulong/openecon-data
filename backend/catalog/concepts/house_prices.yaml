@@ -1,0 +1,60 @@
+# House Prices Indicator Catalog
+concept: house_prices
+category: real_estate
+domain: finance
+
+description: |
+  Indices measuring changes in residential property prices over time.
+
+synonyms:
+  primary:
+    - housing prices
+    - property prices
+  secondary:
+    - real estate prices
+    - home prices
+    - house price index
+    - residential prices
+
+explicit_exclusions:
+  - rent
+  - rental prices
+  - construction costs
+
+providers:
+  BIS:
+    primary:
+      code: WS_SPP
+      name: "Residential property prices"
+      confidence: 0.95
+      coverage: global
+      frequency: quarterly
+
+  Eurostat:
+    primary:
+      code: prc_hpi_a
+      name: "House price index"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+  FRED:
+    primary:
+      code: CSUSHPINSA
+      name: "S&P/Case-Shiller U.S. National Home Price Index"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  StatsCan:
+    primary:
+      code: "111955410"
+      name: "New housing price index"
+      confidence: 0.95
+      coverage: [CA]
+      frequency: monthly
+
+not_available:
+  - IMF
+  - Comtrade
+  - CoinGecko

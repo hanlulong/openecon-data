@@ -1,0 +1,96 @@
+# Money Supply Indicator Catalog
+# Infrastructure fix for M2/M1/M3 disambiguation
+concept: money_supply
+category: monetary
+domain: macroeconomics
+
+description: |
+  Money supply measures (M1, M2, M3) representing the total amount
+  of money in circulation in the economy. M1 is the narrowest measure
+  (currency + demand deposits), M2 adds savings and small time deposits,
+  and M3 adds large time deposits and institutional money market funds.
+
+synonyms:
+  primary:
+    - money supply
+    - monetary aggregate
+    - m2
+    - m1
+    - m3
+    - m2 growth
+    - m1 growth
+    - m3 growth
+    - m2 money stock
+    - m1 money stock
+    - m3 money stock
+  secondary:
+    - money stock
+    - monetary base
+    - liquidity
+    - broad money
+    - narrow money
+    - quasi money
+    - money and quasi money
+    - currency in circulation
+
+# CRITICAL: Prevent false positive matching with GDP growth
+explicit_exclusions:
+  - gdp growth
+  - gdp_growth
+  - economic growth
+  - gdp growth rate
+  - real gdp growth
+  - economic expansion
+  - output growth
+
+providers:
+  FRED:
+    primary:
+      code: M2SL
+      name: "M2 Money Stock"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    alternates:
+      - code: M1SL
+        name: "M1 Money Stock"
+        conditions:
+          indicator_contains: ["m1", "narrow money"]
+      - code: M2REAL
+        name: "Real M2 Money Stock"
+        conditions:
+          indicator_contains: ["real m2", "inflation adjusted"]
+      - code: MABMM301USM189S
+        name: "M3 for United States"
+        conditions:
+          indicator_contains: ["m3", "broad money"]
+
+  WorldBank:
+    primary:
+      code: FM.LBL.MQMY.GD.ZS
+      name: "Money and quasi money (M2) as % of GDP"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+    alternates:
+      - code: FM.LBL.BMNY.GD.ZS
+        name: "Broad money (% of GDP)"
+        conditions:
+          indicator_contains: ["broad money", "m3"]
+
+  IMF:
+    # Note: IMF DataMapper doesn't have direct M2 series
+    # M2 data available via IFS database, not DataMapper API
+    primary:
+      code: FM_BROAD_MONEY_GDP
+      name: "Broad Money (% of GDP)"
+      confidence: 0.70
+      coverage: global
+      frequency: annual
+
+not_available:
+  - Comtrade  # Trade data only
+  - CoinGecko  # Crypto only
+  - ExchangeRate  # FX rates only
+  - BIS  # Central bank policy rates, not money supply
+  - StatsCan  # Use World Bank or IMF for Canada money supply

@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "OpenEcon",
+  "name_for_model": "openecon",
+  "description_for_human": "Query economic data from FRED, World Bank, IMF, UN Comtrade, and 10+ sources using natural language.",
+  "description_for_model": "OpenEcon is an AI-powered economic data aggregation platform. Use this plugin to query economic data from multiple authoritative sources including FRED (Federal Reserve), World Bank, IMF, UN Comtrade, Statistics Canada, Eurostat, OECD, BIS, ExchangeRate-API, and CoinGecko. Users can ask natural language questions like 'What is US GDP growth?' or 'Compare inflation between countries' and get data with visualizations. The platform supports GDP, inflation, unemployment, trade data, interest rates, exchange rates, cryptocurrency prices, and thousands of other economic indicators.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://openecon.ai/api/openapi.json"
+  },
+  "logo_url": "https://openecon.ai/logo.png",
+  "contact_email": "hanlulong@gmail.com",
+  "legal_info_url": "https://openecon.ai/docs"
+}

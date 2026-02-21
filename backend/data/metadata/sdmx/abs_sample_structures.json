@@ -1,0 +1,222 @@
+{
+  "ABORIGINAL_ID_POP_PROJ": {
+    "id": "ABORIGINAL_ID_POP_PROJ",
+    "dimensions": [
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_POP_PROJ"
+      },
+      {
+        "id": "SEX_ABS",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "ASGS_2011",
+        "name": "States and Territories",
+        "codelist": "CL_ASGS_STATE"
+      },
+      {
+        "id": "SERIES",
+        "name": "Main projection series",
+        "codelist": "CL_DEMOG_PROJ_SERIES"
+      },
+      {
+        "id": "FREQUENCY",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "ABORIGINAL_ID_POP_PROJ_REMOTE": {
+    "id": "ABORIGINAL_ID_POP_PROJ_REMOTE",
+    "dimensions": [
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_POP_PROJ"
+      },
+      {
+        "id": "SEX_ABS",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "REGION",
+        "name": "Remoteness Area",
+        "codelist": "CL_REMOTENESS"
+      },
+      {
+        "id": "SERIES",
+        "name": "Main projection series",
+        "codelist": "CL_DEMOG_PROJ_SERIES"
+      },
+      {
+        "id": "FREQUENCY",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "ABORIGINAL_POP_PROJ": {
+    "id": "ABORIGINAL_POP_PROJ",
+    "dimensions": [
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_POP_PROJ"
+      },
+      {
+        "id": "SEX_ABS",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "ASGS_2011",
+        "name": "States and Territories",
+        "codelist": "CL_ASGS_STATE"
+      },
+      {
+        "id": "FERT_ASSUMP",
+        "name": "Fertility assumption",
+        "codelist": "CL_DEMOG_FERTILITY"
+      },
+      {
+        "id": "PATERNITY_ASSUMP",
+        "name": "Paternity assumption",
+        "codelist": "CL_DEMOG_PATERNITY"
+      },
+      {
+        "id": "MORT_ASSUMP",
+        "name": "Mortality assumption",
+        "codelist": "CL_DEMOG_MORTALITY"
+      },
+      {
+        "id": "FREQUENCY",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "ABORIGINAL_POP_PROJ_REMOTE": {
+    "id": "ABORIGINAL_POP_PROJ_REMOTE",
+    "dimensions": [
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_POP_PROJ"
+      },
+      {
+        "id": "SEX_ABS",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "REGION",
+        "name": "Remoteness Area",
+        "codelist": "CL_REMOTENESS"
+      },
+      {
+        "id": "SERIES",
+        "name": "Main projection series",
+        "codelist": "CL_DEMOG_PROJ_SERIES"
+      },
+      {
+        "id": "FREQUENCY",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "ABS_ABORIGINAL_POPPROJ_INDREGION": {
+    "id": "ABS_ABORIGINAL_POPPROJ_INDREGION",
+    "dimensions": [
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_POP_PROJ"
+      },
+      {
+        "id": "SEX_ABS",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "INDIGENOUS_REGION",
+        "name": "Indigenous Region",
+        "codelist": "CL_DEMOG_IND_REG"
+      },
+      {
+        "id": "PROJ_SERIES",
+        "name": "Main projection series",
+        "codelist": "CL_DEMOG_PROJ_SERIES"
+      },
+      {
+        "id": "FREQUENCY",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time Period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

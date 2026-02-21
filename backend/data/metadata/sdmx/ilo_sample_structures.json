@@ -1,0 +1,187 @@
+{
+  "DF_CCF_XOXR_CUR_RT": {
+    "id": "CCF_XOXR_CUR_RT",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE"
+      },
+      {
+        "id": "CUR",
+        "name": "Currency",
+        "codelist": "CL_CUR"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_CCF_XPPP_CUR_RT": {
+    "id": "CCF_XPPP_CUR_RT",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE"
+      },
+      {
+        "id": "CUR",
+        "name": "Currency",
+        "codelist": "CL_CUR"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_CLD_TPOP_SEX_AGE_GEO_NB": {
+    "id": "CLD_TPOP_SEX_AGE_GEO_NB",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "GEO",
+        "name": "Rural/urban areas",
+        "codelist": "CL_GEO"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_CLD_TPOP_SEX_AGE_NB": {
+    "id": "CLD_TPOP_SEX_AGE_NB",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "DF_CLD_TPOP_SEX_AGE_STU_NB": {
+    "id": "CLD_TPOP_SEX_AGE_STU_NB",
+    "dimensions": [
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_AREA"
+      },
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_MEASURE"
+      },
+      {
+        "id": "SEX",
+        "name": "Sex",
+        "codelist": "CL_SEX"
+      },
+      {
+        "id": "AGE",
+        "name": "Age",
+        "codelist": "CL_AGE"
+      },
+      {
+        "id": "STU",
+        "name": "Attendance in school or training",
+        "codelist": "CL_STU"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}

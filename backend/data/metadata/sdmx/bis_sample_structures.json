@@ -1,0 +1,232 @@
+{
+  "BIS_REL_CAL": {
+    "id": "BIS_RELEASE_CALENDAR",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "CATEGORY",
+        "name": "CATEGORY",
+        "codelist": "CL_REL_CAT"
+      },
+      {
+        "id": "RELEASE_TYPE",
+        "name": "RELEASE_TYPE",
+        "codelist": "CL_REL_TYPE"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "WS_CBPOL": {
+    "id": "BIS_CBPOL",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_BIS_GL_REF_AREA"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "WS_CBS_PUB": {
+    "id": "BIS_CBS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "L_MEASURE",
+        "name": "Measure",
+        "codelist": "CL_STOCK_FLOW"
+      },
+      {
+        "id": "L_REP_CTY",
+        "name": "Reporting country",
+        "codelist": "CL_BIS_IF_REF_AREA"
+      },
+      {
+        "id": "CBS_BANK_TYPE",
+        "name": "CBS bank type",
+        "codelist": "CL_BIS_IF_REF_AREA"
+      },
+      {
+        "id": "CBS_BASIS",
+        "name": "CBS reporting basis",
+        "codelist": "CL_CBS_BASIS"
+      },
+      {
+        "id": "L_POSITION",
+        "name": "Balance sheet position",
+        "codelist": "CL_L_POSITION"
+      },
+      {
+        "id": "L_INSTR",
+        "name": "Type of instruments",
+        "codelist": "CL_L_INSTR"
+      },
+      {
+        "id": "REM_MATURITY",
+        "name": "Remaining maturity",
+        "codelist": "CL_ISSUE_MAT"
+      },
+      {
+        "id": "CURR_TYPE_BOOK",
+        "name": "Currency type of booking location",
+        "codelist": "CL_CURRENCY_3POS"
+      },
+      {
+        "id": "L_CP_SECTOR",
+        "name": "Counterparty sector",
+        "codelist": "CL_L_SECTOR"
+      },
+      {
+        "id": "L_CP_COUNTRY",
+        "name": "Counterparty country",
+        "codelist": "CL_BIS_IF_REF_AREA"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "WS_CBTA": {
+    "id": "CBTA",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REF_AREA",
+        "name": "Reference area",
+        "codelist": "CL_BIS_IF_REF_AREA"
+      },
+      {
+        "id": "COMP_METHOD",
+        "name": "",
+        "codelist": "CL_BSI_METHOD"
+      },
+      {
+        "id": "UNIT_MEASURE",
+        "name": "Unit of measure",
+        "codelist": "CL_UNIT"
+      },
+      {
+        "id": "CURRENCY",
+        "name": "Currency",
+        "codelist": "CL_CURRENCY"
+      },
+      {
+        "id": "TRANSFORMATION",
+        "name": "",
+        "codelist": "CL_TRANSFORMATION"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  },
+  "WS_CPMI_CASHLESS": {
+    "id": "CPMI_CASHLESS",
+    "dimensions": [
+      {
+        "id": "FREQ",
+        "name": "Frequency",
+        "codelist": "CL_FREQ"
+      },
+      {
+        "id": "REP_CTY",
+        "name": "Reporting country",
+        "codelist": "CL_BIS_GL_REF_AREA"
+      },
+      {
+        "id": "MEASURE",
+        "name": "Measure",
+        "codelist": "CL_CPMI_MEASURE"
+      },
+      {
+        "id": "INSTRUMENT_TYPE",
+        "name": "Instrument type",
+        "codelist": "CL_TRAN_INSTR_TYPE"
+      },
+      {
+        "id": "DIRECTION",
+        "name": "Direction",
+        "codelist": "CL_TRANS_DIR"
+      },
+      {
+        "id": "TERMINAL_LOC",
+        "name": "Terminal location",
+        "codelist": "CL_LOCATION"
+      },
+      {
+        "id": "CARD_ISS_LOC",
+        "name": "Cards issuance location",
+        "codelist": "CL_LOCATION"
+      },
+      {
+        "id": "DEV_STATE_TECH",
+        "name": "Device state / technology",
+        "codelist": "CL_DEV_STATE_TECH"
+      },
+      {
+        "id": "TERMINAL_TYPE",
+        "name": "Terminal type",
+        "codelist": "CL_TERMINAL_TYPE"
+      },
+      {
+        "id": "CARD_FCT",
+        "name": "Card function",
+        "codelist": "CL_CARD_FCT"
+      },
+      {
+        "id": "PAYMT_SPEED",
+        "name": "Payment speed",
+        "codelist": "CL_PAYMT_SPD"
+      },
+      {
+        "id": "ISSUER_OR_ONUS",
+        "name": "Issuer or on-us payments",
+        "codelist": "CL_DEVISS_ONUSP"
+      },
+      {
+        "id": "TIME_PERIOD",
+        "name": "Time period or range",
+        "codelist": "None"
+      }
+    ],
+    "attributes": [],
+    "measures": []
+  }
+}
