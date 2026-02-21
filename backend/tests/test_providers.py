@@ -427,6 +427,14 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.data[0].value, 1000)
         self.assertEqual(metadata_stub.keyword, "custom eurostat")
 
+    def test_worldbank_does_not_expand_short_country_codes_as_groups(self) -> None:
+        provider = WorldBankProvider()
+
+        self.assertIsNone(provider._expand_country_group("US"))
+        self.assertIsNone(provider._expand_country_group("usa"))
+        self.assertIsNone(provider._expand_country_group("UK"))
+        self.assertIsNotNone(provider._expand_country_group("G7"))
+
 
 if __name__ == "__main__":
     unittest.main()

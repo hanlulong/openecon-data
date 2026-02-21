@@ -665,6 +665,11 @@ class WorldBankProvider(BaseProvider):
 
         key = country.upper().replace(" ", "_")
 
+        # Guardrail: if this already resolves to a concrete country code (e.g., US/USA),
+        # do NOT attempt fuzzy group expansion.
+        if CountryResolver.normalize(country):
+            return None
+
         # First, try CountryResolver (single source of truth)
         expanded = CountryResolver.get_region_expansion(key, format="iso3")
         if expanded:
@@ -684,7 +689,12 @@ class WorldBankProvider(BaseProvider):
             logger.info(f"🌍 Expanded country group '{country}' via WorldBank mappings → {len(countries)} countries: {', '.join(countries)}")
             return countries
 
-        # Check for partial matches in WorldBank-specific groups
+        # Check for partial matches in WorldBank-specific groups.
+        # Only allow this for longer tokens to avoid false positives
+        # like "US" matching "BRICS_PLUS".
+        if len(key) < 4:
+            return None
+
         for group_key, countries in self.COUNTRY_GROUP_EXPANSIONS.items():
             if group_key in key or key in group_key:
                 logger.info(f"🌍 Matched country group '{group_key}' in '{country}' → {len(countries)} countries: {', '.join(countries)}")

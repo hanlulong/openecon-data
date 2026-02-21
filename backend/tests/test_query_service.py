@@ -93,6 +93,18 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(has_parsing, f"Expected parsing step, got: {step_names}")
         self.assertTrue(has_fetching, f"Expected fetching step, got: {step_names}")
 
+    def test_select_indicator_query_uses_original_when_cues_mismatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="World Bank",
+            indicators=["Gross PSD, Central Gov., All maturities, % of GDP"],
+            parameters={"countries": ["China", "US"]},
+            clarificationNeeded=False,
+            originalQuery="import share of gdp China and US",
+        )
+
+        selected = self.service._select_indicator_query_for_resolution(intent)  # pylint: disable=protected-access
+        self.assertEqual(selected, "import share of gdp China and US")
+
 
 if __name__ == "__main__":
     unittest.main()

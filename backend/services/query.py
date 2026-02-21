@@ -332,6 +332,100 @@ class QueryService:
             logger.warning("Hybrid routing failed, using deterministic provider: %s", exc)
             return routed_provider
 
+    def _tokenize_indicator_terms(self, text: str) -> set[str]:
+        """Tokenize indicator text into comparable semantic terms."""
+        if not text:
+            return set()
+
+        stop_words = {
+            "the", "a", "an", "of", "for", "in", "to", "and", "or",
+            "show", "get", "find", "data", "series", "indicator",
+            "country", "countries", "from", "with", "by", "on", "at",
+            "current", "constant", "annual", "monthly", "quarterly",
+            "percent", "percentage", "ratio", "share", "rate", "index",
+            "gdp", "value", "values",
+        }
+        geo_terms = {
+            alias.strip().lower()
+            for alias in CountryResolver.COUNTRY_ALIASES.keys()
+            if alias and " " not in alias
+        }
+
+        raw_terms = set(re.findall(r"[a-z0-9]+", text.lower().replace("_", " ")))
+        terms: set[str] = set()
+        for term in raw_terms:
+            if len(term) <= 2 or term in stop_words or term in geo_terms:
+                continue
+            terms.add(term)
+            if term.endswith("ies") and len(term) > 4:
+                terms.add(term[:-3] + "y")
+            elif term.endswith("s") and len(term) > 3:
+                terms.add(term[:-1])
+        return terms
+
+    def _extract_indicator_cues(self, text: str) -> set[str]:
+        """Extract high-signal semantic cues for intent/indicator consistency checks."""
+        if not text:
+            return set()
+
+        text_lower = text.lower()
+        cue_map = {
+            "import": {"import", "imports"},
+            "export": {"export", "exports"},
+            "trade_balance": {"trade balance", "trade surplus", "trade deficit"},
+            "debt": {"debt", "liability", "liabilities"},
+            "unemployment": {"unemployment", "jobless"},
+            "inflation": {"inflation", "consumer price", "cpi"},
+            "savings": {"saving", "savings"},
+        }
+
+        cues: set[str] = set()
+        for cue, phrases in cue_map.items():
+            if any(phrase in text_lower for phrase in phrases):
+                cues.add(cue)
+        return cues
+
+    def _select_indicator_query_for_resolution(self, intent: ParsedIntent) -> str:
+        """
+        Pick the best query string for indicator resolution.
+
+        Uses LLM indicator text by default, but falls back to the original user
+        query when semantic cues clearly mismatch.
+        """
+        if not intent.indicators:
+            return ""
+
+        indicator_query = str(intent.indicators[0] or "").strip()
+        if not indicator_query:
+            return ""
+
+        original_query = str(intent.originalQuery or "").strip()
+        if not original_query:
+            return indicator_query
+
+        original_cues = self._extract_indicator_cues(original_query)
+        indicator_cues = self._extract_indicator_cues(indicator_query)
+        if original_cues and not (original_cues & indicator_cues):
+            logger.info(
+                "🔎 Indicator cue mismatch (original=%s, parsed=%s). Using original query for resolution.",
+                sorted(original_cues),
+                sorted(indicator_cues),
+            )
+            return original_query
+
+        original_terms = self._tokenize_indicator_terms(original_query)
+        indicator_terms = self._tokenize_indicator_terms(indicator_query)
+        if original_terms and indicator_terms:
+            overlap = len(original_terms & indicator_terms) / max(len(original_terms), 1)
+            if overlap < 0.15:
+                logger.info(
+                    "🔎 Low indicator-term overlap (%.2f). Using original query for resolution.",
+                    overlap,
+                )
+                return original_query
+
+        return indicator_query
+
     def _extract_exchange_rate_params(self, params: dict, intent: ParsedIntent) -> dict:
         """
         Extract currency pair information from query and populate params.
@@ -1370,7 +1464,7 @@ class QueryService:
         if not params.get("indicator") and intent.indicators:
             if provider in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
                 # Try IndicatorResolver first for enhanced resolution
-                indicator_query = intent.indicators[0]
+                indicator_query = self._select_indicator_query_for_resolution(intent)
                 resolved = resolver.resolve(indicator_query, provider=provider)
                 if resolved and resolved.confidence >= 0.7:
                     logger.info(f"🔍 IndicatorResolver: '{indicator_query}' → '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
