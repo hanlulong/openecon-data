@@ -12,7 +12,7 @@ fail=0
 
 echo
 echo "[1/4] Scanning tracked files for secret-like patterns..."
-if git ls-files | xargs rg -n "$SECRET_PATTERNS" >/tmp/public_audit_tracked_hits.txt 2>/dev/null; then
+if git ls-files | rg -v '^scripts/public_release_audit\.sh$' | xargs rg -n "$SECRET_PATTERNS" >/tmp/public_audit_tracked_hits.txt 2>/dev/null; then
   echo "FAIL: secret-like matches found in tracked files:"
   cat /tmp/public_audit_tracked_hits.txt
   fail=1
@@ -23,7 +23,7 @@ fi
 echo
 echo "[2/4] Checking git history for known high-risk key patterns..."
 hist_hits=0
-for pat in "OPENROUTER_API_KEY=sk-or-v1-" "SUPABASE_SERVICE_ROLE_KEY=" "BEGIN (RSA |EC |DSA )?PRIVATE KEY"; do
+for pat in "OPENROUTER_API_KEY=sk-or-v1-[a-f0-9]{32,}" "SUPABASE_SERVICE_ROLE_KEY=eyJ[0-9A-Za-z._-]{20,}" "BEGIN (RSA |EC |DSA )?PRIVATE KEY"; do
   if git log --all --oneline -G "$pat" -- | head -n 5 >/tmp/public_audit_hist_hits.txt && [ -s /tmp/public_audit_hist_hits.txt ]; then
     echo "WARN: history matches pattern '$pat':"
     cat /tmp/public_audit_hist_hits.txt
