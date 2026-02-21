@@ -1116,6 +1116,8 @@ class QueryService:
 
             with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
                 intent = await self.openrouter.parse_query(query, history)
+                # Ensure downstream logic always has the raw user query text.
+                intent.originalQuery = query
                 logger.debug("Parsed intent: %s", intent.model_dump())
 
                 # FALLBACK: Extract explicit country references from query when LLM defaults to US/empty.
@@ -3234,8 +3236,10 @@ class QueryService:
         if tracker:
             with tracker.track("parsing_query", "🤖 Understanding your question..."):
                 intent = await self.openrouter.parse_query(query, history)
+                intent.originalQuery = query
         else:
             intent = await self.openrouter.parse_query(query, history)
+            intent.originalQuery = query
 
         # Keep fallback path behavior consistent with the main processing pipeline.
         self._apply_country_overrides(intent, query)
