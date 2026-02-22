@@ -70,8 +70,12 @@ class ConversationStateManager:
                 state.entities.append(entity_context)
         if data_references:
             for key, ref in data_references.items():
-                if ref not in state.data_references:
-                    state.data_references.append(ref)
+                fallback_id = str(key or "").strip() or None
+                coerced = state._coerce_data_reference(ref, fallback_id=fallback_id)
+                if not coerced:
+                    continue
+                state.data_references[coerced.id] = coerced
+                state.entity_context.add_dataset(coerced)
 
     def clear_old_states(self, max_age_turns: int = 100) -> int:
         """Clear states older than max_age_turns."""

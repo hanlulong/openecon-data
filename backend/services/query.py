@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
+from ..services.query_pipeline import QueryPipeline
 from ..routing.country_resolver import CountryResolver
 from ..routing.unified_router import UnifiedRouter
 from ..routing.hybrid_router import HybridRouter
@@ -140,6 +142,7 @@ def _safe_get_source(data: List[NormalizedData]) -> str:
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
     CACHE_KEY_VERSION = "2026-02-21.2"
+    MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
         self,
@@ -194,7 +197,16 @@ class QueryService:
         # Deterministic baseline router (single source of routing truth).
         self.unified_router = UnifiedRouter()
         # Small in-memory cache to avoid repeated cross-provider fallback scans.
-        self._fallback_provider_cache: Dict[Tuple[str, str, Tuple[str, ...]], List[str]] = {}
+        self._fallback_provider_cache: "OrderedDict[Tuple[str, str, Tuple[str, ...]], List[str]]" = OrderedDict()
+        # Shared parse/routing/validation stages used by multiple execution paths.
+        self.pipeline = QueryPipeline(self)
+
+    @staticmethod
+    def _normalize_provider_alias(provider: Optional[str]) -> Optional[str]:
+        """Normalize provider aliases to canonical provider names."""
+        if not provider:
+            return None
+        return normalize_provider_name(provider)
 
     def _detect_explicit_provider(self, query: str) -> Optional[str]:
         """
@@ -1392,6 +1404,8 @@ class QueryService:
             )
             cached = self._fallback_provider_cache.get(cache_key)
             if cached:
+                # LRU refresh on read.
+                self._fallback_provider_cache.move_to_end(cache_key)
                 return list(cached)
 
         fallback_list = []
@@ -1450,6 +1464,9 @@ class QueryService:
                     result = combined[:5]  # Limit to 5 fallbacks
                     if cache_key:
                         self._fallback_provider_cache[cache_key] = result
+                        self._fallback_provider_cache.move_to_end(cache_key)
+                        while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
+                            self._fallback_provider_cache.popitem(last=False)
                     return result
 
             except Exception as e:
@@ -1466,12 +1483,18 @@ class QueryService:
                     logger.debug(f"Using catalog fallbacks for '{indicator}': {combined}")
                     if cache_key:
                         self._fallback_provider_cache[cache_key] = combined
+                        self._fallback_provider_cache.move_to_end(cache_key)
+                        while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
+                            self._fallback_provider_cache.popitem(last=False)
                     return combined
             except Exception as e:
                 logger.debug(f"Could not get catalog-based fallbacks: {e}")
 
         if cache_key:
             self._fallback_provider_cache[cache_key] = fallback_list
+            self._fallback_provider_cache.move_to_end(cache_key)
+            while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
+                self._fallback_provider_cache.popitem(last=False)
         return fallback_list
 
     def _get_fallback_provider(self, primary_provider: str) -> Optional[str]:
@@ -1935,48 +1958,10 @@ class QueryService:
 
             logger.info("Parsing query with LLM: %s", query)
 
-            # Detect explicit provider requests BEFORE LLM parsing
-            # This ensures user's explicit provider choice is always honored
-            explicit_provider = self._detect_explicit_provider(query)
-            explicit_provider_normalized = (
-                normalize_provider_name(explicit_provider) if explicit_provider else None
-            )
-            if explicit_provider:
-                logger.info(f"🎯 Explicit provider detected: {explicit_provider}")
-
             with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
-                intent = await self.openrouter.parse_query(query, history)
-                # Ensure downstream logic always has the raw user query text.
-                intent.originalQuery = query
+                parse_result = await self.pipeline.parse_and_route(query, history)
+                intent = parse_result.intent
                 logger.debug("Parsed intent: %s", intent.model_dump())
-
-                # FALLBACK: Extract explicit country references from query when LLM defaults to US/empty.
-                self._apply_country_overrides(intent, query)
-
-                # Explicit provider takes precedence over router/hybrid selection.
-                if explicit_provider_normalized:
-                    if intent.apiProvider != explicit_provider_normalized:
-                        logger.info(
-                            "🎯 Enforcing explicit provider request: %s → %s",
-                            intent.apiProvider,
-                            explicit_provider_normalized,
-                        )
-                    intent.apiProvider = explicit_provider_normalized
-                    routed_provider = explicit_provider_normalized
-                else:
-                    # Use deterministic routing (and optional HybridRouter enhancement)
-                    routed_provider = await self._select_routed_provider(intent, query)
-
-                if routed_provider != intent.apiProvider:
-                    logger.info(f"🔄 Provider routing: {intent.apiProvider} → {routed_provider} (deterministic+semantic)")
-                    intent.apiProvider = routed_provider
-
-                # Validate routing decision (logs warnings if routing seems incorrect)
-                validation_warning = ProviderRouter.validate_routing(routed_provider, query, intent)
-                if validation_warning:
-                    # Log but don't fail - warnings are informational
-                    logger.warning(f"Routing validation: {validation_warning}")
-
                 update_parse_metadata({
                     "provider": intent.apiProvider,
                     "indicators": intent.indicators,
@@ -2039,19 +2024,11 @@ class QueryService:
             logger.info("📅 Applying default time periods to prevent clarification requests...")
             ParameterValidator.apply_default_time_periods(intent)
 
-            # Check if this is a multi-indicator query BEFORE parameter validation
-            # (multi-indicator queries will add seriesId during fetch)
-            is_multi_indicator = len(intent.indicators) > 1
-
-            # Validate parameters before fetching (skip for multi-indicator as they'll be validated individually)
-            # Do validation without tracking step to reduce progress bar clutter
-            if not is_multi_indicator:
-                is_valid, validation_error, suggestions = ParameterValidator.validate_intent(intent)
-            else:
-                # For multi-indicator, we'll validate each one separately during fetch
-                is_valid = True
-                validation_error = None
-                suggestions = None
+            validation = self.pipeline.validate_intent(intent)
+            is_multi_indicator = validation.is_multi_indicator
+            is_valid = validation.is_valid
+            validation_error = validation.validation_error
+            suggestions = validation.suggestions
 
             if not is_valid:
                 logger.warning("Parameter validation failed: %s", validation_error)
@@ -2077,14 +2054,8 @@ class QueryService:
                     processingSteps=tracker.to_list(),
                 )
 
-            # Check confidence level (skip for multi-indicator as each will be checked individually)
-            # Do confidence check without tracking step to reduce progress bar clutter
-            if not is_multi_indicator:
-                is_confident, confidence_reason = ParameterValidator.check_confidence(intent)
-            else:
-                is_confident = True
-                confidence_reason = None
-
+            is_confident = validation.is_confident
+            confidence_reason = validation.confidence_reason
             if not is_confident:
                 logger.warning("Low confidence in intent: %s", confidence_reason)
                 return QueryResponse(
@@ -3013,8 +2984,7 @@ class QueryService:
                 if is_multi_country:
                     logger.info("🌍 Multi-country OECD query detected")
                     try:
-                        # Use parallel multi-country method
-                        countries = countries_param if countries_param else [country_param]
+                        countries = countries_param if countries_param else expanded_countries
                         series_list = await self.oecd_provider.fetch_multi_country(
                             indicator=indicator,
                             countries=countries,
@@ -3022,26 +2992,18 @@ class QueryService:
                             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
                         )
                         return series_list
-                    except Exception as e:
-                        logger.warning(f"Multi-country OECD query failed: {e}")
-
-                        # Check if it's a rate limit, timeout, or availability issue
-                        error_msg = str(e).lower()
-                        if "rate limit" in error_msg or "429" in error_msg or "circuit" in error_msg or "failed" in error_msg or "timeout" in error_msg or "timed out" in error_msg:
-                            logger.info("🔄 OECD multi-country failed, attempting WorldBank fallback...")
-                            try:
-                                countries = countries_param if countries_param else [country_param]
-                                worldbank_data = await self.world_bank_provider.fetch_indicator(
-                                    indicator=indicator,
-                                    countries=countries,
-                                    start_date=params.get("startDate"),
-                                    end_date=params.get("endDate"),
-                                )
-                                if worldbank_data:
-                                    logger.info(f"✅ WorldBank fallback succeeded for {len(worldbank_data)} countries")
-                                    return worldbank_data
-                            except Exception as wb_e:
-                                logger.warning(f"WorldBank fallback also failed: {wb_e}")
+                    except Exception as exc:
+                        error_msg = str(exc).lower()
+                        temporarily_unavailable = any(
+                            token in error_msg
+                            for token in ("rate limit", "429", "circuit", "timeout", "timed out", "temporarily unavailable")
+                        )
+                        if temporarily_unavailable:
+                            logger.warning("OECD multi-country temporarily unavailable: %s", exc)
+                            # Let centralized fallback policy choose alternative providers.
+                            raise DataNotAvailableError(
+                                f"OECD temporarily unavailable for multi-country request: {exc}"
+                            ) from exc
                         raise
 
                 try:
@@ -3053,58 +3015,19 @@ class QueryService:
                         end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
                     )
                     return [series]
-                except (DataNotAvailableError, Exception) as e:
-                    # Check if it's a rate limit, timeout, or circuit breaker error
-                    error_msg = str(e).lower()
-                    error_type = type(e).__name__.lower()
-                    is_timeout = "timeout" in error_msg or "timed out" in error_msg or "timeout" in error_type
-                    is_availability = "rate limit" in error_msg or "429" in error_msg or "circuit" in error_msg or "temporarily unavailable" in error_msg
-
-                    if is_timeout or is_availability:
-                        logger.warning(f"OECD unavailable for {params.get('country', 'USA')}: {e}")
-                        logger.info("🔄 Attempting fallback providers (WorldBank, then IMF)...")
-
-                        # First try WorldBank fallback (faster and more reliable)
-                        try:
-                            worldbank_data = await self.world_bank_provider.fetch_indicator(
-                                indicator=indicator,
-                                countries=[params.get("country", "USA")],
-                                start_date=params.get("startDate"),
-                                end_date=params.get("endDate"),
-                            )
-                            if worldbank_data:
-                                logger.info(f"✅ WorldBank fallback succeeded")
-                                return worldbank_data
-                        except Exception as wb_error:
-                            logger.warning(f"WorldBank fallback failed: {wb_error}")
-
-                        # Fallback to IMF provider
-                        try:
-                            # IMF provider needs slightly different parameters
-                            imf_params = {
-                                **params,
-                                "indicator": indicator,
-                                "countries": params.get("countries") or [params.get("country", "USA")]
-                            }
-
-                            # Handle multiple indicators for IMF
-                            if len(intent.indicators) > 1:
-                                all_data = []
-                                for ind in intent.indicators:
-                                    imf_params["indicator"] = ind
-                                    data = await self.imf_provider.fetch_data(imf_params)
-                                    all_data.extend(data if isinstance(data, list) else [data])
-                                return all_data
-                            else:
-                                data = await self.imf_provider.fetch_data(imf_params)
-                                return data if isinstance(data, list) else [data]
-                        except Exception as imf_error:
-                            logger.error(f"IMF fallback also failed: {imf_error}")
-                            # Re-raise original OECD error if all fallbacks fail
-                            raise e
-                    else:
-                        # Not a rate limit/timeout error, raise as-is
-                        raise
+                except Exception as exc:
+                    error_msg = str(exc).lower()
+                    temporarily_unavailable = any(
+                        token in error_msg
+                        for token in ("rate limit", "429", "circuit", "timeout", "timed out", "temporarily unavailable")
+                    )
+                    if temporarily_unavailable:
+                        logger.warning("OECD temporarily unavailable for %s: %s", country_param, exc)
+                        # Let centralized fallback policy choose alternative providers.
+                        raise DataNotAvailableError(
+                            f"OECD temporarily unavailable for {country_param or 'OECD'}: {exc}"
+                        ) from exc
+                    raise
             if provider in {"COINGECKO", "COIN GECKO"}:
                 logger.info(f"🔍 CoinGecko Query Parameters:")
                 logger.info(f"   - Full params: {params}")
@@ -4297,22 +4220,11 @@ class QueryService:
 
         if tracker:
             with tracker.track("parsing_query", "🤖 Understanding your question..."):
-                intent = await self.openrouter.parse_query(query, history)
-                intent.originalQuery = query
+                parse_result = await self.pipeline.parse_and_route(query, history)
+                intent = parse_result.intent
         else:
-            intent = await self.openrouter.parse_query(query, history)
-            intent.originalQuery = query
-
-        # Keep fallback path behavior consistent with the main processing pipeline.
-        self._apply_country_overrides(intent, query)
-        routed_provider = await self._select_routed_provider(intent, query)
-        if routed_provider != intent.apiProvider:
-            logger.info(
-                "🔄 Provider routing (standard path): %s -> %s",
-                intent.apiProvider,
-                routed_provider,
-            )
-            intent.apiProvider = routed_provider
+            parse_result = await self.pipeline.parse_and_route(query, history)
+            intent = parse_result.intent
 
         if record_user_message:
             conversation_id = conversation_manager.add_message_safe(
