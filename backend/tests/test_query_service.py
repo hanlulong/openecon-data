@@ -8,7 +8,7 @@ from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
 from backend.services.cache import cache_service
 from backend.services.conversation import conversation_manager
-from backend.services.query_pipeline import ParseRouteResult
+from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
 from backend.tests.utils import run
 from backend.utils.retry import DataNotAvailableError
@@ -1029,6 +1029,36 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
 
+    def test_build_prefetch_indicator_choice_clarification_skips_collection_for_strong_primary_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["imports share of gdp"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="imports share of gdp in china",
+        )
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "NE.IMP.GNFS.ZS"
+            name = "Imports of goods and services (% of GDP)"
+            confidence = 0.95
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("options should not be collected")), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                conversation_id="conv-prefetch-strong-primary",
+                query="imports share of gdp in china",
+                intent=intent,
+                explicit_provider=None,
+                is_multi_indicator=False,
+                processing_steps=None,
+            )
+
+        self.assertIsNone(clarification)
+
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
         conversation_manager.clear_pending_indicator_options(conv_id)
@@ -1417,6 +1447,55 @@ class QueryServiceTests(unittest.TestCase):
         payload = response.clarificationOptions or []
         self.assertEqual(payload[0].provider, "IMF")
         self.assertEqual(payload[1].provider, "WORLDBANK")
+
+    def test_execute_with_orchestrator_returns_low_confidence_response_before_agent_execution(self) -> None:
+        conv_id = "conv-orchestrator-low-confidence"
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["employment"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="employment in china",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="IMF",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=False,
+            confidence_reason="ambiguous indicator",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "USE_LANGGRAPH": "true",
+                "USE_LANGCHAIN_REACT_AGENT": "false",
+                "USE_DEEP_AGENTS": "false",
+            },
+            clear=False,
+        ), \
+             patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_execute_with_langgraph", new_callable=AsyncMock, side_effect=AssertionError("agent should not run")):
+            response = run(
+                self.service._execute_with_orchestrator(  # pylint: disable=protected-access
+                    query="employment in china",
+                    conversation_id=conv_id,
+                    tracker=None,
+                )
+            )
+
+        self.assertTrue(response.clarificationNeeded)
+        assert response.message is not None
+        self.assertIn("Uncertain Query", response.message)
+        self.assertIn("ambiguous indicator", response.message)
 
     def test_build_uncertain_result_clarification_skips_single_distinct_option_after_sanitization(self) -> None:
         intent = ParsedIntent(

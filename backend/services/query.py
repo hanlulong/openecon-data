@@ -2596,12 +2596,6 @@ class QueryService:
         if not indicator_query:
             return None
 
-        options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
-        if len(options) < 2:
-            return None
-        if not self._has_materially_distinct_indicator_options(options):
-            return None
-
         provider = normalize_provider_name(intent.apiProvider or "")
         params = dict(intent.parameters or {})
         current_indicator = str(params.get("indicator") or "").strip()
@@ -2661,6 +2655,14 @@ class QueryService:
                 metadata=getattr(resolved, "metadata", None),
             )
             current_label = f"{current_name} from {provider or getattr(resolved, 'provider', 'unknown provider')}"
+            if primary_accepted and primary_relevance >= 0.8:
+                return None
+
+        options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
+        if len(options) < 2:
+            return None
+        if not self._has_materially_distinct_indicator_options(options):
+            return None
 
         top_option = self._parse_indicator_option(options[0]) if options else None
         top_matches_primary = bool(
@@ -2752,6 +2754,56 @@ class QueryService:
             explicit_provider=parse_result.explicit_provider,
             is_multi_indicator=validation.is_multi_indicator,
             processing_steps=processing_steps,
+        )
+
+    def _build_invalid_intent_response(
+        self,
+        conversation_id: str,
+        intent: ParsedIntent,
+        validation_error: Optional[str],
+        suggestions: Optional[Dict[str, Any]],
+        processing_steps: Optional[List[Any]] = None,
+    ) -> QueryResponse:
+        """Build the standard validation-failure clarification response."""
+        clarification_qs = ParameterValidator.suggest_clarification(intent, validation_error)
+        message_parts = ["❌ **Cannot Process Query**", str(validation_error or "The query is missing required details.")]
+        if suggestions:
+            if suggestions.get("suggestion"):
+                message_parts.append(f"\n**💡 Suggestion**: {suggestions['suggestion']}")
+            if suggestions.get("common_indicators"):
+                message_parts.append(f"\n**Common indicators**: {', '.join(suggestions['common_indicators'])}")
+            if suggestions.get("example"):
+                message_parts.append(f"\n**Example**: {suggestions['example']}")
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=clarification_qs,
+            message="\n".join(message_parts),
+            processingSteps=processing_steps,
+        )
+
+    def _build_low_confidence_intent_response(
+        self,
+        conversation_id: str,
+        intent: ParsedIntent,
+        confidence_reason: Optional[str],
+        processing_steps: Optional[List[Any]] = None,
+    ) -> QueryResponse:
+        """Build the standard low-confidence clarification response."""
+        reason = str(confidence_reason or "I could not confidently determine the requested data.")
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=[
+                f"I'm not certain about this query: {reason}",
+                "Could you rephrase with more specific details?",
+                "Or would you like to use Pro Mode for a custom analysis?",
+            ],
+            message=f"⚠️ **Uncertain Query**\n{reason}\n\nPlease provide more details or use Pro Mode for better results.",
+            processingSteps=processing_steps,
         )
 
     def _needs_indicator_clarification(
@@ -5551,43 +5603,23 @@ class QueryService:
 
             if not is_valid:
                 logger.warning("Parameter validation failed: %s", validation_error)
-                # Generate clarification questions
-                clarification_qs = ParameterValidator.suggest_clarification(intent, validation_error)
-
-                # Format error message with suggestions
-                message_parts = [f"❌ **Cannot Process Query**", validation_error]
-                if suggestions:
-                    if suggestions.get('suggestion'):
-                        message_parts.append(f"\n**💡 Suggestion**: {suggestions['suggestion']}")
-                    if suggestions.get('common_indicators'):
-                        message_parts.append(f"\n**Common indicators**: {', '.join(suggestions['common_indicators'])}")
-                    if suggestions.get('example'):
-                        message_parts.append(f"\n**Example**: {suggestions['example']}")
-
-                return QueryResponse(
-                    conversationId=conv_id,
+                return self._build_invalid_intent_response(
+                    conversation_id=conv_id,
                     intent=intent,
-                    clarificationNeeded=True,
-                    clarificationQuestions=clarification_qs,
-                    message="\n".join(message_parts),
-                    processingSteps=tracker.to_list(),
+                    validation_error=validation_error,
+                    suggestions=suggestions,
+                    processing_steps=tracker.to_list(),
                 )
 
             is_confident = validation.is_confident
             confidence_reason = validation.confidence_reason
             if not is_confident:
                 logger.warning("Low confidence in intent: %s", confidence_reason)
-                return QueryResponse(
-                    conversationId=conv_id,
+                return self._build_low_confidence_intent_response(
+                    conversation_id=conv_id,
                     intent=intent,
-                    clarificationNeeded=True,
-                    clarificationQuestions=[
-                        f"I'm not certain about this query: {confidence_reason}",
-                        "Could you rephrase with more specific details?",
-                        "Or would you like to use Pro Mode for a custom analysis?"
-                    ],
-                    message=f"⚠️ **Uncertain Query**\n{confidence_reason}\n\nPlease provide more details or use Pro Mode for better results.",
-                    processingSteps=tracker.to_list(),
+                    confidence_reason=confidence_reason,
+                    processing_steps=tracker.to_list(),
                 )
 
             # Log any warnings from validation
@@ -7135,16 +7167,34 @@ class QueryService:
 
             ParameterValidator.apply_default_time_periods(intent)
             validation = self.pipeline.validate_intent(intent)
-            if validation.is_valid and validation.is_confident:
-                parse_stage_clarification = self._build_post_parse_clarification(
+            if not validation.is_valid:
+                logger.warning("Orchestrator pre-check validation failed: %s", validation.validation_error)
+                return self._build_invalid_intent_response(
                     conversation_id=conversation_id,
-                    query=query,
-                    parse_result=parse_result,
-                    validation=validation,
+                    intent=intent,
+                    validation_error=validation.validation_error,
+                    suggestions=validation.suggestions,
                     processing_steps=tracker.to_list() if tracker else None,
                 )
-                if parse_stage_clarification:
-                    return parse_stage_clarification
+
+            if not validation.is_confident:
+                logger.warning("Orchestrator pre-check low confidence: %s", validation.confidence_reason)
+                return self._build_low_confidence_intent_response(
+                    conversation_id=conversation_id,
+                    intent=intent,
+                    confidence_reason=validation.confidence_reason,
+                    processing_steps=tracker.to_list() if tracker else None,
+                )
+
+            parse_stage_clarification = self._build_post_parse_clarification(
+                conversation_id=conversation_id,
+                query=query,
+                parse_result=parse_result,
+                validation=validation,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if parse_stage_clarification:
+                return parse_stage_clarification
 
             # Add current query to history
             updated_conversation_id = conversation_manager.add_message_safe(
