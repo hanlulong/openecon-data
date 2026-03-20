@@ -672,6 +672,7 @@ class QueryService:
             },
             "reserves": {"foreign exchange reserves", "fx reserves", "reserve assets", "international reserves", "reserves"},
             "house_prices": {"house price", "house prices", "housing prices", "property prices", "residential property"},
+            "employment_rate": {"employment rate"},
             "employment_population": {"employment to population", "employment-population", "employment population ratio"},
             "discontinued": {"discontinued", "deprecated", "legacy"},
             "savings": {"saving", "savings"},
@@ -2853,6 +2854,7 @@ class QueryService:
             "tenor_30y",
             "policy_rate",
             "house_prices",
+            "employment_rate",
             "hicp",
             "reserves",
             "employment_population",
@@ -4047,6 +4049,8 @@ class QueryService:
             return "GDP deflator inflation"
         if "employment_population" in cues:
             return "employment to population ratio"
+        if "employment_rate" in cues:
+            return "employment rate"
         if "producer_price" in cues:
             return "producer price inflation"
         if "house_prices" in cues:
@@ -4126,6 +4130,8 @@ class QueryService:
 
         if "employment_population" in cues:
             inferred.append("employment to population ratio")
+        elif "employment_rate" in cues:
+            inferred.append("employment rate")
         elif "unemployment" in cues:
             inferred.append("unemployment rate")
 

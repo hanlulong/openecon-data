@@ -614,6 +614,17 @@ class IndicatorTranslator:
         },
     }
 
+    _SEMANTIC_CONFLICT_GROUPS = (
+        (
+            (r"\bemployment\b", r"\bemployed\b"),
+            (r"\bunemployment\b", r"\bjobless\b"),
+        ),
+        (
+            (r"\bimports?\b",),
+            (r"\bexports?\b",),
+        ),
+    )
+
     # Known IMF codes that should be translated to concepts
     IMF_CODE_TO_CONCEPT: Dict[str, str] = {}  # Built dynamically from UNIVERSAL_CONCEPTS
 
@@ -798,6 +809,8 @@ class IndicatorTranslator:
         best_score = 0.0
 
         for alias, concept in self._alias_to_concept.items():
+            if self._has_semantic_conflict(indicator_lower, alias):
+                continue
             score = SequenceMatcher(None, indicator_lower, alias).ratio()
             if score > best_score and score >= effective_threshold:
                 best_score = score
@@ -807,6 +820,25 @@ class IndicatorTranslator:
             logger.debug(f"Fuzzy matched '{indicator}' to concept '{best_match}' (score: {best_score:.2f}, threshold: {effective_threshold:.2f})")
 
         return best_match
+
+    @classmethod
+    def _has_semantic_conflict(cls, requested: str, candidate: str) -> bool:
+        """Reject fuzzy matches that cross semantic opposites like employment/unemployment."""
+        requested_text = str(requested or "").lower()
+        candidate_text = str(candidate or "").lower()
+
+        for lhs_patterns, rhs_patterns in cls._SEMANTIC_CONFLICT_GROUPS:
+            requested_has_lhs = any(re.search(pattern, requested_text) for pattern in lhs_patterns)
+            requested_has_rhs = any(re.search(pattern, requested_text) for pattern in rhs_patterns)
+            candidate_has_lhs = any(re.search(pattern, candidate_text) for pattern in lhs_patterns)
+            candidate_has_rhs = any(re.search(pattern, candidate_text) for pattern in rhs_patterns)
+
+            if requested_has_lhs and candidate_has_rhs:
+                return True
+            if requested_has_rhs and candidate_has_lhs:
+                return True
+
+        return False
 
     def _fuzzy_match_imf_code(self, indicator: str, threshold: float = 0.8) -> Optional[str]:
         """Try to fuzzy match against known IMF codes."""

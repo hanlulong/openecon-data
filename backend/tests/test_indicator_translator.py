@@ -169,3 +169,15 @@ def test_translate_reer_query_to_worldbank_series_code():
 
     assert concept == "real_effective_exchange_rate"
     assert code == "PX.REX.REER"
+
+
+def test_translate_indicator_does_not_fuzzy_match_employment_to_unemployment():
+    translator = IndicatorTranslator()
+
+    code, concept = translator.translate_indicator(
+        "employment rate",
+        target_provider="IMF",
+    )
+
+    assert code is None
+    assert concept is None

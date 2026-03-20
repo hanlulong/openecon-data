@@ -11,6 +11,7 @@ Date: 2025-11-21
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from difflib import SequenceMatcher
 
@@ -19,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 class ParameterMapper:
     """Maps natural language and LangChain outputs to provider-specific parameters."""
+
+    _SEMANTIC_CONFLICT_GROUPS = (
+        (
+            (r"\bemployment\b", r"\bemployed\b"),
+            (r"\bunemployment\b", r"\bjobless\b"),
+        ),
+        (
+            (r"\bimports?\b",),
+            (r"\bexports?\b",),
+        ),
+    )
 
     def __init__(self):
         """Initialize parameter mapper with comprehensive mappings."""
@@ -605,6 +617,8 @@ class ParameterMapper:
         best_score = 0.0
 
         for key, codes in provider_indicators.items():
+            if self._has_indicator_semantic_conflict(indicator_lower, key):
+                continue
             score = SequenceMatcher(None, indicator_lower, key).ratio()
             if score > best_score and score >= 0.7:  # 70% similarity threshold
                 best_score = score
@@ -626,6 +640,25 @@ class ParameterMapper:
 
         logger.warning(f"No match found for indicator '{indicator}' in {provider_upper}")
         return best_match
+
+    @classmethod
+    def _has_indicator_semantic_conflict(cls, requested: str, candidate: str) -> bool:
+        """Reject fuzzy matches that cross semantic opposites like employment/unemployment."""
+        requested_text = str(requested or "").lower()
+        candidate_text = str(candidate or "").lower()
+
+        for lhs_patterns, rhs_patterns in cls._SEMANTIC_CONFLICT_GROUPS:
+            requested_has_lhs = any(re.search(pattern, requested_text) for pattern in lhs_patterns)
+            requested_has_rhs = any(re.search(pattern, requested_text) for pattern in rhs_patterns)
+            candidate_has_lhs = any(re.search(pattern, candidate_text) for pattern in lhs_patterns)
+            candidate_has_rhs = any(re.search(pattern, candidate_text) for pattern in rhs_patterns)
+
+            if requested_has_lhs and candidate_has_rhs:
+                return True
+            if requested_has_rhs and candidate_has_lhs:
+                return True
+
+        return False
 
     def _extract_coingecko_coin(self, text: str) -> Optional[str]:
         """Extract cryptocurrency name from text for CoinGecko."""
