@@ -491,6 +491,76 @@
   border: 1px solid #e5e7eb;
 }
 
+.clarification-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 0.75rem;
+}
+
+.clarification-option-button {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  color: #1f2937;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.clarification-option-button:hover:not(:disabled) {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.clarification-option-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.clarification-option-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: #e8eefc;
+  color: #3b82f6;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.clarification-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.clarification-option-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.clarification-option-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.clarification-option-hint {
+  font-size: 0.82rem;
+  color: #6b7280;
+  padding-left: 0.125rem;
+}
+
 /* Pro Mode Message Styling */
 .message-bubble.assistant.pro-mode .bubble-content {
   background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);

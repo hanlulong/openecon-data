@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../services/api'
-import { Message, NormalizedData, ProcessingStep, HistoryItem } from '../types'
+import { ClarificationOption, Message, NormalizedData, ProcessingStep, HistoryItem } from '../types'
 import { MessageChart } from './MessageChart'
 import { CodeExecutionDisplay } from './CodeExecutionDisplay'
 import { useAuth } from '../contexts/AuthContext'
@@ -295,6 +295,7 @@ export function ChatPage() {
             setMessages(prev => [...prev, {
               role: 'assistant',
               content: response.clarificationQuestions?.join('\n') || 'Please clarify your request.',
+              clarificationOptions: response.clarificationOptions,
               timestamp: new Date(),
               processingSteps: response.processingSteps,
             }])
@@ -418,6 +419,19 @@ export function ChatPage() {
   const handleExampleClick = (exampleQuery: string) => {
     setQuery(exampleQuery)
   }
+
+  const handleClarificationOptionClick = useCallback((option: ClarificationOption) => {
+    if (processingQuery.current !== null) return
+
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: option.label || option.value,
+      timestamp: new Date(),
+    }])
+
+    void handleStreamingQuery(option.value)
+    setQuery('')
+  }, [handleStreamingQuery])
 
   const handleNewChat = () => {
     // Clear all state
@@ -1005,6 +1019,31 @@ print(f"\\nData source: ${sourceUrl}")
                 {/* Show content for: user messages, errors, clarifications, Pro Mode, or messages without data */}
                 {(msg.role === 'user' || msg.isProMode || !msg.data || msg.data.length === 0) && msg.content && (
                   <div className="bubble-content">{msg.content}</div>
+                )}
+
+                {msg.role === 'assistant' && msg.clarificationOptions && msg.clarificationOptions.length > 0 && (
+                  <div className="clarification-options">
+                    {msg.clarificationOptions.map((option) => (
+                      <button
+                        key={`${option.id}-${option.value}`}
+                        type="button"
+                        className="clarification-option-button"
+                        onClick={() => handleClarificationOptionClick(option)}
+                        disabled={processingQuery.current !== null}
+                      >
+                        <span className="clarification-option-id">{option.id}</span>
+                        <span className="clarification-option-copy">
+                          <span className="clarification-option-label">{option.label}</span>
+                          {(option.provider || option.code) && (
+                            <span className="clarification-option-meta">
+                              {[option.provider, option.code].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                    <div className="clarification-option-hint">Or type a different answer below.</div>
+                  </div>
                 )}
 
                 {msg.processingSteps && msg.processingSteps.length > 0 && (

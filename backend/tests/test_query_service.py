@@ -8,6 +8,7 @@ from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
 from backend.services.cache import cache_service
 from backend.services.conversation import conversation_manager
+from backend.services.query_pipeline import ParseRouteResult
 from backend.services.query import QueryService
 from backend.tests.utils import run
 from backend.utils.retry import DataNotAvailableError
@@ -768,6 +769,12 @@ class QueryServiceTests(unittest.TestCase):
         joined = "\n".join(clarification.clarificationQuestions or [])
         self.assertIn("IMF", joined)
         self.assertIn("WorldBank", joined)
+        self.assertIsNotNone(clarification.clarificationOptions)
+        options = clarification.clarificationOptions or []
+        self.assertGreaterEqual(len(options), 2)
+        self.assertTrue(all(option.id and option.value for option in options))
+        self.assertIn("IMF", {option.provider for option in options})
+        self.assertIn("WORLDBANK", {option.provider for option in options})
 
     def test_build_uncertain_result_clarification_requests_explicit_indicator_when_only_match_is_incompatible(self) -> None:
         intent = ParsedIntent(
@@ -851,8 +858,176 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(clarification.clarificationNeeded)
         joined = "\n".join(clarification.clarificationQuestions or [])
         self.assertIn("Imports of goods and services", joined)
+        self.assertIsNotNone(clarification.clarificationOptions)
+        options_payload = clarification.clarificationOptions or []
+        self.assertEqual(len(options_payload), 2)
+        self.assertEqual(options_payload[0].label, "Imports of goods and services (% of GDP)")
+        self.assertEqual(options_payload[0].provider, "WORLDBANK")
+        self.assertEqual(options_payload[0].code, "NE.IMP.GNFS.ZS")
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
+
+    def test_build_semantic_ambiguity_clarification_for_broad_employment_query(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-semantic-employment")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="total employment in G20",
+        )
+
+        clarification = self.service._build_semantic_ambiguity_clarification(  # pylint: disable=protected-access
+            conversation_id=conv_id,
+            query="total employment in G20",
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIsNotNone(clarification.clarificationOptions)
+        options = clarification.clarificationOptions or []
+        self.assertEqual(
+            [option.label for option in options],
+            [
+                "number employed",
+                "employment rate",
+                "employment-to-population ratio",
+            ],
+        )
+        self.assertEqual(options[1].value, "employment rate in G20")
+        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+        self.assertIsNotNone(pending)
+
+    def test_build_group_scope_clarification_for_region_query(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-group-scope")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["employment rate"],
+            parameters={"countries": ["AR", "AU", "BR"]},
+            clarificationNeeded=False,
+            originalQuery="employment rate in G20",
+        )
+
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id=conv_id,
+            query="employment rate in G20",
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIsNotNone(clarification.clarificationOptions)
+        options = clarification.clarificationOptions or []
+        self.assertEqual(
+            [option.label for option in options],
+            [
+                "compare member countries",
+                "one overall group value (aggregate/average if available)",
+            ],
+        )
+        self.assertEqual(options[0].value, "employment rate across G20 member countries")
+        self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
+        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+        self.assertIsNotNone(pending)
+
+    def test_build_group_scope_clarification_skips_explicit_comparison_query(self) -> None:
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-group-explicit",
+            query="compare employment rate across G20 countries",
+            intent=None,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNone(clarification)
+
+    def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["GDP to Debt Ratio"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="gdp to debt ratio in china",
+        )
+        options = [
+            "[IMF] General government gross debt (% of GDP) (GGXWDG_NGDP)",
+            "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "BIS"
+            code = "WS_DSR"
+            name = "Debt service ratios"
+            confidence = 0.85
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                conversation_id=conv_id,
+                query="gdp to debt ratio in china",
+                intent=intent,
+                explicit_provider=None,
+                is_multi_indicator=False,
+                processing_steps=None,
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIsNotNone(clarification.clarificationOptions)
+        options_payload = clarification.clarificationOptions or []
+        self.assertEqual(len(options_payload), 2)
+        joined = "\n".join(clarification.clarificationQuestions or [])
+        self.assertIn("Current routed match", joined)
+        pending = conversation_manager.get_pending_indicator_options(conv_id)
+        self.assertIsNotNone(pending)
+
+    def test_build_prefetch_indicator_choice_clarification_skips_provider_only_duplicates(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["imports share of gdp"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="imports share of gdp in china",
+        )
+        options = [
+            "[WorldBank] imports (NE.IMP.GNFS.ZS)",
+            "[IMF] imports (BM_GDP)",
+        ]
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "NE.IMP.GNFS.ZS"
+            name = "imports"
+            confidence = 0.92
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                conversation_id="conv-prefetch-duplicate-labels",
+                query="imports share of gdp in china",
+                intent=intent,
+                explicit_provider=None,
+                is_multi_indicator=False,
+                processing_steps=None,
+            )
+
+        self.assertIsNone(clarification)
 
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
@@ -911,6 +1086,109 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.intent.parameters.get("indicator"), "BT_GDP")
         self.assertIsNone(conversation_manager.get_pending_indicator_options(conv_id))
 
+    def test_try_resolve_pending_semantic_clarification_rewrites_short_custom_reply(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-semantic-reply")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "employment_metric",
+                "concept_label": "employment",
+                "original_query": "total employment in G20",
+                "question_lines": ["Choose the metric you want:"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "number employed",
+                        "value": "number employed in G20",
+                    },
+                    {
+                        "id": "2",
+                        "label": "employment rate",
+                        "value": "employment rate in G20",
+                    },
+                ],
+            },
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+            response = run(
+                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
+                    query="employment rate",
+                    conversation_id=conv_id,
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=True,
+                    tracker=None,
+                )
+            )
+
+        self.assertEqual(response, expected_response)
+        process_query.assert_awaited_once_with(
+            query="employment rate in G20",
+            conversation_id=conv_id,
+            auto_pro_mode=False,
+            use_orchestrator=False,
+            allow_orchestrator=True,
+        )
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
+    def test_try_resolve_pending_semantic_clarification_matches_group_scope_keyword(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-group-scope-reply")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "group_scope",
+                "region": "G20",
+                "original_query": "employment rate in G20",
+                "question_lines": ["Choose the scope you want:"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "compare member countries",
+                        "value": "compare employment rate across G20 member countries",
+                    },
+                    {
+                        "id": "2",
+                        "label": "one overall group value (aggregate/average if available)",
+                        "value": "employment rate for the G20 group as a whole",
+                    },
+                ],
+            },
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+            response = run(
+                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
+                    query="aggregate",
+                    conversation_id=conv_id,
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=True,
+                    tracker=None,
+                )
+            )
+
+        self.assertEqual(response, expected_response)
+        process_query.assert_awaited_once_with(
+            query="employment rate for the G20 group as a whole",
+            conversation_id=conv_id,
+            auto_pro_mode=False,
+            use_orchestrator=False,
+            allow_orchestrator=True,
+        )
+
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
             "[IMF] Trade Balance (% of GDP) (BT_GDP)",
@@ -929,6 +1207,36 @@ class QueryServiceTests(unittest.TestCase):
         )
         self.assertEqual(selected_ordinal, options[1])
 
+    def test_build_clarification_options_extracts_metadata(self) -> None:
+        options = [
+            "[IMF] Trade Balance (% of GDP) (BT_GDP)",
+            "[WorldBank] Trade Balance (% of GDP) (NE.RSB.GNFS.ZS)",
+        ]
+
+        structured = self.service._build_clarification_options(options)  # pylint: disable=protected-access
+
+        self.assertIsNotNone(structured)
+        assert structured is not None
+        self.assertEqual(
+            [option.model_dump() for option in structured],
+            [
+                {
+                    "id": "1",
+                    "label": "Trade Balance (% of GDP)",
+                    "value": "[IMF] Trade Balance (% of GDP) (BT_GDP)",
+                    "provider": "IMF",
+                    "code": "BT_GDP",
+                },
+                {
+                    "id": "2",
+                    "label": "Trade Balance (% of GDP)",
+                    "value": "[WorldBank] Trade Balance (% of GDP) (NE.RSB.GNFS.ZS)",
+                    "provider": "WORLDBANK",
+                    "code": "NE.RSB.GNFS.ZS",
+                },
+            ],
+        )
+
     def test_dedupe_indicator_choice_options_filters_placeholder_and_duplicates(self) -> None:
         options = [
             "[IMF] Current account balance (% of GDP) (N/A)",
@@ -943,6 +1251,172 @@ class QueryServiceTests(unittest.TestCase):
         joined = "\n".join(deduped).upper()
         self.assertNotIn("(N/A)", joined)
         self.assertEqual(joined.count("(BCA_NGDPD)"), 1)
+
+    def test_try_resolve_pending_indicator_choice_reprompts_with_structured_options_for_invalid_number(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-choice-invalid-number")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        pending_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["trade balance"],
+            parameters={"countries": ["JP", "KR"]},
+            clarificationNeeded=False,
+            originalQuery="net trade balance as share of gdp in japan and korea",
+        )
+        conversation_manager.set_pending_indicator_options(
+            conv_id,
+            {
+                "original_query": pending_intent.originalQuery,
+                "intent": pending_intent.model_dump(),
+                "options": [
+                    "[IMF] Trade Balance (% of GDP) (BT_GDP)",
+                    "[WorldBank] Trade Balance (BN.GSR.GNFS.CD)",
+                ],
+                "question_lines": ["Please choose one option:"],
+            },
+        )
+
+        response = run(
+            self.service._try_resolve_pending_indicator_choice(  # pylint: disable=protected-access
+                query="9",
+                conversation_id=conv_id,
+                tracker=None,
+            )
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        self.assertEqual(response.message, "Please choose one of the listed option numbers.")
+        self.assertIsNotNone(response.clarificationOptions)
+        options_payload = response.clarificationOptions or []
+        self.assertEqual([option.id for option in options_payload], ["1", "2"])
+        self.assertEqual(options_payload[0].provider, "IMF")
+        self.assertEqual(options_payload[1].provider, "WORLDBANK")
+
+    def test_process_query_returns_semantic_clarification_before_parse(self) -> None:
+        conv_id = "conv-process-semantic"
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+
+        with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+            response = run(self.service.process_query("total employment in G20", conversation_id=conv_id))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNone(response.intent)
+        self.assertIsNotNone(response.clarificationOptions)
+        options = response.clarificationOptions or []
+        self.assertEqual(options[0].label, "number employed")
+        self.assertEqual(options[1].value, "employment rate in G20")
+
+    def test_process_query_returns_group_scope_clarification_before_parse(self) -> None:
+        conv_id = "conv-process-group-scope"
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+
+        with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+            response = run(self.service.process_query("employment rate in G20", conversation_id=conv_id))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNone(response.intent)
+        self.assertIsNotNone(response.clarificationOptions)
+        options = response.clarificationOptions or []
+        self.assertEqual(options[0].label, "compare member countries")
+        self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
+
+    def test_process_query_returns_prefetch_indicator_clarification_before_fetch(self) -> None:
+        conv_id = "conv-process-prefetch-choice"
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["GDP to Debt Ratio"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="gdp to debt ratio in china",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="BIS",
+            validation_warning=None,
+        )
+        options = [
+            "[IMF] General government gross debt (% of GDP) (GGXWDG_NGDP)",
+            "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "BIS"
+            code = "WS_DSR"
+            name = "Debt service ratios"
+            confidence = 0.85
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
+             patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch.object(self.service, "_fetch_data", side_effect=AssertionError("fetch should not run")):
+            response = run(self.service.process_query("gdp to debt ratio in china", conversation_id=conv_id))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationOptions)
+        payload = response.clarificationOptions or []
+        self.assertEqual(payload[0].provider, "IMF")
+        self.assertEqual(payload[1].provider, "WORLDBANK")
+
+    def test_execute_with_orchestrator_returns_post_parse_clarification_before_agent_execution(self) -> None:
+        conv_id = "conv-orchestrator-prefetch-choice"
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["GDP to Debt Ratio"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            originalQuery="gdp to debt ratio in china",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="BIS",
+            validation_warning=None,
+        )
+        options = [
+            "[IMF] General government gross debt (% of GDP) (GGXWDG_NGDP)",
+            "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "BIS"
+            code = "WS_DSR"
+            name = "Debt service ratios"
+            confidence = 0.85
+            source = "database"
+            metadata = {}
+
+        with patch.dict(
+            "os.environ",
+            {
+                "USE_LANGGRAPH": "true",
+                "USE_LANGCHAIN_REACT_AGENT": "false",
+                "USE_DEEP_AGENTS": "false",
+            },
+            clear=False,
+        ), \
+             patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
+             patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
+             patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
+             patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch.object(self.service, "_execute_with_langgraph", new_callable=AsyncMock, side_effect=AssertionError("agent should not run")):
+            response = run(
+                self.service._execute_with_orchestrator(  # pylint: disable=protected-access
+                    query="gdp to debt ratio in china",
+                    conversation_id=conv_id,
+                    tracker=None,
+                )
+            )
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationOptions)
+        payload = response.clarificationOptions or []
+        self.assertEqual(payload[0].provider, "IMF")
+        self.assertEqual(payload[1].provider, "WORLDBANK")
 
     def test_build_uncertain_result_clarification_skips_single_distinct_option_after_sanitization(self) -> None:
         intent = ParsedIntent(

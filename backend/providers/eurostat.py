@@ -55,7 +55,6 @@ class EurostatProvider(BaseProvider):
         "YOUTH_UNEMPLOYMENT_RATE": "une_rt_a",
         "YOUTH UNEMPLOYMENT RATE": "une_rt_a",
         "YOUTH_UNEMPLOYMENT_CHANGE": "tipslm80",  # Percentage point change version
-        "EMPLOYMENT": "lfsi_emp_a",
         "EMPLOYMENT_RATE": "lfsi_emp_a",
         "EMPLOYMENT RATE": "lfsi_emp_a",
 

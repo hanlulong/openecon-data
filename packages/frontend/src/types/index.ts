@@ -45,12 +45,21 @@ export interface ParsedIntent {
   useProMode?: boolean;  // Auto-switch to Pro Mode for complex aggregations
 }
 
+export interface ClarificationOption {
+  id: string;
+  label: string;
+  value: string;
+  provider?: string;
+  code?: string;
+}
+
 export interface QueryResponse {
   conversationId: string;
   intent?: ParsedIntent;
   data?: NormalizedData[];
   clarificationNeeded: boolean;
   clarificationQuestions?: string[];
+  clarificationOptions?: ClarificationOption[];
   error?: string;
   message?: string;
   codeExecution?: CodeExecutionResult;
@@ -77,6 +86,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   data?: NormalizedData[];
+  clarificationOptions?: ClarificationOption[];
   chartType?: 'line' | 'bar' | 'scatter' | 'table';
   codeExecution?: CodeExecutionResult;
   isProMode?: boolean;

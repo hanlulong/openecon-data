@@ -38,16 +38,12 @@ class FREDProvider(BaseProvider):
         # Labor Market
         "UNEMPLOYMENT": "UNRATE",
         "UNEMPLOYMENT_RATE": "UNRATE",
-        "TOTAL_EMPLOYMENT": "PAYEMS",  # All employees, total nonfarm
-        "EMPLOYMENT": "PAYEMS",
         "NONFARM_PAYROLL": "PAYEMS",
         "NONFARM_PAYROLLS": "PAYEMS",
         "TOTAL_NONFARM_PAYROLLS": "PAYEMS",
         "TOTAL_NONFARM_PAYROLL": "PAYEMS",
         "US_NONFARM_PAYROLLS": "PAYEMS",
-        "US_EMPLOYMENT": "PAYEMS",
         "PAYROLLS": "PAYEMS",
-        "JOBS": "PAYEMS",
         "LABOR_FORCE_PARTICIPATION": "CIVPART",
         "LABOR_FORCE_PARTICIPATION_RATE": "CIVPART",
         "LABOR_FORCE_PARTICIPATION_MEN": "LNS11300001",  # Men, 20 years and over

@@ -10,7 +10,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
-from ..models import CodeExecutionResult, DataPoint, GeneratedFile, NormalizedData, ParsedIntent, QueryResponse
+from ..models import (
+    ClarificationOption,
+    CodeExecutionResult,
+    DataPoint,
+    GeneratedFile,
+    NormalizedData,
+    ParsedIntent,
+    QueryResponse,
+)
 from ..config import Settings
 from ..services.cache import cache_service
 from ..services.redis_cache import get_redis_cache
@@ -21,7 +29,7 @@ from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
-from ..services.query_pipeline import QueryPipeline
+from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
 from ..routing.country_resolver import CountryResolver
 from ..routing.unified_router import UnifiedRouter
 from ..routing.hybrid_router import HybridRouter
@@ -40,6 +48,7 @@ from ..utils.geographies import normalize_canadian_region_list
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.rate_limiter import is_provider_circuit_open
 from ..services.time_range_defaults import apply_default_time_range
+from ..services.semantic_clarifier import SemanticClarifier
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -218,6 +227,7 @@ class QueryService:
 
         # Semantic provider router (default): semantic-router + LiteLLM fallback.
         self.semantic_provider_router: Optional[SemanticProviderRouter] = None
+        self.semantic_clarifier = SemanticClarifier()
         if self.settings.use_semantic_provider_router:
             self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
             logger.info("🧭 SemanticProviderRouter enabled (USE_SEMANTIC_PROVIDER_ROUTER=true)")
@@ -1454,6 +1464,135 @@ class QueryService:
         except Exception as exc:
             logger.debug("Failed to store pending indicator options: %s", exc)
 
+    def _store_pending_semantic_clarification(
+        self,
+        conversation_id: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        """Persist semantic clarification state for a follow-up turn."""
+        if not conversation_id or not payload:
+            return
+        try:
+            conversation_manager.set_pending_semantic_clarification(conversation_id, payload)
+        except Exception as exc:
+            logger.debug("Failed to store pending semantic clarification: %s", exc)
+
+    def _build_clarification_options(
+        self,
+        options: Optional[List[str]],
+    ) -> Optional[List[ClarificationOption]]:
+        """Convert raw option strings into structured clarification choices."""
+        clean_options = self._dedupe_indicator_choice_options(
+            [str(option) for option in (options or []) if str(option).strip()]
+        )
+        if not clean_options:
+            return None
+
+        structured_options: List[ClarificationOption] = []
+        for idx, option_text in enumerate(clean_options, start=1):
+            provider = None
+            code = None
+            label = option_text
+
+            parsed = self._parse_indicator_option(option_text)
+            if parsed:
+                provider, code = parsed
+                option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text).strip()
+                label = re.sub(r"\s*\([^()]+\)\s*$", "", option_body).strip() or option_body or option_text
+
+            structured_options.append(
+                ClarificationOption(
+                    id=str(idx),
+                    label=label,
+                    value=option_text,
+                    provider=provider,
+                    code=code,
+                )
+            )
+
+        return structured_options
+
+    @staticmethod
+    def _indicator_option_label_key(option: str) -> Optional[str]:
+        """Build a provider-agnostic label key for one indicator option."""
+        option_text = str(option or "").strip()
+        if not option_text:
+            return None
+        option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text).strip()
+        label = re.sub(r"\s*\([^()]+\)\s*$", "", option_body).strip() or option_body
+        label_key = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+        return label_key or None
+
+    def _has_materially_distinct_indicator_options(self, options: Optional[List[str]]) -> bool:
+        """
+        Return True when indicator-choice options differ by more than provider/code.
+
+        Prefetch clarification should only interrupt execution when the user is
+        choosing between genuinely different indicator meanings. If every option
+        has the same display label and only differs by provider, allow normal
+        fetch/fallback behavior to proceed.
+        """
+        clean_options = self._dedupe_indicator_choice_options(
+            [str(option) for option in (options or []) if str(option).strip()]
+        )
+        label_keys = {
+            label_key
+            for option in clean_options
+            if (label_key := self._indicator_option_label_key(option))
+        }
+        return len(label_keys) >= 2
+
+    @staticmethod
+    def _match_structured_clarification_option(
+        user_query: str,
+        options: List[ClarificationOption],
+    ) -> Optional[ClarificationOption]:
+        """Match a user reply against structured clarification options."""
+        text = str(user_query or "").strip()
+        if not text or not options:
+            return None
+
+        numeric_patterns = [
+            r"^\s*(\d{1,2})\s*$",
+            r"^\s*(?:option|choose|pick|select)\s*(\d{1,2})\s*$",
+            r"^\s*#\s*(\d{1,2})\s*$",
+        ]
+        numeric = None
+        for pattern in numeric_patterns:
+            numeric = re.fullmatch(pattern, text.lower())
+            if numeric:
+                break
+        if not numeric:
+            ordinal_map = {
+                "first": 1,
+                "second": 2,
+                "third": 3,
+                "fourth": 4,
+                "fifth": 5,
+            }
+            ordinal_value = ordinal_map.get(text.lower().strip())
+            if ordinal_value is not None:
+                numeric = re.match(r"(\d+)", str(ordinal_value))
+        if numeric:
+            idx = int(numeric.group(1)) - 1
+            if 0 <= idx < len(options):
+                return options[idx]
+            return None
+
+        normalized = re.sub(r"\s+", " ", text.lower()).strip()
+        for option in options:
+            option_label = re.sub(r"\s+", " ", str(option.label or "").lower()).strip()
+            option_value = re.sub(r"\s+", " ", str(option.value or "").lower()).strip()
+            if normalized in {option_label, option_value}:
+                return option
+            if len(normalized) >= 4 and (
+                normalized in option_label
+                or normalized in option_value
+            ):
+                return option
+
+        return None
+
     def _match_indicator_choice_option(self, user_query: str, options: List[str]) -> Optional[str]:
         """Match a user follow-up response against stored clarification options."""
         text = str(user_query or "").strip()
@@ -1537,6 +1676,7 @@ class QueryService:
                     conversationId=conversation_id,
                     clarificationNeeded=True,
                     clarificationQuestions=pending.get("question_lines") or [],
+                    clarificationOptions=self._build_clarification_options(options),
                     message="Please choose one of the listed option numbers.",
                     processingSteps=tracker.to_list() if tracker else None,
                 )
@@ -1606,6 +1746,7 @@ class QueryService:
                 intent=intent,
                 clarificationNeeded=True,
                 clarificationQuestions=pending.get("question_lines") or [],
+                clarificationOptions=self._build_clarification_options(options),
                 error=str(exc),
                 message="That option did not return usable data. Please choose a different option.",
                 processingSteps=tracker.to_list() if tracker else None,
@@ -1648,6 +1789,76 @@ class QueryService:
             data=data,
             clarificationNeeded=False,
             processingSteps=tracker.to_list() if tracker else None,
+        )
+
+    async def _try_resolve_pending_semantic_clarification(
+        self,
+        query: str,
+        conversation_id: str,
+        auto_pro_mode: bool,
+        use_orchestrator: bool,
+        allow_orchestrator: bool,
+        tracker: Optional['ProcessingTracker'] = None,
+    ) -> Optional[QueryResponse]:
+        """Apply a pending semantic clarification and re-enter the main pipeline."""
+        pending = conversation_manager.get_pending_semantic_clarification(conversation_id)
+        if not pending:
+            return None
+
+        option_payloads = pending.get("options") or []
+        options: List[ClarificationOption] = []
+        for raw_option in option_payloads:
+            try:
+                options.append(ClarificationOption.model_validate(raw_option))
+            except Exception:
+                continue
+
+        if not options:
+            conversation_manager.clear_pending_semantic_clarification(conversation_id)
+            return None
+
+        selected_option = self._match_structured_clarification_option(query, options)
+        refined_query = ""
+        if selected_option is not None:
+            refined_query = str(selected_option.value or "").strip()
+        else:
+            text = str(query or "").strip()
+            if re.fullmatch(r"\d{1,2}", text):
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    clarificationNeeded=True,
+                    clarificationQuestions=pending.get("question_lines") or [],
+                    clarificationOptions=options,
+                    message="Please choose one of the listed option numbers, or type the metric you want.",
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+
+            if len(text.split()) <= 6:
+                refined_query = str(self.semantic_clarifier.build_custom_query(pending, text) or "").strip()
+
+            if not refined_query:
+                if len(text.split()) >= 3:
+                    conversation_manager.clear_pending_semantic_clarification(conversation_id)
+                return None
+
+        original_query = str(pending.get("original_query") or "").strip()
+        if refined_query.lower() == original_query.lower():
+            return QueryResponse(
+                conversationId=conversation_id,
+                clarificationNeeded=True,
+                clarificationQuestions=pending.get("question_lines") or [],
+                clarificationOptions=options,
+                message="Please choose a more specific metric, or type a different one.",
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        conversation_manager.clear_pending_semantic_clarification(conversation_id)
+        return await self.process_query(
+            query=refined_query,
+            conversation_id=conversation_id,
+            auto_pro_mode=auto_pro_mode,
+            use_orchestrator=use_orchestrator,
+            allow_orchestrator=allow_orchestrator,
         )
 
     async def _maybe_recover_from_uncertain_match(
@@ -2101,7 +2312,446 @@ class QueryService:
             intent=intent,
             clarificationNeeded=True,
             clarificationQuestions=clarification_questions,
+            clarificationOptions=self._build_clarification_options(options),
             processingSteps=processing_steps,
+        )
+
+    def _build_semantic_ambiguity_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: Optional[ParsedIntent],
+        is_multi_indicator: bool,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """
+        Ask for a more precise metric when the query uses a broad concept.
+
+        This runs before fetch, so the system avoids silently picking one
+        provider-specific series for an underspecified concept like employment,
+        trade, debt, interest rates, productivity, or wages.
+        """
+        if is_multi_indicator:
+            return None
+        if intent and intent.indicators and len(intent.indicators) > 1:
+            return None
+
+        plan = self.semantic_clarifier.detect(query)
+        if not plan:
+            return None
+
+        options = [
+            ClarificationOption(
+                id=str(idx),
+                label=str(option.get("label") or "").strip(),
+                value=str(option.get("value") or "").strip(),
+            )
+            for idx, option in enumerate(plan.get("options") or [], start=1)
+            if str(option.get("label") or "").strip() and str(option.get("value") or "").strip()
+        ]
+        if len(options) < 2:
+            return None
+
+        clarification_questions = list(plan.get("question_lines") or [])
+        clarification_questions.extend(
+            f"{option.id}. {option.label}" for option in options
+        )
+        clarification_questions.append(
+            "Reply with the option number, or type a different metric."
+        )
+
+        payload = {
+            "kind": plan.get("kind"),
+            "concept_label": plan.get("concept_label"),
+            "original_query": str(plan.get("original_query") or query or "").strip(),
+            "question_lines": clarification_questions,
+            "options": [option.model_dump() for option in options],
+        }
+        self._store_pending_semantic_clarification(conversation_id, payload)
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=clarification_questions,
+            clarificationOptions=options,
+            processingSteps=processing_steps,
+        )
+
+    @staticmethod
+    def _humanize_region_name(region: str) -> str:
+        """Convert normalized region keys into user-facing labels."""
+        text = str(region or "").strip()
+        if not text:
+            return text
+
+        replacements = {
+            "BRICS_PLUS": "BRICS+",
+            "EUROZONE": "euro area",
+            "LATAM": "Latin America",
+            "MENA": "Middle East and North Africa",
+            "SSA": "Sub-Saharan Africa",
+            "EAST_ASIA": "East Asia",
+            "SOUTH_ASIA": "South Asia",
+            "SOUTHEAST_ASIA": "Southeast Asia",
+        }
+        if text in replacements:
+            return replacements[text]
+        if text.isupper():
+            return text.replace("_", " ")
+        return text.replace("_", " ").title()
+
+    def _has_explicit_group_scope(self, query: str) -> bool:
+        """Return True when the query already makes group scope explicit."""
+        query_lower = str(query or "").lower()
+        if self._is_comparison_query(query_lower) or self._is_ranking_query(query_lower):
+            return True
+
+        explicit_markers = [
+            "member countries",
+            "member country",
+            "members",
+            "countries",
+            "each country",
+            "by country",
+            "country by country",
+            "cross-country",
+            "group average",
+            "regional average",
+            "average across",
+            "mean across",
+            "aggregate",
+            "aggregated",
+            "overall",
+            "as a group",
+            "as a whole",
+            "group as a whole",
+            "one value",
+            "single value",
+            "combined",
+            "total for the group",
+        ]
+        return any(marker in query_lower for marker in explicit_markers)
+
+    def _rewrite_group_scope_query(
+        self,
+        query: str,
+        region: str,
+        scope: str,
+    ) -> str:
+        """Rewrite an ambiguous group query into an explicit scope query."""
+        query_text = str(query or "").strip()
+        region_label = self._humanize_region_name(region)
+        if not query_text or not region_label:
+            return query_text
+
+        region_patterns = [re.escape(region_label)]
+        region_upper = str(region or "").strip()
+        if region_upper and region_upper != region_label:
+            region_patterns.append(re.escape(region_upper.replace("_", " ")))
+        region_patterns.append(re.escape(region_upper))
+        region_regex = "|".join(pattern for pattern in region_patterns if pattern)
+
+        rewritten = query_text
+        if scope == "compare_members":
+            rewritten = re.sub(
+                rf"\b(in|for|within|among)\s+(?:the\s+)?(?:{region_regex})\b",
+                f"across {region_label} member countries",
+                rewritten,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if rewritten == query_text:
+                rewritten = re.sub(
+                    rf"\b(?:{region_regex})\b",
+                    f"{region_label} member countries",
+                    rewritten,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+            if not self._is_comparison_query(rewritten):
+                rewritten = f"compare {rewritten}"
+            return rewritten
+
+        rewritten = re.sub(
+            rf"\b(in|for|within|among)\s+(?:the\s+)?(?:{region_regex})\b",
+            f"for the {region_label} group as a whole",
+            rewritten,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if rewritten == query_text:
+            rewritten = re.sub(
+                rf"\b(?:{region_regex})\b",
+                f"the {region_label} group as a whole",
+                rewritten,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if rewritten == query_text:
+            rewritten = f"{query_text} for the {region_label} group as a whole"
+        return rewritten
+
+    def _build_group_scope_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: Optional[ParsedIntent],
+        is_multi_indicator: bool,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """
+        Ask whether a group query means member-country comparison or one group value.
+        """
+        if is_multi_indicator:
+            return None
+        if intent and intent.indicators and len(intent.indicators) > 1:
+            return None
+
+        regions = CountryResolver.detect_regions_in_query(query)
+        if len(regions) != 1:
+            return None
+
+        region = regions[0]
+        expanded = CountryResolver.expand_region(region)
+        if not expanded or len(expanded) < 2:
+            return None
+        if self._has_explicit_group_scope(query):
+            return None
+
+        region_label = self._humanize_region_name(region)
+        options = [
+            ClarificationOption(
+                id="1",
+                label="compare member countries",
+                value=self._rewrite_group_scope_query(query, region, "compare_members"),
+            ),
+            ClarificationOption(
+                id="2",
+                label="one overall group value (aggregate/average if available)",
+                value=self._rewrite_group_scope_query(query, region, "group_value"),
+            ),
+        ]
+
+        clarification_questions = [
+            f"Your query mentions {region_label}, but the scope is still ambiguous.",
+            f"Do you want to compare {region_label} member countries, or ask for one overall value for the group?",
+        ]
+        clarification_questions.extend(
+            f"{option.id}. {option.label}" for option in options
+        )
+        clarification_questions.append(
+            "Reply with the option number, or type a different scope."
+        )
+
+        payload = {
+            "kind": "group_scope",
+            "region": region,
+            "original_query": str(query or "").strip(),
+            "question_lines": clarification_questions,
+            "options": [option.model_dump() for option in options],
+        }
+        self._store_pending_semantic_clarification(conversation_id, payload)
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=clarification_questions,
+            clarificationOptions=options,
+            processingSteps=processing_steps,
+        )
+
+    def _build_prefetch_indicator_choice_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: Optional[ParsedIntent],
+        explicit_provider: Optional[str],
+        is_multi_indicator: bool,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """
+        Clarify indicator choice before fetch when the routed provider guess is weak.
+
+        This is the first interpretation-first step: if the routed provider cannot
+        resolve the indicator plausibly but cross-provider candidate retrieval can
+        produce viable alternatives, ask the user before making any data request.
+        """
+        if not intent:
+            return None
+        if explicit_provider:
+            return None
+        if is_multi_indicator:
+            return None
+        if intent.indicators and len(intent.indicators) > 1:
+            return None
+
+        query_text = str(query or "").strip()
+        indicator_query = self._select_indicator_query_for_resolution(intent)
+        if not indicator_query:
+            indicator_query = str(intent.indicators[0] if intent.indicators else "").strip()
+        if not indicator_query:
+            indicator_query = query_text
+        if not indicator_query:
+            return None
+
+        options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
+        if len(options) < 2:
+            return None
+        if not self._has_materially_distinct_indicator_options(options):
+            return None
+
+        provider = normalize_provider_name(intent.apiProvider or "")
+        params = dict(intent.parameters or {})
+        current_indicator = str(params.get("indicator") or "").strip()
+        if (
+            current_indicator
+            and self._looks_like_provider_indicator_code(provider, current_indicator)
+            and self._is_resolved_indicator_plausible(
+                provider=provider,
+                indicator_query=indicator_query,
+                resolved_code=current_indicator,
+            )
+        ):
+            return None
+
+        target_countries = self._collect_target_countries(params)
+        target_country = target_countries[0] if target_countries else None
+        resolver = get_indicator_resolver()
+        resolved = None
+        try:
+            resolved = resolver.resolve(
+                indicator_query,
+                provider=provider,
+                country=target_country,
+                countries=target_countries or None,
+                use_cache=False,
+            )
+        except Exception:
+            resolved = None
+
+        primary_accepted = False
+        primary_relevance = -999.0
+        current_label = f"{provider or 'Unknown provider'} routing guess"
+        if resolved and getattr(resolved, "code", None):
+            threshold = self._indicator_resolution_threshold(
+                indicator_query=indicator_query,
+                resolved_source=str(getattr(resolved, "source", "") or ""),
+            )
+            primary_relevance = self._score_resolved_indicator_relevance(
+                indicator_query=indicator_query,
+                provider=provider,
+                resolved=resolved,
+            )
+            primary_accepted = float(getattr(resolved, "confidence", 0.0) or 0.0) >= threshold
+            if primary_accepted and not self._is_resolved_indicator_plausible(
+                provider=provider,
+                indicator_query=indicator_query,
+                resolved_code=str(resolved.code),
+            ):
+                primary_accepted = False
+            if primary_accepted and primary_relevance < self._minimum_resolved_relevance_threshold(indicator_query):
+                primary_accepted = False
+
+            current_name = self._format_indicator_option_name(
+                provider=provider,
+                code=str(resolved.code),
+                name=getattr(resolved, "name", None),
+                metadata=getattr(resolved, "metadata", None),
+            )
+            current_label = f"{current_name} from {provider or getattr(resolved, 'provider', 'unknown provider')}"
+
+        top_option = self._parse_indicator_option(options[0]) if options else None
+        top_matches_primary = bool(
+            resolved
+            and top_option
+            and top_option[0] == normalize_provider_name(getattr(resolved, "provider", provider))
+            and str(top_option[1]).upper() == str(getattr(resolved, "code", "") or "").upper()
+        )
+
+        if primary_accepted and top_matches_primary:
+            return None
+
+        if primary_accepted and not top_matches_primary and primary_relevance >= 0.8:
+            return None
+
+        clarification_questions = [
+            "I found multiple plausible indicator matches before fetching data.",
+            f"Current routed match: {current_label}",
+            "Please choose the indicator you intended:",
+        ]
+        clarification_questions.extend(
+            f"{idx}. {option}" for idx, option in enumerate(options, start=1)
+        )
+        clarification_questions.append(
+            "Reply with the option number (for example, 1) or the exact indicator text you want."
+        )
+
+        self._store_pending_indicator_options(
+            conversation_id=conversation_id,
+            query=query_text or indicator_query,
+            intent=intent,
+            options=options,
+            question_lines=clarification_questions,
+        )
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=clarification_questions,
+            clarificationOptions=self._build_clarification_options(options),
+            processingSteps=processing_steps,
+        )
+
+    def _build_post_parse_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        parse_result: ParseRouteResult,
+        validation: ValidationResult,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """Apply the shared clarification guardrails after parse/validation."""
+        intent = parse_result.intent
+        multi_concept_clarification = self._build_multi_concept_query_clarification(
+            conversation_id=conversation_id,
+            query=query,
+            intent=intent,
+            is_multi_indicator=validation.is_multi_indicator,
+            processing_steps=processing_steps,
+        )
+        if multi_concept_clarification:
+            return multi_concept_clarification
+
+        semantic_clarification = self._build_semantic_ambiguity_clarification(
+            conversation_id=conversation_id,
+            query=query,
+            intent=intent,
+            is_multi_indicator=validation.is_multi_indicator,
+            processing_steps=processing_steps,
+        )
+        if semantic_clarification:
+            return semantic_clarification
+
+        group_scope_clarification = self._build_group_scope_clarification(
+            conversation_id=conversation_id,
+            query=query,
+            intent=intent,
+            is_multi_indicator=validation.is_multi_indicator,
+            processing_steps=processing_steps,
+        )
+        if group_scope_clarification:
+            return group_scope_clarification
+
+        return self._build_prefetch_indicator_choice_clarification(
+            conversation_id=conversation_id,
+            query=query,
+            intent=intent,
+            explicit_provider=parse_result.explicit_provider,
+            is_multi_indicator=validation.is_multi_indicator,
+            processing_steps=processing_steps,
         )
 
     def _needs_indicator_clarification(
@@ -2482,6 +3132,7 @@ class QueryService:
                 intent=intent,
                 clarificationNeeded=True,
                 clarificationQuestions=clarification_questions,
+                clarificationOptions=self._build_clarification_options(options),
                 processingSteps=processing_steps,
             )
 
@@ -2512,6 +3163,7 @@ class QueryService:
             intent=intent,
             clarificationNeeded=True,
             clarificationQuestions=clarification_questions,
+            clarificationOptions=self._build_clarification_options(options),
             processingSteps=processing_steps,
         )
 
@@ -2615,6 +3267,7 @@ class QueryService:
             intent=intent,
             clarificationNeeded=True,
             clarificationQuestions=clarification_questions,
+            clarificationOptions=self._build_clarification_options(options),
             processingSteps=processing_steps,
         )
 
@@ -4765,6 +5418,37 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
+            pending_semantic_response = await self._try_resolve_pending_semantic_clarification(
+                query=query,
+                conversation_id=conv_id,
+                auto_pro_mode=auto_pro_mode,
+                use_orchestrator=use_orchestrator,
+                allow_orchestrator=allow_orchestrator,
+                tracker=tracker,
+            )
+            if pending_semantic_response is not None:
+                return pending_semantic_response
+
+            early_semantic_clarification = self._build_semantic_ambiguity_clarification(
+                conversation_id=conv_id,
+                query=query,
+                intent=None,
+                is_multi_indicator=False,
+                processing_steps=tracker.to_list(),
+            )
+            if early_semantic_clarification:
+                return early_semantic_clarification
+
+            early_group_scope_clarification = self._build_group_scope_clarification(
+                conversation_id=conv_id,
+                query=query,
+                intent=None,
+                is_multi_indicator=False,
+                processing_steps=tracker.to_list(),
+            )
+            if early_group_scope_clarification:
+                return early_group_scope_clarification
+
             # Check if LangChain orchestrator should be used
             from ..config import get_settings
             settings = get_settings()
@@ -4804,6 +5488,7 @@ class QueryService:
 
             if intent.clarificationNeeded:
                 conversation_manager.clear_pending_indicator_options(conv_id)
+                conversation_manager.clear_pending_semantic_clarification(conv_id)
                 return QueryResponse(
                     conversationId=conv_id,
                     intent=intent,
@@ -4909,15 +5594,15 @@ class QueryService:
             if suggestions and suggestions.get('warning'):
                 logger.info("Validation warning: %s", suggestions['warning'])
 
-            multi_concept_clarification = self._build_multi_concept_query_clarification(
+            parse_stage_clarification = self._build_post_parse_clarification(
                 conversation_id=conv_id,
                 query=query,
-                intent=intent,
-                is_multi_indicator=is_multi_indicator,
+                parse_result=parse_result,
+                validation=validation,
                 processing_steps=tracker.to_list(),
             )
-            if multi_concept_clarification:
-                return multi_concept_clarification
+            if parse_stage_clarification:
+                return parse_stage_clarification
 
             # Fetch data based on whether it's multi-indicator or not
             if is_multi_indicator:
@@ -6418,6 +7103,48 @@ class QueryService:
 
             # Get conversation history for context
             conversation_history = conversation_manager.get_messages(conversation_id)
+
+            # Run the same post-parse clarification guardrails used by the
+            # standard pipeline before agent orchestration takes over.
+            if tracker:
+                with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
+                    parse_result = await self.pipeline.parse_and_route(query, conversation_history)
+                    intent = parse_result.intent
+                    update_parse_metadata({
+                        "provider": intent.apiProvider,
+                        "indicators": intent.indicators,
+                    })
+            else:
+                parse_result = await self.pipeline.parse_and_route(query, conversation_history)
+                intent = parse_result.intent
+
+            self._maybe_resolve_region_clarification(query, intent)
+            self._maybe_resolve_temporal_comparison_clarification(query, intent)
+            self._maybe_expand_multi_concept_intent(query, intent)
+
+            if intent.clarificationNeeded:
+                conversation_manager.clear_pending_indicator_options(conversation_id)
+                conversation_manager.clear_pending_semantic_clarification(conversation_id)
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    intent=intent,
+                    clarificationNeeded=True,
+                    clarificationQuestions=intent.clarificationQuestions,
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+
+            ParameterValidator.apply_default_time_periods(intent)
+            validation = self.pipeline.validate_intent(intent)
+            if validation.is_valid and validation.is_confident:
+                parse_stage_clarification = self._build_post_parse_clarification(
+                    conversation_id=conversation_id,
+                    query=query,
+                    parse_result=parse_result,
+                    validation=validation,
+                    processing_steps=tracker.to_list() if tracker else None,
+                )
+                if parse_stage_clarification:
+                    return parse_stage_clarification
 
             # Add current query to history
             updated_conversation_id = conversation_manager.add_message_safe(

@@ -24,6 +24,7 @@ class ConversationContext:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_intent: Optional[ParsedIntent] = None
     pending_indicator_options: Optional[Dict[str, Any]] = None
+    pending_semantic_clarification: Optional[Dict[str, Any]] = None
 
 
 class ConversationManager:
@@ -155,6 +156,34 @@ class ConversationManager:
             if not conversation:
                 return
             conversation.pending_indicator_options = None
+            conversation.updated_at = self._now()
+
+    def set_pending_semantic_clarification(self, conversation_id: str, payload: Dict[str, Any]) -> None:
+        """Persist pending semantic clarification state for a conversation."""
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                raise ValueError("Conversation not found")
+
+            conversation.pending_semantic_clarification = dict(payload or {})
+            conversation.updated_at = self._now()
+
+    def get_pending_semantic_clarification(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get pending semantic clarification payload if present."""
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return None
+            pending = conversation.pending_semantic_clarification
+            return dict(pending) if isinstance(pending, dict) else None
+
+    def clear_pending_semantic_clarification(self, conversation_id: str) -> None:
+        """Clear pending semantic clarification state."""
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return
+            conversation.pending_semantic_clarification = None
             conversation.updated_at = self._now()
 
     def get_or_create(self, conversation_id: Optional[str]) -> str:
