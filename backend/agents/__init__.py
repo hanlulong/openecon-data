@@ -1,5 +1,5 @@
 """
-Multi-Agent Architecture for econ-data-mcp
+Multi-Agent Architecture for OpenEcon Data
 
 This module provides specialized agents for handling different query types:
 - RouterAgent: Classifies queries and routes to appropriate specialist

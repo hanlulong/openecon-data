@@ -8,7 +8,7 @@ A general-purpose indicator translation layer that handles:
 
 This replaces hardcoded provider-specific aliases with a general solution.
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-11-29
 """
 

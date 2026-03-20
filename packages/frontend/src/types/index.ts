@@ -31,7 +31,7 @@ export interface NormalizedData {
 export interface ParsedIntent {
   apiProvider: string;
   indicators: string[];
-  parameters: Record<string, any>;
+  parameters: Record<string, unknown>;
   clarificationNeeded: boolean;
   clarificationQuestions?: string[];
   confidence?: number;
@@ -145,7 +145,11 @@ export interface ProcessingStep {
   step: string;
   description: string;
   duration_ms?: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StreamProcessingStepEvent extends ProcessingStep {
+  status?: string;
 }
 
 // Additional type for chat history items (used in ChatPage)

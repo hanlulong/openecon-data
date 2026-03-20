@@ -7,6 +7,7 @@ This guide walks through the minimum steps to run econ-data-mcp locally with the
 - Python 3.10+ (virtualenv recommended)
 - Node.js 18+ and npm 9+
 - An OpenRouter API key (required)
+- Optional: an OpenAI API key if you want OpenAI embedding models
 - Optional data keys: `FRED_API_KEY`, `COMTRADE_API_KEY`
 
 ## 2. Install dependencies
@@ -31,6 +32,12 @@ Create a `.env` file in the repository root:
 LLM_PROVIDER=openrouter
 LLM_MODEL=openai/gpt-4o-mini
 OPENROUTER_API_KEY=pk-...
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# Optional OpenAI embedding setup:
+# OPENAI_API_KEY=sk-...
+# EMBEDDING_MODEL=text-embedding-3-small
+# EMBEDDING_DIMENSIONS=1536
+# SEMANTIC_ROUTER_ENCODER_MODEL=text-embedding-3-small
 FRED_API_KEY=optional
 COMTRADE_API_KEY=optional
 JWT_SECRET=generate_a_random_string

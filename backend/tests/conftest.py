@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for econ-data-mcp backend tests.
+Shared pytest fixtures for OpenEcon Data backend tests.
 
 This module provides common fixtures used across all test modules.
 Import fixtures from here instead of defining them in individual test files.

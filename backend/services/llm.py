@@ -175,7 +175,7 @@ class OpenRouterProvider(BaseLLMProvider):
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "HTTP-Referer": "https://openecon.ai",
-                        "X-Title": "econ-data-mcp"
+                        "X-Title": "OpenEcon Data"
                     },
                     json=payload
                 )

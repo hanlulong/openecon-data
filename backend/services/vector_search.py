@@ -16,6 +16,15 @@ import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
+from openai import OpenAI
+
+from ..config import get_settings
+from ..embedding_utils import (
+    is_openai_embedding_model,
+    normalize_embedding_model_name,
+    resolve_embedding_dimensions,
+)
+
 logger = logging.getLogger(__name__)
 
 # Optional vector search dependencies - gracefully degrade if not available
@@ -25,9 +34,8 @@ CHROMA_AVAILABLE = False
 
 try:
     import faiss
-    from sentence_transformers import SentenceTransformer
     FAISS_AVAILABLE = True
-    logger.info("✅ FAISS available (faiss-cpu, sentence-transformers)")
+    logger.info("✅ FAISS available (faiss-cpu)")
 except ImportError:
     logger.debug("ℹ️  FAISS not available")
 
@@ -46,9 +54,8 @@ if VECTOR_SEARCH_AVAILABLE:
     logger.info(f"✅ Vector search available (FAISS: {FAISS_AVAILABLE}, ChromaDB: {CHROMA_AVAILABLE})")
 else:
     logger.warning("⚠️ Vector search dependencies not available. Falling back to BM25-only search.")
-    logger.info("Install with: pip install faiss-cpu sentence-transformers")
+    logger.info("Install with: pip install faiss-cpu sentence-transformers chromadb")
 
-# Import sentence transformers if available
 try:
     from sentence_transformers import SentenceTransformer
 except ImportError:
@@ -77,7 +84,7 @@ class VectorSearchService:
     - FAISS backend: 100x faster than ChromaDB (<100ms load, <5ms search)
     - ChromaDB backend: More features, slower startup
     - Automatic fallback if preferred backend not available
-    - Uses all-MiniLM-L6-v2 model (384-dim, 35ms inference on CPU)
+    - Supports sentence-transformers or OpenAI embedding models
 
     The service automatically selects the best available backend:
     1. FAISS if available and enabled (default)
@@ -87,21 +94,41 @@ class VectorSearchService:
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: Optional[str] = None,
         persist_directory: str = "backend/data/chroma_db",
         collection_name: str = "economic_indicators",
         use_faiss: bool = True,  # Prefer FAISS by default (100x faster)
+        embedding_dimensions: Optional[int] = None,
     ):
         """
         Initialize the vector search service.
 
         Args:
-            model_name: HuggingFace model name for embeddings
+            model_name: Embedding model name for vector search
             persist_directory: Directory to persist Chroma database (if using ChromaDB)
             collection_name: Name of the Chroma collection (if using ChromaDB)
             use_faiss: Prefer FAISS backend if available (default: True)
+            embedding_dimensions: Optional OpenAI embedding dimension override
         """
-        self.model_name = model_name
+        settings = get_settings()
+        resolved_model_name = normalize_embedding_model_name(
+            model_name or settings.embedding_model
+        )
+        resolved_dimensions = resolve_embedding_dimensions(
+            resolved_model_name,
+            embedding_dimensions if embedding_dimensions is not None else settings.embedding_dimensions,
+        )
+
+        if is_openai_embedding_model(resolved_model_name) and resolved_dimensions is None:
+            raise ValueError(
+                "Unknown OpenAI embedding dimensions for model "
+                f"'{resolved_model_name}'. Set EMBEDDING_DIMENSIONS explicitly."
+            )
+
+        self.settings = settings
+        self.model_name = resolved_model_name
+        self.is_openai_embedding = is_openai_embedding_model(resolved_model_name)
+        self.embedding_dimensions = resolved_dimensions
         self.persist_directory = persist_directory
         self.collection_name = collection_name
         self.model = None
@@ -117,7 +144,7 @@ class VectorSearchService:
             return
 
         logger.info(f"🚀 Initializing VectorSearchService (lazy mode)")
-        logger.info(f"   - Model: {model_name}")
+        logger.info(f"   - Model: {self.model_name}")
         logger.info(f"   - Prefer FAISS: {use_faiss}")
         logger.info(f"   - Model and backend will be loaded on first use")
 
@@ -141,12 +168,25 @@ class VectorSearchService:
         logger.info(f"✅ VectorSearchService lazy initialization complete")
 
     def _load_model(self):
-        """Load the sentence transformer model."""
-        if SentenceTransformer is None:
-            logger.error("❌ Sentence transformers not available")
-            return
-
         try:
+            if self.is_openai_embedding:
+                if not self.settings.openai_api_key:
+                    raise ValueError("OPENAI_API_KEY is required for OpenAI embeddings")
+
+                logger.info(f"📥 Initializing OpenAI embedding client: {self.model_name}")
+                self.model = OpenAI(
+                    api_key=self.settings.openai_api_key,
+                    base_url=self.settings.openai_base_url,
+                    organization=self.settings.openai_org_id,
+                )
+                logger.info(f"✅ OpenAI embedding client ready")
+                logger.info(f"   - Embedding dimension: {self.embedding_dimensions}")
+                return
+
+            if SentenceTransformer is None:
+                logger.error("❌ sentence-transformers not available")
+                return
+
             logger.info(f"📥 Loading embedding model: {self.model_name}")
             self.model = SentenceTransformer(self.model_name)
             logger.info(f"✅ Model loaded: {self.model_name}")
@@ -162,7 +202,11 @@ class VectorSearchService:
             try:
                 logger.info("📦 Initializing FAISS backend")
                 from .faiss_vector_search import FAISSVectorSearch
-                self.backend = FAISSVectorSearch(model_name=self.model_name)
+                self.backend = FAISSVectorSearch(
+                    model_name=self.model_name,
+                    embedding_dim=self.embedding_dimensions or 384,
+                    embedding_dimensions=self.embedding_dimensions,
+                )
                 logger.info(f"✅ FAISS backend initialized")
                 return
             except Exception as e:
@@ -223,9 +267,11 @@ class VectorSearchService:
             text: Text to embed
 
         Returns:
-            Embedding vector (384-dimensional for all-MiniLM-L6-v2)
+            Embedding vector
         """
         self._ensure_initialized()
+        if self.is_openai_embedding:
+            return self._embed_batch_openai([text])[0]
         return self.model.encode(text, convert_to_numpy=True).tolist()
 
     def embed_batch(self, texts: List[str], batch_size: int = 128) -> List[List[float]]:
@@ -242,6 +288,8 @@ class VectorSearchService:
             List of embedding vectors
         """
         self._ensure_initialized()
+        if self.is_openai_embedding:
+            return self._embed_batch_openai(texts)
         embeddings = self.model.encode(
             texts,
             batch_size=batch_size,
@@ -249,6 +297,19 @@ class VectorSearchService:
             convert_to_numpy=True
         )
         return embeddings.tolist()
+
+    def _embed_batch_openai(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts using OpenAI."""
+        request_kwargs: Dict[str, Any] = {
+            "input": texts,
+            "model": self.model_name,
+            "encoding_format": "float",
+        }
+        if self.embedding_dimensions is not None:
+            request_kwargs["dimensions"] = self.embedding_dimensions
+
+        response = self.model.embeddings.create(**request_kwargs)
+        return [item.embedding for item in response.data]
 
     def index_indicators(self, indicators: List[Dict[str, Any]], batch_size: int = 100, clear_existing: bool = True):
         """

@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
         app.state.cleanup_task = None
         app.state.file_cleanup_task = None
 
-    logger.info("🚀 econ-data-mcp Python backend ready (startup time optimized)")
+    logger.info("🚀 OpenEcon Data Python backend ready (startup time optimized)")
 
     yield  # Application runs here
 
@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
             await file_cleanup_task
 
 
-app = FastAPI(title="econ-data-mcp API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="OpenEcon Data API", version="1.0.0", lifespan=lifespan)
 
 # Rate limiting configuration using custom middleware approach
 # This avoids Pydantic/FastAPI compatibility issues with slowapi decorators
@@ -1568,7 +1568,7 @@ if not settings.disable_mcp:
     # includes the endpoints we want to expose as tools.
     mcp = FastApiMCP(
         app,
-        name="econ-data-mcp MCP Server",
+        name="OpenEcon Data MCP Server",
         description="AI-powered economic data aggregation service. Query economic data using natural language from sources including FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate-API, BIS, and Eurostat.",
         include_operations=[
             "query_data",  # Only expose the query endpoint to MCP clients

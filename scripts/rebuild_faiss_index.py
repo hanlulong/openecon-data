@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Rebuild FAISS vector index from JSON metadata files.
+Rebuild the FAISS vector index from metadata JSON files.
 
-This script loads all indicators from the metadata JSON files
-and rebuilds the FAISS index for semantic search.
+This mirrors the application's metadata-loading path so the rebuilt index uses:
+- every metadata JSON file under ``backend/data/metadata``
+- the same provider-prefixed deduplicated codes
+- the same ``name + description[:200]`` text construction used for embeddings
+- the embedding backend configured via environment variables
 
 Usage:
     python3 scripts/rebuild_faiss_index.py
@@ -13,11 +16,13 @@ import sys
 import json
 import logging
 from pathlib import Path
+from collections import defaultdict
 
 # Add backend to Python path
 backend_dir = Path(__file__).parent.parent / "backend"
 sys.path.insert(0, str(backend_dir.parent))
 
+from backend.config import get_settings
 from backend.services.faiss_vector_search import FAISSVectorSearch
 
 # Configure logging
@@ -28,47 +33,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_indicators_from_json() -> list[dict]:
-    """Load all indicators from JSON metadata files."""
+def load_indicators_from_json() -> tuple[list[dict], dict[str, int]]:
+    """Load all indicators from metadata JSON files using application semantics."""
     metadata_dir = backend_dir / "data" / "metadata"
-
-    providers = [
-        "worldbank",
-        "statscan",
-        "imf",
-        "bis",
-        "eurostat",
-        "oecd",
-    ]
-
     all_indicators = []
+    provider_counts: dict[str, int] = defaultdict(int)
+    seen_codes: dict[str, int] = {}
 
-    for provider in providers:
-        metadata_file = metadata_dir / f"{provider}.json"
-        if not metadata_file.exists():
-            logger.warning(f"⚠️  Metadata file not found: {metadata_file}")
-            continue
+    for metadata_file in sorted(metadata_dir.glob("*.json")):
+        provider_fallback = metadata_file.stem.upper()
 
         try:
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            indicators_list = data.get("indicators", [])
+            provider = str(data.get("provider") or provider_fallback).strip().upper()
+            indicators_list = data.get("indicators") or data.get("series") or []
             logger.info(f"📦 Loaded {len(indicators_list)} indicators from {provider}")
 
-            # Convert to the format expected by FAISSVectorSearch
             for indicator in indicators_list:
+                code = indicator.get("code") or indicator.get("id", "")
+                name = indicator.get("name", "")
+                if not code or not name:
+                    continue
+
+                base_unique_code = f"{provider}:{code}"
+                if base_unique_code in seen_codes:
+                    seen_codes[base_unique_code] += 1
+                    unique_code = f"{base_unique_code}:{seen_codes[base_unique_code]}"
+                else:
+                    seen_codes[base_unique_code] = 0
+                    unique_code = base_unique_code
+
+                description = indicator.get("description", "")
+                text = f"{name}. {description[:200]}" if description else name
+
                 all_indicators.append({
-                    "code": indicator.get("code", ""),
-                    "name": indicator.get("name", ""),
-                    "provider": provider.upper(),
+                    "code": unique_code,
+                    "original_code": code,
+                    "name": text,
+                    "provider": provider,
                 })
+                provider_counts[provider] += 1
 
         except Exception as e:
-            logger.error(f"❌ Error loading {provider} metadata: {e}")
+            logger.error(f"❌ Error loading {metadata_file.name}: {e}")
             continue
 
-    return all_indicators
+    return all_indicators, dict(sorted(provider_counts.items()))
 
 
 def main():
@@ -79,27 +91,38 @@ def main():
     logger.info("")
 
     try:
+        settings = get_settings()
+
         # Step 1: Load indicators from JSON metadata
         logger.info("📥 Loading indicators from JSON metadata files...")
-        indicators = load_indicators_from_json()
+        indicators, provider_counts = load_indicators_from_json()
 
         if not indicators:
             logger.error("❌ No indicators loaded. Exiting.")
             return 1
 
         logger.info(f"✅ Loaded {len(indicators)} indicators total")
+        for provider, count in provider_counts.items():
+            logger.info(f"   - {provider}: {count}")
         logger.info("")
 
         # Step 2: Initialize FAISS vector search
         logger.info("🔧 Initializing FAISSVectorSearch...")
-        vector_search = FAISSVectorSearch()
+        vector_search = FAISSVectorSearch(
+            model_name=settings.embedding_model,
+            index_dir=settings.vector_search_cache_dir,
+            embedding_dimensions=settings.embedding_dimensions,
+        )
+        logger.info(f"   - Embedding model: {settings.embedding_model}")
+        if settings.embedding_dimensions is not None:
+            logger.info(f"   - Embedding dimensions override: {settings.embedding_dimensions}")
+        logger.info(f"   - Index directory: {settings.vector_search_cache_dir}")
         logger.info("")
 
         # Step 3: Rebuild index
         logger.info("🔨 Rebuilding FAISS index...")
         logger.info(f"   - Total indicators: {len(indicators)}")
-        logger.info(f"   - Batch size: 128 (for embeddings)")
-        logger.info(f"   - Estimated time: 3-5 minutes")
+        logger.info("   - Batch size: 128 (for embeddings)")
         logger.info("")
 
         vector_search.index_indicators(

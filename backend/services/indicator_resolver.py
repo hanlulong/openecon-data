@@ -1,7 +1,7 @@
 """
 Unified Indicator Resolver Service
 
-THE SINGLE ENTRY POINT for all indicator resolution across econ-data-mcp.
+THE SINGLE ENTRY POINT for all indicator resolution across OpenEcon Data.
 
 This service consolidates:
 1. IndicatorLookup (FTS5 search over 330K+ indicators)
@@ -22,7 +22,7 @@ Usage:
     # Translate between providers
     code = resolver.translate("NGDP_RPCH", from_provider="IMF", to_provider="FRED")
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-12-27
 """
 

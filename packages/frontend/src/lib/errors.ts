@@ -13,11 +13,44 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public statusCode: number,
-    public details?: any
+    public details?: unknown
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+type ApiErrorPayload = {
+  error?: string;
+  detail?: string;
+  message?: string;
+};
+
+type ApiErrorLike = {
+  response?: {
+    status?: number;
+    data?: ApiErrorPayload;
+  };
+  request?: unknown;
+};
+
+function isApiErrorLike(error: unknown): error is ApiErrorLike {
+  return typeof error === 'object' && error !== null;
+}
+
+export function extractApiErrorMessage(error: unknown, fallback: string): string {
+  if (isApiErrorLike(error)) {
+    const data = error.response?.data;
+    if (data?.error || data?.detail || data?.message) {
+      return data.error || data.detail || data.message || fallback;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
 }
 
 export class NetworkError extends Error {
@@ -107,10 +140,10 @@ export function isAuthError(error: unknown): boolean {
 /**
  * Handles API errors and converts them to appropriate error types
  */
-export function handleApiError(error: any): never {
+export function handleApiError(error: unknown): never {
   logger.error('API Error:', error);
 
-  if (error.response) {
+  if (isApiErrorLike(error) && error.response) {
     const status = error.response.status;
     const data = error.response.data;
 
@@ -131,7 +164,7 @@ export function handleApiError(error: any): never {
     throw new ApiError(message, status, data);
   }
 
-  if (error.request) {
+  if (isApiErrorLike(error) && error.request) {
     throw new NetworkError('Unable to reach the server. Please try again.');
   }
 

@@ -14,11 +14,15 @@ class _FakeSettings:
     semantic_router_similarity_threshold: float = 0.58
     semantic_router_top_k: int = 5
     semantic_router_encoder_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dimensions: int | None = None
     use_litellm_router_fallback: bool = True
     semantic_router_litellm_timeout: int = 20
     llm_provider: str = "vllm"
     llm_model: str = "gpt-oss-120b"
     openrouter_api_key: str | None = None
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
+    openai_org_id: str | None = None
     llm_base_url: str | None = "http://localhost:8000"
     vllm_api_key: str | None = "EMPTY"
 
@@ -101,3 +105,38 @@ async def test_litellm_fallback_used_when_semantic_is_low():
     assert decision.provider == "OECD"
     assert decision.match_type == "litellm"
     assert decision.confidence == pytest.approx(0.77, abs=1e-6)
+
+
+def test_build_semantic_encoder_uses_openai_encoder_for_openai_models(monkeypatch):
+    captured = {}
+
+    class _FakeOpenAIEncoder:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "backend.routing.semantic_provider_router.OpenAIEncoder",
+        _FakeOpenAIEncoder,
+    )
+
+    router = SemanticProviderRouter(
+        settings=_FakeSettings(
+            semantic_router_encoder_model="text-embedding-3-small",
+            embedding_dimensions=1536,
+            openai_api_key="sk-test",
+            openai_base_url="https://api.openai.com/v1",
+            openai_org_id="org-test",
+        ),
+        deterministic_router=_FakeDeterministicRouter(),
+    )
+
+    encoder = router._build_semantic_encoder("text-embedding-3-small")
+
+    assert isinstance(encoder, _FakeOpenAIEncoder)
+    assert captured == {
+        "name": "text-embedding-3-small",
+        "openai_api_key": "sk-test",
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_org_id": "org-test",
+        "dimensions": 1536,
+    }

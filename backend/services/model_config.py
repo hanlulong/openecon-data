@@ -1,5 +1,5 @@
 """
-Model Configuration System for econ-data-mcp LLM Integration
+Model Configuration System for OpenEcon Data LLM Integration
 
 Supports model-specific prompts and configurations for different LLM types:
 - OpenAI/OpenRouter models (GPT-4o, etc.)

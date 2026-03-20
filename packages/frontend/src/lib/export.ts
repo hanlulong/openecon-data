@@ -66,7 +66,7 @@ export function downloadExport(blob: Blob, format: ExportFormat, prefix?: string
  * @param data - Data to convert
  * @returns JSON blob
  */
-export function createJsonBlob(data: any): Blob {
+export function createJsonBlob(data: unknown): Blob {
   const jsonString = JSON.stringify(data, null, 2);
   return new Blob([jsonString], { type: 'application/json' });
 }
@@ -77,7 +77,7 @@ export function createJsonBlob(data: any): Blob {
  * @param data - Data to export
  * @param prefix - Optional filename prefix
  */
-export function downloadJson(data: any, prefix?: string): void {
+export function downloadJson(data: unknown, prefix?: string): void {
   const blob = createJsonBlob(data);
   downloadExport(blob, 'json', prefix);
 }

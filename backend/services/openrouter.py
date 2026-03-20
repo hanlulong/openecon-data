@@ -242,7 +242,7 @@ class OpenRouterService:
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": "https://openecon.ai",
-                        "X-Title": "econ-data-mcp",
+                        "X-Title": "OpenEcon Data",
                     },
                     json={
                         "model": self.MODEL,

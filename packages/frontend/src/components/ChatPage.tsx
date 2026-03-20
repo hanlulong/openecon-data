@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { api } from '../services/api'
-import { ClarificationOption, Message, NormalizedData, ProcessingStep, HistoryItem } from '../types'
+import { ClarificationOption, Message, NormalizedData, ProcessingStep, HistoryItem, StreamProcessingStepEvent } from '../types'
 import { MessageChart } from './MessageChart'
 import { CodeExecutionDisplay } from './CodeExecutionDisplay'
 import { useAuth } from '../contexts/AuthContext'
@@ -11,6 +11,7 @@ import { trackAnonymousSession, getOrCreateSessionId } from '../lib/supabase'
 import { useMobile } from '../hooks/useMobile'
 import { logger } from '../utils/logger'
 import { downloadExport } from '../lib/export'
+import { extractApiErrorMessage } from '../lib/errors'
 import { ShareModal } from './ShareModal'
 import { FeedbackModal } from './FeedbackModal'
 import './ChatPage.css'
@@ -248,10 +249,10 @@ export function ChatPage() {
     // Use streaming for both regular and Pro Mode
     try {
       await api.queryStream(q, conversationId, proMode, {
-        onStep: (step) => {
+        onStep: (step: StreamProcessingStepEvent) => {
           // Update or add processing step in real-time
           // If step has a status field, use it; if it has duration_ms, it's completed
-          const status = (step as any).status || (step.duration_ms !== undefined ? 'completed' : 'in-progress')
+          const status = step.status || (step.duration_ms !== undefined ? 'completed' : 'in-progress')
 
           const timelineStep: ProcessingTimelineStep = {
             step: step.step,
@@ -345,7 +346,7 @@ export function ChatPage() {
           setActiveProcessingSteps([])
         },
       })
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Streaming query error:', error)
       setLoadingStatus('')
       processingQuery.current = null
@@ -353,7 +354,7 @@ export function ChatPage() {
 
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Error: ${error.message}`,
+        content: `Error: ${extractApiErrorMessage(error, 'An unexpected error occurred')}`,
         timestamp: new Date(),
       }])
     }

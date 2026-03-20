@@ -1,5 +1,5 @@
 """
-LangChain ReAct Agent Orchestrator for econ-data-mcp
+LangChain ReAct Agent Orchestrator for OpenEcon Data
 
 This module implements an intelligent ReAct (Reasoning + Acting) agent that:
 - Analyzes user queries for complexity and intent
@@ -9,7 +9,7 @@ This module implements an intelligent ReAct (Reasoning + Acting) agent that:
 
 Based on LANGCHAIN_ARCHITECTURE_DESIGN.md specification.
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-11-26
 """
 
@@ -246,7 +246,7 @@ class LangChainReActAgent:
             max_tokens=2000,
             default_headers={
                 "HTTP-Referer": "https://openecon.ai",
-                "X-Title": "econ-data-mcp ReAct Agent"
+                "X-Title": "OpenEcon Data ReAct Agent"
             }
         )
 

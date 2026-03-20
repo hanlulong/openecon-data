@@ -1,5 +1,5 @@
 /**
- * Test utilities for econ-data-mcp frontend tests.
+ * Test utilities for OpenEcon Data frontend tests.
  *
  * Provides custom render functions that wrap components with necessary providers,
  * mock data fixtures, and helper functions for testing.
@@ -189,7 +189,7 @@ export const waitForAsync = () =>
 /**
  * Create a mock function that resolves after a delay.
  */
-export const createDelayedMock = <T>(value: T, delay = 100) =>
+export const createDelayedMock = <T,>(value: T, delay = 100) =>
   vi.fn().mockImplementation(
     () => new Promise((resolve) => setTimeout(() => resolve(value), delay))
   );

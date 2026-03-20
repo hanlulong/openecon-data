@@ -14,3 +14,10 @@ def test_bis_display_name_uses_human_readable_dataflow_label():
     assert display != "WS_DSR"
     assert "debt service" in display.lower()
 
+
+def test_bis_country_display_name_uses_human_readable_labels():
+    provider = BISProvider()
+
+    assert provider._display_country_name("US") == "United States"  # pylint: disable=protected-access
+    assert provider._display_country_name("DE") == "Germany"  # pylint: disable=protected-access
+    assert provider._display_country_name("XM") == "Euro Area"  # pylint: disable=protected-access

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from backend.services.faiss_vector_search import FAISSVectorSearch
@@ -31,3 +33,46 @@ def test_search_uses_raw_rank_distance_when_provider_filter_skips_items():
     assert results[1].code == "C"
     # Second kept result should keep its original FAISS rank distance (0.33), not 0.22.
     assert float(results[1].distance) == float(np.float32(0.33))
+
+
+class _FakeEmbeddingsClient:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(embedding=[0.1, 0.2]),
+                SimpleNamespace(embedding=[0.3, 0.4]),
+            ]
+        )
+
+
+class _FakeOpenAIClient:
+    def __init__(self):
+        self.embeddings = _FakeEmbeddingsClient()
+
+
+def test_embed_batch_uses_openai_embeddings_for_openai_models():
+    searcher = object.__new__(FAISSVectorSearch)
+    searcher.model_name = "text-embedding-3-small"
+    searcher.is_openai_embedding = True
+    searcher.embedding_dim = 2
+    searcher.embedding_dimensions = 2
+    searcher.default_batch_size = 128
+    searcher.model = _FakeOpenAIClient()
+    searcher.embedding_cache = {}
+    searcher.cache_stats = {"hits": 0, "misses": 0, "duplicates_skipped": 0}
+
+    results = searcher.embed_batch(["inflation", "gdp"])
+
+    assert results == [[0.1, 0.2], [0.3, 0.4]]
+    assert searcher.model.embeddings.calls == [
+        {
+            "input": ["inflation", "gdp"],
+            "model": "text-embedding-3-small",
+            "encoding_format": "float",
+            "dimensions": 2,
+        }
+    ]

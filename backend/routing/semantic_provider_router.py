@@ -20,6 +20,10 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import Settings
+from ..embedding_utils import (
+    is_openai_embedding_model,
+    normalize_embedding_model_name,
+)
 from ..services.json_parser import extract_json_from_text
 from .unified_router import RoutingDecision, UnifiedRouter
 
@@ -27,13 +31,14 @@ logger = logging.getLogger(__name__)
 
 try:
     from semantic_router import Route
-    from semantic_router.encoders import HuggingFaceEncoder
+    from semantic_router.encoders import HuggingFaceEncoder, OpenAIEncoder
     from semantic_router.routers import SemanticRouter
 
     SEMANTIC_ROUTER_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
     Route = None
     HuggingFaceEncoder = None
+    OpenAIEncoder = None
     SemanticRouter = None
     SEMANTIC_ROUTER_AVAILABLE = False
 
@@ -50,7 +55,7 @@ class SemanticProviderRouter:
     """Semantic provider router with LiteLLM fallback."""
 
     _SHARED_ENGINE: Optional[Any] = None
-    _SHARED_ENGINE_MODEL: Optional[str] = None
+    _SHARED_ENGINE_KEY: Optional[Tuple[str, str, Optional[int], Optional[str]]] = None
     _SHARED_INIT_FAILED: bool = False
 
     _PROVIDER_CANONICAL = {
@@ -208,10 +213,11 @@ class SemanticProviderRouter:
         if self.__class__._SHARED_INIT_FAILED:
             return None
 
-        model_name = self.settings.semantic_router_encoder_model
+        model_name = self.settings.semantic_router_encoder_model or "sentence-transformers/all-MiniLM-L6-v2"
+        engine_key = self._semantic_engine_key(model_name)
         if (
             self.__class__._SHARED_ENGINE is not None
-            and self.__class__._SHARED_ENGINE_MODEL == model_name
+            and self.__class__._SHARED_ENGINE_KEY == engine_key
         ):
             self._semantic_engine = self.__class__._SHARED_ENGINE
             return self._semantic_engine
@@ -221,7 +227,7 @@ class SemanticProviderRouter:
                 Route(name=name, utterances=utterances)
                 for name, utterances in self._ROUTE_UTTERANCES.items()
             ]
-            encoder = HuggingFaceEncoder(name=model_name)
+            encoder = self._build_semantic_encoder(model_name)
             router = SemanticRouter(
                 encoder=encoder,
                 routes=routes,
@@ -234,13 +240,47 @@ class SemanticProviderRouter:
                 logger.debug("semantic-router local sync warning: %s", sync_exc)
             self._semantic_engine = router
             self.__class__._SHARED_ENGINE = router
-            self.__class__._SHARED_ENGINE_MODEL = model_name
+            self.__class__._SHARED_ENGINE_KEY = engine_key
             logger.info("🧭 SemanticProviderRouter initialized with semantic-router")
         except Exception as exc:
             logger.warning("SemanticProviderRouter initialization failed, falling back: %s", exc)
             self._semantic_engine = None
             self.__class__._SHARED_INIT_FAILED = True
         return self._semantic_engine
+
+    def _semantic_engine_key(
+        self,
+        model_name: str,
+    ) -> Tuple[str, str, Optional[int], Optional[str]]:
+        normalized_model = normalize_embedding_model_name(model_name)
+        if is_openai_embedding_model(normalized_model):
+            return (
+                "openai",
+                normalized_model,
+                self.settings.embedding_dimensions,
+                self.settings.openai_base_url,
+            )
+        return ("huggingface", normalized_model, None, None)
+
+    def _build_semantic_encoder(self, model_name: str) -> Any:
+        normalized_model = normalize_embedding_model_name(model_name)
+        if is_openai_embedding_model(normalized_model):
+            if OpenAIEncoder is None:
+                raise RuntimeError("semantic-router OpenAI encoder is unavailable")
+
+            encoder_kwargs: Dict[str, Any] = {
+                "name": normalized_model,
+                "openai_api_key": self.settings.openai_api_key,
+                "openai_base_url": self.settings.openai_base_url,
+                "openai_org_id": self.settings.openai_org_id,
+            }
+            if self.settings.embedding_dimensions is not None:
+                encoder_kwargs["dimensions"] = self.settings.embedding_dimensions
+            return OpenAIEncoder(**encoder_kwargs)
+
+        if HuggingFaceEncoder is None:
+            raise RuntimeError("semantic-router HuggingFace encoder is unavailable")
+        return HuggingFaceEncoder(name=model_name)
 
     def _semantic_route_choice(
         self,

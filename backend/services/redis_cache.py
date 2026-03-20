@@ -1,5 +1,5 @@
 """
-Redis caching service for econ-data-mcp.
+Redis caching service for OpenEcon Data.
 
 Provides distributed caching with TTL support, automatic serialization,
 and fallback to in-memory cache when Redis is unavailable.
@@ -369,7 +369,7 @@ class RedisCacheService:
                     ) if info.get("keyspace_hits", 0) > 0 else 0
                 }
 
-                # Count econ-data-mcp keys
+                # Count OpenEcon Data keys
                 openecon_keys = 0
                 cursor = 0
                 while True:

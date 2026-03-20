@@ -1,4 +1,4 @@
 """
-econ-data-mcp backend Python package.
+OpenEcon Data backend Python package.
 """
 

@@ -8,8 +8,42 @@ Tests verify that the provider can dynamically discover and fetch data for:
 - Other indicators without hardcoded mappings
 """
 import asyncio
+from typing import Optional
+
+import httpx
 import pytest
 from backend.providers.statscan import StatsCanProvider
+
+_STATSCAN_DATA_ENDPOINT_AVAILABLE: Optional[bool] = None
+
+
+async def _ensure_statscan_data_endpoint_available() -> None:
+    global _STATSCAN_DATA_ENDPOINT_AVAILABLE
+
+    if _STATSCAN_DATA_ENDPOINT_AVAILABLE is True:
+        return
+    if _STATSCAN_DATA_ENDPOINT_AVAILABLE is False:
+        pytest.skip("Statistics Canada WDS data endpoint is currently unavailable")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods",
+                json=[{
+                    "productId": "14100287",
+                    "coordinate": "1.2.1.1.1.1.0.0.0.0",
+                    "latestN": 1,
+                }],
+                headers={"Content-Type": "application/json"},
+            )
+        if response.status_code == 503:
+            _STATSCAN_DATA_ENDPOINT_AVAILABLE = False
+            pytest.skip("Statistics Canada WDS data endpoint is currently unavailable")
+    except httpx.HTTPError:
+        _STATSCAN_DATA_ENDPOINT_AVAILABLE = False
+        pytest.skip("Statistics Canada WDS data endpoint is currently unavailable")
+
+    _STATSCAN_DATA_ENDPOINT_AVAILABLE = True
 
 
 @pytest.fixture
@@ -80,6 +114,7 @@ async def test_get_cube_metadata_labour_force(statscan_provider):
 @pytest.mark.asyncio
 async def test_fetch_dynamic_data_alberta_employment(statscan_provider):
     """Test fetch_dynamic_data for Alberta employment."""
+    await _ensure_statscan_data_endpoint_available()
     result = await statscan_provider.fetch_dynamic_data({
         "indicator": "employment",
         "geography": "Alberta",
@@ -112,6 +147,7 @@ async def test_fetch_dynamic_data_alberta_employment(statscan_provider):
 @pytest.mark.asyncio
 async def test_fetch_dynamic_data_retail_sales(statscan_provider):
     """Test fetch_dynamic_data for Canada retail sales."""
+    await _ensure_statscan_data_endpoint_available()
     result = await statscan_provider.fetch_dynamic_data({
         "indicator": "retail sales",
         "periods": 120
@@ -139,6 +175,7 @@ async def test_fetch_dynamic_data_retail_sales(statscan_provider):
 async def test_fetch_dynamic_data_with_geography_fallback(statscan_provider):
     """Test that fetch_dynamic_data skips products without geography when needed."""
     # Try to fetch employment for Ontario
+    await _ensure_statscan_data_endpoint_available()
     result = await statscan_provider.fetch_dynamic_data({
         "indicator": "labour force",
         "geography": "Ontario",

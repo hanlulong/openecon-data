@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios';
-import { QueryResponse, NormalizedData, AuthResponse, RegisterRequest, LoginRequest, User, UserQueryHistory, HealthResponse, CacheStatsResponse, ApiError, FeedbackRequest, FeedbackResponse } from '../types';
+import { QueryResponse, NormalizedData, AuthResponse, RegisterRequest, LoginRequest, User, UserQueryHistory, HealthResponse, CacheStatsResponse, ApiError, FeedbackRequest, FeedbackResponse, StreamProcessingStepEvent } from '../types';
 import { getOrCreateSessionId } from '../lib/supabase';
 import { getCookie, removeSharedCookie, setSharedCookie } from '../lib/sharedStorage';
 
@@ -158,7 +158,7 @@ export const api = {
     conversationId: string | undefined,
     proMode: boolean,
     callbacks: {
-      onStep?: (step: { step: string; description: string; duration_ms?: number; status?: string; metadata?: any }) => void;
+      onStep?: (step: StreamProcessingStepEvent) => void;
       onData?: (data: QueryResponse) => void;
       onError?: (error: { error: string; message: string }) => void;
       onDone?: (conversationId: string) => void;

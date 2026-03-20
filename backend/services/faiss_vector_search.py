@@ -5,7 +5,7 @@ This service provides 100x faster vector search compared to ChromaDB by:
 - Using FAISS (Facebook AI Similarity Search) for approximate nearest neighbor search
 - Caching embeddings to avoid re-computing duplicates
 - Persisting to disk for fast index loading (<100ms)
-- Using sentence-transformers for efficient embeddings (384-dim all-MiniLM-L6-v2)
+- Using sentence-transformers or OpenAI embedding models
 - Batch processing with optimized batch sizes (128) for better throughput
 - Progress tracking during indexing for visibility into long-running operations
 
@@ -31,6 +31,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 
+from ..config import get_settings
+from ..embedding_utils import (
+    is_openai_embedding_model,
+    normalize_embedding_model_name,
+    resolve_embedding_dimensions,
+)
+
 logger = logging.getLogger(__name__)
 
 # Optional FAISS dependencies
@@ -38,15 +45,23 @@ FAISS_AVAILABLE = False
 try:
     import faiss
     import numpy as np
-    from sentence_transformers import SentenceTransformer
     FAISS_AVAILABLE = True
-    logger.info("✅ FAISS dependencies available (faiss-cpu, sentence-transformers)")
+    logger.info("✅ FAISS dependency available (faiss-cpu)")
 except ImportError as e:
-    logger.warning(f"⚠️  FAISS dependencies not available: {e}")
-    logger.info("Install with: pip install faiss-cpu sentence-transformers")
+    logger.warning(f"⚠️  FAISS not available: {e}")
+    logger.info("Install with: pip install faiss-cpu")
     faiss = None
     np = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
     SentenceTransformer = None
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 
 @dataclass
@@ -70,7 +85,7 @@ class VectorSearchResult:
 
 class FAISSVectorSearch:
     """
-    High-performance vector search using FAISS and sentence-transformers.
+    High-performance vector search using FAISS and configurable embeddings.
 
     Features:
     - <100ms index load time (vs 5+ minutes for ChromaDB)
@@ -81,7 +96,7 @@ class FAISSVectorSearch:
     - Batch embedding generation for efficiency
 
     Architecture:
-    1. Embedding Generation: sentence-transformers/all-MiniLM-L6-v2 (384-dim vectors)
+    1. Embedding Generation: sentence-transformers or OpenAI embedding models
     2. Indexing: FAISS IVF (Inverted File) with product quantization
     3. Storage: Pickle for index, JSON for metadata
     4. Search: Multi-probe IVF search with optional filtering
@@ -93,23 +108,37 @@ class FAISSVectorSearch:
         index_dir: str = "backend/data/faiss_index",
         index_name: str = "economic_indicators",
         embedding_dim: int = 384,
+        embedding_dimensions: Optional[int] = None,
         default_batch_size: int = 128,
     ):
         """
         Initialize FAISS vector search.
 
         Args:
-            model_name: HuggingFace model for embeddings
+            model_name: Embedding model for FAISS indexing
             index_dir: Directory to persist index files
             index_name: Name of the index (for multi-index support)
-            embedding_dim: Embedding dimension (384 for all-MiniLM-L6-v2)
+            embedding_dim: Fallback embedding dimension for local models
+            embedding_dimensions: Optional OpenAI embedding dimension override
             default_batch_size: Default batch size for embedding generation (default: 128)
         """
         # Initialize all attributes first
-        self.model_name = model_name
+        normalized_model_name = normalize_embedding_model_name(model_name)
+        self.model_name = normalized_model_name
         self.index_dir = Path(index_dir)
         self.index_name = index_name
-        self.embedding_dim = embedding_dim
+        self.is_openai_embedding = is_openai_embedding_model(normalized_model_name)
+        resolved_dimensions = resolve_embedding_dimensions(
+            normalized_model_name,
+            embedding_dimensions,
+        )
+        if self.is_openai_embedding and resolved_dimensions is None:
+            raise ValueError(
+                "Unknown OpenAI embedding dimensions for model "
+                f"'{normalized_model_name}'. Set EMBEDDING_DIMENSIONS explicitly."
+            )
+        self.embedding_dimensions = resolved_dimensions
+        self.embedding_dim = resolved_dimensions or embedding_dim
         self.default_batch_size = default_batch_size
         self.model = None
         self.index = None
@@ -144,10 +173,31 @@ class FAISSVectorSearch:
         self._load_or_init_index()
 
     def _load_model(self):
-        """Load sentence transformer model."""
+        """Load the configured embedding backend."""
         try:
-            if not FAISS_AVAILABLE or SentenceTransformer is None:
-                logger.error("❌ Sentence transformers not available")
+            if self.is_openai_embedding:
+                if OpenAI is None:
+                    logger.error("❌ OpenAI SDK not available")
+                    return
+
+                settings = get_settings()
+                if not settings.openai_api_key:
+                    raise ValueError("OPENAI_API_KEY is required for OpenAI embeddings")
+
+                logger.info(f"📥 Initializing OpenAI embedding client: {self.model_name}")
+                start = time.time()
+                self.model = OpenAI(
+                    api_key=settings.openai_api_key,
+                    base_url=settings.openai_base_url,
+                    organization=settings.openai_org_id,
+                )
+                elapsed = time.time() - start
+                logger.info(f"✅ OpenAI embedding client initialized in {elapsed:.2f}s")
+                logger.info(f"   - Embedding dimension: {self.embedding_dim}")
+                return
+
+            if SentenceTransformer is None:
+                logger.error("❌ sentence-transformers not available")
                 return
 
             logger.info(f"📥 Loading embedding model: {self.model_name}")
@@ -242,13 +292,15 @@ class FAISSVectorSearch:
             text: Text to embed
 
         Returns:
-            Embedding vector (384-dimensional for all-MiniLM-L6-v2)
+            Embedding vector
         """
         if self.model is None:
             logger.warning("⚠️  Model not loaded, returning zero vector")
             return [0.0] * self.embedding_dim
 
         try:
+            if self.is_openai_embedding:
+                return self._embed_batch_openai([text])[0]
             embedding = self.model.encode(text, convert_to_numpy=True)
             return embedding.tolist()
         except Exception as e:
@@ -306,13 +358,16 @@ class FAISSVectorSearch:
 
             # Embed only uncached texts
             if texts_to_embed:
-                new_embeddings = self.model.encode(
-                    texts_to_embed,
-                    batch_size=batch_size,
-                    show_progress_bar=len(texts_to_embed) > 100,
-                    convert_to_numpy=True
-                )
-                new_embeddings_list = new_embeddings.tolist()
+                if self.is_openai_embedding:
+                    new_embeddings_list = self._embed_batch_openai(texts_to_embed)
+                else:
+                    new_embeddings = self.model.encode(
+                        texts_to_embed,
+                        batch_size=batch_size,
+                        show_progress_bar=len(texts_to_embed) > 100,
+                        convert_to_numpy=True
+                    )
+                    new_embeddings_list = new_embeddings.tolist()
 
                 # Store in cache and result
                 for idx, embedding in zip(indices_to_embed, new_embeddings_list):
@@ -324,6 +379,22 @@ class FAISSVectorSearch:
         except Exception as e:
             logger.error(f"❌ Error embedding batch: {e}")
             return [[0.0] * self.embedding_dim for _ in texts]
+
+    def _embed_batch_openai(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for a batch of texts using OpenAI."""
+        if self.model is None:
+            raise ValueError("OpenAI embedding client not initialized")
+
+        request_kwargs: Dict[str, Any] = {
+            "input": texts,
+            "model": self.model_name,
+            "encoding_format": "float",
+        }
+        if self.embedding_dimensions is not None:
+            request_kwargs["dimensions"] = self.embedding_dimensions
+
+        response = self.model.embeddings.create(**request_kwargs)
+        return [item.embedding for item in response.data]
 
     def index_indicators(
         self,

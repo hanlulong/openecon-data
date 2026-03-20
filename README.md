@@ -73,7 +73,7 @@ Use query_data to compare US, UK, and Japan inflation from 2015 to 2025.
 ```bash
 git clone https://github.com/hanlulong/openecon-data.git
 cd openecon-data
-cp .env.example .env          # Add your OPENROUTER_API_KEY
+cp .env.example .env          # Add your OPENROUTER_API_KEY and optional OPENAI_API_KEY
 pip install -r requirements.txt
 npm install
 python3 scripts/restart_dev.py
@@ -86,6 +86,7 @@ python3 scripts/restart_dev.py
 - Python 3.10+
 - Node.js 18+
 - An [OpenRouter API key](https://openrouter.ai/keys) (required for LLM parsing)
+- Optional: an [OpenAI API key](https://platform.openai.com/api-keys) if you want OpenAI embedding models
 - Optional: FRED API key, Comtrade API key, Supabase credentials
 
 See [Getting Started Guide](docs/guides/getting-started.md) for full setup instructions.

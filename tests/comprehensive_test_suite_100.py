@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive Test Suite for econ-data-mcp - 100 Complex Queries
+Comprehensive Test Suite for OpenEcon Data - 100 Complex Queries
 Tests all providers with edge cases, complex queries, and challenging scenarios
 """
 
@@ -368,7 +368,7 @@ def print_summary(all_results: Dict[str, List[TestResult]]):
 def main():
     """Run comprehensive test suite"""
     print(f"{'='*80}")
-    print(f"econ-data-mcp Comprehensive Test Suite - 100 Complex Queries")
+    print(f"OpenEcon Data Comprehensive Test Suite - 100 Complex Queries")
     print(f"API: {API_URL}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*80}")

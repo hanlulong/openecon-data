@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive production testing for all econ-data-mcp data providers
+Comprehensive production testing for all OpenEcon Data data providers
 Tests each provider with 20 diverse queries on https://openecon.ai
 """
 
@@ -437,7 +437,7 @@ class ComprehensiveProviderTester:
         }
 
         filename = f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = f"/home/hanlulong/econ-data-mcp/scripts/{filename}"
+        filepath = f"/home/hanlulong/OpenEcon/scripts/{filename}"
 
         with open(filepath, 'w') as f:
             json.dump(report, f, indent=2)

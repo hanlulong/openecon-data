@@ -6,12 +6,17 @@ from typing import List
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .embedding_utils import is_openai_embedding_model
+
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     environment: str = Field(default="development", alias="NODE_ENV")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
+    openai_org_id: str | None = Field(default=None, alias="OPENAI_ORG_ID")
     fred_api_key: str | None = Field(default=None, alias="FRED_API_KEY")
     comtrade_api_key: str | None = Field(default=None, alias="COMTRADE_API_KEY")
     coingecko_api_key: str | None = Field(default=None, alias="COINGECKO_API_KEY")
@@ -65,6 +70,16 @@ class Settings(BaseSettings):
         alias="USE_HYBRID_ROUTER",
         description="Enable hybrid provider routing (deterministic candidates + LLM ranking)"
     )
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        alias="EMBEDDING_MODEL",
+        description="Embedding model used by vector search unless overridden explicitly"
+    )
+    embedding_dimensions: int | None = Field(
+        default=None,
+        alias="EMBEDDING_DIMENSIONS",
+        description="Optional embedding vector dimension override"
+    )
     use_indicator_hybrid_rerank: bool = Field(
         default=True,
         alias="USE_INDICATOR_HYBRID_RERANK",
@@ -95,8 +110,8 @@ class Settings(BaseSettings):
         alias="SEMANTIC_ROUTER_TOP_K",
         description="Top-k semantic route candidates to evaluate"
     )
-    semantic_router_encoder_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+    semantic_router_encoder_model: str | None = Field(
+        default=None,
         alias="SEMANTIC_ROUTER_ENCODER_MODEL",
         description="Embedding model name used by semantic-router encoder"
     )
@@ -161,11 +176,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_llm_provider_keys(self):
-        """Validate that required API keys are set for the selected LLM provider."""
+        """Validate that required API keys are set for the selected providers."""
+        if not self.semantic_router_encoder_model:
+            self.semantic_router_encoder_model = self.embedding_model
+
         if self.llm_provider == "openrouter" and not self.openrouter_api_key:
             raise ValueError(
                 "OPENROUTER_API_KEY is required when LLM_PROVIDER is 'openrouter'. "
                 "Set LLM_PROVIDER to 'vllm', 'ollama', or 'lm-studio' for local models."
+            )
+
+        if (
+            is_openai_embedding_model(self.embedding_model)
+            or is_openai_embedding_model(self.semantic_router_encoder_model)
+        ) and not self.openai_api_key:
+            raise ValueError(
+                "OPENAI_API_KEY is required when EMBEDDING_MODEL or "
+                "SEMANTIC_ROUTER_ENCODER_MODEL uses an OpenAI embedding model."
             )
         return self
 

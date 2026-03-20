@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 import httpx
 
 from ..config import get_settings
 from ..services.http_pool import get_http_client
+from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
 from ..services.rate_limiter import wait_for_provider, record_provider_request
@@ -397,6 +398,8 @@ class StatsCanProvider(BaseProvider):
         settings = get_settings()
         self.base_url = settings.statscan_base_url.rstrip("/")
         self.metadata_search = metadata_search_service  # Optional: for intelligent indicator discovery
+        self._statscan_metadata_service = get_statscan_metadata_service()
+        self._cube_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
     async def _fetch_data(self, **params) -> NormalizedData | List[NormalizedData]:
         """Implement BaseProvider interface by routing to fetch_indicator."""
@@ -433,6 +436,149 @@ class StatsCanProvider(BaseProvider):
 
         # For other lengths, return generic data search page
         return "https://www150.statcan.gc.ca/n1/en/type/data"
+
+    @staticmethod
+    def _normalize_metadata_product_id(product_id: str) -> str:
+        """Normalize a product ID to the 8-digit WDS metadata form."""
+        digits_only = "".join(ch for ch in str(product_id) if ch.isdigit())
+        if len(digits_only) >= 10:
+            return digits_only[:8]
+        return digits_only
+
+    @staticmethod
+    def _extract_member_name(member: Dict[str, Any]) -> str:
+        return str(member.get("memberNameEn", "")).strip()
+
+    def _find_member_id_by_keywords(self, members: List[Dict[str, Any]], keywords: List[str]) -> Optional[int]:
+        """Find the best matching member ID using exact-first keyword scoring."""
+        best_member_id: Optional[int] = None
+        best_score = 0
+
+        normalized_keywords = [kw.lower().strip() for kw in keywords if kw and kw.strip()]
+        if not normalized_keywords:
+            return None
+
+        for member in members:
+            member_name = self._extract_member_name(member)
+            if not member_name:
+                continue
+
+            member_name_lower = member_name.lower()
+            score = 0
+
+            for keyword in normalized_keywords:
+                if member_name_lower == keyword:
+                    score = max(score, 120)
+                elif member_name_lower.startswith(f"{keyword},") or member_name_lower.startswith(f"{keyword} "):
+                    score = max(score, 100)
+                elif keyword in member_name_lower:
+                    score = max(score, 70 + min(len(keyword), 20))
+
+            if score > best_score:
+                best_score = score
+                best_member_id = member.get("memberId")
+
+        return best_member_id
+
+    def _select_default_member_id(
+        self,
+        dimension_name: str,
+        members: List[Dict[str, Any]],
+        indicator_lower: str,
+    ) -> int:
+        """Choose a semantically sensible default instead of blindly taking member 1."""
+        if not members:
+            return 1
+
+        dimension_name_lower = dimension_name.lower()
+
+        if "geogr" in dimension_name_lower:
+            return self._find_member_id_by_keywords(members, ["canada", "total"]) or 1
+
+        if any(term in dimension_name_lower for term in ["labour force characteristic", "labour force", "labor force"]):
+            if "employment-to-population" in indicator_lower or "employment to population" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["employment rate", "employment-to-population ratio"]) or 1
+            if "participation rate" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["participation rate"]) or 1
+            if "unemployment rate" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["unemployment rate"]) or 1
+            if "unemployment" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["unemployment"]) or 1
+            if "full-time" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["full-time employment"]) or 1
+            if "part-time" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["part-time employment"]) or 1
+            if "employment" in indicator_lower or "employed" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["employment"]) or 1
+            if "labour force" in indicator_lower or "labor force" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["labour force"]) or 1
+
+        if any(term in dimension_name_lower for term in ["type of retail store", "kind of business", "industry", "sector"]):
+            return self._find_member_id_by_keywords(
+                members,
+                ["total retail, all stores", "all industries", "all sectors", "total", "all"],
+            ) or 1
+
+        if "retail trade component" in dimension_name_lower:
+            return self._find_member_id_by_keywords(members, ["all stores", "total", "all"]) or 1
+
+        if any(term in dimension_name_lower for term in ["seasonal", "adjustment"]):
+            if "unadjusted" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["unadjusted"]) or 1
+            if "trend" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["trend-cycle", "trend"]) or 1
+            return self._find_member_id_by_keywords(members, ["seasonally adjusted", "adjusted"]) or 1
+
+        if "basis" in dimension_name_lower:
+            return self._find_member_id_by_keywords(members, ["balance of payments", "bop", "customs basis"]) or 1
+
+        if any(term in dimension_name_lower for term in ["statistics", "statistic"]):
+            return self._find_member_id_by_keywords(members, ["estimate", "number", "value", "total"]) or 1
+
+        if any(term in dimension_name_lower for term in ["gender", "sex"]):
+            return self._find_member_id_by_keywords(members, ["total - gender", "both sexes", "total"]) or 1
+
+        if "age group" in dimension_name_lower:
+            return self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
+
+        return self._find_member_id_by_keywords(members, ["total", "all", "canada", "estimate"]) or (
+            members[0].get("memberId") if members[0].get("memberId") is not None else 1
+        )
+
+    def _score_cube_metadata_relevance(
+        self,
+        metadata: Optional[Dict[str, Any]],
+        search_terms: List[str],
+    ) -> float:
+        """Use dimension names and members to prefer cubes whose semantics match the query."""
+        if not metadata:
+            return 0.0
+
+        score = 0.0
+        normalized_terms = [term.lower().strip() for term in search_terms if term and term.strip()]
+
+        for dimension in metadata.get("dimension", []):
+            dimension_name = str(dimension.get("dimensionNameEn", "")).lower()
+            if any(term in dimension_name for term in normalized_terms):
+                score += 6.0
+
+            best_member_score = 0.0
+            for member in dimension.get("member", []):
+                member_name = self._extract_member_name(member).lower()
+                if not member_name:
+                    continue
+
+                for term in normalized_terms:
+                    if member_name == term:
+                        best_member_score = max(best_member_score, 25.0)
+                    elif member_name.startswith(f"{term},") or member_name.startswith(f"{term} "):
+                        best_member_score = max(best_member_score, 12.0)
+                    elif term in member_name:
+                        best_member_score = max(best_member_score, 4.0)
+
+            score += best_member_score
+
+        return score
 
     async def _vector_id(self, indicator: Optional[str], vector_id: Optional[int]) -> int:
         """
@@ -857,13 +1003,27 @@ class StatsCanProvider(BaseProvider):
         Returns:
             Dictionary with cube metadata including dimensions and members
         """
+        normalized_product_id = self._normalize_metadata_product_id(product_id)
+        if not normalized_product_id:
+            raise DataNotAvailableError(f"Invalid Statistics Canada product ID: {product_id}")
+
+        cached_metadata = self._cube_metadata_cache.get(normalized_product_id)
+        if cached_metadata:
+            return cached_metadata
+
+        local_metadata = self._statscan_metadata_service.get_local_cube_metadata(normalized_product_id)
+        if local_metadata:
+            self._cube_metadata_cache[normalized_product_id] = local_metadata
+            logger.info(f"💾 Using local cube metadata for product {normalized_product_id}")
+            return local_metadata
+
         try:
             # Use shared HTTP client pool for better performance
             client = get_http_client()
-            logger.info(f"📊 Fetching metadata for product {product_id}")
+            logger.info(f"📊 Fetching metadata for product {normalized_product_id}")
             response = await client.post(
                 f"{self.base_url}/getCubeMetadata",
-                json=[{"productId": product_id}],
+                json=[{"productId": normalized_product_id}],
                 headers={"Content-Type": "application/json"},
                 timeout=30.0
             )
@@ -875,17 +1035,18 @@ class StatsCanProvider(BaseProvider):
                 response_obj = payload[0]
                 if response_obj.get("status") == "SUCCESS":
                     metadata = response_obj.get("object", {})
-                    logger.info(f"✅ Retrieved metadata for product {product_id}")
+                    self._cube_metadata_cache[normalized_product_id] = metadata
+                    logger.info(f"✅ Retrieved metadata for product {normalized_product_id}")
                     return metadata
                 else:
-                    raise ValueError(f"API error for product {product_id}: {response_obj.get('status')}")
+                    raise ValueError(f"API error for product {normalized_product_id}: {response_obj.get('status')}")
             else:
-                raise ValueError(f"Empty response for product {product_id}")
+                raise ValueError(f"Empty response for product {normalized_product_id}")
 
         except Exception as e:
-            logger.error(f"Failed to get metadata for product {product_id}: {e}")
+            logger.error(f"Failed to get metadata for product {normalized_product_id}: {e}")
             raise DataNotAvailableError(
-                f"Could not retrieve metadata for Statistics Canada product {product_id}: {e}"
+                f"Could not retrieve metadata for Statistics Canada product {normalized_product_id}: {e}"
             )
 
     def _find_dimension_member(
@@ -1450,8 +1611,80 @@ class StatsCanProvider(BaseProvider):
         Returns:
             List of matching cubes with productId and titles
         """
+        # Build search terms (original keyword + synonyms)
+        keyword_upper = keyword.upper().replace(" ", "_")
+        search_terms = [keyword.lower()]
+
+        if keyword_upper in self.KEYWORD_SYNONYMS:
+            synonyms = self.KEYWORD_SYNONYMS[keyword_upper]
+            search_terms.extend([s.lower() for s in synonyms])
+            logger.info(f"   Expanded search with synonyms: {synonyms}")
+
+        # Preserve order while avoiding duplicate terms from synonym expansion.
+        search_terms = list(dict.fromkeys(search_terms))
+
+        def cube_relevance_score(cube: Dict[str, Any]) -> float:
+            title = str(cube.get("title", "")).lower()
+            metadata = cube.get("_metadata")
+            score = 0.0
+
+            if keyword.lower() in title:
+                score += 10.0
+
+            for term in search_terms:
+                if title == term:
+                    score += 14.0
+                elif title.startswith(f"{term},") or title.startswith(f"{term} "):
+                    score += 11.0
+                elif term in title:
+                    score += 7.0
+
+            score += self._score_cube_metadata_relevance(metadata, search_terms)
+
+            archived = cube.get("archived")
+            if archived == "2":
+                score += 2.0
+            elif archived == "1":
+                score -= 1.0
+
+            end_date = str(cube.get("endDate", ""))
+            if end_date[:4].isdigit():
+                end_year = int(end_date[:4])
+                if end_year >= 2024:
+                    score += 2.0
+                elif end_year >= 2020:
+                    score += 1.0
+
+            if "inactive" in title or "discontinued" in title:
+                score -= 2.5
+
+            if cube.get("metadataCached"):
+                score += 3.0
+
+            return score
+
+        matching: Dict[str, Dict[str, Any]] = {}
+
+        local_catalog = getattr(self._statscan_metadata_service, "_local_cache", {})
+        for product_id, metadata in local_catalog.items():
+            title = str(metadata.get("cubeTitleEn", ""))
+            title_lower = title.lower()
+            if not any(term in title_lower for term in search_terms):
+                continue
+
+            archived = "1" if "inactive" in title_lower else "2"
+            matching[product_id] = {
+                "productId": str(product_id),
+                "title": title,
+                "startDate": metadata.get("cubeStartDate"),
+                "endDate": metadata.get("cubeEndDate"),
+                "archived": archived,
+                "frequency": metadata.get("frequencyCode"),
+                "metadataCached": True,
+                "_metadata": metadata,
+            }
+
         try:
-            # Use shared HTTP client pool for better performance
             client = get_http_client()
             logger.info(f"🔍 Searching StatsCan for: {keyword}")
             response = await client.get(
@@ -1461,48 +1694,41 @@ class StatsCanProvider(BaseProvider):
             response.raise_for_status()
             cubes = response.json()
 
-            # Build search terms (original keyword + synonyms)
-            keyword_upper = keyword.upper().replace(" ", "_")
-            search_terms = [keyword.lower()]
-
-            # Add synonyms if available
-            if keyword_upper in self.KEYWORD_SYNONYMS:
-                synonyms = self.KEYWORD_SYNONYMS[keyword_upper]
-                search_terms.extend([s.lower() for s in synonyms])
-                logger.info(f"   Expanded search with synonyms: {synonyms}")
-
-            # Match cubes by any search term (case-insensitive substring match)
-            matching = []
             for cube in cubes:
                 cube_title = cube.get("cubeTitleEn", "").lower()
-                # Check if any search term matches the cube title
-                if any(term in cube_title for term in search_terms):
-                    matching.append({
-                        "productId": str(cube["productId"]),
-                        "title": cube.get("cubeTitleEn", ""),
-                        "startDate": cube.get("cubeStartDate"),
-                        "endDate": cube.get("cubeEndDate"),
-                        "archived": cube.get("archived", "1"),
-                        "frequency": cube.get("frequencyCode"),
-                    })
+                if not any(term in cube_title for term in search_terms):
+                    continue
 
-            # Prioritize active (non-archived) cubes with recent data
-            def sort_key(cube):
-                # Score: (is_active, is_recent, has_long_history)
-                is_active = 1 if cube.get("archived") == "2" else 0
-                end_year = int(cube.get("endDate", "2000-01-01")[:4])
-                is_recent = 1 if end_year >= 2024 else (0.5 if end_year >= 2020 else 0)
-                return (is_active, is_recent)
+                product_id = str(cube["productId"])
+                existing = matching.get(product_id)
+                candidate = {
+                    "productId": product_id,
+                    "title": cube.get("cubeTitleEn", ""),
+                    "startDate": cube.get("cubeStartDate"),
+                    "endDate": cube.get("cubeEndDate"),
+                    "archived": cube.get("archived", "1"),
+                    "frequency": cube.get("frequencyCode"),
+                    "metadataCached": bool(existing and existing.get("metadataCached")),
+                    "_metadata": existing.get("_metadata") if existing else None,
+                }
 
-            matching.sort(key=sort_key, reverse=True)
-            logger.info(f"✅ Found {len(matching)} StatsCan cubes matching '{keyword}'")
-            return matching[:limit]
+                if not existing or cube_relevance_score(candidate) > cube_relevance_score(existing):
+                    matching[product_id] = candidate
 
         except Exception as e:
-            logger.error(f"Error searching StatsCan cubes: {e}")
-            raise DataNotAvailableError(
-                f"Failed to search Statistics Canada for '{keyword}': {e}"
-            )
+            if not matching:
+                logger.error(f"Error searching StatsCan cubes: {e}")
+                raise DataNotAvailableError(
+                    f"Failed to search Statistics Canada for '{keyword}': {e}"
+                )
+            logger.warning(f"⚠️ Live StatsCan cube search failed, falling back to local catalog: {e}")
+
+        ranked = sorted(matching.values(), key=cube_relevance_score, reverse=True)
+        logger.info(f"✅ Found {len(ranked)} StatsCan cubes matching '{keyword}'")
+        return [
+            {key: value for key, value in cube.items() if not key.startswith("_")}
+            for cube in ranked[:limit]
+        ]
 
     async def fetch_categorical_data(
         self, params: Dict[str, any]
@@ -1934,9 +2160,11 @@ class StatsCanProvider(BaseProvider):
                 found = find_member_by_keywords(["balance of payments", "bop"])
                 coordinate_parts.append(found if found else 1)
 
-            # 6. Default to first member (usually "Total" or "All")
+            # 6. Default to the best semantic aggregate rather than blindly taking member 1
             else:
-                coordinate_parts.append(1)
+                coordinate_parts.append(
+                    self._select_default_member_id(dim_name, members, indicator_lower)
+                )
 
         # Build coordinate string
         # WDS coordinates have 10 dimensions separated by dots, e.g., "1.2.3.0.0.0.0.0.0.0"

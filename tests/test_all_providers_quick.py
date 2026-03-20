@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick Production Test for All econ-data-mcp Providers
+Quick Production Test for All OpenEcon Data Providers
 Tests key queries per provider against production with proper unit handling
 """
 
@@ -208,7 +208,7 @@ def test_provider(provider_name: str, queries: List[Tuple]) -> Dict:
 def main():
     """Run production tests for all providers"""
     print(f"{BOLD}{'=' * 80}{RESET}")
-    print(f"{BOLD}econ-data-mcp Production Test - All Providers{RESET}")
+    print(f"{BOLD}OpenEcon Data Production Test - All Providers{RESET}")
     print(f"API: {API_URL}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{BOLD}{'=' * 80}{RESET}")

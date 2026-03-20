@@ -35,6 +35,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 
+type TooltipEntry = {
+  color?: string
+  name?: string
+  value?: number | string | null
+}
+
+type LandingTooltipProps = {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string
+}
+
 // Showcase MULTI-COUNTRY/MULTI-SERIES comparisons from DIFFERENT PROVIDERS:
 // 1. FRED - US unemployment & inflation (multi-series)
 // 2. World Bank - China, India, Brazil GDP growth (multi-country)
@@ -364,12 +376,12 @@ function DemoChart({ example, chartTypeOverride }: { example: typeof demoExample
   }
 
   // Custom tooltip component for professional look
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  const CustomTooltip = ({ active, payload, label }: LandingTooltipProps) => {
     if (active && payload && payload.length) {
       return (
         <div className="bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg shadow-xl p-3 min-w-[140px]">
           <p className="text-xs font-semibold text-gray-900 mb-2 pb-1.5 border-b border-gray-100">{label}</p>
-          {payload.map((entry: any, index: number) => (
+          {payload.map((entry, index: number) => (
             <div key={index} className="flex items-center justify-between gap-4 text-xs py-0.5">
               <span className="flex items-center gap-1.5">
                 <span
@@ -1235,7 +1247,7 @@ export function LandingPage() {
             <a href="/docs" className="hover:text-gray-900">
               Docs
             </a>
-            <a href="https://github.com/hanlulong/econ-data-mcp" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
+            <a href="https://github.com/hanlulong/openecon-data" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
               GitHub
             </a>
             <a href="mailto:contact@openecon.ai" className="hover:text-gray-900">

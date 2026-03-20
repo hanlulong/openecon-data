@@ -31,7 +31,7 @@ FEEDBACK_EMAIL_TO = os.getenv("FEEDBACK_EMAIL_TO", "hanlulong@gmail.com")
 
 # Resend API (recommended - simpler setup)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-RESEND_FROM = os.getenv("RESEND_FROM", "econ-data-mcp <feedback@openecon.ai>")
+RESEND_FROM = os.getenv("RESEND_FROM", "OpenEcon Data <feedback@openecon.ai>")
 
 # SMTP configuration (fallback)
 SMTP_HOST = os.getenv("SMTP_HOST")
@@ -141,7 +141,7 @@ class FeedbackService:
     def _send_via_resend(self, feedback: dict) -> bool:
         """Send email via Resend API."""
         try:
-            subject = f"[econ-data-mcp Feedback] {feedback['type'].upper()}: {feedback['id'][:8]}"
+            subject = f"[OpenEcon Data Feedback] {feedback['type'].upper()}: {feedback['id'][:8]}"
             html_body = self._format_feedback_html(feedback)
             text_body = self._format_feedback_text(feedback)
 
@@ -185,7 +185,7 @@ class FeedbackService:
         try:
             # Create email message
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"[econ-data-mcp Feedback] {feedback['type'].upper()}: {feedback['id'][:8]}"
+            msg["Subject"] = f"[OpenEcon Data Feedback] {feedback['type'].upper()}: {feedback['id'][:8]}"
             msg["From"] = SMTP_FROM
             msg["To"] = FEEDBACK_EMAIL_TO
 
@@ -293,7 +293,7 @@ class FeedbackService:
             <div class="container">
                 <div class="header">
                     <span class="badge">{feedback['type']}</span>
-                    <h1 style="margin-top: 10px;">New econ-data-mcp Feedback</h1>
+                    <h1 style="margin-top: 10px;">New OpenEcon Data Feedback</h1>
                     <p style="margin: 5px 0 0; opacity: 0.9; font-size: 14px;">{feedback['timestamp']}</p>
                 </div>
                 <div class="content">

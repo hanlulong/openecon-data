@@ -724,7 +724,7 @@ finally:
                 # Generic secrets/tokens
                 'SECRET_', 'TOKEN_', 'API_KEY', 'APIKEY', 'PASSWORD', 'PASSWD', 'CREDENTIAL',
                 'PRIVATE_KEY', 'PRIVATEKEY', 'AUTH_', 'BEARER_',
-                # econ-data-mcp specific API keys
+                # OpenEcon Data specific API keys
                 'OPENROUTER_', 'GROK_', 'FRED_', 'COMTRADE_',
                 'SUPABASE_', 'JWT_', 'EXCHANGERATE_', 'COINGECKO_',
                 'VLLM_', 'ANTHROPIC_', 'OPENAI_', 'CLAUDE_',

@@ -1,6 +1,6 @@
 # Tests
 
-Integration test suites for the econ-data-mcp project.
+Integration test suites for the OpenEcon Data project.
 
 ## Main Test Suites
 

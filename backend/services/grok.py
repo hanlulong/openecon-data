@@ -188,7 +188,7 @@ Output ONLY executable Python code."""
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": self.app_url,
-                        "X-Title": "econ-data-mcp Pro Mode Error Fix"
+                        "X-Title": "OpenEcon Data Pro Mode Error Fix"
                     },
                     json={
                         "model": self.model,
@@ -285,7 +285,7 @@ Output ONLY the Python code, no explanations."""
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": self.app_url,
-                        "X-Title": "econ-data-mcp Pro Mode"
+                        "X-Title": "OpenEcon Data Pro Mode"
                     },
                     json={
                         "model": self.model,
@@ -392,7 +392,7 @@ Output ONLY the Python code, no explanations."""
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": self.app_url,
-                        "X-Title": "econ-data-mcp Pro Mode"
+                        "X-Title": "OpenEcon Data Pro Mode"
                     },
                     json=request_payload
                 ) as response:

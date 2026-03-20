@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import { UserQueryHistory, NormalizedData } from '../types';
 import { MessageChart } from './MessageChart';
 import { downloadExport } from '../lib/export';
+import { extractApiErrorMessage } from '../lib/errors';
 import { logger } from '../utils/logger';
 import './UserHistory.css';
 
@@ -26,8 +27,8 @@ export const UserHistory = ({ onClose }: UserHistoryProps) => {
       setIsLoading(true);
       const response = await api.getUserHistory();
       setHistory(response.history);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load history');
+    } catch (error: unknown) {
+      setError(extractApiErrorMessage(error, 'Failed to load history'));
     } finally {
       setIsLoading(false);
     }
@@ -43,8 +44,8 @@ export const UserHistory = ({ onClose }: UserHistoryProps) => {
       setError('');
       await api.clearUserHistory();
       setHistory([]);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to clear history');
+    } catch (error: unknown) {
+      setError(extractApiErrorMessage(error, 'Failed to clear history'));
     } finally {
       setIsClearing(false);
     }

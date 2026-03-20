@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { extractApiErrorMessage } from '../lib/errors';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import './Auth.css';
 
@@ -45,8 +46,8 @@ export const Auth = ({ onClose }: AuthProps) => {
       } else {
         setError(result.error || 'Authentication failed');
       }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred');
+    } catch (error: unknown) {
+      setError(extractApiErrorMessage(error, 'An error occurred'));
     } finally {
       setIsLoading(false);
     }

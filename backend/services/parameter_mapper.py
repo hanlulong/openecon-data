@@ -4,7 +4,7 @@ Parameter Mapper for LangChain Orchestrator
 Maps natural language terms and LangChain LLM outputs to provider-specific parameters.
 Handles indicator codes, country codes, time periods, and special parameters for each provider.
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-11-21
 """
 

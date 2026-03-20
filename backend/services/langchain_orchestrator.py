@@ -11,7 +11,7 @@ Enhanced with multi-agent architecture for:
 
 Compatible with LangChain 1.0+ API.
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-11-21
 Updated: 2025-11-29 - Added multi-agent architecture
 """
@@ -165,7 +165,7 @@ class LangChainOrchestrator:
             max_tokens=1000,
             default_headers={
                 "HTTP-Referer": "https://openecon.ai",
-                "X-Title": "econ-data-mcp"
+                "X-Title": "OpenEcon Data"
             }
         )
 

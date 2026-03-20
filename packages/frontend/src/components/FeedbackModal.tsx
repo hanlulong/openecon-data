@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Message } from '../types'
 import { api } from '../services/api'
+import { extractApiErrorMessage } from '../lib/errors'
 import { logger } from '../utils/logger'
 import { useAuth } from '../contexts/AuthContext'
 import './FeedbackModal.css'
@@ -115,9 +116,9 @@ export function FeedbackModal({ isOpen, onClose, messages, conversationId }: Fee
       setTimeout(() => {
         onClose()
       }, 2000)
-    } catch (err: any) {
-      logger.error('Failed to submit feedback:', err)
-      setError(err.response?.data?.message || err.message || 'Failed to submit feedback. Please try again.')
+    } catch (error: unknown) {
+      logger.error('Failed to submit feedback:', error)
+      setError(extractApiErrorMessage(error, 'Failed to submit feedback. Please try again.'))
     } finally {
       setIsSubmitting(false)
     }

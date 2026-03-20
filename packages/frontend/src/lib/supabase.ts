@@ -4,7 +4,7 @@
  * Handles graceful degradation when Supabase is not configured (development mode).
  * In development without Supabase, most features fall back gracefully.
  */
-import { createClient, Session, User as SupabaseUser } from '@supabase/supabase-js'
+import { createClient, Session, SupabaseClient, User as SupabaseUser } from '@supabase/supabase-js'
 import { getCookie, removeSharedCookie, setSharedCookie } from './sharedStorage'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -13,9 +13,99 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 // Check if Supabase is available
 export const isSupabaseAvailable = !!(supabaseUrl && supabaseAnonKey)
 
+type QueryLogPayload = {
+  query: string
+  conversationId?: string
+  proMode?: boolean
+  intent?: unknown
+  responseData?: unknown
+  codeExecution?: unknown
+  errorMessage?: string
+  processingTimeMs?: number
+}
+
+const createMockSupabaseClient = () => ({
+  auth: {
+    signInWithOAuth: async () => ({
+      data: null,
+      error: new Error('Supabase not configured in development mode')
+    }),
+    signInWithPassword: async () => ({
+      data: null,
+      error: new Error('Supabase not configured in development mode')
+    }),
+    signUp: async () => ({
+      data: null,
+      error: new Error('Supabase not configured in development mode')
+    }),
+    signOut: async () => ({
+      error: null
+    }),
+    getSession: async () => ({
+      data: { session: null as Session | null }
+    }),
+    getUser: async () => ({
+      data: { user: null as SupabaseUser | null }
+    }),
+    onAuthStateChange: (_callback: (event: string, session: Session | null) => void) => ({
+      data: { subscription: { unsubscribe: () => {} } }
+    })
+  },
+  from: (_table: string) => ({
+    select: () => ({
+      eq: () => ({
+        order: () => ({
+          limit: async () => ({
+            data: null,
+            error: null
+          })
+        }),
+        execute: async () => ({
+          data: null,
+          error: null
+        })
+      }),
+      execute: async () => ({
+        data: null,
+        error: null
+      })
+    }),
+    insert: async () => ({
+      data: null,
+      error: null
+    }),
+    update: () => ({
+      eq: async () => ({
+        data: null,
+        error: null
+      }),
+      execute: async () => ({
+        data: null,
+        error: null
+      })
+    }),
+    delete: () => ({
+      eq: async () => ({
+        data: null,
+        error: null
+      }),
+      execute: async () => ({
+        data: null,
+        error: null
+      })
+    }),
+    upsert: async () => ({
+      data: null,
+      error: null
+    })
+  })
+})
+
+type MockSupabaseClient = ReturnType<typeof createMockSupabaseClient>
+
 // Create client only if both URL and key are provided
 // Otherwise, use a no-op mock client
-let supabaseClient: any = null
+let supabaseClient: SupabaseClient | MockSupabaseClient
 
 if (isSupabaseAvailable) {
   supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -29,92 +119,7 @@ if (isSupabaseAvailable) {
   // Mock client for development without Supabase
   console.info('ℹ️ Supabase not configured - using development mode without persistent storage')
 
-  supabaseClient = {
-    auth: {
-      signInWithOAuth: async () => ({
-        data: null,
-        error: new Error('Supabase not configured in development mode')
-      }),
-      signInWithPassword: async () => ({
-        data: null,
-        error: new Error('Supabase not configured in development mode')
-      }),
-      signUp: async () => ({
-        data: null,
-        error: new Error('Supabase not configured in development mode')
-      }),
-      signOut: async () => ({
-        error: null
-      }),
-      getSession: async () => ({
-        data: { session: null }
-      }),
-      getUser: async () => ({
-        data: { user: null }
-      }),
-      onAuthStateChange: (_callback: (event: string, session: unknown) => void) => ({
-        data: { subscription: { unsubscribe: () => {} } }
-      })
-    },
-    from: (_table: string) => ({
-      select: () => ({
-        eq: () => ({
-          order: () => ({
-            limit: () => ({
-              execute: async () => ({
-                data: null,
-                error: null
-              })
-            })
-          }),
-          execute: async () => ({
-            data: null,
-            error: null
-          })
-        }),
-        execute: async () => ({
-          data: null,
-          error: null
-        })
-      }),
-      insert: () => ({
-        execute: async () => ({
-          data: null,
-          error: null
-        })
-      }),
-      update: () => ({
-        eq: () => ({
-          execute: async () => ({
-            data: null,
-            error: null
-          })
-        }),
-        execute: async () => ({
-          data: null,
-          error: null
-        })
-      }),
-      delete: () => ({
-        eq: () => ({
-          execute: async () => ({
-            data: null,
-            error: null
-          })
-        }),
-        execute: async () => ({
-          data: null,
-          error: null
-        })
-      }),
-      upsert: () => ({
-        execute: async () => ({
-          data: null,
-          error: null
-        })
-      })
-    })
-  }
+  supabaseClient = createMockSupabaseClient()
 }
 
 export const supabase = supabaseClient
@@ -262,16 +267,7 @@ export function onAuthStateChange(callback: (event: string, session: Session | n
 /**
  * Log query to Supabase (handles both authenticated and anonymous users)
  */
-export async function logQuery(data: {
-  query: string
-  conversationId?: string
-  proMode?: boolean
-  intent?: any
-  responseData?: any
-  codeExecution?: any
-  errorMessage?: string
-  processingTimeMs?: number
-}) {
+export async function logQuery(data: QueryLogPayload) {
   // Skip logging if Supabase is not available (development mode)
   if (!isSupabaseAvailable) {
     console.debug('ℹ️ Query logging skipped (Supabase not configured)')

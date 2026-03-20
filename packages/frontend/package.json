@@ -1,9 +1,9 @@
 {
-  "name": "@econ-data-mcp/frontend",
+  "name": "@openecon-data/frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "econ-data-mcp frontend React application",
+  "description": "OpenEcon Data frontend React application",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

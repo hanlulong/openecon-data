@@ -1,5 +1,5 @@
 """
-Comprehensive 100-query test suite for econ-data-mcp.
+Comprehensive 100-query test suite for OpenEcon Data.
 Tests complex economic variables and trade flow questions across all providers.
 """
 

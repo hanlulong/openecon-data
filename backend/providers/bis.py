@@ -277,6 +277,7 @@ class BISProvider(BaseProvider):
 
     # Lazy-loaded dataflow metadata (id -> {"name": ..., "description": ...})
     _DATAFLOW_METADATA_CACHE: Optional[Dict[str, Dict[str, str]]] = None
+    _COUNTRY_DISPLAY_NAME_CACHE: Optional[Dict[str, str]] = None
 
     @property
     def provider_name(self) -> str:
@@ -325,6 +326,40 @@ class BISProvider(BaseProvider):
         name = info.get("name") or None
         description = info.get("description") or None
         return name, description
+
+    @classmethod
+    def _country_display_names(cls) -> Dict[str, str]:
+        """Build human-readable country labels for BIS metadata."""
+        if cls._COUNTRY_DISPLAY_NAME_CACHE is not None:
+            return cls._COUNTRY_DISPLAY_NAME_CACHE
+
+        display_names: Dict[str, str] = {
+            "XM": "Euro Area",
+        }
+        display_scores: Dict[str, tuple[int, int]] = {"XM": (10, len("Euro Area"))}
+
+        for raw_name, code in cls.COUNTRY_MAPPINGS.items():
+            normalized_code = str(code or "").upper()
+            candidate = str(raw_name or "").replace("_", " ").strip()
+            if len(candidate) <= 2:
+                continue
+
+            score = (
+                2 if " " in candidate else 1,
+                len(candidate),
+            )
+            if score >= display_scores.get(normalized_code, (0, 0)):
+                display_names[normalized_code] = candidate.title()
+                display_scores[normalized_code] = score
+
+        cls._COUNTRY_DISPLAY_NAME_CACHE = display_names
+        return display_names
+
+    @classmethod
+    def _display_country_name(cls, country_code: str) -> str:
+        """Return a human-readable country name for BIS metadata."""
+        normalized_code = str(country_code or "").upper()
+        return cls._country_display_names().get(normalized_code, normalized_code)
 
     @staticmethod
     def _selected_series_dimension_values(
@@ -748,7 +783,7 @@ class BISProvider(BaseProvider):
                     _, dataflow_description = self._lookup_dataflow_info(indicator_code)
 
                     # Use original country code or Euro area if fallback was used
-                    display_country = current_country_code
+                    display_country = self._display_country_name(current_country_code)
 
                     # Human-readable URL for data verification on BIS Data Portal
                     # Map dataflow codes to topic URLs (verified 2025-11)

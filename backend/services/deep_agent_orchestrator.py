@@ -1,5 +1,5 @@
 """
-Deep Agents Integration for econ-data-mcp
+Deep Agents Integration for OpenEcon Data
 
 This module integrates LangChain Deep Agents for enhanced query processing:
 1. Planning capability for complex multi-step queries
@@ -9,7 +9,7 @@ This module integrates LangChain Deep Agents for enhanced query processing:
 5. Progress tracking with real-time updates
 6. Smart provider routing based on query analysis
 
-Author: econ-data-mcp Development Team
+Author: OpenEcon Data Development Team
 Date: 2025-12-24
 Updated: 2025-12-25 - Enhanced with progress tracking and smarter routing
 """
@@ -318,7 +318,7 @@ class DeepAgentOrchestrator:
             max_tokens=2000,
             default_headers={
                 "HTTP-Referer": "https://openecon.ai",
-                "X-Title": "econ-data-mcp Deep Agent"
+                "X-Title": "OpenEcon Data Deep Agent"
             }
         )
 

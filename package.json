@@ -1,8 +1,8 @@
 {
-  "name": "econ-data-mcp",
+  "name": "openecon-data",
   "version": "0.1.0",
   "private": true,
-  "description": "econ-data-mcp: AI-powered economic data aggregation with MCP support",
+  "description": "OpenEcon Data: AI-powered economic data aggregation with MCP support",
   "workspaces": [
     "packages/frontend"
   ],

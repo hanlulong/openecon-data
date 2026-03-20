@@ -3,6 +3,7 @@ import { api, tokenManager, setLogoutCallback } from '../services/api';
 import { User, ApiError } from '../types';
 import { supabase, getSession, setSessionId, signOut as supabaseSignOut } from '../lib/supabase';
 import { AxiosError } from 'axios';
+import { Session } from '@supabase/supabase-js';
 import { logger } from '../utils/logger';
 import { requestCrossDomainBridgePayload } from '../lib/authBridge';
 
@@ -38,7 +39,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // Check if user is already logged in on mount
   useEffect(() => {
-    const setUserFromSupabaseSession = (session: any): boolean => {
+    const setUserFromSupabaseSession = (session: Session | null): boolean => {
       if (!session?.user) {
         return false;
       }
@@ -133,7 +134,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     checkAuth();
 
     // Listen for Supabase auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: string, session: any) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: string, session: Session | null) => {
       logger.log('Supabase auth state changed:', event);
 
       // Handle sign-in, token refresh, and user updates

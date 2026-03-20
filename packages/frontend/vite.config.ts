@@ -10,10 +10,6 @@ export default defineConfig(({ mode }) => {
   // Load env file from the frontend directory
   const env = loadEnv(mode, __dirname, '')
 
-  console.log('🔍 Debug: Loaded env vars:');
-  console.log('  VITE_SUPABASE_URL:', env.VITE_SUPABASE_URL ? 'FOUND ✅' : 'MISSING ❌');
-  console.log('  VITE_SUPABASE_ANON_KEY:', env.VITE_SUPABASE_ANON_KEY ? 'FOUND ✅' : 'MISSING ❌');
-
   return {
   plugins: [react()],
   define: {

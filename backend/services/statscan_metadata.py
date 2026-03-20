@@ -98,6 +98,22 @@ class StatsCanMetadataService:
             logger.error(f"Error loading local cache: {e}")
             return {}
 
+    @staticmethod
+    def _normalize_product_id(product_id: str) -> str:
+        """Normalize a StatsCan product ID to the 8-digit WDS form used by metadata cache."""
+        digits_only = "".join(ch for ch in str(product_id) if ch.isdigit())
+        if len(digits_only) >= 10:
+            return digits_only[:8]
+        return digits_only
+
+    def get_local_cube_metadata(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Return locally cached cube metadata when available without making a network call."""
+        normalized_product_id = self._normalize_product_id(product_id)
+        metadata = self._local_cache.get(normalized_product_id)
+        if metadata:
+            self._cache[f"metadata_{normalized_product_id}"] = metadata
+        return metadata
+
     async def get_cube_metadata(self, product_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch full metadata for a given product ID.
@@ -109,16 +125,17 @@ class StatsCanMetadataService:
             Dictionary containing cube metadata including dimensions and members
         """
         # Check memory cache first
-        cache_key = f"metadata_{product_id}"
+        normalized_product_id = self._normalize_product_id(product_id)
+        cache_key = f"metadata_{normalized_product_id}"
         if cache_key in self._cache:
-            logger.debug(f"Using cached metadata for product {product_id}")
+            logger.debug(f"Using cached metadata for product {normalized_product_id}")
             return self._cache[cache_key]
 
         # Check local file cache second
-        if product_id in self._local_cache:
-            metadata = self._local_cache[product_id]
+        if normalized_product_id in self._local_cache:
+            metadata = self._local_cache[normalized_product_id]
             self._cache[cache_key] = metadata  # Store in memory cache too
-            logger.info(f"💾 Using local cached metadata for product {product_id}")
+            logger.info(f"💾 Using local cached metadata for product {normalized_product_id}")
             return metadata
 
         # Only fetch from API if not in local cache
@@ -133,14 +150,14 @@ class StatsCanMetadataService:
             async with httpx.AsyncClient(timeout=timeout_config) as client:
                 response = await client.post(
                     f"{self.base_url}/getCubeMetadata",
-                    json=[{"productId": int(product_id)}],
+                    json=[{"productId": int(normalized_product_id)}],
                     headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
                 payload = response.json()
 
                 if not payload or payload[0].get("status") != "SUCCESS":
-                    logger.error(f"Failed to fetch metadata for product {product_id}")
+                    logger.error(f"Failed to fetch metadata for product {normalized_product_id}")
                     return None
 
                 metadata = payload[0]["object"]
@@ -149,14 +166,14 @@ class StatsCanMetadataService:
                 self._cache[cache_key] = metadata
 
                 logger.info(
-                    f"✅ Fetched metadata for product {product_id}: "
+                    f"✅ Fetched metadata for product {normalized_product_id}: "
                     f"{metadata.get('cubeTitleEn', 'Unknown')}"
                 )
 
                 return metadata
 
         except Exception as e:
-            logger.exception(f"Error fetching metadata for product {product_id}: {e}")
+            logger.exception(f"Error fetching metadata for product {normalized_product_id}: {e}")
             return None
 
     def extract_dimension_mappings(self, metadata: Dict[str, Any]) -> Dict[str, Dict[str, int]]:

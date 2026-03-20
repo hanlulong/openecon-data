@@ -1,110 +1,103 @@
 """
-Integration Test: Verify ProviderRouter Integration
+Focused integration tests for query-service provider selection.
 
-Tests that the ProviderRouter correctly overrides providers when integrated into the query pipeline.
+These tests exercise QueryService's routing selection logic without hitting the
+LLM or remote provider APIs.
 """
-import asyncio
-import json
-import sys
+from __future__ import annotations
+
 import os
+import sys
+
+import pytest
 
 # Add backend to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from backend.models import ParsedIntent
+from backend.routing.unified_router import UnifiedRouter
 from backend.services.query import QueryService
-from backend.config import get_settings
 
 
-async def test_integration():
-    """Test ProviderRouter integration with real query processing"""
+@pytest.fixture
+def lightweight_query_service() -> QueryService:
+    service = QueryService.__new__(QueryService)
+    service.unified_router = UnifiedRouter()
+    service.semantic_provider_router = None
+    service.hybrid_router = None
+    return service
 
-    settings = get_settings()
-    query_service = QueryService(
-        openrouter_key=settings.openrouter_api_key,
-        fred_key=settings.fred_api_key,
-        comtrade_key=settings.comtrade_api_key,
-        coingecko_key=settings.coingecko_api_key,
-        settings=settings
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("intent", "query", "expected_provider"),
+    [
+        (
+            ParsedIntent(
+                apiProvider="WorldBank",
+                indicators=["GDP"],
+                parameters={"country": "Italy"},
+                clarificationNeeded=False,
+            ),
+            "Get Italy GDP from OECD",
+            "OECD",
+        ),
+        (
+            ParsedIntent(
+                apiProvider="WorldBank",
+                indicators=["GDP"],
+                parameters={"country": "Canada"},
+                clarificationNeeded=False,
+            ),
+            "Canada GDP",
+            "STATSCAN",
+        ),
+        (
+            ParsedIntent(
+                apiProvider="WorldBank",
+                indicators=["house prices"],
+                parameters={"country": "Germany"},
+                clarificationNeeded=False,
+            ),
+            "Germany house prices",
+            "BIS",
+        ),
+        (
+            ParsedIntent(
+                apiProvider="WorldBank",
+                indicators=["imports"],
+                parameters={"country": "US"},
+                clarificationNeeded=False,
+            ),
+            "US imports",
+            "COMTRADE",
+        ),
+    ],
+)
+async def test_query_service_selects_expected_provider(
+    lightweight_query_service: QueryService,
+    intent: ParsedIntent,
+    query: str,
+    expected_provider: str,
+) -> None:
+    provider = await lightweight_query_service._select_routed_provider(intent, query)
+    assert provider == expected_provider
+
+
+@pytest.mark.asyncio
+async def test_query_service_applies_country_coverage_override(
+    lightweight_query_service: QueryService,
+) -> None:
+    intent = ParsedIntent(
+        apiProvider="Eurostat",
+        indicators=["GDP"],
+        parameters={"countries": ["France", "Japan"]},
+        clarificationNeeded=False,
     )
 
-    # Test queries that should trigger ProviderRouter overrides
-    test_cases = [
-        {
-            "query": "Show me Canada GDP",
-            "expected_provider": "StatsCan",
-            "description": "Canadian query should route to StatsCan"
-        },
-        {
-            "query": "Case-Shiller home price index",
-            "expected_provider": "FRED",
-            "description": "US-only indicator should route to FRED"
-        },
-        {
-            "query": "Germany house prices",
-            "expected_provider": "BIS",
-            "description": "Non-US housing should route to BIS"
-        },
-        {
-            "query": "Get Italy GDP from OECD",
-            "expected_provider": "OECD",
-            "description": "Explicit provider should be honored"
-        },
-    ]
+    provider = await lightweight_query_service._select_routed_provider(
+        intent,
+        "compare gdp in france and japan",
+    )
 
-    print("\n" + "="*80)
-    print("INTEGRATION TEST: ProviderRouter in Query Pipeline")
-    print("="*80)
-
-    passed = 0
-    failed = 0
-
-    for i, test in enumerate(test_cases, 1):
-        print(f"\n[Test {i}/{len(test_cases)}] {test['description']}")
-        print(f"Query: \"{test['query']}\"")
-        print(f"Expected provider: {test['expected_provider']}")
-
-        try:
-            # Process query
-            response = await query_service.process_query(test['query'])
-
-            if response.intent:
-                actual_provider = response.intent.apiProvider
-                print(f"Actual provider: {actual_provider}")
-
-                # Check if routing is correct
-                if actual_provider.upper() == test['expected_provider'].upper():
-                    print("✅ PASS - Provider routing correct")
-                    passed += 1
-                else:
-                    print(f"❌ FAIL - Expected {test['expected_provider']}, got {actual_provider}")
-                    failed += 1
-            else:
-                print("❌ FAIL - No intent returned")
-                failed += 1
-
-        except Exception as e:
-            print(f"❌ ERROR - {str(e)}")
-            failed += 1
-
-        # Small delay between requests
-        await asyncio.sleep(1)
-
-    # Summary
-    print("\n" + "="*80)
-    print(f"INTEGRATION TEST RESULTS")
-    print("="*80)
-    print(f"Passed: {passed}/{len(test_cases)}")
-    print(f"Failed: {failed}/{len(test_cases)}")
-
-    if failed == 0:
-        print("\n✅ ALL INTEGRATION TESTS PASSED")
-        print("ProviderRouter is working correctly in the query pipeline!")
-        return 0
-    else:
-        print(f"\n❌ {failed} TEST(S) FAILED")
-        return 1
-
-
-if __name__ == "__main__":
-    exit_code = asyncio.run(test_integration())
-    sys.exit(exit_code)
+    assert provider == "WORLDBANK"

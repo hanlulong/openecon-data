@@ -818,7 +818,7 @@ class WorldBankProvider(BaseProvider):
 
         # Add proper headers to avoid rate limiting and blocking
         headers = {
-            "User-Agent": "econ-data-mcp/1.0 (https://openecon.ai; economic-data-aggregator)",
+            "User-Agent": "openecon-data/1.0 (https://openecon.ai; economic-data-aggregator)",
             "Accept": "application/json",
         }
 

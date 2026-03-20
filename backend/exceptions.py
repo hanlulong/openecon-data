@@ -1,4 +1,4 @@
-"""Custom exception hierarchy for econ-data-mcp.
+"""Custom exception hierarchy for OpenEcon Data.
 
 This module provides a standardized exception hierarchy used across
 all backend services and agents. Using specific exception types enables:
@@ -32,10 +32,10 @@ from typing import Optional, Dict, Any
 
 
 class EconDataMcpError(Exception):
-    """Base exception for all econ-data-mcp errors.
+    """Base exception for all OpenEcon Data errors.
 
     All custom exceptions should inherit from this class to enable
-    catching all econ-data-mcp-specific errors with a single except block.
+    catching all OpenEcon Data-specific errors with a single except block.
 
     Attributes:
         message: Human-readable error message
@@ -310,7 +310,7 @@ def get_error_response(error: Exception) -> Dict[str, Any]:
     if isinstance(error, EconDataMcpError):
         return error.to_dict()
 
-    # For non-econ-data-mcp exceptions, create a generic response
+    # For non-OpenEcon Data exceptions, create a generic response
     return {
         "error": "InternalError",
         "message": str(error),

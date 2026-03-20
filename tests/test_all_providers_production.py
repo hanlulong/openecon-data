@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive Production Test Suite for All econ-data-mcp Providers
+Comprehensive Production Test Suite for All OpenEcon Data Providers
 Tests diverse queries per provider against production with data verification
 """
 
@@ -286,7 +286,7 @@ def test_provider(provider_name: str, queries: List[Tuple]) -> Dict:
 def main():
     """Run comprehensive production tests"""
     print(f"{BOLD}{'=' * 80}{RESET}")
-    print(f"{BOLD}econ-data-mcp Production Test Suite{RESET}")
+    print(f"{BOLD}OpenEcon Data Production Test Suite{RESET}")
     print(f"API: {API_URL}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{BOLD}{'=' * 80}{RESET}")

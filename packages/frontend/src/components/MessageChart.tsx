@@ -32,6 +32,18 @@ type ChartRow = {
   [key: string]: number | string | null
 }
 
+type TooltipEntry = {
+  color?: string
+  name?: string
+  value?: number | string | null
+}
+
+type ChartTooltipProps = {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string
+}
+
 // Helper to get a short label for an indicator
 function getShortIndicatorLabel(indicator: string): string {
   // Common indicator name shortenings
@@ -257,7 +269,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
 
   // Get frequency from first series for x-axis formatting
   const frequency = data[0]?.metadata.frequency
-  const xAxisFormatter = (value: string) => formatXAxisTick(value, frequency)
+  const xAxisFormatter = useCallback((value: string) => formatXAxisTick(value, frequency), [frequency])
 
   // Check if this is categorical data (should display as table only)
   const isCategoricalData = frequency?.toLowerCase() === 'categorical'
@@ -269,7 +281,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
     data[0].data.every(point => /^[A-Z]{3}$/.test(point.date)))
 
   // Professional custom tooltip component
-  const CustomTooltip = useCallback(({ active, payload, label }: any) => {
+  const CustomTooltip = useCallback(({ active, payload, label }: ChartTooltipProps) => {
     if (active && payload && payload.length) {
       return (
         <div
@@ -293,7 +305,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
           }}>
             {xAxisFormatter(label)}
           </p>
-          {payload.map((entry: any, index: number) => (
+          {payload.map((entry, index: number) => (
             <div
               key={index}
               style={{
