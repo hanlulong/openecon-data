@@ -16,6 +16,7 @@ from ..utils.retry import DataNotAvailableError, retry_async
 from ..services.dsd_cache import get_dimension_key_builder
 from ..services.cache import cache_service
 from ..services.rate_limiter import (
+    ProviderRateLimitWaitExceeded,
     wait_for_provider,
     record_provider_request,
     record_provider_rate_limit_error,
@@ -412,6 +413,13 @@ class OECDProvider:
         Raises:
             DataNotAvailableError if no suitable dataflow found after all fallback attempts
         """
+        explicit_dataflow = str(indicator or "").strip().upper()
+        if re.fullmatch(r"DSD_[A-Z0-9_]+@DF_[A-Z0-9_]+", explicit_dataflow):
+            logger.info("🔒 Treating explicit OECD dataflow as resolved: %s", explicit_dataflow)
+            result = self._build_result_from_discovery(explicit_dataflow, {})
+            cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
+            return result
+
         lookup_terms = self._build_indicator_lookup_terms(indicator)
         if not lookup_terms:
             raise DataNotAvailableError("OECD indicator is empty")
@@ -1103,9 +1111,10 @@ class OECDProvider:
         Raises:
             DataNotAvailableError: If circuit breaker is open or data not available
         """
-        # NOTE: Circuit breaker check removed - it was too aggressive and blocked valid queries
-        # The circuit breaker will still protect us by opening AFTER we hit actual 429 errors
-        # (handled in the retry logic below at lines 974-977)
+        if is_provider_circuit_open("OECD"):
+            raise DataNotAvailableError(
+                "OECD is temporarily unavailable due to rate limiting. Please try again later."
+            )
 
         # Resolve indicator to (agency, dataflow, version) tuple using metadata search if needed
         agency, dataflow, version = await self._resolve_indicator(indicator)
@@ -1189,7 +1198,13 @@ class OECDProvider:
 
         # STEP 1: Wait for rate limiter before making request
         # This prevents hitting rate limits in the first place by enforcing delays
-        wait_delay = await wait_for_provider("OECD")
+        try:
+            wait_delay = await wait_for_provider("OECD", max_wait_seconds=5.0)
+        except ProviderRateLimitWaitExceeded as exc:
+            record_provider_rate_limit_error("OECD")
+            raise DataNotAvailableError(
+                "OECD is temporarily rate-limited right now. Please try again later or use a different provider."
+            ) from exc
         if wait_delay > 0:
             logger.info(f"⏳ OECD rate limiter applied {wait_delay:.1f}s delay before request")
 
@@ -1677,13 +1692,11 @@ class OECDProvider:
             # Aggregate failed and no countries specified - use major economies
             country_codes = MAJOR_OECD_ECONOMIES
             logger.info(f"📊 Fetching {indicator} for {len(country_codes)} major OECD economies")
-        elif len(target_countries) > 20:
-            # Too many countries would hit rate limit - use major economies instead
-            logger.warning(
-                f"⚠️ {len(target_countries)} countries requested, but this would hit rate limits. "
-                f"Using {len(MAJOR_OECD_ECONOMIES)} major OECD economies instead."
+        elif len(target_countries) > 8:
+            raise DataNotAvailableError(
+                "OECD multi-country comparisons over more than 8 countries are temporarily unavailable due to API rate limits. "
+                "Try a smaller country set or choose a different provider."
             )
-            country_codes = MAJOR_OECD_ECONOMIES
         else:
             country_codes = target_countries
             logger.info(f"📊 Fetching {indicator} for {len(country_codes)} countries: {country_codes}")

@@ -14,6 +14,10 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+class ProviderRateLimitWaitExceeded(RuntimeError):
+    """Raised when a provider would require an unreasonable wait before retrying."""
+
+
 class RateLimiterConfig:
     """Configuration for a provider's rate limits."""
 
@@ -105,9 +109,13 @@ class ProviderRateLimiter:
         # Return maximum delay needed
         return max(delays) if delays else 0
 
-    async def wait_until_ready(self) -> float:
+    async def wait_until_ready(self, max_wait_seconds: Optional[float] = None) -> float:
         """
         Wait until the next request can be made.
+
+        Args:
+            max_wait_seconds: Optional cap for acceptable wait time. If the
+                required delay exceeds this, raise instead of blocking.
 
         Returns:
             Delay that was applied (in seconds)
@@ -116,6 +124,16 @@ class ProviderRateLimiter:
 
         delay = self.get_delay_until_ready()
         if delay > 0:
+            if max_wait_seconds is not None and delay > max_wait_seconds:
+                logger.warning(
+                    "🚦 %s rate limit requires %.1fs wait, exceeding max_wait_seconds=%.1fs; failing fast",
+                    self.config.name,
+                    delay,
+                    max_wait_seconds,
+                )
+                raise ProviderRateLimitWaitExceeded(
+                    f"{self.config.name} is temporarily rate-limited; retry would require waiting {delay:.1f}s"
+                )
             logger.info(
                 f"🚦 {self.config.name} rate limit: waiting {delay:.1f}s before next request "
                 f"(minute: {len(self.minute_window)}/{self.config.max_requests_per_minute}, "
@@ -311,18 +329,19 @@ def get_global_rate_limiter() -> GlobalRateLimiter:
     return _global_rate_limiter
 
 
-async def wait_for_provider(provider: str) -> float:
+async def wait_for_provider(provider: str, max_wait_seconds: Optional[float] = None) -> float:
     """
     Wait until it's safe to make a request to a provider.
 
     Args:
         provider: Provider name (e.g., "OECD")
+        max_wait_seconds: Optional cap for acceptable wait time.
 
     Returns:
         Delay that was applied in seconds
     """
     limiter = get_global_rate_limiter().get_limiter(provider)
-    return await limiter.wait_until_ready()
+    return await limiter.wait_until_ready(max_wait_seconds=max_wait_seconds)
 
 
 def record_provider_request(provider: str) -> None:

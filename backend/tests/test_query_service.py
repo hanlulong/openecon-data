@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -977,14 +979,17 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
              patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
-            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
-                conversation_id=conv_id,
-                query="gdp to debt ratio in china",
-                intent=intent,
-                explicit_provider=None,
-                is_multi_indicator=False,
-                processing_steps=None,
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="gdp to debt ratio in china",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
             )
 
         self.assertIsNotNone(clarification)
@@ -1021,13 +1026,15 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
              patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
-            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
-                conversation_id="conv-prefetch-duplicate-labels",
-                query="imports share of gdp in china",
-                intent=intent,
-                explicit_provider=None,
-                is_multi_indicator=False,
-                processing_steps=None,
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-duplicate-labels",
+                    query="imports share of gdp in china",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
             )
 
         self.assertIsNone(clarification)
@@ -1051,16 +1058,186 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("options should not be collected")), \
              patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
-            clarification = self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
-                conversation_id="conv-prefetch-strong-primary",
-                query="imports share of gdp in china",
-                intent=intent,
-                explicit_provider=None,
-                is_multi_indicator=False,
-                processing_steps=None,
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-strong-primary",
+                    query="imports share of gdp in china",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
             )
 
         self.assertIsNone(clarification)
+
+    def test_build_prefetch_indicator_choice_clarification_skips_viability_prefetch_for_large_country_sets(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"countries": ["AR", "AU", "BR", "CA", "CN", "DE", "FR", "GB", "ID", "IN", "IT", "JP", "KR", "MX", "RU", "SA", "TR", "US", "ZA"]},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+        options = [
+            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
+            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
+            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "JI.EMP.1564.YG.ZS"
+            name = "Employment rate, aged 15-24 (% of labor force aged 15-24)"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch.object(
+                 self.service,
+                 "_filter_viable_indicator_choice_options",
+                 new=AsyncMock(side_effect=AssertionError("viability prefetch should be skipped")),
+             ):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-large-country-set",
+                    query="compare employment rate across G20 member countries",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        payload = clarification.clarificationOptions or []
+        self.assertEqual([option.provider for option in payload], ["IMF", "OECD", "WORLDBANK"])
+
+    def test_collect_indicator_choice_options_filters_implausible_and_unsupported_candidates(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"countries": ["AR", "AU", "BR", "CA", "CN", "DE", "FR", "GB", "ID", "IN", "IT", "JP", "KR", "MX", "RU", "SA", "TR", "US", "ZA"]},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+
+        def _resolve(query: str, provider: str | None = None, **_: Any) -> Any:
+            provider_name = str(provider or "").upper()
+            if provider_name == "IMF":
+                return SimpleNamespace(
+                    provider="IMF",
+                    code="LER_PT",
+                    name="Labor Markets, Employment, Employment Rate, Percent",
+                    confidence=0.92,
+                    source="database",
+                    metadata={},
+                )
+            if provider_name == "OECD":
+                return SimpleNamespace(
+                    provider="OECD",
+                    code="DSD_LFS@DF_IALFS_EMP_WAP_Q",
+                    name="Employment rate",
+                    confidence=0.91,
+                    source="database",
+                    metadata={},
+                )
+            if provider_name == "WORLDBANK":
+                return SimpleNamespace(
+                    provider="WORLDBANK",
+                    code="JI.EMP.1564.YG.ZS",
+                    name="Employment rate, aged 15-24 (% of labor force aged 15-24)",
+                    confidence=0.90,
+                    source="database",
+                    metadata={},
+                )
+            return None
+
+        with patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(side_effect=_resolve))):
+            options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
+                "compare employment rate across G20 member countries",
+                intent,
+                max_options=4,
+            )
+
+        self.assertEqual(options, [])
+
+    def test_build_prefetch_indicator_choice_clarification_auto_switches_single_viable_option(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["imports share of gdp"],
+            parameters={"countries": ["CN"]},
+            clarificationNeeded=False,
+            originalQuery="imports share of gdp in china",
+        )
+
+        class _Resolved:
+            provider = "FRED"
+            code = "GDP"
+            name = "Gross Domestic Product"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(
+            self.service,
+            "_collect_indicator_choice_options",
+            return_value=["[WorldBank] Imports of goods and services (% of GDP) (NE.IMP.GNFS.ZS)"],
+        ), patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-auto-switch",
+                    query="imports share of gdp in china",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
+        self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
+
+    def test_build_prefetch_indicator_choice_clarification_returns_no_reliable_match_response(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"countries": ["AR", "AU", "BR", "CA", "CN", "DE", "FR", "GB", "ID", "IN", "IT", "JP", "KR", "MX", "RU", "SA", "TR", "US", "ZA"]},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "JI.EMP.1564.YG.ZS"
+            name = "Employment rate, aged 15-24 (% of labor force aged 15-24)"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-no-reliable-match",
+                    query="compare employment rate across G20 member countries",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIn("reliable indicator and provider combination", " ".join(clarification.clarificationQuestions or []))
+        self.assertIsNone(clarification.clarificationOptions)
 
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
@@ -1167,7 +1344,7 @@ class QueryServiceTests(unittest.TestCase):
             conversation_id=conv_id,
             auto_pro_mode=False,
             use_orchestrator=False,
-            allow_orchestrator=True,
+            allow_orchestrator=False,
         )
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
@@ -1219,7 +1396,7 @@ class QueryServiceTests(unittest.TestCase):
             conversation_id=conv_id,
             auto_pro_mode=False,
             use_orchestrator=False,
-            allow_orchestrator=True,
+            allow_orchestrator=False,
         )
 
     def test_try_resolve_pending_semantic_clarification_matches_numeric_option(self) -> None:
@@ -1270,7 +1447,7 @@ class QueryServiceTests(unittest.TestCase):
             conversation_id=conv_id,
             auto_pro_mode=False,
             use_orchestrator=False,
-            allow_orchestrator=True,
+            allow_orchestrator=False,
         )
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
@@ -1456,6 +1633,7 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
              patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
              patch.object(self.service, "_fetch_data", side_effect=AssertionError("fetch should not run")):
             response = run(self.service.process_query("gdp to debt ratio in china", conversation_id=conv_id))
@@ -1507,6 +1685,7 @@ class QueryServiceTests(unittest.TestCase):
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
              patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
              patch.object(self.service, "_execute_with_langgraph", new_callable=AsyncMock, side_effect=AssertionError("agent should not run")):
             response = run(
@@ -1522,6 +1701,152 @@ class QueryServiceTests(unittest.TestCase):
         payload = response.clarificationOptions or []
         self.assertEqual(payload[0].provider, "IMF")
         self.assertEqual(payload[1].provider, "WORLDBANK")
+
+    def test_prefetch_indicator_clarification_filters_unusable_options(self) -> None:
+        conv_id = "conv-process-prefetch-filter"
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"region": "G20"},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        options = [
+            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
+            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
+            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "JI.EMP.1564.YG.ZS"
+            name = "Employment rate, aged 15-24 (% of labor force aged 15-24)"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch.object(
+                 self.service,
+                 "_filter_viable_indicator_choice_options",
+                 AsyncMock(return_value=options[1:]),
+             ):
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="compare employment rate across G20 member countries",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertTrue(response.clarificationNeeded)
+        payload = response.clarificationOptions or []
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0].provider, "OECD")
+        self.assertEqual(payload[1].provider, "WORLDBANK")
+
+    def test_prefetch_indicator_clarification_falls_back_to_original_options_when_validation_cannot_prune(self) -> None:
+        conv_id = "conv-process-prefetch-fallback-options"
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"region": "G20"},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+        options = [
+            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
+            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
+            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "JI.EMP.1564.YG.ZS"
+            name = "Employment rate, aged 15-24 (% of labor force aged 15-24)"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch.object(
+                 self.service,
+                 "_filter_viable_indicator_choice_options",
+                 AsyncMock(return_value=[]),
+             ):
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="compare employment rate across G20 member countries",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        payload = response.clarificationOptions or []
+        self.assertEqual([option.provider for option in payload], ["IMF", "OECD", "WORLDBANK"])
+
+    def test_try_resolve_pending_indicator_choice_drops_failed_option_from_retry_list(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-choice-drop-failed")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        pending_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment rate"],
+            parameters={"region": "G20"},
+            clarificationNeeded=False,
+            originalQuery="compare employment rate across G20 member countries",
+        )
+        options = [
+            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
+            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
+            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
+        ]
+        conversation_manager.set_pending_indicator_options(
+            conv_id,
+            {
+                "original_query": pending_intent.originalQuery,
+                "intent": pending_intent.model_dump(),
+                "options": options,
+                "question_lines": ["Please choose one option:"],
+            },
+        )
+
+        with patch.object(self.service, "_fetch_data", side_effect=RuntimeError("no data")):
+            response = run(
+                self.service._try_resolve_pending_indicator_choice(  # pylint: disable=protected-access
+                    query="1",
+                    conversation_id=conv_id,
+                    tracker=None,
+                )
+            )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        self.assertEqual(response.message, "That option did not return usable data. Please choose a different option.")
+        payload = response.clarificationOptions or []
+        self.assertEqual([option.provider for option in payload], ["OECD", "WORLDBANK"])
+        pending = conversation_manager.get_pending_indicator_options(conv_id)
+        assert pending is not None
+        self.assertEqual(
+            pending.get("options"),
+            options[1:],
+        )
 
     def test_execute_with_orchestrator_returns_low_confidence_response_before_agent_execution(self) -> None:
         conv_id = "conv-orchestrator-low-confidence"

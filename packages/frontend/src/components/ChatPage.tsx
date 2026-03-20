@@ -917,7 +917,10 @@ print(f"\\nData source: ${sourceUrl}")
               <path d="M21 21L16.65 16.65" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
             </svg>
             <input
+              id="chat-history-search"
+              name="chat_history_search"
               type="text"
+              aria-label="Search chats"
               placeholder="Search chats"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -1089,9 +1092,12 @@ print(f"\\nData source: ${sourceUrl}")
           <div className="input-area">
             <form onSubmit={handleSubmit} className="input-form">
               <input
+                id="chat-query-input"
+                name="query"
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                aria-label={proMode ? "Ask for custom analysis with code execution" : "Ask about economic data"}
                 placeholder={proMode ? "Ask for custom analysis with code execution..." : "Ask about economic data..."}
                 className="query-input"
                 disabled={processingQuery.current !== null}

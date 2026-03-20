@@ -1,7 +1,7 @@
 # OpenEcon.ai - AI Economic Data Platform
 # https://openecon.ai
 # https://data.openecon.io/chat
-# Source: https://github.com/hanlulong/econ-data-mcp
+# Source: https://github.com/hanlulong/openecon-data
 
 ## About
 OpenEcon.ai is an AI-powered economic data aggregation platform that allows users to query economic data using natural language. It provides access to 10+ authoritative data sources including FRED, World Bank, IMF, UN Comtrade, Statistics Canada, Eurostat, OECD, BIS, ExchangeRate-API, and CoinGecko.

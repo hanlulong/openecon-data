@@ -11,7 +11,9 @@ from backend.providers.imf import IMFProvider
 from backend.providers.bis import BISProvider
 from backend.providers.eurostat import EurostatProvider
 from backend.providers.oecd import OECDProvider
+from backend.services.rate_limiter import ProviderRateLimitWaitExceeded
 from backend.tests.utils import MockAsyncClient, MockAsyncResponse, run
+from backend.utils.retry import DataNotAvailableError
 
 
 class ProviderTests(unittest.TestCase):
@@ -43,6 +45,15 @@ class ProviderTests(unittest.TestCase):
             _, dataflow, _ = run(provider._resolve_indicator("PPI"))  # pylint: disable=protected-access
 
         self.assertEqual(dataflow, "DSD_PRICES@DF_PPI")
+
+    def test_oecd_resolve_indicator_keeps_explicit_dataflow_id(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        agency, dataflow, version = run(provider._resolve_indicator("DSD_LFS@DF_IALFS_EMP_WAP_Q"))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.SDD.TPS")
+        self.assertEqual(dataflow, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
+        self.assertEqual(version, "1.0")
 
     def test_fred_series_id_mapping(self) -> None:
         """Test that indicator names are properly mapped to FRED series IDs."""
@@ -595,6 +606,39 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("USA", call_countries)
         self.assertIn("DEU", call_countries)
         self.assertNotIn("OECD", call_countries)
+
+    def test_oecd_fetch_indicator_fails_fast_when_rate_limit_wait_is_too_long(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.TPS", "DSD_LFS@DF_IALFS_EMP_WAP_Q", "1.0")),
+        ), patch(
+            "backend.providers.oecd.wait_for_provider",
+            new=AsyncMock(side_effect=ProviderRateLimitWaitExceeded("wait too long")),
+        ):
+            with self.assertRaisesRegex(DataNotAvailableError, "temporarily rate-limited"):
+                run(provider.fetch_indicator("employment rate", country="USA"))
+
+    def test_oecd_fetch_indicator_short_circuits_when_circuit_is_open(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        with patch("backend.providers.oecd.is_provider_circuit_open", return_value=True), \
+             patch.object(provider, "_resolve_indicator", new=AsyncMock(side_effect=AssertionError("should not resolve"))):
+            with self.assertRaisesRegex(DataNotAvailableError, "temporarily unavailable due to rate limiting"):
+                run(provider.fetch_indicator("employment rate", country="USA"))
+
+    def test_oecd_fetch_multi_country_fails_fast_for_large_country_sets(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        with self.assertRaisesRegex(DataNotAvailableError, "more than 8 countries"):
+            run(
+                provider.fetch_multi_country(
+                    indicator="employment rate",
+                    countries=["US", "CA", "GB", "FR", "DE", "IT", "JP", "KR", "AU"],
+                )
+            )
 
     def test_worldbank_does_not_expand_short_country_codes_as_groups(self) -> None:
         provider = WorldBankProvider()

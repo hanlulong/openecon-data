@@ -1914,46 +1914,49 @@ class QueryService:
                     initial_delay=0.3,
                 )
         except Exception as exc:
-            self._store_pending_indicator_options(
+            return self._build_failed_indicator_choice_response(
                 conversation_id=conversation_id,
                 query=original_query or query,
                 intent=intent,
                 options=options,
+                selected_option=selected_option,
                 question_lines=pending.get("question_lines") or [],
-            )
-            return QueryResponse(
-                conversationId=conversation_id,
-                intent=intent,
-                clarificationNeeded=True,
-                clarificationQuestions=pending.get("question_lines") or [],
-                clarificationOptions=self._build_clarification_options(options),
+                tracker=tracker,
                 error=str(exc),
-                message="That option did not return usable data. Please choose a different option.",
-                processingSteps=tracker.to_list() if tracker else None,
             )
 
-        if data:
-            data = self._rerank_data_by_query_relevance(intent.originalQuery or query, data)
-            if self._is_ranking_query(intent.originalQuery or query):
-                data = self._apply_ranking_projection(intent.originalQuery or query, data)
-
-            recovered_data = await self._maybe_recover_from_uncertain_match(
-                intent.originalQuery or query,
-                intent,
-                data,
-            )
-            if recovered_data:
-                data = recovered_data
-
-            clarification_response = self._build_uncertain_result_clarification(
+        if not data:
+            return self._build_failed_indicator_choice_response(
                 conversation_id=conversation_id,
-                query=intent.originalQuery or query,
+                query=original_query or query,
                 intent=intent,
-                data=data,
-                processing_steps=tracker.to_list() if tracker else None,
+                options=options,
+                selected_option=selected_option,
+                question_lines=pending.get("question_lines") or [],
+                tracker=tracker,
             )
-            if clarification_response:
-                return clarification_response
+
+        data = self._rerank_data_by_query_relevance(intent.originalQuery or query, data)
+        if self._is_ranking_query(intent.originalQuery or query):
+            data = self._apply_ranking_projection(intent.originalQuery or query, data)
+
+        recovered_data = await self._maybe_recover_from_uncertain_match(
+            intent.originalQuery or query,
+            intent,
+            data,
+        )
+        if recovered_data:
+            data = recovered_data
+
+        clarification_response = self._build_uncertain_result_clarification(
+            conversation_id=conversation_id,
+            query=intent.originalQuery or query,
+            intent=intent,
+            data=data,
+            processing_steps=tracker.to_list() if tracker else None,
+        )
+        if clarification_response:
+            return clarification_response
 
         conversation_id = conversation_manager.add_message_safe(
             conversation_id,
@@ -2037,8 +2040,8 @@ class QueryService:
             query=refined_query,
             conversation_id=conversation_id,
             auto_pro_mode=auto_pro_mode,
-            use_orchestrator=use_orchestrator,
-            allow_orchestrator=allow_orchestrator,
+            use_orchestrator=False,
+            allow_orchestrator=False,
         )
 
     async def _maybe_recover_from_uncertain_match(
@@ -2213,6 +2216,113 @@ class QueryService:
             )
         return True
 
+    def _provider_supports_requested_scope(
+        self,
+        provider: str,
+        query: str,
+        countries: Optional[List[str]],
+    ) -> bool:
+        """Filter options that are incompatible with the requested comparison scope."""
+        if not countries:
+            return True
+
+        provider_upper = normalize_provider_name(provider)
+        query_lower = str(query or "").lower()
+        country_count = len([country for country in countries if country])
+        comparison_markers = (
+            self._is_comparison_query(query_lower)
+            or "member countries" in query_lower
+            or "by country" in query_lower
+            or "country by country" in query_lower
+            or "each country" in query_lower
+        )
+
+        if provider_upper == "OECD" and country_count > 8 and comparison_markers:
+            return False
+
+        return True
+
+    def _apply_indicator_option_to_intent(self, intent: ParsedIntent, option_text: str) -> bool:
+        """Apply one indicator-choice option directly onto an existing intent."""
+        parsed = self._parse_indicator_option(option_text)
+        if not parsed:
+            return False
+
+        provider_name, code = parsed
+        intent.apiProvider = provider_name
+        intent.indicators = [code]
+        intent.clarificationNeeded = False
+        intent.clarificationQuestions = []
+
+        params = dict(intent.parameters or {})
+        params.pop("seriesId", None)
+        params.pop("series_id", None)
+        params.pop("code", None)
+        params["indicator"] = code
+        intent.parameters = params
+        return True
+
+    def _provider_can_execute_indicator_option(
+        self,
+        provider: str,
+        code: str,
+        option_name: Optional[str] = None,
+    ) -> bool:
+        """
+        Cheap provider-side executability guard for clarification options.
+
+        Some metadata/discovery layers know about provider-adjacent indicator codes
+        that the concrete fetch provider in this app does not actually support.
+        Keep those out of user-facing choices.
+        """
+        provider_upper = normalize_provider_name(provider)
+        code_text = str(code or "").strip()
+        option_label = str(option_name or "").strip()
+        if not code_text:
+            return False
+
+        if provider_upper == "IMF":
+            return bool(
+                self.imf_provider._indicator_code(code_text)  # pylint: disable=protected-access
+                or (option_label and self.imf_provider._indicator_code(option_label))  # pylint: disable=protected-access
+            )
+
+        return True
+
+    def _build_no_reliable_indicator_match_response(
+        self,
+        conversation_id: str,
+        intent: ParsedIntent,
+        query: str,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> QueryResponse:
+        """Return a clarification instead of guessing when no reliable option remains."""
+        query_text = str(query or intent.originalQuery or "").strip()
+        target_countries = self._collect_target_countries(intent.parameters)
+        questions = [
+            "I could not find a reliable indicator and provider combination for this request without guessing.",
+        ]
+        if target_countries and len(target_countries) > 8 and self._is_comparison_query(query_text):
+            questions.append(
+                "Large cross-country comparisons are the hardest case here, and the current metric is not reliably available across the full scope."
+            )
+            questions.append(
+                "Try a smaller country set, ask for one overall group value, or choose a different metric wording."
+            )
+        else:
+            questions.append(
+                "Please rephrase with a more specific metric, narrower geography, or different provider scope."
+            )
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=True,
+            clarificationQuestions=questions,
+            message="I stopped before fetching because the available matches were not reliable enough.",
+            processingSteps=processing_steps,
+        )
+
     def _collect_indicator_choice_options(
         self,
         query: str,
@@ -2300,6 +2410,12 @@ class QueryService:
                 for iso2 in target_iso2
             ):
                 continue
+            if not self._provider_supports_requested_scope(
+                provider_name,
+                raw_query or indicator_query,
+                target_iso2,
+            ):
+                continue
 
             try:
                 resolved = resolver.resolve(
@@ -2315,6 +2431,29 @@ class QueryService:
             if not resolved or not resolved.code or resolved.confidence < 0.55:
                 continue
             if self._is_placeholder_indicator_code(str(resolved.code)):
+                continue
+
+            resolved_name = " ".join(
+                part
+                for part in [
+                    str(getattr(resolved, "name", "") or ""),
+                    str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
+                    str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
+                ]
+                if part
+            )
+            if not self._is_resolved_indicator_plausible(
+                provider=provider_name,
+                indicator_query=raw_query or indicator_query,
+                resolved_code=str(resolved.code),
+                resolved_name=resolved_name,
+            ):
+                continue
+            if not self._provider_can_execute_indicator_option(
+                provider=provider_name,
+                code=str(resolved.code),
+                option_name=resolved_name,
+            ):
                 continue
 
             code_key = (provider_name, str(resolved.code).upper())
@@ -2742,7 +2881,122 @@ class QueryService:
             processingSteps=processing_steps,
         )
 
-    def _build_prefetch_indicator_choice_clarification(
+    async def _filter_viable_indicator_choice_options(
+        self,
+        query: str,
+        intent: ParsedIntent,
+        options: List[str],
+        max_options: int = 3,
+    ) -> List[str]:
+        """
+        Keep only indicator-choice options that can plausibly fetch usable data.
+
+        Clarification should not present provider/code choices that immediately
+        fail for the current geography/scope. This performs a lightweight
+        preflight fetch for the small candidate list used in the UI.
+        """
+        clean_options = self._dedupe_indicator_choice_options(
+            [str(option) for option in (options or []) if str(option).strip()]
+        )
+        if len(clean_options) < 2:
+            return clean_options[:max_options]
+
+        viable_options: List[str] = []
+        tracker_token = None
+        if get_processing_tracker() is not None:
+            tracker_token = activate_processing_tracker(None)  # type: ignore[arg-type]
+
+        try:
+            for option_text in clean_options:
+                parsed = self._parse_indicator_option(option_text)
+                if not parsed:
+                    continue
+
+                provider_name, code = parsed
+                attempt_intent = intent.model_copy(deep=True)
+                attempt_intent.apiProvider = provider_name
+                attempt_intent.indicators = [code]
+                if not attempt_intent.originalQuery:
+                    attempt_intent.originalQuery = str(query or "").strip()
+
+                attempt_params = dict(attempt_intent.parameters or {})
+                attempt_params["_prefetch_option_validation"] = True
+                attempt_params.pop("seriesId", None)
+                attempt_params.pop("series_id", None)
+                attempt_params.pop("code", None)
+                attempt_params["indicator"] = code
+                attempt_intent.parameters = attempt_params
+
+                try:
+                    candidate_data = await retry_async(
+                        lambda i=attempt_intent: self._fetch_data(i),
+                        max_attempts=1,
+                        initial_delay=0.2,
+                    )
+                except Exception:
+                    continue
+
+                if not candidate_data:
+                    continue
+
+                candidate_data = self._rerank_data_by_query_relevance(query, candidate_data)
+                if self._is_ranking_query(query):
+                    candidate_data = self._apply_ranking_projection(query, candidate_data)
+                if not candidate_data:
+                    continue
+                if self._has_implausible_top_series(query, candidate_data):
+                    continue
+                if self._needs_indicator_clarification(query, candidate_data, attempt_intent):
+                    continue
+
+                viable_options.append(option_text)
+                if len(viable_options) >= max_options:
+                    break
+        finally:
+            if tracker_token is not None:
+                reset_processing_tracker(tracker_token)
+
+        return viable_options
+
+    def _build_failed_indicator_choice_response(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: ParsedIntent,
+        options: List[str],
+        selected_option: Optional[str],
+        question_lines: Optional[List[str]],
+        tracker: Optional['ProcessingTracker'] = None,
+        error: Optional[str] = None,
+    ) -> QueryResponse:
+        """Re-prompt after an indicator option fails and drop the dead option."""
+        remaining_options = [
+            option for option in self._dedupe_indicator_choice_options(options)
+            if option != selected_option
+        ]
+        if remaining_options:
+            self._store_pending_indicator_options(
+                conversation_id=conversation_id,
+                query=query,
+                intent=intent,
+                options=remaining_options,
+                question_lines=question_lines or [],
+            )
+        else:
+            conversation_manager.clear_pending_indicator_options(conversation_id)
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            clarificationNeeded=bool(remaining_options),
+            clarificationQuestions=question_lines or [],
+            clarificationOptions=self._build_clarification_options(remaining_options),
+            error=error,
+            message="That option did not return usable data. Please choose a different option.",
+            processingSteps=tracker.to_list() if tracker else None,
+        )
+
+    async def _build_prefetch_indicator_choice_clarification(
         self,
         conversation_id: str,
         query: str,
@@ -2848,10 +3102,29 @@ class QueryService:
                 return None
 
         options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
-        if len(options) < 2:
+        if not options:
+            if not primary_accepted:
+                return self._build_no_reliable_indicator_match_response(
+                    conversation_id=conversation_id,
+                    intent=intent,
+                    query=query_text or indicator_query,
+                    processing_steps=processing_steps,
+                )
             return None
-        if not self._has_materially_distinct_indicator_options(options):
+        if len(options) >= 2 and not self._has_materially_distinct_indicator_options(options):
             return None
+
+        target_countries = self._collect_target_countries(intent.parameters)
+        should_skip_viability_prefetch = len(target_countries) > 8
+        if len(options) >= 2 and not should_skip_viability_prefetch:
+            viable_options = await self._filter_viable_indicator_choice_options(
+                query=query_text or indicator_query,
+                intent=intent,
+                options=options,
+                max_options=4,
+            )
+            if len(viable_options) >= 2:
+                options = viable_options
 
         top_option = self._parse_indicator_option(options[0]) if options else None
         top_matches_primary = bool(
@@ -2860,6 +3133,21 @@ class QueryService:
             and top_option[0] == normalize_provider_name(getattr(resolved, "provider", provider))
             and str(top_option[1]).upper() == str(getattr(resolved, "code", "") or "").upper()
         )
+
+        if len(options) == 1:
+            if top_option and (not primary_accepted or not top_matches_primary):
+                self._apply_indicator_option_to_intent(intent, options[0])
+            return None
+
+        if len(options) < 2:
+            if not primary_accepted:
+                return self._build_no_reliable_indicator_match_response(
+                    conversation_id=conversation_id,
+                    intent=intent,
+                    query=query_text or indicator_query,
+                    processing_steps=processing_steps,
+                )
+            return None
 
         if primary_accepted and top_matches_primary:
             return None
@@ -2896,7 +3184,7 @@ class QueryService:
             processingSteps=processing_steps,
         )
 
-    def _build_post_parse_clarification(
+    async def _build_post_parse_clarification(
         self,
         conversation_id: str,
         query: str,
@@ -2936,7 +3224,7 @@ class QueryService:
         if group_scope_clarification:
             return group_scope_clarification
 
-        return self._build_prefetch_indicator_choice_clarification(
+        return await self._build_prefetch_indicator_choice_clarification(
             conversation_id=conversation_id,
             query=query,
             intent=intent,
@@ -5839,7 +6127,7 @@ class QueryService:
             if suggestions and suggestions.get('warning'):
                 logger.info("Validation warning: %s", suggestions['warning'])
 
-            parse_stage_clarification = self._build_post_parse_clarification(
+            parse_stage_clarification = await self._build_post_parse_clarification(
                 conversation_id=conv_id,
                 query=query,
                 parse_result=parse_result,
@@ -7409,7 +7697,7 @@ class QueryService:
                     processing_steps=tracker.to_list() if tracker else None,
                 )
 
-            parse_stage_clarification = self._build_post_parse_clarification(
+            parse_stage_clarification = await self._build_post_parse_clarification(
                 conversation_id=conversation_id,
                 query=query,
                 parse_result=parse_result,

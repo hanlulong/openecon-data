@@ -723,7 +723,10 @@ export function LandingPage() {
                     <div className="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
                       <Search className="h-4 w-4 text-gray-400 flex-shrink-0" />
                       <input
+                        id="landing-query-input"
+                        name="landing_query"
                         className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
+                        aria-label="Ask about economic data"
                         placeholder="Ask about economic data..."
                         value={sampleQuery}
                         onChange={(e) => setSampleQuery(e.target.value)}
