@@ -778,6 +778,147 @@ class IndicatorResolver:
         return normalized
 
     @staticmethod
+    def _specialization_penalty(query_text: str, candidate_text: str) -> float:
+        """Penalize subgroup-specific series when the query asked for a generic metric."""
+        query_lower = str(query_text or "").lower()
+        candidate_lower = str(candidate_text or "").lower()
+        if not candidate_lower:
+            return 0.0
+
+        penalty = 0.0
+
+        def query_mentions(*terms: str) -> bool:
+            return any(term in query_lower for term in terms)
+
+        def candidate_mentions(*terms: str) -> bool:
+            return any(term in candidate_lower for term in terms)
+
+        penalty += IndicatorResolver._labor_rate_specificity_penalty(query_lower, candidate_lower)
+
+        if not query_mentions("student", "students", "school months", "summer months") and candidate_mentions(
+            "student",
+            "students",
+            "school months",
+            "summer months",
+        ):
+            penalty += 0.62
+
+        if not query_mentions("education", "educational attainment", "school") and candidate_mentions(
+            "educational attainment",
+            "education",
+        ):
+            penalty += 0.42
+
+        if not query_mentions("fiscal") and candidate_mentions("fiscal"):
+            penalty += 0.38
+
+        if not query_mentions("insurance", "employment insurance", "beneficiaries", "claimants") and candidate_mentions(
+            "employment insurance",
+            "insurance program",
+            "insurance region",
+            "beneficiaries",
+            "claimants",
+        ):
+            penalty += 0.46
+
+        if not query_mentions("indigenous") and candidate_mentions("indigenous"):
+            penalty += 0.32
+
+        if not query_mentions("gender", "sex", "women", "woman", "men", "man", "female", "male") and candidate_mentions(
+            "gender",
+            "sex",
+            "women",
+            "woman",
+            "men",
+            "man",
+            "female",
+            "male",
+        ):
+            penalty += 0.24
+
+        if not query_mentions("urban", "rural", "metropolitan", "population centre", "health region") and candidate_mentions(
+            "urban",
+            "rural",
+            "metropolitan",
+            "population centre",
+            "health region",
+        ):
+            penalty += 0.18
+
+        if not query_mentions("industry", "industries", "sector", "sectors") and candidate_mentions(
+            "industry",
+            "industries",
+            "sector",
+            "sectors",
+        ):
+            penalty += 0.26
+
+        if not query_mentions("firm size", "business size", "company size", "enterprise size") and candidate_mentions(
+            "firm size",
+            "business size",
+            "enterprise size",
+        ):
+            penalty += 0.26
+
+        if not query_mentions("province", "provinces", "territory", "territories", "regional", "region", "regions") and candidate_mentions(
+            "province",
+            "provinces",
+            "territory",
+            "territories",
+            "regional",
+            "regions",
+        ):
+            penalty += 0.20
+
+        if not query_mentions("youth", "age", "aged", "years old", "15-24", "15 to 24", "25-64", "25 to 64") and (
+            re.search(r"\baged?\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s*(?:to|-)\s*\d{1,2}\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s+years?\s+(?:and|or)\s+over\b", candidate_lower)
+        ):
+            penalty += 0.34
+
+        return penalty
+
+    @staticmethod
+    def _labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> float:
+        """Penalize near-miss labor-rate candidates for generic labor queries."""
+        query_lower = str(query_text or "").lower()
+        candidate_lower = str(candidate_text or "").lower()
+        if not query_lower or not candidate_lower:
+            return 0.0
+
+        requested_metric = ""
+        if re.search(r"\bemployment\s+rate\b", query_lower):
+            requested_metric = "employment"
+        elif re.search(r"\bunemployment\s+rate\b", query_lower):
+            requested_metric = "unemployment"
+        elif re.search(r"\b(?:labou?r\s+force\s+)?participation\s+rate\b", query_lower):
+            requested_metric = "participation"
+
+        if not requested_metric:
+            return 0.0
+
+        def has_metric_rate(metric: str) -> bool:
+            metric_pattern = {
+                "employment": r"\bemployment(?:\s+\w+){0,2}\s+rates?\b",
+                "unemployment": r"\bunemployment(?:\s+\w+){0,2}\s+rates?\b",
+                "participation": r"\b(?:labou?r\s+force\s+)?participation(?:\s+\w+){0,2}\s+rates?\b",
+            }[metric]
+            return bool(re.search(metric_pattern, candidate_lower))
+
+        penalty = 0.0
+        if not has_metric_rate(requested_metric):
+            penalty += 0.58
+
+        for sibling_metric in ("employment", "unemployment", "participation"):
+            if sibling_metric == requested_metric:
+                continue
+            if has_metric_rate(sibling_metric):
+                penalty += 0.12
+
+        return penalty
+
+    @staticmethod
     def _single_directional_term(terms: Set[str]) -> str:
         """Return a strict single trade direction from query terms, if present."""
         has_import = bool({"import", "imports"} & terms)
@@ -1242,6 +1383,8 @@ class IndicatorResolver:
         if "discontinued" in candidate_text_lower and "discontinued" not in query_text:
             confidence -= 0.42
 
+        confidence -= self._specialization_penalty(query_text, candidate_text_lower)
+
         # Guardrail: single-term lexical hits are often semantically ambiguous
         # (e.g., "custom indicator" matching "customs and trade ...").
         # Keep confidence moderate unless we have an exact code or direct phrase match.
@@ -1361,6 +1504,7 @@ class IndicatorResolver:
         """Select best search result using lexical + concept-aware scoring."""
         best_result: Optional[Dict[str, Any]] = None
         best_confidence = 0.0
+        best_tiebreak: tuple[float, float, int] = (-float("inf"), -float("inf"), -10**9)
 
         for idx, candidate in enumerate(search_results):
             confidence = self._score_search_match(query, candidate, rank_index=idx)
@@ -1381,9 +1525,20 @@ class IndicatorResolver:
                 confidence -= country_penalty
 
             confidence = max(0.0, min(1.0, confidence))
-            if confidence > best_confidence:
+            candidate_text = " ".join(
+                str(candidate.get(key) or "")
+                for key in ("name", "description", "code")
+            )
+            specialization_penalty = self._specialization_penalty(query, candidate_text)
+            semantic_similarity = float(candidate.get("_semantic_similarity") or 0.0)
+            tiebreak = (-specialization_penalty, semantic_similarity, -idx)
+
+            if confidence > best_confidence or (
+                abs(confidence - best_confidence) <= 1e-9 and tiebreak > best_tiebreak
+            ):
                 best_result = candidate
                 best_confidence = confidence
+                best_tiebreak = tiebreak
 
         return best_result, best_confidence
 

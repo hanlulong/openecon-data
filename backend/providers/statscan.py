@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import logging
+import re
 
 import httpx
 
@@ -496,6 +497,8 @@ class StatsCanProvider(BaseProvider):
             return self._find_member_id_by_keywords(members, ["canada", "total"]) or 1
 
         if any(term in dimension_name_lower for term in ["labour force characteristic", "labour force", "labor force"]):
+            if "employment rate" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["employment rate"]) or 1
             if "employment-to-population" in indicator_lower or "employment to population" in indicator_lower:
                 return self._find_member_id_by_keywords(members, ["employment rate", "employment-to-population ratio"]) or 1
             if "participation rate" in indicator_lower:
@@ -544,6 +547,51 @@ class StatsCanProvider(BaseProvider):
         return self._find_member_id_by_keywords(members, ["total", "all", "canada", "estimate"]) or (
             members[0].get("memberId") if members[0].get("memberId") is not None else 1
         )
+
+    @staticmethod
+    def _title_specialization_penalty(query_text: str, candidate_text: str) -> float:
+        """Penalize specialized subgroup series when the query asked for a generic metric."""
+        query_lower = str(query_text or "").lower()
+        candidate_lower = str(candidate_text or "").lower()
+        if not candidate_lower:
+            return 0.0
+
+        penalty = 0.0
+
+        def query_mentions(*terms: str) -> bool:
+            return any(term in query_lower for term in terms)
+
+        def candidate_mentions(*terms: str) -> bool:
+            return any(term in candidate_lower for term in terms)
+
+        if not query_mentions("student", "students", "school months", "summer months") and candidate_mentions(
+            "student",
+            "students",
+            "school months",
+            "summer months",
+        ):
+            penalty += 15.0
+
+        if not query_mentions("education", "educational attainment", "school") and candidate_mentions(
+            "educational attainment",
+            "education",
+        ):
+            penalty += 12.0
+
+        if not query_mentions("fiscal") and candidate_mentions("fiscal"):
+            penalty += 10.0
+
+        if not query_mentions("indigenous") and candidate_mentions("indigenous"):
+            penalty += 10.0
+
+        if not query_mentions("youth", "age", "aged", "years old", "15-24", "15 to 24", "25-64", "25 to 64") and (
+            re.search(r"\baged?\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s*(?:to|-)\s*\d{1,2}\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s+years?\s+(?:and|or)\s+over\b", candidate_lower)
+        ):
+            penalty += 8.0
+
+        return penalty
 
     def _score_cube_metadata_relevance(
         self,
@@ -1661,6 +1709,8 @@ class StatsCanProvider(BaseProvider):
             if cube.get("metadataCached"):
                 score += 3.0
 
+            score -= self._title_specialization_penalty(keyword, title)
+
             return score
 
         matching: Dict[str, Dict[str, Any]] = {}
@@ -1970,6 +2020,7 @@ class StatsCanProvider(BaseProvider):
             NormalizedData with the requested data
         """
         indicator = params.get("indicator", "")
+        display_indicator = str(params.get("indicatorLabel") or indicator or "").strip() or str(indicator or "")
         geography = params.get("geography")
         periods = params.get("periods", 240)
         start_date = params.get("startDate")
@@ -1984,8 +2035,23 @@ class StatsCanProvider(BaseProvider):
 
         # Normalize indicator name: convert "RETAIL_SALES" → "retail sales"
         # This ensures the search works with StatsCan's actual cube titles
-        search_term = indicator.lower().replace("_", " ")
+        search_term = display_indicator.lower().replace("_", " ")
         logger.info(f"📊 Search term: '{search_term}' (normalized from '{indicator}')")
+
+        exact_product_id = self._normalize_metadata_product_id(indicator)
+        indicator_digits = "".join(ch for ch in str(indicator or "") if ch.isdigit())
+        if exact_product_id and indicator_digits and len(indicator_digits) in {8, 10}:
+            logger.info(f"📦 Treating {indicator} as an exact Statistics Canada product ID")
+            metadata = await self._get_cube_metadata(exact_product_id)
+            return await self.fetch_from_product_with_discovery(
+                product_id=exact_product_id,
+                indicator=display_indicator,
+                metadata=metadata,
+                geography=geography,
+                periods=periods,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
         # Step 1: Search for matching cubes
         matching_cubes = await self.search_vectors(search_term, limit=5)

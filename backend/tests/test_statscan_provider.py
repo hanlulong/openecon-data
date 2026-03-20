@@ -65,6 +65,25 @@ def test_select_default_member_id_prefers_employment_series(statscan_provider):
     assert age_member == 1
 
 
+def test_select_default_member_id_prefers_employment_rate_member(statscan_provider):
+    metadata = statscan_provider._statscan_metadata_service.get_local_cube_metadata("14100287")
+    labour_dimension = next(
+        dim for dim in metadata["dimension"] if dim["dimensionNameEn"] == "Labour force characteristics"
+    )
+    expected_member = statscan_provider._find_member_id_by_keywords(
+        labour_dimension["member"],
+        ["employment rate"],
+    )
+
+    member = statscan_provider._select_default_member_id(
+        labour_dimension["dimensionNameEn"],
+        labour_dimension["member"],
+        "employment rate",
+    )
+
+    assert member == expected_member
+
+
 def test_select_default_member_id_prefers_total_retail_all_stores(statscan_provider):
     metadata = statscan_provider._statscan_metadata_service.get_local_cube_metadata("20100031")
     dimensions = metadata["dimension"]
@@ -91,3 +110,42 @@ def test_select_default_member_id_prefers_total_retail_all_stores(statscan_provi
     assert store_member == 1
     assert component_member == 3
     assert adjustment_member == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_dynamic_data_uses_exact_product_id_without_search(monkeypatch, statscan_provider):
+    metadata = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Geography",
+                "member": [{"memberId": 1, "memberNameEn": "Canada"}],
+            }
+        ]
+    }
+
+    async def fake_get_cube_metadata(product_id):
+        assert product_id == "14100374"
+        return metadata
+
+    async def fake_fetch_from_product_with_discovery(**kwargs):
+        assert kwargs["product_id"] == "14100374"
+        assert kwargs["indicator"] == "employment rate"
+        return "ok"
+
+    monkeypatch.setattr(statscan_provider, "_get_cube_metadata", fake_get_cube_metadata)
+    monkeypatch.setattr(
+        statscan_provider,
+        "fetch_from_product_with_discovery",
+        fake_fetch_from_product_with_discovery,
+    )
+
+    async def fail_search_vectors(*args, **kwargs):
+        raise AssertionError("search_vectors should not run for exact product IDs")
+
+    monkeypatch.setattr(statscan_provider, "search_vectors", fail_search_vectors)
+
+    result = await statscan_provider.fetch_dynamic_data(
+        {"indicator": "14100374", "indicatorLabel": "employment rate"}
+    )
+
+    assert result == "ok"

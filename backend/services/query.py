@@ -809,6 +809,147 @@ class QueryService:
             for key in ("indicator", "seriesId", "description", "source", "country", "unit")
         ).strip()
 
+    @staticmethod
+    def _specialization_mismatch_penalty(query_text: str, candidate_text: str) -> float:
+        """Penalize subgroup-specific series when the query asked for a generic metric."""
+        query_lower = str(query_text or "").lower()
+        candidate_lower = str(candidate_text or "").lower()
+        if not candidate_lower:
+            return 0.0
+
+        penalty = 0.0
+
+        def query_mentions(*terms: str) -> bool:
+            return any(term in query_lower for term in terms)
+
+        def candidate_mentions(*terms: str) -> bool:
+            return any(term in candidate_lower for term in terms)
+
+        penalty += QueryService._labor_rate_specificity_penalty(query_lower, candidate_lower)
+
+        if not query_mentions("student", "students", "school months", "summer months") and candidate_mentions(
+            "student",
+            "students",
+            "school months",
+            "summer months",
+        ):
+            penalty += 3.4
+
+        if not query_mentions("education", "educational attainment", "school") and candidate_mentions(
+            "educational attainment",
+            "education",
+        ):
+            penalty += 2.4
+
+        if not query_mentions("fiscal") and candidate_mentions("fiscal"):
+            penalty += 2.1
+
+        if not query_mentions("insurance", "employment insurance", "beneficiaries", "claimants") and candidate_mentions(
+            "employment insurance",
+            "insurance program",
+            "insurance region",
+            "beneficiaries",
+            "claimants",
+        ):
+            penalty += 2.2
+
+        if not query_mentions("indigenous") and candidate_mentions("indigenous"):
+            penalty += 2.0
+
+        if not query_mentions("gender", "sex", "women", "woman", "men", "man", "female", "male") and candidate_mentions(
+            "gender",
+            "sex",
+            "women",
+            "woman",
+            "men",
+            "man",
+            "female",
+            "male",
+        ):
+            penalty += 1.6
+
+        if not query_mentions("urban", "rural", "metropolitan", "population centre", "health region") and candidate_mentions(
+            "urban",
+            "rural",
+            "metropolitan",
+            "population centre",
+            "health region",
+        ):
+            penalty += 1.2
+
+        if not query_mentions("industry", "industries", "sector", "sectors") and candidate_mentions(
+            "industry",
+            "industries",
+            "sector",
+            "sectors",
+        ):
+            penalty += 1.7
+
+        if not query_mentions("firm size", "business size", "company size", "enterprise size") and candidate_mentions(
+            "firm size",
+            "business size",
+            "enterprise size",
+        ):
+            penalty += 1.7
+
+        if not query_mentions("province", "provinces", "territory", "territories", "regional", "region", "regions") and candidate_mentions(
+            "province",
+            "provinces",
+            "territory",
+            "territories",
+            "regional",
+            "regions",
+        ):
+            penalty += 1.3
+
+        if not query_mentions("youth", "age", "aged", "years old", "15-24", "15 to 24", "25-64", "25 to 64") and (
+            re.search(r"\baged?\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s*(?:to|-)\s*\d{1,2}\b", candidate_lower)
+            or re.search(r"\b\d{1,2}\s+years?\s+(?:and|or)\s+over\b", candidate_lower)
+        ):
+            penalty += 2.0
+
+        return penalty
+
+    @staticmethod
+    def _labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> float:
+        """Penalize near-miss labour-rate candidates for generic rate queries."""
+        query_lower = str(query_text or "").lower()
+        candidate_lower = str(candidate_text or "").lower()
+        if not query_lower or not candidate_lower:
+            return 0.0
+
+        requested_metric = ""
+        if re.search(r"\bemployment\s+rate\b", query_lower):
+            requested_metric = "employment"
+        elif re.search(r"\bunemployment\s+rate\b", query_lower):
+            requested_metric = "unemployment"
+        elif re.search(r"\b(?:labou?r\s+force\s+)?participation\s+rate\b", query_lower):
+            requested_metric = "participation"
+
+        if not requested_metric:
+            return 0.0
+
+        def has_metric_rate(metric: str) -> bool:
+            metric_pattern = {
+                "employment": r"\bemployment(?:\s+\w+){0,2}\s+rates?\b",
+                "unemployment": r"\bunemployment(?:\s+\w+){0,2}\s+rates?\b",
+                "participation": r"\b(?:labou?r\s+force\s+)?participation(?:\s+\w+){0,2}\s+rates?\b",
+            }[metric]
+            return bool(re.search(metric_pattern, candidate_lower))
+
+        penalty = 0.0
+        if not has_metric_rate(requested_metric):
+            penalty += 2.0
+
+        for sibling_metric in ("employment", "unemployment", "participation"):
+            if sibling_metric == requested_metric:
+                continue
+            if has_metric_rate(sibling_metric):
+                penalty += 0.45
+
+        return penalty
+
     def _score_series_relevance(self, query: str, series: Any) -> float:
         """Score semantic relevance of one returned series to the original query."""
         query_text = str(query or "").lower()
@@ -915,6 +1056,8 @@ class QueryService:
             score -= 2.0
         if "discontinued" in series_cues and "discontinued" not in query_cues:
             score -= 3.0
+
+        score -= self._specialization_mismatch_penalty(query_text, series_text)
 
         # Generic GDP series should not dominate directional/ratio trade queries.
         if "gdp (current us$)" in series_text and ({"import", "export", "trade_balance"} & query_cues):
@@ -1219,6 +1362,8 @@ class QueryService:
                 hints.extend(["gdp deflator"])
             if code_upper.endswith(".ZS"):
                 hints.extend(["% of gdp", "share of gdp"])
+            if ".YG." in code_upper or ".1524." in code_upper:
+                hints.extend(["youth", "15 to 24 years"])
 
         if provider_norm == "FRED":
             if code_upper.startswith("DGS"):
@@ -1255,6 +1400,28 @@ class QueryService:
                 hints.extend(["consumer price", "inflation", "cpi"])
             if "PPPI" in code_upper or "PWPI" in code_upper:
                 hints.extend(["producer price", "ppi"])
+            if code_upper.startswith("LER"):
+                hints.extend(["employment rate"])
+            if code_upper.startswith("LUR"):
+                hints.extend(["unemployment rate"])
+            if "_FY" in code_upper:
+                hints.extend(["fiscal"])
+            if "_FM" in code_upper:
+                hints.extend(["female", "women"])
+            if "_ML" in code_upper:
+                hints.extend(["male", "men"])
+            if "_UR" in code_upper:
+                hints.extend(["urban"])
+            if "_RU" in code_upper:
+                hints.extend(["rural"])
+            if "_IFT" in code_upper:
+                hints.extend(["informal"])
+            if "15T24" in code_upper:
+                hints.extend(["15 to 24 years", "youth"])
+            if "1564" in code_upper:
+                hints.extend(["15 to 64 years"])
+            if "GE15" in code_upper:
+                hints.extend(["15 years and over"])
 
         if provider_norm == "BIS":
             if code_upper == "WS_DSR":
@@ -1263,6 +1430,18 @@ class QueryService:
                 hints.extend(["house prices"])
             if code_upper == "WS_CBPOL":
                 hints.extend(["policy rate"])
+
+        if provider_norm == "OECD":
+            if "UNEM" in code_upper:
+                hints.extend(["unemployment rate"])
+            if "EMP" in code_upper and "UNEM" not in code_upper:
+                hints.extend(["employment rate"])
+            if "CPI" in code_upper:
+                hints.extend(["consumer price", "inflation", "cpi"])
+            if "PPI" in code_upper:
+                hints.extend(["producer price", "ppi"])
+            if code_upper in {"IRLT", "IRST"} or "IRLT" in code_upper:
+                hints.extend(["long-term interest rate", "bond yield"])
 
         return " ".join(dict.fromkeys(hints))
 
@@ -2644,6 +2823,15 @@ class QueryService:
                 provider=provider,
                 indicator_query=indicator_query,
                 resolved_code=str(resolved.code),
+                resolved_name=" ".join(
+                    part
+                    for part in [
+                        str(getattr(resolved, "name", "") or ""),
+                        str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
+                        str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
+                    ]
+                    if part
+                ),
             ):
                 primary_accepted = False
             if primary_accepted and primary_relevance < self._minimum_resolved_relevance_threshold(indicator_query):
@@ -3373,6 +3561,7 @@ class QueryService:
         provider: str,
         indicator_query: str,
         resolved_code: str,
+        resolved_name: str = "",
     ) -> bool:
         """
         Lightweight semantic plausibility check for resolved provider codes.
@@ -3384,9 +3573,21 @@ class QueryService:
         query_cues = self._extract_indicator_cues(indicator_query or "")
         code_upper = str(resolved_code or "").upper()
         query_lower = str(indicator_query or "").lower()
+        candidate_text = " ".join(
+            part
+            for part in [
+                resolved_name,
+                self._code_semantic_hint(provider_upper, code_upper),
+                code_upper,
+            ]
+            if part
+        ).lower()
 
         if not query_cues:
             return True
+
+        if self._specialization_mismatch_penalty(query_lower, candidate_text) >= 1.8:
+            return False
 
         if "gdp_deflator" in query_cues and not any(
             token in code_upper for token in ("DEFL", "DEFLATOR", "GDPDEFL")
@@ -3580,10 +3781,16 @@ class QueryService:
         if not provider or not code:
             return False
 
+        indicator_name = ""
+        meta = getattr(data[0], "metadata", None)
+        if meta:
+            indicator_name = str(getattr(meta, "indicator", "") or "")
+
         return not self._is_resolved_indicator_plausible(
             provider=provider,
             indicator_query=query,
             resolved_code=code,
+            resolved_name=indicator_name,
         )
 
     def _normalize_bis_metadata_labels(self, data: List[Any]) -> None:
@@ -6071,6 +6278,15 @@ class QueryService:
                             provider=provider,
                             indicator_query=indicator_query,
                             resolved_code=resolved.code,
+                            resolved_name=" ".join(
+                                part
+                                for part in [
+                                    str(getattr(resolved, "name", "") or ""),
+                                    str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
+                                    str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
+                                ]
+                                if part
+                            ),
                         ):
                             accepted_resolved = False
                         if accepted_resolved and resolved_relevance < relevance_threshold:
@@ -6359,6 +6575,7 @@ class QueryService:
                         logger.info(f"🔍 Using dynamic discovery for StatsCan indicator: {indicator}")
                         dynamic_params = {
                             "indicator": indicator,
+                            "indicatorLabel": str(intent.indicators[0] if intent.indicators else indicator),
                             "geography": params.get("geography"),
                             "periods": params.get("periods", 240)
                         }

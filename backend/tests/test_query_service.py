@@ -950,6 +950,9 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
 
+    def test_semantic_clarifier_does_not_repeat_for_number_employed_query(self) -> None:
+        self.assertIsNone(self.service.semantic_clarifier.detect("number employed in Canada"))
+
     def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
         conversation_manager.clear_pending_indicator_options(conv_id)
@@ -1219,6 +1222,58 @@ class QueryServiceTests(unittest.TestCase):
             allow_orchestrator=True,
         )
 
+    def test_try_resolve_pending_semantic_clarification_matches_numeric_option(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-semantic-numeric-reply")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "employment_metric",
+                "concept_label": "employment",
+                "original_query": "employment in Canada",
+                "question_lines": ["Choose the metric you want:"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "number employed",
+                        "value": "number employed in Canada",
+                    },
+                    {
+                        "id": "2",
+                        "label": "employment rate",
+                        "value": "employment rate in Canada",
+                    },
+                ],
+            },
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+            response = run(
+                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
+                    query="1",
+                    conversation_id=conv_id,
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=True,
+                    tracker=None,
+                )
+            )
+
+        self.assertEqual(response, expected_response)
+        process_query.assert_awaited_once_with(
+            query="number employed in Canada",
+            conversation_id=conv_id,
+            auto_pro_mode=False,
+            use_orchestrator=False,
+            allow_orchestrator=True,
+        )
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
             "[IMF] Trade Balance (% of GDP) (BT_GDP)",
@@ -1350,6 +1405,26 @@ class QueryServiceTests(unittest.TestCase):
         options = response.clarificationOptions or []
         self.assertEqual(options[0].label, "compare member countries")
         self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
+
+    def test_is_resolved_indicator_plausible_rejects_unrequested_specialized_slice(self) -> None:
+        plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+            provider="WorldBank",
+            indicator_query="employment rate in Canada",
+            resolved_code="JI.EMP.1564.YG.ZS",
+            resolved_name="Employment rate, aged 15-24 (% of labor force aged 15-24)",
+        )
+
+        self.assertFalse(plausible)
+
+    def test_is_resolved_indicator_plausible_rejects_employment_insurance_regional_slice(self) -> None:
+        plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+            provider="StatsCan",
+            indicator_query="employment rate in Canada",
+            resolved_code="14100354",
+            resolved_name="Regional unemployment rates used by the Employment Insurance program, three-month moving average, seasonally adjusted",
+        )
+
+        self.assertFalse(plausible)
 
     def test_process_query_returns_prefetch_indicator_clarification_before_fetch(self) -> None:
         conv_id = "conv-process-prefetch-choice"

@@ -46,6 +46,9 @@ class SemanticClarifier:
             ),
             block_patterns=(
                 r"\bunemployment\b",
+                r"\bnumber\s+employed\b",
+                r"\bnumber\s+of\s+(?:people\s+)?employed\b",
+                r"\bemployed\s+persons?\b",
                 r"\bemployment\s+rate\b",
                 r"\bemployment[-\s]+to[-\s]+population\b",
                 r"\bemployment[-\s]+population\b",

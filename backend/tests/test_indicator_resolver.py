@@ -265,6 +265,43 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertEqual(result.code, "SL.EMP.TOTL.SP.ZS")
         self.assertEqual(result.source, "catalog")
 
+    def test_prefers_general_employment_rate_over_specialized_breakdowns(self):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "14100021",
+                    "provider": "StatsCan",
+                    "name": "Unemployment rate, participation rate, and employment rate by type of student during school months, monthly, unadjusted for seasonality",
+                    "description": "Employment rate by type of student during school months",
+                },
+                {
+                    "code": "14100374",
+                    "provider": "StatsCan",
+                    "name": "Employment and unemployment rate, monthly, unadjusted for seasonality",
+                    "description": "Employment and unemployment rate",
+                },
+                {
+                    "code": "14100020",
+                    "provider": "StatsCan",
+                    "name": "Unemployment rate, participation rate and employment rate by educational attainment, annual",
+                    "description": "Employment rate by educational attainment",
+                },
+                {
+                    "code": "14100354",
+                    "provider": "StatsCan",
+                    "name": "Regional unemployment rates used by the Employment Insurance program, three-month moving average, seasonally adjusted",
+                    "description": "Employment Insurance regional unemployment rate",
+                },
+            ]
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("employment rate", provider="STATSCAN", country="Canada", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "14100374")
+
     def test_resolves_foreign_exchange_reserves_via_catalog(self):
         lookup = _FakeLookup(search_results=[])
         resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
