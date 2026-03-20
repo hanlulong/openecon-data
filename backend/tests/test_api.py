@@ -14,6 +14,7 @@ from backend.main import (  # noqa: E402  # pylint: disable=C0413
     QueryRequest,
     RegisterRequest,
     LoginRequest,
+    get_request_conversation_id,
     health,
     query_endpoint,
     register,
@@ -58,7 +59,7 @@ class ApiTests(unittest.TestCase):
             ],
         )
 
-        with patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)):
+        with patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query:
             result = asyncio.run(
                 query_endpoint(
                     QueryRequest(query="GDP", conversationId=None),
@@ -69,6 +70,29 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(result, QueryResponse)
         self.assertEqual(result.conversationId, "123")
         self.assertFalse(result.clarificationNeeded)
+        process_query.assert_awaited_once_with("GDP", None)
+
+    def test_query_endpoint_uses_anonymous_session_id_as_conversation(self) -> None:
+        mock_response = QueryResponse(conversationId="session-123", clarificationNeeded=True)
+
+        with patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query:
+            result = asyncio.run(
+                query_endpoint(
+                    QueryRequest(query="1", conversationId=None, sessionId="session-123"),
+                    user=None,
+                )
+            )
+
+        self.assertEqual(result.conversationId, "session-123")
+        process_query.assert_awaited_once_with("1", "session-123")
+
+    def test_get_request_conversation_id_prefers_explicit_conversation(self) -> None:
+        request = QueryRequest(query="GDP", conversationId="conv-1", sessionId="session-1")
+        self.assertEqual(get_request_conversation_id(request, user=None), "conv-1")
+
+    def test_get_request_conversation_id_uses_anonymous_session(self) -> None:
+        request = QueryRequest(query="GDP", conversationId=None, sessionId="session-1")
+        self.assertEqual(get_request_conversation_id(request, user=None), "session-1")
 
     def test_auth_flow(self) -> None:
         """Test auth flow using MockAuthService (simulates dev mode without Supabase)."""

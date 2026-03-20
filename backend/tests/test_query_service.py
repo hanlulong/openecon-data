@@ -5,7 +5,7 @@ from typing import Any
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from backend.models import GeneratedFile, NormalizedData, ParsedIntent, QueryResponse
+from backend.models import ClarificationOption, GeneratedFile, NormalizedData, ParsedIntent, QueryResponse
 from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
 from backend.services.cache import cache_service
@@ -1326,7 +1326,8 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             message="ok",
         )
-        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
+             patch.object(self.service, "process_query", AsyncMock()) as process_query:
             response = run(
                 self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
                     query="employment rate",
@@ -1339,13 +1340,8 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(response, expected_response)
-        process_query.assert_awaited_once_with(
-            query="employment rate in G20",
-            conversation_id=conv_id,
-            auto_pro_mode=False,
-            use_orchestrator=False,
-            allow_orchestrator=False,
-        )
+        execute_intent.assert_awaited_once()
+        process_query.assert_not_awaited()
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
     def test_try_resolve_pending_semantic_clarification_matches_group_scope_keyword(self) -> None:
@@ -1429,7 +1425,8 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             message="ok",
         )
-        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
+             patch.object(self.service, "process_query", AsyncMock()) as process_query:
             response = run(
                 self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
                     query="1",
@@ -1442,14 +1439,55 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(response, expected_response)
-        process_query.assert_awaited_once_with(
-            query="number employed in Canada",
-            conversation_id=conv_id,
-            auto_pro_mode=False,
-            use_orchestrator=False,
-            allow_orchestrator=False,
-        )
+        execute_intent.assert_awaited_once()
+        process_query.assert_not_awaited()
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
+    def test_build_intent_from_semantic_clarification_sets_country_and_indicator(self) -> None:
+        pending = {
+            "kind": "employment_metric",
+            "original_query": "employment in Canada",
+        }
+        option = ClarificationOption(
+            id="1",
+            label="number employed",
+            value="number employed in Canada",
+        )
+
+        intent = self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+            pending=pending,
+            selected_option=option,
+            refined_query=option.value,
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.indicators, ["number employed"])
+        self.assertEqual(intent.parameters.get("country"), "CA")
+
+    def test_build_intent_from_semantic_clarification_sets_compare_member_countries(self) -> None:
+        pending = {
+            "kind": "group_scope",
+            "original_query": "employment rate in G20",
+        }
+        option = ClarificationOption(
+            id="1",
+            label="compare member countries",
+            value="employment rate across G20 member countries",
+        )
+
+        intent = self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+            pending=pending,
+            selected_option=option,
+            refined_query=option.value,
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.indicators, ["employment rate"])
+        self.assertGreaterEqual(len(intent.parameters.get("countries") or []), 10)
 
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [

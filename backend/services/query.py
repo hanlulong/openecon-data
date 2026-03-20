@@ -417,6 +417,86 @@ class QueryService:
                 extracted_country,
             )
 
+    @staticmethod
+    def _extract_indicator_text_from_refined_query(refined_query: str) -> str:
+        """Strip scope suffixes from a clarification-refined query."""
+        text = str(refined_query or "").strip()
+        if not text:
+            return ""
+
+        cleaned = re.sub(
+            r"\s+(?:across|for)\s+.+$",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        return cleaned or text
+
+    def _build_intent_from_semantic_clarification(
+        self,
+        pending: Dict[str, Any],
+        selected_option: ClarificationOption,
+        refined_query: str,
+    ) -> Optional[ParsedIntent]:
+        """
+        Build a deterministic intent for clarification follow-ups when possible.
+
+        This avoids sending an already-disambiguated reply back through the full
+        LLM parse path.
+        """
+        kind = str(pending.get("kind") or "").strip()
+        option_label = str(selected_option.label or "").strip()
+        query_text = str(refined_query or "").strip()
+        if not query_text:
+            return None
+
+        # "group as a whole" still requires more nuanced aggregate handling.
+        if kind == "group_scope" and "compare member countries" not in option_label.lower():
+            return None
+
+        extracted_countries = self._extract_countries_from_query(query_text)
+        expanded_region_countries = CountryResolver.expand_regions_in_query(query_text)
+        params: Dict[str, Any] = {}
+
+        if expanded_region_countries and (
+            "member countries" in query_text.lower()
+            or self._is_comparison_query(query_text)
+        ):
+            params["countries"] = expanded_region_countries
+        elif len(extracted_countries) == 1:
+            params["country"] = extracted_countries[0]
+        elif len(extracted_countries) > 1:
+            params["countries"] = extracted_countries
+
+        indicator_text = option_label if kind != "group_scope" else self._extract_indicator_text_from_refined_query(query_text)
+        indicator_text = str(indicator_text or "").strip() or self._extract_indicator_text_from_refined_query(query_text)
+        if not indicator_text:
+            return None
+
+        routing_decision = self.unified_router.route(
+            query=query_text,
+            indicators=[indicator_text],
+            country=params.get("country"),
+            countries=params.get("countries"),
+            llm_provider=None,
+        )
+        api_provider = normalize_provider_name(routing_decision.provider)
+        if params.get("countries") and len(params["countries"]) > 1 and not self._provider_covers_country_list(api_provider, params["countries"]):
+            api_provider = "WORLDBANK"
+
+        intent = ParsedIntent(
+            apiProvider=api_provider,
+            indicators=[indicator_text],
+            parameters=params,
+            clarificationNeeded=False,
+            confidence=0.95,
+            recommendedChartType="line",
+            originalQuery=query_text,
+        )
+        self._apply_country_overrides(intent, query_text)
+        return intent
+
     async def _select_routed_provider(self, intent: ParsedIntent, query: str) -> str:
         """
         Select provider using deterministic router, optionally enhanced by
@@ -2036,6 +2116,33 @@ class QueryService:
             )
 
         conversation_manager.clear_pending_semantic_clarification(conversation_id)
+        deterministic_intent = self._build_intent_from_semantic_clarification(
+            pending=pending,
+            selected_option=selected_option if selected_option is not None else ClarificationOption(
+                id="custom",
+                label=refined_query,
+                value=refined_query,
+            ),
+            refined_query=refined_query,
+        )
+        if deterministic_intent is not None:
+            parse_result = ParseRouteResult(
+                intent=deterministic_intent,
+                explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
+                routed_provider=deterministic_intent.apiProvider,
+                validation_warning=ProviderRouter.validate_routing(
+                    deterministic_intent.apiProvider,
+                    refined_query,
+                    deterministic_intent,
+                ),
+            )
+            return await self._execute_resolved_intent(
+                query=refined_query,
+                conversation_id=conversation_id,
+                intent=deterministic_intent,
+                parse_result=parse_result,
+                tracker=tracker,
+            )
         return await self.process_query(
             query=refined_query,
             conversation_id=conversation_id,
@@ -3281,6 +3388,223 @@ class QueryService:
             ],
             message=f"⚠️ **Uncertain Query**\n{reason}\n\nPlease provide more details or use Pro Mode for better results.",
             processingSteps=processing_steps,
+        )
+
+    async def _execute_resolved_intent(
+        self,
+        query: str,
+        conversation_id: str,
+        intent: ParsedIntent,
+        parse_result: ParseRouteResult,
+        tracker: Optional['ProcessingTracker'] = None,
+    ) -> QueryResponse:
+        """Run validation, clarification guardrails, and fetch for an already-built intent."""
+        conv_id = conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
+
+        if intent.clarificationNeeded:
+            conversation_manager.clear_pending_indicator_options(conv_id)
+            conversation_manager.clear_pending_semantic_clarification(conv_id)
+            return QueryResponse(
+                conversationId=conv_id,
+                intent=intent,
+                clarificationNeeded=True,
+                clarificationQuestions=intent.clarificationQuestions,
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        if intent.needsDecomposition and intent.decompositionType == "provinces":
+            intent.decompositionEntities = normalize_canadian_region_list(
+                intent.decompositionEntities,
+                fill_missing_territories=True
+            )
+
+        if intent.needsDecomposition and intent.decompositionEntities:
+            if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):
+                logger.info("📅 Applying default time periods to decomposition query...")
+                ParameterValidator.apply_default_time_periods(intent)
+
+            logger.info("🔄 Query decomposition detected: %s %s into %d entities",
+                       intent.decompositionType, query, len(intent.decompositionEntities))
+            logger.info("🚀 Using batch method (Pro Mode disabled for decomposition)")
+
+            data = await self._decompose_and_aggregate(query, intent, conv_id, tracker)
+
+            conv_id = conversation_manager.add_message_safe(
+                conv_id,
+                "assistant",
+                f"Retrieved data for {len(intent.decompositionEntities)} {intent.decompositionType} from {intent.apiProvider}"
+            )
+
+            return QueryResponse(
+                conversationId=conv_id,
+                intent=intent,
+                data=data,
+                clarificationNeeded=False,
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        logger.info("📅 Applying default time periods to prevent clarification requests...")
+        ParameterValidator.apply_default_time_periods(intent)
+
+        validation = self.pipeline.validate_intent(intent)
+        if not validation.is_valid:
+            logger.warning("Parameter validation failed: %s", validation.validation_error)
+            return self._build_invalid_intent_response(
+                conversation_id=conv_id,
+                intent=intent,
+                validation_error=validation.validation_error,
+                suggestions=validation.suggestions,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+
+        if not validation.is_confident:
+            logger.warning("Low confidence in intent: %s", validation.confidence_reason)
+            return self._build_low_confidence_intent_response(
+                conversation_id=conv_id,
+                intent=intent,
+                confidence_reason=validation.confidence_reason,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+
+        if validation.suggestions and validation.suggestions.get('warning'):
+            logger.info("Validation warning: %s", validation.suggestions['warning'])
+
+        parse_stage_clarification = await self._build_post_parse_clarification(
+            conversation_id=conv_id,
+            query=query,
+            parse_result=parse_result,
+            validation=validation,
+            processing_steps=tracker.to_list() if tracker else None,
+        )
+        if parse_stage_clarification:
+            return parse_stage_clarification
+
+        if validation.is_multi_indicator:
+            logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
+            data = await self._fetch_multi_indicator_data(intent)
+        else:
+            data = await retry_async(
+                lambda: self._fetch_data(intent),
+                max_attempts=3,
+                initial_delay=1.0,
+            )
+
+        if not data or (isinstance(data, list) and len(data) == 0):
+            logger.warning(f"No data returned from {intent.apiProvider} for query: {query}")
+
+            try:
+                logger.info("🔄 Empty result detected, attempting fallback providers...")
+                fallback_data = await self._try_with_fallback(
+                    intent,
+                    DataNotAvailableError(
+                        f"No data returned from {intent.apiProvider} for query: {query}"
+                    ),
+                )
+                if fallback_data:
+                    logger.info("✅ Fallback succeeded after empty primary response")
+                    fallback_data = self._rerank_data_by_query_relevance(query, fallback_data)
+                    fallback_data = self._apply_ranking_projection(query, fallback_data)
+                    fallback_data, coverage_warning = await self._maybe_improve_country_coverage(
+                        query,
+                        intent,
+                        fallback_data,
+                    )
+                    return QueryResponse(
+                        conversationId=conv_id,
+                        intent=intent,
+                        data=fallback_data,
+                        clarificationNeeded=False,
+                        message=coverage_warning,
+                        processingSteps=tracker.to_list() if tracker else None,
+                    )
+            except Exception as fallback_exc:
+                logger.warning("Fallback after empty response failed: %s", fallback_exc)
+
+            recovered_data = await self._maybe_recover_from_empty_data(query, intent)
+            if recovered_data:
+                logger.info("✅ Semantic recovery succeeded after empty primary response")
+                recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
+                    query,
+                    intent,
+                    recovered_data,
+                )
+                return QueryResponse(
+                    conversationId=conv_id,
+                    intent=intent,
+                    data=recovered_data,
+                    clarificationNeeded=False,
+                    message=coverage_warning,
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+
+            no_data_clarification = self._build_no_data_indicator_clarification(
+                conversation_id=conv_id,
+                query=query,
+                intent=intent,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if no_data_clarification:
+                return no_data_clarification
+
+            provider_name = intent.apiProvider
+            indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
+            country = intent.parameters.get("country") or intent.parameters.get("countries", [""])[0] if intent.parameters else ""
+
+            error_details = []
+            error_details.append(f"No data found for **{indicators}**")
+            if country:
+                error_details.append(f"for **{country}**")
+            error_details.append(f"from **{provider_name}**.")
+
+            suggestions = self._get_no_data_suggestions(provider_name, intent)
+
+            return QueryResponse(
+                conversationId=conv_id,
+                intent=intent,
+                data=None,
+                clarificationNeeded=False,
+                error="no_data_found",
+                message=f"⚠️ **No Data Available**\n\n{' '.join(error_details)}\n\n{suggestions}",
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        data = self._rerank_data_by_query_relevance(query, data)
+        data = self._apply_ranking_projection(query, data)
+        recovered_uncertain_data = await self._maybe_recover_from_uncertain_match(
+            query,
+            intent,
+            data,
+        )
+        if recovered_uncertain_data:
+            data = recovered_uncertain_data
+        data, coverage_warning = await self._maybe_improve_country_coverage(
+            query,
+            intent,
+            data,
+        )
+        clarification_response = self._build_uncertain_result_clarification(
+            conversation_id=conv_id,
+            query=query,
+            intent=intent,
+            data=data,
+            processing_steps=tracker.to_list() if tracker else None,
+        )
+        if clarification_response:
+            return clarification_response
+
+        conv_id = conversation_manager.add_message_safe(
+            conv_id,
+            "assistant",
+            f"Retrieved {len(data)} data series from {intent.apiProvider}",
+        )
+
+        return QueryResponse(
+            conversationId=conv_id,
+            intent=intent,
+            data=data,
+            clarificationNeeded=False,
+            message=coverage_warning,
+            processingSteps=tracker.to_list() if tracker else None,
         )
 
     def _needs_indicator_clarification(

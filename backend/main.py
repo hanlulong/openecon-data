@@ -57,6 +57,8 @@ from .utils.dependencies import require_promode
 logger = logging.getLogger("openecon")
 logging.basicConfig(level=logging.INFO)
 
+_background_tasks: set[asyncio.Task] = set()
+
 
 settings: Settings = get_settings()
 # Use factory to get appropriate auth service (Supabase or Mock)
@@ -363,6 +365,28 @@ async def log_query_to_supabase(
         logger.error(f"Failed to log {'Pro Mode ' if pro_mode else ''}query to Supabase: {e}")
 
 
+def schedule_query_log_to_supabase(**kwargs) -> None:
+    """Run Supabase query logging in the background so it never blocks responses."""
+    task = asyncio.create_task(log_query_to_supabase(**kwargs))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def get_request_conversation_id(request: QueryRequest, user: Optional[User]) -> Optional[str]:
+    """
+    Resolve the conversation key for this request.
+
+    Anonymous callers often only send ``sessionId`` on the first few requests, so
+    we must treat that as the conversation identifier to preserve clarification
+    state across follow-ups.
+    """
+    if request.conversationId:
+        return request.conversationId
+    if not user and request.sessionId:
+        return request.sessionId
+    return None
+
+
 def save_to_user_history(
     user: User,
     query: str,
@@ -601,9 +625,10 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
-    logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id if user else "anonymous")
+    conversation_id = get_request_conversation_id(request, user)
+    logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
-    result = await query_service.process_query(request.query, request.conversationId)
+    result = await query_service.process_query(request.query, conversation_id)
 
     # Don't treat "data_not_available" as a server error - return 200 with error message
     # Only return 500 for actual processing errors
@@ -615,7 +640,7 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
         save_to_user_history(user, request.query, result.conversationId, result.intent, result.data)
 
     # Log query to Supabase (for both authenticated and anonymous users)
-    await log_query_to_supabase(
+    schedule_query_log_to_supabase(
         query=request.query,
         user=user,
         session_id=None if user else request.sessionId,
@@ -644,7 +669,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
-    logger.info("📝 Stream Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id if user else "anonymous")
+    conversation_id = get_request_conversation_id(request, user)
+    logger.info("📝 Stream Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
     # Queue for streaming events
     event_queue: asyncio.Queue = asyncio.Queue()
@@ -680,7 +706,7 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
             tracker_token = activate_processing_tracker(tracker)
 
             # Start processing query in background (don't await yet)
-            query_task = asyncio.create_task(query_service.process_query(request.query, request.conversationId))
+            query_task = asyncio.create_task(query_service.process_query(request.query, conversation_id))
 
             # Stream events as they come
             processing_complete = False
@@ -739,7 +765,7 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
 
             # Log query to Supabase (for both authenticated and anonymous users)
             # Use request.sessionId for consistency with non-streaming path, fallback to conversationId
-            await log_query_to_supabase(
+            schedule_query_log_to_supabase(
                 query=request.query,
                 user=user,
                 session_id=None if user else (request.sessionId or result.conversationId),
@@ -972,7 +998,7 @@ async def query_pro_endpoint(request: QueryRequest, user: User = Depends(get_cur
             save_to_user_history(user, request.query, conversation_id, None, None)
 
         # Log query to Supabase (for both authenticated and anonymous users)
-        await log_query_to_supabase(
+        schedule_query_log_to_supabase(
             query=request.query,
             user=user,
             session_id=None if user else conversation_id,
@@ -1397,7 +1423,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: User = Depends(
                 save_to_user_history(user, request.query, conversation_id, None, None)
 
             # Log query to Supabase (for both authenticated and anonymous users)
-            await log_query_to_supabase(
+            schedule_query_log_to_supabase(
                 query=request.query,
                 user=user,
                 session_id=None if user else conversation_id,
