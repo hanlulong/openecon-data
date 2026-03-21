@@ -1202,6 +1202,28 @@ class QueryServiceTests(unittest.TestCase):
         result = self.service.semantic_clarifier.detect("total employment in Canada")
         self.assertIsNotNone(result)
 
+    def test_semantic_clarifier_detects_broad_economic_concept(self) -> None:
+        """'show me economic data for France' should trigger structured clarification."""
+        result = self.service.semantic_clarifier.detect("show me economic data for France")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["kind"], "broad_economic_concept")
+        options = result.get("options") or []
+        labels = [o["label"] for o in options]
+        self.assertIn("GDP (economic output)", labels)
+        self.assertIn("inflation rate (price stability)", labels)
+
+    def test_semantic_clarifier_detects_economy_doing(self) -> None:
+        """'how is the US economy doing' should trigger structured clarification."""
+        result = self.service.semantic_clarifier.detect("how is the US economy doing")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["kind"], "broad_economic_concept")
+
+    def test_semantic_clarifier_skips_broad_when_specific_indicator(self) -> None:
+        """'GDP of France' should NOT trigger broad economic concept clarification."""
+        result = self.service.semantic_clarifier.detect("GDP of France")
+        # Should be None (GDP is specific enough) — the block_pattern for 'gdp' fires
+        self.assertIsNone(result)
+
     def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
         conversation_manager.clear_pending_indicator_options(conv_id)
