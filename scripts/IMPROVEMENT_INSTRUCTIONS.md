@@ -185,7 +185,7 @@ PHASE 7: RECORD & REPORT (3 min)
 | **coverage** | 15% | All providers work (FRED, WorldBank, IMF, Eurostat, BIS, Comtrade, etc.) |
 | **reliability** | 15% | Vague/minimal/edge-case queries handled gracefully, no crashes |
 | **session** | 10% | Multi-turn conversations, follow-ups, clarification responses work |
-| **ui** | 10% | Production site renders correctly: charts, tables, streaming, mobile |
+| **ui** | 10% | Production browser test via chrome-devtools: charts render, follow-ups work, no JS errors, export buttons visible |
 
 **Weighted score** = sum(dimension_score × weight). Track trend across cycles.
 
