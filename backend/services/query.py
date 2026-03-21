@@ -1257,7 +1257,13 @@ class QueryService:
                 "unemployment": r"\bunemployment(?:\s+\w+){0,2}\s+rates?\b",
                 "participation": r"\b(?:labou?r\s+force\s+)?participation(?:\s+\w+){0,2}\s+rates?\b",
             }[metric]
-            return bool(re.search(metric_pattern, candidate_lower))
+            if re.search(metric_pattern, candidate_lower):
+                return True
+            # Recognize percentage-of-labor-force indicators as equivalent to "rate"
+            # e.g., "unemployment, total (% of total labor force)" IS the unemployment rate
+            if metric in candidate_lower and re.search(r"\(%\s+of\s+(?:total\s+)?labo[u]?r\s+force\)", candidate_lower):
+                return True
+            return False
 
         penalty = 0.0
         if not has_metric_rate(requested_metric):

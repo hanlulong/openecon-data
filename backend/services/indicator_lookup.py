@@ -227,7 +227,7 @@ class IndicatorLookup:
             "gdp": "gdp gross domestic product",
             "cpi": "cpi consumer price index",
             "ppi": "ppi producer price index",
-            "unemployment": "unemployment rate jobless",
+            "unemployment": "unemployment rate total jobless labor force",
             "inflation": "inflation cpi price",
             "interest": "interest rate",
             "forex": "foreign exchange currency",
@@ -342,6 +342,18 @@ class IndicatorLookup:
                 # Boost series that are explicitly for United States
                 if "united states" in name_lower or "u.s." in name_lower:
                     score += 5
+
+            # Boost aggregate/total indicators for generic queries.
+            # When users search "unemployment rate" or "GDP" without specifying
+            # a demographic (youth, female, male), prefer the total/aggregate
+            # indicator over specialized variants.
+            demographic_terms = {"youth", "female", "male", "aged", "rural", "urban", "gender", "ratio of"}
+            is_generic_query = not any(w in query_lower for w in demographic_terms)
+            if is_generic_query:
+                if ", total" in name_lower or "total (" in name_lower or name_lower.startswith("total "):
+                    score += 8  # Strong boost for aggregate indicators
+                if any(w in name_lower for w in ["youth", "female", "male", "ratio of female", "aged 15-24", "aged 25-64"]):
+                    score -= 5  # Penalize demographic-specific variants
 
             # Prefer series with recent data (not discontinued)
             end_date = r.get("end_date") or ""
