@@ -3030,6 +3030,196 @@ class QueryService:
             processingSteps=processing_steps,
         )
 
+    # ======================================================================
+    # Informational / Metadata Query Handling
+    # ======================================================================
+
+    # Patterns that indicate the user is asking ABOUT available data, not
+    # requesting data itself.  Must be combined with block patterns to avoid
+    # false positives on data-fetch queries like "What's the GDP of France?"
+    _INFORMATIONAL_TRIGGER_PATTERNS = [
+        r"\bwhat\s+(?:indicators?|series|data(?:sets?)?|metrics?)\b.*\b(?:have|available|exist|offer|provide|cover)\b",
+        r"\b(?:list|show|browse|display)\s+(?:all\s+)?(?:available\s+)?(?:\w+\s+)*(?:indicators?|series|data(?:sets?)?|metrics?)\b",
+        r"\bwhich\s+(?:providers?|sources?)\s+(?:has|have|cover|offer|provide)\b",
+        r"\b(?:does|do)\s+\w+\s+have\s+(?:\w+\s+)*(?:data|indicators?|series|metrics?)\b",
+        r"\bwhat\s+(?:data|indicators?|series)\s+(?:is|are)\s+available\b",
+        r"\b(?:is|are)\s+there\s+(?:any\s+)?(?:data|indicators?|series)\b.*\bfor\b",
+        r"\bwhat\s+(?:kind|type)s?\s+of\s+(?:data|indicators?|economic)\b",
+        r"\bwhat\s+(?:\w+\s+){0,3}(?:series|indicators?)\s+does\b",
+        r"\b(?:available|supported)\s+(?:indicators?|series|data(?:sets?)?)\b",
+        r"\bhow\s+(?:many|much)\s+(?:indicators?|series|data)\b",
+    ]
+
+    # Block patterns — if these match, it's a data-fetch query, not informational.
+    _INFORMATIONAL_BLOCK_PATTERNS = [
+        r"\b(?:of|in|for)\s+(?:the\s+)?(?:US|USA|China|Japan|Germany|France|India|Brazil|UK|Canada)\b.*\b\d{4}\b",
+        r"\b(?:last|past|recent)\s+\d+\s+(?:years?|months?|quarters?)\b",
+        r"\b\d{4}\s*[-–]\s*\d{4}\b",  # date ranges like 2018-2023
+        r"\b(?:growth|rate|trend|change|increase|decrease|decline)\b",
+        r"\b(?:compare|comparison|versus|vs\.?)\b",
+    ]
+
+    def _is_informational_query(self, query: str) -> bool:
+        """Detect whether a query is asking ABOUT available data, not requesting data."""
+        q = str(query or "").lower().strip()
+        if not q or len(q) < 10:
+            return False
+
+        # Block patterns take priority — if any match, it's data-fetch
+        for pattern in self._INFORMATIONAL_BLOCK_PATTERNS:
+            if re.search(pattern, q, re.IGNORECASE):
+                return False
+
+        # Check trigger patterns
+        for pattern in self._INFORMATIONAL_TRIGGER_PATTERNS:
+            if re.search(pattern, q, re.IGNORECASE):
+                return True
+
+        return False
+
+    def _extract_informational_context(self, query: str) -> Dict[str, Optional[str]]:
+        """Extract provider and topic from an informational query."""
+        q = str(query or "").lower().strip()
+
+        # Detect provider mentions
+        provider_patterns = {
+            "FRED": r"\bfred\b",
+            "WorldBank": r"\b(?:world\s*bank|wb)\b",
+            "IMF": r"\bimf\b",
+            "Eurostat": r"\beurostat\b",
+            "OECD": r"\boecd\b",
+            "StatsCan": r"\b(?:statscan|statistics?\s*canada|statcan)\b",
+            "BIS": r"\bbis\b",
+            "Comtrade": r"\bcomtrade\b",
+            "CoinGecko": r"\b(?:coingecko|coin\s*gecko)\b",
+            "ExchangeRate": r"\b(?:exchange\s*rate)\b",
+        }
+
+        detected_provider = None
+        for provider_name, pattern in provider_patterns.items():
+            if re.search(pattern, q):
+                detected_provider = provider_name
+                break
+
+        # Extract topic keywords — remove provider names, question words, filler
+        topic = re.sub(
+            r"\b(?:what|which|does|do|have|has|available|list|show|browse|"
+            r"all|the|are|is|there|any|for|in|from|of|me|data|indicators?|"
+            r"series|datasets?|metrics?|about|tell|can|you|provide|providers?|"
+            r"offer|cover|supported|kind|types?|sources?)\b",
+            " ", q,
+        )
+        # Also remove provider names from topic
+        for pattern in provider_patterns.values():
+            topic = re.sub(pattern, " ", topic)
+        # Strip punctuation and normalize whitespace
+        topic = re.sub(r"[?!.,;:'\"]", "", topic)
+        topic = " ".join(topic.split()).strip()
+
+        return {
+            "provider": detected_provider,
+            "topic": topic if topic else None,
+        }
+
+    def _try_handle_informational_query(
+        self,
+        query: str,
+        conversation_id: str,
+        tracker: Optional["ProcessingTracker"] = None,
+    ) -> Optional[QueryResponse]:
+        """
+        Handle informational queries about available data/indicators.
+
+        Returns a text-only QueryResponse if the query is informational,
+        or None if it should be handled as a normal data-fetch query.
+        """
+        if not self._is_informational_query(query):
+            return None
+
+        logger.info("📖 Detected informational/metadata query: %s", query)
+
+        context = self._extract_informational_context(query)
+        provider = context.get("provider")
+        topic = context.get("topic")
+
+        if not topic and not provider:
+            return None
+
+        # Search the indicator database
+        from .indicator_lookup import IndicatorLookup
+        lookup = IndicatorLookup()
+
+        search_query = topic or ""
+        results = lookup.search(search_query, provider=provider, limit=30)
+
+        if not results:
+            # Try broader search without provider filter
+            if provider and topic:
+                results = lookup.search(search_query, provider=None, limit=20)
+
+        if not results:
+            provider_label = provider or "any provider"
+            topic_label = topic or "that topic"
+            message = (
+                f"I couldn't find indicators matching \"{topic_label}\" "
+                f"in {provider_label}. Try rephrasing or searching a different provider."
+            )
+            return QueryResponse(
+                conversationId=conversation_id,
+                clarificationNeeded=False,
+                message=message,
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        # Format results grouped by provider
+        message = self._format_informational_results(results, provider, topic, query)
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            clarificationNeeded=False,
+            message=message,
+            processingSteps=tracker.to_list() if tracker else None,
+        )
+
+    def _format_informational_results(
+        self,
+        results: List[Dict[str, Any]],
+        provider_filter: Optional[str],
+        topic: Optional[str],
+        original_query: str,
+    ) -> str:
+        """Format indicator search results as a readable text response."""
+        # Group by provider
+        by_provider: Dict[str, List[Dict[str, Any]]] = {}
+        for r in results:
+            prov = str(r.get("provider") or r.get("source") or "Unknown")
+            by_provider.setdefault(prov, []).append(r)
+
+        total = len(results)
+        topic_label = topic or "your search"
+        if provider_filter:
+            header = f"Found **{total}** indicators in **{provider_filter}** matching \"{topic_label}\":"
+        else:
+            header = f"Found **{total}** indicators matching \"{topic_label}\" across providers:"
+
+        lines = [header, ""]
+
+        for prov, indicators in by_provider.items():
+            lines.append(f"**{prov}** ({len(indicators)} results):")
+            for ind in indicators[:10]:  # Cap at 10 per provider
+                code = ind.get("code") or ind.get("series_id") or "?"
+                name = ind.get("name") or ind.get("title") or ind.get("description") or code
+                # Truncate long names
+                if len(name) > 80:
+                    name = name[:77] + "..."
+                lines.append(f"  - {name} (`{code}`)")
+            if len(indicators) > 10:
+                lines.append(f"  - ... and {len(indicators) - 10} more")
+            lines.append("")
+
+        lines.append("To fetch data for any indicator, just ask: *\"Show me [indicator name]\"*")
+        return "\n".join(lines)
+
     def _auto_resolve_broad_concept_for_region(self, query: str) -> str:
         """
         Auto-rewrite broad concepts to their default metric for region queries.
@@ -6713,6 +6903,23 @@ class QueryService:
             )
             if pending_semantic_response is not None:
                 return pending_semantic_response
+
+            # Check for informational/metadata queries (e.g., "What indicators
+            # does World Bank have for employment?").  These return text answers
+            # about available data rather than fetching time-series.
+            informational_response = self._try_handle_informational_query(
+                query=query,
+                conversation_id=conv_id,
+                tracker=tracker,
+            )
+            if informational_response is not None:
+                conv_id = conversation_manager.add_message_safe(
+                    conv_id, "user", query,
+                )
+                conversation_manager.add_message_safe(
+                    conv_id, "assistant", informational_response.message or "",
+                )
+                return informational_response
 
             contextual_follow_up = self._build_intent_from_contextual_follow_up(
                 query=query,

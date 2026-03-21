@@ -3534,5 +3534,81 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(historical_mock.call_args.kwargs.get("days"), 90)
 
 
+class InformationalQueryTests(unittest.TestCase):
+    """Tests for informational/metadata query detection and handling."""
+
+    def setUp(self) -> None:
+        self.service = QueryService.__new__(QueryService)
+        self.service.semantic_clarifier = __import__(
+            "backend.services.semantic_clarifier", fromlist=["SemanticClarifier"]
+        ).SemanticClarifier()
+
+    def test_detects_informational_query_what_series(self) -> None:
+        self.assertTrue(self.service._is_informational_query(
+            "What employment series does World Bank have?"
+        ))
+
+    def test_detects_informational_query_list_indicators(self) -> None:
+        self.assertTrue(self.service._is_informational_query(
+            "List all available GDP indicators in FRED"
+        ))
+
+    def test_detects_informational_query_which_providers(self) -> None:
+        self.assertTrue(self.service._is_informational_query(
+            "Which providers have trade data?"
+        ))
+
+    def test_detects_informational_query_does_have(self) -> None:
+        self.assertTrue(self.service._is_informational_query(
+            "Does IMF have inflation data for developing countries?"
+        ))
+
+    def test_detects_informational_query_available(self) -> None:
+        self.assertTrue(self.service._is_informational_query(
+            "What indicators are available for unemployment?"
+        ))
+
+    def test_rejects_data_fetch_whats_gdp(self) -> None:
+        """'What's the GDP of France?' is a data-fetch query, not informational."""
+        self.assertFalse(self.service._is_informational_query(
+            "What's the GDP of France 2020-2023?"
+        ))
+
+    def test_rejects_data_fetch_show_me_data(self) -> None:
+        self.assertFalse(self.service._is_informational_query(
+            "Show me US GDP last 5 years"
+        ))
+
+    def test_rejects_data_fetch_compare(self) -> None:
+        self.assertFalse(self.service._is_informational_query(
+            "Compare GDP growth rate in G7 countries"
+        ))
+
+    def test_rejects_data_fetch_trend(self) -> None:
+        self.assertFalse(self.service._is_informational_query(
+            "What is the inflation trend in Germany?"
+        ))
+
+    def test_extracts_provider_and_topic(self) -> None:
+        context = self.service._extract_informational_context(
+            "What employment series does World Bank have?"
+        )
+        self.assertEqual(context["provider"], "WorldBank")
+        self.assertIn("employment", context["topic"])
+
+    def test_extracts_provider_fred(self) -> None:
+        context = self.service._extract_informational_context(
+            "List available unemployment indicators in FRED"
+        )
+        self.assertEqual(context["provider"], "FRED")
+
+    def test_extracts_no_provider(self) -> None:
+        context = self.service._extract_informational_context(
+            "What GDP indicators are available?"
+        )
+        self.assertIsNone(context["provider"])
+        self.assertIn("gdp", context["topic"])
+
+
 if __name__ == "__main__":
     unittest.main()

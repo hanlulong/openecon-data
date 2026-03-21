@@ -90,6 +90,19 @@ Review agent checklist:
 - **Auto-commit** small improvements without asking user
 - **Ask user via Discord** for big architectural decisions only
 
+### 9. Informational / Metadata Queries
+- Users should be able to ask informational questions, not just data-fetching queries
+- Examples: "What employment series does World Bank have?", "Which providers cover trade data?", "What indicators are available for Japan?"
+- These should return **text answers** (indicator lists, explanations) rather than charts/data
+- The system should detect query intent: informational vs data-fetching
+- Use existing indicator database (330K+ indicators) and provider metadata to answer
+
+### 10. Dual Review for Key Changes
+- Use dual review agents (two independent agents) for any infrastructure or architectural changes
+- Review agents should independently analyze the proposed fix and consider better alternatives
+- Only proceed when both agree — reconcile differences or escalate to user
+- This applies to both automated cycle improvements AND manual development work
+
 ### 8. Reporting
 - Report to Discord channel `1484703567519547424` every cycle
 - Include: dimension scores, trends, focus area, root cause, fix, impact
