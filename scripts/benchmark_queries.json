@@ -279,6 +279,23 @@
       "timeout_s": 15
     },
     {
+      "id": "cov-08",
+      "dimension": "coverage",
+      "query": "ethereum price last 7 days",
+      "notes": "CoinGecko crypto query - should not trigger indicator clarification",
+      "expected_provider": "COINGECKO",
+      "expected_min_points": 5,
+      "timeout_s": 20
+    },
+    {
+      "id": "cov-09",
+      "dimension": "coverage",
+      "query": "gold price in USD",
+      "notes": "Commodity/precious metal query",
+      "expected_min_points": 1,
+      "timeout_s": 20
+    },
+    {
       "id": "session-02",
       "dimension": "session",
       "query": "inflation rate in France 2019-2023",

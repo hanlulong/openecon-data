@@ -5,19 +5,20 @@
     {"cycle": 2, "dimension_scores": {"accuracy": 83, "multi_country": 90, "coverage": 50, "informational": 75}, "focus_area": "informational", "commit_sha": "5d895b6"},
     {"cycle": 3, "dimension_scores": {"accuracy": 83, "multi_country": 60, "coverage": 33, "informational": 75}, "focus_area": "OECD routing", "commit_sha": "44a540e"},
     {"cycle": 4, "dimension_scores": {"accuracy": 67, "multi_country": 80, "coverage": 67, "informational": 100}, "focus_area": "indicator plausibility", "commit_sha": "5aaa674"},
+    {"cycle": 5, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "informational": 100}, "focus_area": "cue ordering bug", "commit_sha": "d15c71f"},
     {
-      "cycle": 5,
-      "timestamp": "2026-03-21T10:40:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "edge_cases": 100, "informational": 100, "reliability": 50, "session": 0},
-      "focus_area": "distilled query cue ordering",
-      "root_cause": "_build_distilled_indicator_query checked 'employment_rate' cue BEFORE 'unemployment' cue. Since 'unemployment rate' produces both cues, the employment_rate match fired first and returned 'employment rate' (dropping 'un' prefix). The entire resolution pipeline then searched for the wrong indicator.",
-      "fix_description": "Moved 'unemployment' cue check before 'employment_rate' in _build_distilled_indicator_query. Now 'unemployment rate in Japan' correctly distills to 'unemployment rate' → resolves to SL.UEM.TOTL.ZS → fetches real data.",
-      "queries_improved": ["acc-02", "acc-09", "mc-05"],
-      "before": {"acc-02": "clarification (employment rate resolved)", "acc-09": "clarification", "mc-05": "clarification"},
-      "after": {"acc-02": "Japan 2.8% unemployment (WorldBank)", "acc-09": "Australia 6.4% (WorldBank)", "mc-05": "5 Nordic countries (DK,FI,IS,NO,SE)"},
-      "tests_total": 412,
-      "benchmark_pass_rate": "18/20 (90%)",
-      "commit_sha": "d15c71f"
+      "cycle": 6,
+      "timestamp": "2026-03-21T12:45:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "edge_cases": 100, "informational": 100, "reliability": 50, "session": 50},
+      "focus_area": "session follow-up context",
+      "root_cause": "_looks_like_country_follow_up didn't recognize follow-up verbs ('add', 'also', 'what about') or full country names ('Germany' vs 'DE'). Follow-up queries were treated as standalone and failed.",
+      "fix_description": "1) Added follow-up verbs (add, also, include, what, about, compare) to allowed_tokens. 2) Added country name aliases from CountryResolver.COUNTRY_ALIASES to geography_tokens so full names like 'Germany' match ISO codes.",
+      "queries_improved": ["session-01 (Add Germany)", "session-02 partially (What about Japan works in unit test but orchestrator path still blocks)"],
+      "tests_added": 4,
+      "tests_total": 416,
+      "benchmark_queries_total": 35,
+      "benchmark_pass_rate": "18/20 single queries + 1/3 session tests",
+      "commit_sha": "f93d0d7"
     }
   ]
 }

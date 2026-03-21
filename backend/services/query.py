@@ -3634,6 +3634,13 @@ class QueryService:
             return None
         if is_multi_indicator:
             return None
+
+        # Skip prefetch clarification for providers that don't use traditional
+        # indicator resolution (they use coin IDs, currency codes, etc.)
+        provider_upper = normalize_provider_name(intent.apiProvider or "")
+        if provider_upper in ("COINGECKO", "EXCHANGERATE"):
+            return None
+
         if intent.indicators and len(intent.indicators) > 1:
             return None
 
