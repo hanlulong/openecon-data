@@ -43,6 +43,9 @@ python3 tests/test_eurostat_comprehensive.py
 python3 tests/test_imf_comprehensive.py
 python3 tests/test_oecd_comprehensive.py
 python3 tests/test_statscan_comprehensive.py
+
+# Run the opt-in live production smoke test
+OPENECON_LIVE_SMOKE=1 backend/.venv/bin/pytest tests/test_live_chat_smoke.py -q
 ```
 
 ## Test Structure
