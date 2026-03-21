@@ -4,41 +4,31 @@
     {
       "cycle": 1,
       "timestamp": "2026-03-21T04:01:00Z",
-      "dimension_scores": {
-        "accuracy": 75,
-        "coverage": 80,
-        "multi_country": 80,
-        "reliability": 50,
-        "edge_cases": 100
-      },
+      "dimension_scores": {"accuracy": 75, "coverage": 80, "multi_country": 80, "reliability": 50, "edge_cases": 100},
       "focus_area": "multi_country",
-      "root_cause": "Group-scope clarification fired for 'nations/economies' markers; semantic ambiguity blocked multi-country region queries with broad terms like 'employment'",
-      "fix_description": "1) Added 'nations', 'nation', 'economies' to explicit group scope markers. 2) Skip semantic ambiguity clarification for region groups, auto-resolve broad concepts to default metric.",
-      "queries_improved": ["mc-02", "mc-03"],
-      "tests_added": 5,
-      "tests_total": 401,
+      "fix_description": "Added scope markers, auto-resolve broad concepts for region groups",
       "commit_sha": "9cab464"
     },
     {
       "cycle": 2,
       "timestamp": "2026-03-21T04:55:00Z",
-      "dimension_scores": {
-        "accuracy": 83,
-        "coverage": 50,
-        "multi_country": 90,
-        "reliability": 50,
-        "edge_cases": 100,
-        "informational": 75
-      },
+      "dimension_scores": {"accuracy": 83, "coverage": 50, "multi_country": 90, "reliability": 50, "edge_cases": 100, "informational": 75},
       "focus_area": "informational",
-      "root_cause": "Informational queries (queryType=informational) bypassed by two pre-LLM checks: 1) SemanticClarifier caught broad concepts like 'employment' before LLM could classify queryType. 2) LangChain orchestrator handled all queries before LLM parse step.",
-      "fix_description": "1) Added informational bypass patterns to SemanticClarifier.detect() so metadata queries skip semantic ambiguity check. 2) Added _looks_informational() pre-check to bypass orchestrator for probable informational queries. 3) Added 5 new benchmark queries (info-01..04, session-01). 4) Added 4 new unit tests for semantic clarifier bypass.",
-      "queries_improved": ["info-01", "info-03", "info-04"],
-      "before": {"info-01": "caught by semantic clarifier, never reached LLM", "info-03": "caught by orchestrator"},
-      "after": {"info-01": "returns 30 World Bank employment indicators", "info-04": "returns GDP indicators across providers"},
-      "tests_added": 4,
+      "fix_description": "Semantic clarifier bypass + orchestrator bypass for informational queries",
+      "commit_sha": "5d895b6"
+    },
+    {
+      "cycle": 3,
+      "timestamp": "2026-03-21T06:50:00Z",
+      "dimension_scores": {"accuracy": 83, "coverage": 33, "multi_country": 60, "reliability": 50, "edge_cases": 100, "informational": 75, "session": 0},
+      "focus_area": "accuracy (OECD routing)",
+      "root_cause": "OECD non-EU countries (Japan, Australia, S.Korea) with standard macro indicators (unemployment, GDP) were routed to OECD which has unreliable indicator resolution. UnifiedRouter rule at line 926 matched too broadly.",
+      "fix_description": "1) Split OECD routing into OECD-specific indicators (R&D, Gini, tax) vs standard macro (GDP, unemployment). Standard macro → WorldBank for OECD non-EU countries. 2) Added prefetch fallback: when primary provider indicator resolution fails, try fallback providers before giving up. 3) Simple single-country macro queries bypass orchestrator for deterministic pipeline. 4) Added 3 new benchmark queries (acc-09, acc-10, cov-07).",
+      "queries_improved": ["acc-02 (routing fixed: OECD→WorldBank)"],
+      "note": "acc-02 routing now correct (WorldBank not OECD), but WorldBank indicator resolution for 'unemployment rate' still fails — needs indicator resolution quality improvement in next cycle",
+      "tests_added": 0,
       "tests_total": 412,
-      "benchmark_queries_total": 30,
+      "benchmark_queries_total": 33,
       "commit_sha": "pending"
     }
   ]

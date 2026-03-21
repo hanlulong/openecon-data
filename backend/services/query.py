@@ -3035,6 +3035,27 @@ class QueryService:
     # ======================================================================
 
     @staticmethod
+    def _is_simple_single_country_query(query: str) -> bool:
+        """
+        Detect simple single-country macro queries that work better through
+        the deterministic pipeline (with UnifiedRouter) than the orchestrator.
+
+        Examples: "unemployment rate in Japan 2020-2024", "GDP of Australia"
+        """
+        q = str(query or "").lower()
+        # Must mention exactly one country
+        countries = CountryResolver.detect_all_countries_in_query(query)
+        if len(countries) != 1:
+            return False
+        # Must mention a standard macro indicator
+        macro_terms = {
+            "gdp", "unemployment", "inflation", "cpi", "population",
+            "labor force", "labour force", "employment rate",
+            "interest rate", "government debt", "trade balance",
+        }
+        return any(term in q for term in macro_terms)
+
+    @staticmethod
     def _looks_informational(query: str) -> bool:
         """
         Lightweight pre-LLM check for probable informational queries.
@@ -3698,12 +3719,46 @@ class QueryService:
                         indicator_query,
                     )
                     return None
-                return self._build_no_reliable_indicator_match_response(
-                    conversation_id=conversation_id,
-                    intent=intent,
-                    query=query_text or indicator_query,
-                    processing_steps=processing_steps,
-                )
+
+                # Before giving up, try fallback providers.  This is critical
+                # for OECD-routed queries where indicator resolution fails but
+                # WorldBank/Eurostat have the same data.
+                fallback_providers = self._get_fallback_providers(provider)
+                original_provider = intent.apiProvider
+                for fb_provider in fallback_providers:
+                    fb_query = indicator_query or query_text or ""
+                    # Temporarily switch provider for option collection
+                    intent.apiProvider = fb_provider
+                    fb_options = self._collect_indicator_choice_options(
+                        fb_query, intent, max_options=4,
+                    )
+                    if fb_options:
+                        logger.info(
+                            "⬅️ Primary %s failed, found options via fallback %s",
+                            original_provider, fb_provider,
+                        )
+                        options = fb_options
+                        break  # Keep intent.apiProvider = fb_provider
+                    fb_direct = self._get_direct_provider_indicator_translation(
+                        provider=fb_provider,
+                        indicator_query=fb_query,
+                    )
+                    if fb_direct:
+                        logger.info(
+                            "⬅️ Primary %s failed, direct translation via fallback %s: '%s'",
+                            original_provider, fb_provider, fb_direct,
+                        )
+                        return None  # Let normal fetch proceed with fallback provider
+
+                if not options:
+                    # Restore original provider before returning error
+                    intent.apiProvider = original_provider
+                    return self._build_no_reliable_indicator_match_response(
+                        conversation_id=conversation_id,
+                        intent=intent,
+                        query=query_text or indicator_query,
+                        processing_steps=processing_steps,
+                    )
             return None
         if len(options) >= 2 and not self._has_materially_distinct_indicator_options(options):
             return None
@@ -6897,6 +6952,13 @@ class QueryService:
             if not bypass_orchestrator and self._looks_informational(query):
                 bypass_orchestrator = True
                 logger.info("⏭️ Bypassing orchestrator for possible informational query")
+            # Simple single-country macro queries work better through the
+            # deterministic pipeline with the UnifiedRouter, which has
+            # reliable fallback logic.  The orchestrator is better for
+            # complex/multi-step queries.
+            if not bypass_orchestrator and self._is_simple_single_country_query(query):
+                bypass_orchestrator = True
+                logger.info("⏭️ Bypassing orchestrator for simple single-country query; deterministic pipeline is more reliable")
             if allow_orchestrator and (use_orchestrator or settings.use_langchain_orchestrator) and not bypass_orchestrator:
                 logger.info("🤖 Using LangChain orchestrator for intelligent query routing")
                 return await self._execute_with_orchestrator(query, conv_id, tracker)

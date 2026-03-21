@@ -245,6 +245,31 @@
       "timeout_s": 20
     },
     {
+      "id": "acc-09",
+      "dimension": "accuracy",
+      "query": "unemployment rate Australia 2020-2024",
+      "notes": "OECD member - should fallback to WorldBank if OECD resolution fails",
+      "expected_min_points": 3,
+      "timeout_s": 20
+    },
+    {
+      "id": "acc-10",
+      "dimension": "accuracy",
+      "query": "labor force participation rate South Korea",
+      "notes": "OECD member - should fallback to WorldBank if OECD resolution fails",
+      "expected_min_points": 1,
+      "timeout_s": 20
+    },
+    {
+      "id": "cov-07",
+      "dimension": "coverage",
+      "query": "10 year US treasury yield from FRED 2020-2024",
+      "notes": "FRED financial series",
+      "expected_provider": "FRED",
+      "expected_min_points": 10,
+      "timeout_s": 15
+    },
+    {
       "id": "session-01",
       "dimension": "session",
       "query": "US GDP last 5 years",

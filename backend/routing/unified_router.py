@@ -922,20 +922,44 @@ class UnifiedRouter:
                 reasoning=f"EU member ({country}) → Eurostat",
             )
 
-        # OECD non-EU → OECD for OECD-specific indicators
+        # OECD non-EU → prefer WorldBank for standard macro indicators
+        # (unemployment, GDP, inflation, etc.) since OECD resolution is
+        # unreliable.  Only route to OECD for OECD-specific indicators
+        # that WorldBank doesn't cover well.
         if CountryResolver.is_oecd_non_eu(country):
             indicators_str = " ".join(indicators).lower()
-            has_oecd_indicator = any(term in indicators_str or term in query_lower for term in [
-                "unemployment", "employment", "labor force", "productivity",
-                "education", "health expenditure", "r&d", "tax revenue",
-                "gini", "income inequality", "social spending", "pension"
-            ])
-            if has_oecd_indicator:
+            # OECD-specific indicators (not well covered by WorldBank)
+            oecd_specific_terms = [
+                "r&d", "tax revenue", "gini", "income inequality",
+                "social spending", "pension", "education spending",
+                "health expenditure",
+            ]
+            has_oecd_specific = any(
+                term in indicators_str or term in query_lower
+                for term in oecd_specific_terms
+            )
+            if has_oecd_specific:
                 return self._create_decision(
                     provider="OECD",
                     confidence=0.75,
                     match_type="indicator",
-                    reasoning=f"OECD non-EU country ({country}) with OECD indicator",
+                    reasoning=f"OECD non-EU country ({country}) with OECD-specific indicator",
+                )
+            # Standard macro indicators → WorldBank (broader, more reliable)
+            standard_macro_terms = [
+                "unemployment", "employment", "labor force", "productivity",
+                "gdp", "inflation", "population", "trade",
+            ]
+            has_standard_macro = any(
+                term in indicators_str or term in query_lower
+                for term in standard_macro_terms
+            )
+            if has_standard_macro:
+                return self._create_decision(
+                    provider="WorldBank",
+                    confidence=0.80,
+                    match_type="indicator",
+                    reasoning=f"OECD non-EU country ({country}) with standard macro indicator → WorldBank (broader coverage)",
                 )
             # Fall through to default
 
