@@ -1,0 +1,216 @@
+{
+  "_description": "Benchmark queries for automated improvement cycles. Each query has expected outcomes for scoring.",
+  "_scoring": "Each query scored: 0=error/timeout, 1=returned data but wrong/incomplete, 2=correct data",
+  "_dimensions": ["accuracy", "coverage", "reliability", "multi_country", "session", "edge_cases"],
+  "queries": [
+    {
+      "id": "acc-01",
+      "dimension": "accuracy",
+      "query": "US GDP last 5 years",
+      "expected_provider": "FRED",
+      "expected_min_points": 5,
+      "expected_country": "US",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-02",
+      "dimension": "accuracy",
+      "query": "unemployment rate in Japan 2020-2024",
+      "expected_provider": "WORLDBANK",
+      "expected_min_points": 3,
+      "expected_country": "Japan",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-03",
+      "dimension": "accuracy",
+      "query": "inflation rate in Germany 2019-2023",
+      "expected_provider": "EUROSTAT",
+      "expected_min_points": 3,
+      "expected_country": "Germany",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-04",
+      "dimension": "accuracy",
+      "query": "Canada CPI last 3 years",
+      "expected_provider": "STATSCAN",
+      "expected_min_points": 3,
+      "expected_country": "Canada",
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-05",
+      "dimension": "accuracy",
+      "query": "China GDP growth rate 2018-2023",
+      "expected_provider": "WORLDBANK",
+      "expected_min_points": 3,
+      "expected_country": "China",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-06",
+      "dimension": "accuracy",
+      "query": "US federal funds rate last 2 years from FRED",
+      "expected_provider": "FRED",
+      "expected_min_points": 10,
+      "expected_country": "US",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-07",
+      "dimension": "accuracy",
+      "query": "Brazil government debt to GDP ratio",
+      "expected_provider": "WORLDBANK",
+      "expected_min_points": 3,
+      "expected_country": "Brazil",
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-08",
+      "dimension": "accuracy",
+      "query": "India population growth 2010-2023",
+      "expected_provider": "WORLDBANK",
+      "expected_min_points": 5,
+      "expected_country": "India",
+      "timeout_s": 15
+    },
+    {
+      "id": "cov-01",
+      "dimension": "coverage",
+      "query": "credit to GDP ratio US, UK, Japan from BIS 2019-2023",
+      "expected_provider": "BIS",
+      "expected_min_points": 3,
+      "expected_min_series": 3,
+      "timeout_s": 20
+    },
+    {
+      "id": "cov-02",
+      "dimension": "coverage",
+      "query": "exchange rate EUR to USD last year",
+      "expected_provider": "EXCHANGERATE",
+      "expected_min_points": 1,
+      "timeout_s": 15
+    },
+    {
+      "id": "cov-03",
+      "dimension": "coverage",
+      "query": "bitcoin price last 30 days",
+      "expected_provider": "COINGECKO",
+      "expected_min_points": 10,
+      "timeout_s": 15
+    },
+    {
+      "id": "cov-04",
+      "dimension": "coverage",
+      "query": "total exports from US to China 2018-2023 from Comtrade",
+      "expected_provider": "COMTRADE",
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "cov-05",
+      "dimension": "coverage",
+      "query": "EU unemployment rate from Eurostat 2020-2024",
+      "expected_provider": "EUROSTAT",
+      "expected_min_points": 3,
+      "timeout_s": 20
+    },
+    {
+      "id": "cov-06",
+      "dimension": "coverage",
+      "query": "IMF world economic outlook GDP forecast",
+      "expected_provider": "IMF",
+      "expected_min_points": 1,
+      "timeout_s": 20
+    },
+    {
+      "id": "mc-01",
+      "dimension": "multi_country",
+      "query": "GDP growth in G7 countries 2020-2023",
+      "expected_min_series": 7,
+      "expected_min_points": 2,
+      "timeout_s": 30
+    },
+    {
+      "id": "mc-02",
+      "dimension": "multi_country",
+      "query": "employment in G20 countries",
+      "expected_min_series": 15,
+      "expected_min_points": 1,
+      "timeout_s": 60
+    },
+    {
+      "id": "mc-03",
+      "dimension": "multi_country",
+      "query": "inflation rate BRICS nations 2019-2023",
+      "expected_min_series": 5,
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "mc-04",
+      "dimension": "multi_country",
+      "query": "GDP per capita US, Germany, Japan, China 2018-2023",
+      "expected_min_series": 4,
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "mc-05",
+      "dimension": "multi_country",
+      "query": "unemployment rate Nordic countries 2020-2024",
+      "expected_min_series": 5,
+      "expected_min_points": 2,
+      "timeout_s": 30
+    },
+    {
+      "id": "rel-01",
+      "dimension": "reliability",
+      "query": "show me US economic data",
+      "notes": "vague query - should clarify or return GDP",
+      "expected_min_points": 1,
+      "timeout_s": 15
+    },
+    {
+      "id": "rel-02",
+      "dimension": "reliability",
+      "query": "how is the economy doing",
+      "notes": "extremely vague - should clarify or default to US GDP",
+      "timeout_s": 15
+    },
+    {
+      "id": "rel-03",
+      "dimension": "reliability",
+      "query": "GDP",
+      "notes": "minimal query - should return US GDP or ask for country",
+      "timeout_s": 15
+    },
+    {
+      "id": "edge-01",
+      "dimension": "edge_cases",
+      "query": "Korea GDP 2020-2023",
+      "notes": "ambiguous - South Korea or North Korea? Should default to South Korea",
+      "expected_country": "South Korea",
+      "expected_min_points": 2,
+      "timeout_s": 15
+    },
+    {
+      "id": "edge-02",
+      "dimension": "edge_cases",
+      "query": "UK inflation after Brexit",
+      "notes": "temporal reference, should map to 2016+",
+      "expected_country": "UK",
+      "expected_min_points": 3,
+      "timeout_s": 15
+    },
+    {
+      "id": "edge-03",
+      "dimension": "edge_cases",
+      "query": "GDP growth rate USA vs China vs India 2015-2023",
+      "expected_min_series": 3,
+      "expected_min_points": 5,
+      "timeout_s": 30
+    }
+  ]
+}

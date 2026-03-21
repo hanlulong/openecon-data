@@ -3030,6 +3030,41 @@ class QueryService:
             processingSteps=processing_steps,
         )
 
+    def _auto_resolve_broad_concept_for_region(self, query: str) -> str:
+        """
+        Auto-rewrite broad concepts to their default metric for region queries.
+
+        When a multi-country region is detected and the query uses a broad
+        concept (e.g. "employment"), we auto-select the most common metric
+        (e.g. "employment rate") to avoid wrong indicator resolution.
+
+        Returns the rewritten query, or the original if no rewrite is needed.
+        """
+        regions = CountryResolver.detect_regions_in_query(query)
+        if not regions:
+            return query
+        expanded = CountryResolver.expand_regions_in_query(query)
+        if len(expanded) < 2:
+            return query
+
+        plan = self.semantic_clarifier.detect(query)
+        if not plan:
+            return query
+
+        options = plan.get("options") or []
+        if not options:
+            return query
+
+        default_value = str(options[0].get("value") or "").strip()
+        if not default_value or default_value == query:
+            return query
+
+        logger.info(
+            "🔄 Auto-resolved broad concept for region query: '%s' -> '%s'",
+            query, default_value,
+        )
+        return default_value
+
     def _build_semantic_ambiguity_clarification(
         self,
         conversation_id: str,
@@ -3053,6 +3088,21 @@ class QueryService:
         plan = self.semantic_clarifier.detect(query)
         if not plan:
             return None
+
+        # For multi-country region queries, auto-select the default metric
+        # instead of asking.  The user's primary intent is clear (compare
+        # countries) so we pick the most common interpretation of the broad
+        # concept and rewrite the query transparently.
+        regions = CountryResolver.detect_regions_in_query(query)
+        if regions:
+            expanded = CountryResolver.expand_regions_in_query(query)
+            if len(expanded) >= 2:
+                logger.info(
+                    "⏭️ Skipping semantic ambiguity clarification for multi-country "
+                    "region query (region=%s, %d countries)",
+                    regions, len(expanded),
+                )
+                return None
 
         options = [
             ClarificationOption(
@@ -3126,6 +3176,9 @@ class QueryService:
             "member country",
             "members",
             "countries",
+            "nations",
+            "nation",
+            "economies",
             "each country",
             "by country",
             "country by country",
@@ -6684,6 +6737,12 @@ class QueryService:
             )
             if early_semantic_clarification:
                 return early_semantic_clarification
+
+            # Auto-rewrite broad concepts for multi-country region queries.
+            # When the semantic check was skipped (region detected), the broad
+            # term (e.g. "employment") would resolve to the wrong indicator.
+            # Pick the default metric from the clarifier profile instead.
+            query = self._auto_resolve_broad_concept_for_region(query)
 
             early_group_scope_clarification = self._build_group_scope_clarification(
                 conversation_id=conv_id,

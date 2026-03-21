@@ -1050,20 +1050,21 @@ class QueryServiceTests(unittest.TestCase):
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
 
-    def test_build_semantic_ambiguity_clarification_for_broad_employment_query(self) -> None:
+    def test_build_semantic_ambiguity_clarification_for_broad_employment_single_country(self) -> None:
+        """Semantic ambiguity should fire for single-country broad employment queries."""
         conv_id = conversation_manager.get_or_create("conv-semantic-employment")
         conversation_manager.clear_pending_semantic_clarification(conv_id)
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment"],
-            parameters={"countries": ["US", "DE"]},
+            parameters={"country": "US"},
             clarificationNeeded=False,
-            originalQuery="total employment in G20",
+            originalQuery="total employment in US",
         )
 
         clarification = self.service._build_semantic_ambiguity_clarification(  # pylint: disable=protected-access
             conversation_id=conv_id,
-            query="total employment in G20",
+            query="total employment in US",
             intent=intent,
             is_multi_indicator=False,
             processing_steps=None,
@@ -1082,7 +1083,7 @@ class QueryServiceTests(unittest.TestCase):
                 "employment-to-population ratio",
             ],
         )
-        self.assertEqual(options[1].value, "employment rate in G20")
+        self.assertEqual(options[1].value, "employment rate in US")
         pending = conversation_manager.get_pending_semantic_clarification(conv_id)
         self.assertIsNotNone(pending)
 
@@ -1142,6 +1143,39 @@ class QueryServiceTests(unittest.TestCase):
             processing_steps=None,
         )
 
+        self.assertIsNone(clarification)
+
+    def test_build_group_scope_clarification_skips_nations_marker(self) -> None:
+        """'nations' should be treated as explicit comparison scope."""
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-group-nations",
+            query="inflation rate BRICS nations 2019-2023",
+            intent=None,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+        self.assertIsNone(clarification)
+
+    def test_build_group_scope_clarification_skips_economies_marker(self) -> None:
+        """'economies' should be treated as explicit comparison scope."""
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-group-economies",
+            query="GDP growth G20 economies",
+            intent=None,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+        self.assertIsNone(clarification)
+
+    def test_semantic_ambiguity_skipped_for_multi_country_region(self) -> None:
+        """Semantic ambiguity clarification should not fire for multi-country group queries."""
+        clarification = self.service._build_semantic_ambiguity_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-semantic-region",
+            query="employment in G20 countries",
+            intent=None,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
         self.assertIsNone(clarification)
 
     def test_semantic_clarifier_does_not_repeat_for_number_employed_query(self) -> None:
@@ -1890,19 +1924,20 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options_payload[0].provider, "IMF")
         self.assertEqual(options_payload[1].provider, "WORLDBANK")
 
-    def test_process_query_returns_semantic_clarification_before_parse(self) -> None:
+    def test_process_query_returns_semantic_clarification_for_single_country(self) -> None:
+        """Semantic clarification should fire for single-country broad queries (not region groups)."""
         conv_id = "conv-process-semantic"
         conversation_manager.clear_pending_semantic_clarification(conv_id)
 
         with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
-            response = run(self.service.process_query("total employment in G20", conversation_id=conv_id))
+            response = run(self.service.process_query("total employment in Canada", conversation_id=conv_id))
 
         self.assertTrue(response.clarificationNeeded)
         self.assertIsNone(response.intent)
         self.assertIsNotNone(response.clarificationOptions)
         options = response.clarificationOptions or []
         self.assertEqual(options[0].label, "number employed")
-        self.assertEqual(options[1].value, "employment rate in G20")
+        self.assertEqual(options[1].value, "employment rate in Canada")
 
     def test_process_query_returns_group_scope_clarification_before_parse(self) -> None:
         conv_id = "conv-process-group-scope"

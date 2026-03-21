@@ -1,0 +1,25 @@
+{
+  "_description": "Tracks improvement scores across automated cycles. Each cycle adds an entry with dimension scores (0-100).",
+  "cycles": [
+    {
+      "cycle": 1,
+      "timestamp": "2026-03-21T04:01:00Z",
+      "dimension_scores": {
+        "accuracy": 75,
+        "coverage": 80,
+        "multi_country": 80,
+        "reliability": 50,
+        "edge_cases": 100
+      },
+      "focus_area": "multi_country",
+      "root_cause": "Group-scope clarification fired for 'nations/economies' markers; semantic ambiguity blocked multi-country region queries with broad terms like 'employment'",
+      "fix_description": "1) Added 'nations', 'nation', 'economies' to explicit group scope markers. 2) Skip semantic ambiguity clarification for region groups, auto-resolve broad concepts to default metric. 3) Added _auto_resolve_broad_concept_for_region to rewrite 'employment in G20' -> 'number employed in G20'",
+      "queries_improved": ["mc-02", "mc-03"],
+      "before": {"mc-02": "clarification loop (employment too broad)", "mc-03": "clarification loop (compare vs overall)"},
+      "after": {"mc-02": "17/19 countries returned", "mc-03": "5/5 BRICS countries returned"},
+      "tests_added": 5,
+      "tests_total": 401,
+      "commit_sha": "pending"
+    }
+  ]
+}

@@ -86,7 +86,8 @@ if $JSON_OUTPUT; then
   "disk": "$STATUS_DISK",
   "disk_usage_pct": $DISK_USAGE,
   "log_error_count": $ERROR_COUNT,
-  "warnings": $(printf '%s\n' "${WARNINGS[@]:-}" | jq -R . | jq -s .)
+  "warning_count": ${#WARNINGS[@]},
+  "warnings": [$(printf '"%s",' "${WARNINGS[@]:-}" | sed 's/,$//' )]
 }
 EOF
 else
