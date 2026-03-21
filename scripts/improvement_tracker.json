@@ -1,24 +1,27 @@
 {
   "_description": "Tracks improvement scores across automated cycles.",
   "cycles": [
-    {"cycle": 1, "dimension_scores": {"accuracy": 75, "multi_country": 80, "coverage": 80}, "focus_area": "multi_country", "commit_sha": "9cab464"},
-    {"cycle": 2, "dimension_scores": {"accuracy": 83, "multi_country": 90, "coverage": 50, "informational": 75}, "focus_area": "informational", "commit_sha": "5d895b6"},
-    {"cycle": 3, "dimension_scores": {"accuracy": 83, "multi_country": 60, "coverage": 33, "informational": 75}, "focus_area": "OECD routing", "commit_sha": "44a540e"},
-    {"cycle": 4, "dimension_scores": {"accuracy": 67, "multi_country": 80, "coverage": 67, "informational": 100}, "focus_area": "indicator plausibility", "commit_sha": "5aaa674"},
-    {"cycle": 5, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "informational": 100}, "focus_area": "cue ordering bug", "commit_sha": "d15c71f"},
+    {"cycle": 1, "dimension_scores": {"accuracy": 75, "multi_country": 80, "coverage": 80}, "commit_sha": "9cab464"},
+    {"cycle": 2, "dimension_scores": {"accuracy": 83, "multi_country": 90, "coverage": 50, "informational": 75}, "commit_sha": "5d895b6"},
+    {"cycle": 3, "dimension_scores": {"accuracy": 83, "multi_country": 60, "coverage": 33}, "commit_sha": "44a540e"},
+    {"cycle": 4, "dimension_scores": {"accuracy": 67, "multi_country": 80, "coverage": 67, "informational": 100}, "commit_sha": "5aaa674"},
+    {"cycle": 5, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "informational": 100}, "commit_sha": "d15c71f"},
+    {"cycle": 6, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "session": 50}, "commit_sha": "f93d0d7"},
     {
-      "cycle": 6,
-      "timestamp": "2026-03-21T12:45:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "edge_cases": 100, "informational": 100, "reliability": 50, "session": 50},
-      "focus_area": "session follow-up context",
-      "root_cause": "_looks_like_country_follow_up didn't recognize follow-up verbs ('add', 'also', 'what about') or full country names ('Germany' vs 'DE'). Follow-up queries were treated as standalone and failed.",
-      "fix_description": "1) Added follow-up verbs (add, also, include, what, about, compare) to allowed_tokens. 2) Added country name aliases from CountryResolver.COUNTRY_ALIASES to geography_tokens so full names like 'Germany' match ISO codes.",
-      "queries_improved": ["session-01 (Add Germany)", "session-02 partially (What about Japan works in unit test but orchestrator path still blocks)"],
-      "tests_added": 4,
+      "cycle": 7,
+      "timestamp": "2026-03-21T14:35:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "edge_cases": 100, "informational": 100, "reliability": 50, "session": 33},
+      "focus_area": "coverage (CoinGecko/crypto queries)",
+      "root_cause": "Prefetch indicator choice clarification fired for CoinGecko/ExchangeRate providers, which don't use traditional indicator codes. 'bitcoin price last 30 days' with indicators=['dynamic'] triggered clarification because 'dynamic' isn't a recognized indicator code.",
+      "fix_description": "Skip _build_prefetch_indicator_choice_clarification for COINGECKO and EXCHANGERATE providers (they use coin IDs and currency codes, not indicator codes).",
+      "queries_improved": ["cov-03 (bitcoin price)", "cov-08 (ethereum price)"],
+      "before": {"cov-03": "clarification (7 consecutive cycles)", "cov-08": "not tested"},
+      "after": {"cov-03": "722 observations, daily, USD", "cov-08": "169 observations, daily"},
+      "browser_test": "Bitcoin price chart renders correctly on production. Line chart, 30 days, ~$80K range. No console errors.",
       "tests_total": 416,
-      "benchmark_queries_total": 35,
-      "benchmark_pass_rate": "18/20 single queries + 1/3 session tests",
-      "commit_sha": "f93d0d7"
+      "benchmark_queries_total": 37,
+      "benchmark_pass_rate": "20/22 (91%)",
+      "commit_sha": "ef45e84"
     }
   ]
 }

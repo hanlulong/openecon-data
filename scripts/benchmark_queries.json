@@ -296,6 +296,36 @@
       "timeout_s": 20
     },
     {
+      "id": "acc-11",
+      "dimension": "accuracy",
+      "query": "government debt to GDP ratio in US 2015-2023",
+      "notes": "Financial ratio indicator from IMF or WorldBank - IMF can be slow",
+      "expected_min_points": 5,
+      "timeout_s": 40
+    },
+    {
+      "id": "acc-12",
+      "dimension": "accuracy",
+      "query": "population of India 2010-2023",
+      "notes": "Basic demographic indicator from WorldBank",
+      "expected_min_points": 5,
+      "timeout_s": 15
+    },
+    {
+      "id": "rel-04",
+      "dimension": "reliability",
+      "query": "show me economic data for France",
+      "notes": "Vague query - should either clarify or default to GDP",
+      "timeout_s": 15
+    },
+    {
+      "id": "rel-05",
+      "dimension": "reliability",
+      "query": "how is the US economy doing",
+      "notes": "Extremely vague - should clarify or default to key indicators",
+      "timeout_s": 15
+    },
+    {
       "id": "session-02",
       "dimension": "session",
       "query": "inflation rate in France 2019-2023",
