@@ -16,7 +16,7 @@ JSON_OUTPUT=false
 
 BACKEND_URL="${BACKEND_URL:-http://localhost:3001}"
 FRONTEND_URL="${FRONTEND_URL:-http://localhost:5173}"
-PROD_URL="${PROD_URL:-https://openecon.ai}"
+PROD_URL="${PROD_URL:-https://data.openecon.ai}"
 
 # Colors (disabled for JSON mode)
 if $JSON_OUTPUT; then
