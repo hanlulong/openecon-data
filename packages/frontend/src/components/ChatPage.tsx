@@ -327,7 +327,7 @@ export function ChatPage() {
           setLoadingStatus('')
           processingQuery.current = null
 
-          if (!conversationId) {
+          if (response.conversationId) {
             setConversationId(response.conversationId)
           }
 
@@ -399,6 +399,9 @@ export function ChatPage() {
         },
         onDone: (convId) => {
           logger.log('Stream completed for conversation:', convId)
+          if (convId) {
+            setConversationId(convId)
+          }
           setLoadingStatus('')
           setActiveProcessingSteps([])
         },

@@ -426,6 +426,45 @@ class QueryServiceTests(unittest.TestCase):
         self.assertGreaterEqual(len(countries), 5)
         self.assertIn("SG", countries)
 
+    def test_apply_country_overrides_expands_g20_without_comparative_markers(self) -> None:
+        """Region expansion must fire even without words like 'compare' or 'countries'."""
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["employment rate"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="employment in G20",
+        )
+
+        self.service._apply_country_overrides(  # pylint: disable=protected-access
+            intent,
+            intent.originalQuery,
+        )
+
+        countries = intent.parameters.get("countries") or []
+        self.assertEqual(len(countries), 19)
+        self.assertIn("CN", countries)
+        self.assertIn("BR", countries)
+        self.assertIn("IN", countries)
+        self.assertNotIn("country", intent.parameters)
+
+    def test_provider_covers_country_list_rejects_oecd_for_non_oecd_countries(self) -> None:
+        """OECD provider should be rejected when country list includes non-OECD members."""
+        g20_countries = list(CountryResolver.G20_MEMBERS)
+        result = self.service._provider_covers_country_list(  # pylint: disable=protected-access
+            "OECD",
+            g20_countries,
+        )
+        self.assertFalse(result)
+
+    def test_provider_covers_country_list_accepts_oecd_for_oecd_only_countries(self) -> None:
+        """OECD provider should be accepted when all countries are OECD members."""
+        result = self.service._provider_covers_country_list(  # pylint: disable=protected-access
+            "OECD",
+            ["US", "GB", "FR", "DE", "JP"],
+        )
+        self.assertTrue(result)
+
     def test_maybe_resolve_region_clarification_expands_known_groups(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",

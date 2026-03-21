@@ -340,36 +340,33 @@ class QueryService:
             or (len(current_countries) == 1 and _is_us(current_countries[0]))
         )
 
-        # Region-based multi-country override for comparative/ranking queries
-        # (e.g., "ASEAN countries", "euro area members", "G7 ranking").
+        # Region-based multi-country override: when query mentions a known
+        # country group (G7, G20, BRICS, EU, ASEAN, etc.), always expand to
+        # the full member list regardless of comparative language.  Previously
+        # this was gated behind "comparative_markers" which caused queries
+        # like "employment in G20" (without words like "compare") to miss the
+        # expansion entirely.
         if len(expanded_region_countries) > 1:
-            query_lower = str(query or "").lower()
-            comparative_markers = [
-                "compare", "comparison", "across", "countries", "members",
-                "economies",
-                "highest", "lowest", "top", "rank", "ranking", "versus", "vs",
+            current_geo = current_countries[:] if current_countries else ([current_country] if current_country else [])
+            normalized_current = [
+                self._normalize_country_to_iso2(country) or str(country).upper()
+                for country in current_geo
+                if country
             ]
-            if any(marker in query_lower for marker in comparative_markers):
-                current_geo = current_countries[:] if current_countries else ([current_country] if current_country else [])
-                normalized_current = [
-                    self._normalize_country_to_iso2(country) or str(country).upper()
-                    for country in current_geo
-                    if country
-                ]
-                normalized_target = [
-                    self._normalize_country_to_iso2(country) or str(country).upper()
-                    for country in expanded_region_countries
-                ]
-                if normalized_current != normalized_target:
-                    previous = current_country or (",".join(current_countries) if current_countries else "")
-                    intent.parameters.pop("country", None)
-                    intent.parameters["countries"] = expanded_region_countries
-                    logger.info(
-                        "🌍 Region Override: '%s' -> %s (query specifies a country group)",
-                        previous,
-                        expanded_region_countries,
-                    )
-                    return
+            normalized_target = [
+                self._normalize_country_to_iso2(country) or str(country).upper()
+                for country in expanded_region_countries
+            ]
+            if normalized_current != normalized_target:
+                previous = current_country or (",".join(current_countries) if current_countries else "")
+                intent.parameters.pop("country", None)
+                intent.parameters["countries"] = expanded_region_countries
+                logger.info(
+                    "🌍 Region Override: '%s' -> %s (query specifies a country group)",
+                    previous,
+                    expanded_region_countries,
+                )
+                return
 
         # Multi-country override should apply whenever query explicitly names multiple
         # countries, even if parser already selected one non-US country.
@@ -2563,6 +2560,11 @@ class QueryService:
         if provider_upper == "EUROSTAT":
             return all(
                 code in {"EU", "EA", "EA19", "EA20", "EU27_2020"} or CountryResolver.is_eu_member(code)
+                for code in normalized_iso2
+            )
+        if provider_upper == "OECD":
+            return all(
+                CountryResolver.is_oecd_member(code)
                 for code in normalized_iso2
             )
         return True
@@ -6629,7 +6631,7 @@ class QueryService:
             tracker_token = activate_processing_tracker(tracker)
         try:
             conv_id = conversation_manager.get_or_create(conversation_id)
-            history = conversation_manager.get_history(conv_id) if conversation_id else []
+            history = conversation_manager.get_history(conv_id)
 
             pending_choice_response = await self._try_resolve_pending_indicator_choice(
                 query=query,
