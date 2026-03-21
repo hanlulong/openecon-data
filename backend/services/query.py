@@ -28,6 +28,7 @@ from ..services.query_complexity import QueryComplexityAnalyzer
 from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
+from ..services.indicator_translator import IndicatorTranslator
 from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
 from ..routing.country_resolver import CountryResolver
@@ -228,6 +229,7 @@ class QueryService:
         # Semantic provider router (default): semantic-router + LiteLLM fallback.
         self.semantic_provider_router: Optional[SemanticProviderRouter] = None
         self.semantic_clarifier = SemanticClarifier()
+        self.indicator_translator = IndicatorTranslator()
         if self.settings.use_semantic_provider_router:
             self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
             logger.info("🧭 SemanticProviderRouter enabled (USE_SEMANTIC_PROVIDER_ROUTER=true)")
@@ -432,6 +434,222 @@ class QueryService:
             flags=re.IGNORECASE,
         ).strip()
         return cleaned or text
+
+    def _normalize_country_targets(self, countries: List[str]) -> List[str]:
+        """Normalize a list of country or region targets to deduplicated ISO2 codes when possible."""
+        normalized: List[str] = []
+        for country in countries:
+            country_text = str(country or "").strip()
+            if not country_text:
+                continue
+            normalized_country = self._normalize_country_to_iso2(country_text) or country_text.upper()
+            if normalized_country not in normalized:
+                normalized.append(normalized_country)
+        return normalized
+
+    def _looks_like_country_follow_up(
+        self,
+        query: str,
+        target_countries: List[str],
+    ) -> bool:
+        """
+        Detect short geography-only follow-ups such as "show only US" or "Japan".
+
+        These should reuse the last intent instead of being reparsed as a brand new
+        query with no indicator context.
+        """
+        query_text = str(query or "").strip()
+        if not query_text or not target_countries:
+            return False
+
+        query_lower = query_text.lower()
+        tokens = re.findall(r"[a-zA-Z]+", query_lower)
+        if not tokens:
+            return False
+
+        allowed_tokens = {
+            "show", "only", "just", "keep", "filter", "now", "instead",
+            "use", "plot", "display", "me", "the", "for", "in", "to",
+        }
+        geography_tokens = {country.lower() for country in target_countries}
+        for country in target_countries:
+            if country.upper() == "US":
+                geography_tokens.update({"united", "states", "usa", "us"})
+            iso3 = CountryResolver.to_iso3(country)
+            if iso3:
+                geography_tokens.add(iso3.lower())
+
+        non_geography_tokens = [
+            token for token in tokens
+            if token not in allowed_tokens and token not in geography_tokens
+        ]
+        return len(non_geography_tokens) == 0
+
+    def _build_contextual_follow_up_query(
+        self,
+        last_intent: ParsedIntent,
+        target_countries: List[str],
+    ) -> Optional[str]:
+        """Build a deterministic full query from the last intent plus new country scope."""
+        indicators = [str(indicator).strip() for indicator in (last_intent.indicators or []) if str(indicator).strip()]
+        if not indicators or not target_countries:
+            return None
+
+        indicator_text = " and ".join(indicators)
+        if len(target_countries) == 1:
+            return f"{indicator_text} in {target_countries[0]}"
+        return f"{indicator_text} across {', '.join(target_countries)}"
+
+    def _rewrite_query_with_country_targets(
+        self,
+        base_query: str,
+        target_countries: List[str],
+    ) -> Optional[str]:
+        """Rewrite a prior query so only the geography scope changes."""
+        query_text = str(base_query or "").strip()
+        if not query_text or not target_countries:
+            return None
+
+        new_scope = (
+            f"in {target_countries[0]}"
+            if len(target_countries) == 1
+            else f"across {', '.join(target_countries)}"
+        )
+
+        regions = CountryResolver.detect_regions_in_query(query_text)
+        patterns: List[str] = [
+            r"\bacross\s+[^,.;!?]+?\s+member countries\b",
+            r"\bfor\s+the\s+[^,.;!?]+?\s+group(?:\s+as\s+a\s+whole)?\b",
+        ]
+
+        for region in regions:
+            region_text = re.escape(str(region or "").strip())
+            region_label = re.escape(self._humanize_region_name(region))
+            patterns = [
+                rf"\bacross\s+(?:the\s+)?{region_text}(?:\s+member countries)?\b",
+                rf"\bacross\s+(?:the\s+)?{region_label}(?:\s+member countries)?\b",
+                rf"\bfor\s+(?:the\s+)?{region_text}(?:\s+group(?:\s+as\s+a\s+whole)?)?\b",
+                rf"\bfor\s+(?:the\s+)?{region_label}(?:\s+group(?:\s+as\s+a\s+whole)?)?\b",
+                rf"\bin\s+(?:the\s+)?{region_text}\b",
+                rf"\bin\s+(?:the\s+)?{region_label}\b",
+            ] + patterns
+
+        for pattern in patterns:
+            if re.search(pattern, query_text, flags=re.IGNORECASE):
+                rewritten = re.sub(pattern, new_scope, query_text, count=1, flags=re.IGNORECASE)
+                return re.sub(r"\s{2,}", " ", rewritten).strip()
+
+        distilled_indicator = self._build_distilled_indicator_query(query_text)
+        if distilled_indicator:
+            return f"{distilled_indicator} {new_scope}"
+        return None
+
+    def _build_intent_from_contextual_follow_up(
+        self,
+        query: str,
+        conversation_id: str,
+    ) -> Optional[Tuple[str, ParsedIntent, ParseRouteResult]]:
+        """
+        Resolve short country-only follow-ups against the previous intent.
+
+        Example:
+        - previous: "employment rate across G20 member countries"
+        - follow-up: "show only US"
+        - rewritten query: "employment rate in US"
+        """
+        last_intent = conversation_manager.get_last_intent(conversation_id)
+        if not last_intent or last_intent.clarificationNeeded:
+            return None
+
+        extracted_countries = self._extract_countries_from_query(query)
+        expanded_region_countries = CountryResolver.expand_regions_in_query(query)
+        target_countries = self._normalize_country_targets(extracted_countries or expanded_region_countries)
+        if not self._looks_like_country_follow_up(query, target_countries):
+            return None
+
+        refined_query = self._build_contextual_follow_up_query(last_intent, target_countries)
+        if not refined_query:
+            return None
+
+        params = dict(last_intent.parameters or {})
+        for key in ("country", "countries", "reporter", "reporters", "partner", "region"):
+            params.pop(key, None)
+
+        if len(target_countries) == 1:
+            params["country"] = target_countries[0]
+        else:
+            params["countries"] = target_countries
+
+        routing_decision = self.unified_router.route(
+            query=refined_query,
+            indicators=last_intent.indicators,
+            country=params.get("country"),
+            countries=params.get("countries"),
+            llm_provider=last_intent.apiProvider,
+        )
+        api_provider = normalize_provider_name(routing_decision.provider)
+        if params.get("countries") and len(params["countries"]) > 1 and not self._provider_covers_country_list(api_provider, params["countries"]):
+            api_provider = "WORLDBANK"
+
+        intent = last_intent.model_copy(deep=True)
+        intent.apiProvider = api_provider
+        intent.parameters = params
+        intent.clarificationNeeded = False
+        intent.clarificationQuestions = []
+        intent.confidence = max(float(last_intent.confidence or 0.0), 0.95)
+        intent.originalQuery = refined_query
+
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
+            routed_provider=api_provider,
+            validation_warning=ProviderRouter.validate_routing(
+                api_provider,
+                refined_query,
+                intent,
+            ),
+        )
+        return refined_query, intent, parse_result
+
+    async def _try_resolve_pending_country_follow_up(
+        self,
+        query: str,
+        conversation_id: str,
+        auto_pro_mode: bool,
+        tracker: Optional['ProcessingTracker'] = None,
+    ) -> Optional[QueryResponse]:
+        """
+        Let geography-only follow-ups override a pending semantic clarification.
+
+        Example:
+        - pending clarification from "imports share of gdp in G20"
+        - follow-up: "show only US"
+        - rewritten query: "imports share of gdp in US"
+        """
+        pending = conversation_manager.get_pending_semantic_clarification(conversation_id)
+        if not pending:
+            return None
+
+        extracted_countries = self._extract_countries_from_query(query)
+        expanded_region_countries = CountryResolver.expand_regions_in_query(query)
+        target_countries = self._normalize_country_targets(extracted_countries or expanded_region_countries)
+        if not self._looks_like_country_follow_up(query, target_countries):
+            return None
+
+        original_query = str(pending.get("original_query") or "").strip()
+        refined_query = self._rewrite_query_with_country_targets(original_query, target_countries)
+        if not refined_query:
+            return None
+
+        conversation_manager.clear_pending_semantic_clarification(conversation_id)
+        conversation_manager.clear_pending_indicator_options(conversation_id)
+        return await self.process_query(
+            query=refined_query,
+            conversation_id=conversation_id,
+            auto_pro_mode=auto_pro_mode,
+            use_orchestrator=False,
+            allow_orchestrator=False,
+        )
 
     def _build_intent_from_semantic_clarification(
         self,
@@ -2430,6 +2648,48 @@ class QueryService:
             processingSteps=processing_steps,
         )
 
+    def _get_direct_provider_indicator_translation(
+        self,
+        provider: str,
+        indicator_query: str,
+    ) -> Optional[str]:
+        """
+        Return a direct provider-native code when the translator has a strong match.
+
+        This is used to avoid over-eager clarification for high-signal queries where
+        the provider already has a stable concept mapping, such as World Bank imports
+        as % of GDP.
+        """
+        provider_name = normalize_provider_name(provider)
+        indicator_text = str(indicator_query or "").strip()
+        if not provider_name or not indicator_text:
+            return None
+
+        try:
+            translated_code, translated_concept = self.indicator_translator.translate_indicator(
+                indicator_text,
+                target_provider=provider_name,
+            )
+        except Exception:
+            return None
+
+        if self._is_placeholder_indicator_code(translated_code):
+            return None
+        if not self._provider_can_execute_indicator_option(
+            provider=provider_name,
+            code=str(translated_code),
+            option_name=translated_concept,
+        ):
+            return None
+        if not self._is_resolved_indicator_plausible(
+            provider=provider_name,
+            indicator_query=indicator_text,
+            resolved_code=str(translated_code),
+            resolved_name=str(translated_concept or indicator_text),
+        ):
+            return None
+        return str(translated_code)
+
     def _collect_indicator_choice_options(
         self,
         query: str,
@@ -3211,6 +3471,18 @@ class QueryService:
         options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
         if not options:
             if not primary_accepted:
+                direct_translation = self._get_direct_provider_indicator_translation(
+                    provider=provider,
+                    indicator_query=indicator_query,
+                )
+                if direct_translation:
+                    logger.info(
+                        "🟢 Allowing direct %s translation '%s' for '%s' to bypass prefetch clarification",
+                        provider,
+                        direct_translation,
+                        indicator_query,
+                    )
+                    return None
                 return self._build_no_reliable_indicator_match_response(
                     conversation_id=conversation_id,
                     intent=intent,
@@ -3248,6 +3520,18 @@ class QueryService:
 
         if len(options) < 2:
             if not primary_accepted:
+                direct_translation = self._get_direct_provider_indicator_translation(
+                    provider=provider,
+                    indicator_query=indicator_query,
+                )
+                if direct_translation:
+                    logger.info(
+                        "🟢 Allowing direct %s translation '%s' for '%s' to bypass prefetch clarification",
+                        provider,
+                        direct_translation,
+                        indicator_query,
+                    )
+                    return None
                 return self._build_no_reliable_indicator_match_response(
                     conversation_id=conversation_id,
                     intent=intent,
@@ -6295,6 +6579,15 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
+            pending_country_follow_up = await self._try_resolve_pending_country_follow_up(
+                query=query,
+                conversation_id=conv_id,
+                auto_pro_mode=auto_pro_mode,
+                tracker=tracker,
+            )
+            if pending_country_follow_up is not None:
+                return pending_country_follow_up
+
             pending_semantic_response = await self._try_resolve_pending_semantic_clarification(
                 query=query,
                 conversation_id=conv_id,
@@ -6305,6 +6598,20 @@ class QueryService:
             )
             if pending_semantic_response is not None:
                 return pending_semantic_response
+
+            contextual_follow_up = self._build_intent_from_contextual_follow_up(
+                query=query,
+                conversation_id=conv_id,
+            )
+            if contextual_follow_up is not None:
+                refined_query, contextual_intent, contextual_parse_result = contextual_follow_up
+                return await self._execute_resolved_intent(
+                    query=refined_query,
+                    conversation_id=conv_id,
+                    intent=contextual_intent,
+                    parse_result=contextual_parse_result,
+                    tracker=tracker,
+                )
 
             early_semantic_clarification = self._build_semantic_ambiguity_clarification(
                 conversation_id=conv_id,

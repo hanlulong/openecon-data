@@ -497,6 +497,16 @@ class QueryServiceTests(unittest.TestCase):
         self.assertGreaterEqual(len(expanded), 5)
         self.assertIn("SG", expanded)
 
+    def test_expand_regions_in_query_returns_all_g20_members(self) -> None:
+        expanded = CountryResolver.expand_regions_in_query(
+            "employment rate across G20 member countries"
+        )
+
+        self.assertEqual(len(expanded), 19)
+        self.assertIn("AU", expanded)
+        self.assertIn("JP", expanded)
+        self.assertIn("US", expanded)
+
     def test_maybe_expand_multi_concept_intent_builds_multi_indicator_query(self) -> None:
         intent = ParsedIntent(
             apiProvider="BIS",
@@ -1443,6 +1453,56 @@ class QueryServiceTests(unittest.TestCase):
         process_query.assert_not_awaited()
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
+    def test_try_resolve_pending_country_follow_up_rewrites_pending_group_query(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-pending-country-follow-up")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "group_scope",
+                "region": "G20",
+                "original_query": "imports share of gdp in G20",
+                "question_lines": ["Choose the scope you want:"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "compare member countries",
+                        "value": "imports share of gdp across G20 member countries",
+                    },
+                    {
+                        "id": "2",
+                        "label": "one overall group value (aggregate/average if available)",
+                        "value": "imports share of gdp for the G20 group as a whole",
+                    },
+                ],
+            },
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
+            response = run(
+                self.service._try_resolve_pending_country_follow_up(  # pylint: disable=protected-access
+                    query="show only US",
+                    conversation_id=conv_id,
+                    auto_pro_mode=False,
+                    tracker=None,
+                )
+            )
+
+        self.assertEqual(response, expected_response)
+        process_query.assert_awaited_once_with(
+            query="imports share of gdp in US",
+            conversation_id=conv_id,
+            auto_pro_mode=False,
+            use_orchestrator=False,
+            allow_orchestrator=False,
+        )
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
     def test_build_intent_from_semantic_clarification_sets_country_and_indicator(self) -> None:
         pending = {
             "kind": "employment_metric",
@@ -1488,6 +1548,61 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.apiProvider, "WORLDBANK")
         self.assertEqual(intent.indicators, ["employment rate"])
         self.assertGreaterEqual(len(intent.parameters.get("countries") or []), 10)
+
+    def test_build_intent_from_contextual_follow_up_reuses_last_intent_with_new_country(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-country-follow-up")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "employment rate across G20 member countries",
+            intent=ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=["employment rate"],
+                parameters={"countries": sorted(CountryResolver.G20_MEMBERS)},
+                clarificationNeeded=False,
+                originalQuery="employment rate across G20 member countries",
+            ),
+        )
+
+        contextual_follow_up = self.service._build_intent_from_contextual_follow_up(  # pylint: disable=protected-access
+            query="show only US",
+            conversation_id=conv_id,
+        )
+
+        self.assertIsNotNone(contextual_follow_up)
+        assert contextual_follow_up is not None
+        refined_query, intent, parse_result = contextual_follow_up
+        self.assertEqual(refined_query, "employment rate in US")
+        self.assertEqual(intent.parameters.get("country"), "US")
+        self.assertNotIn("countries", intent.parameters)
+        self.assertEqual(parse_result.routed_provider, intent.apiProvider)
+
+    def test_process_query_uses_contextual_country_follow_up_before_parse(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-country-follow-up-process")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "employment rate across G20 member countries",
+            intent=ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=["employment rate"],
+                parameters={"countries": sorted(CountryResolver.G20_MEMBERS)},
+                clarificationNeeded=False,
+                originalQuery="employment rate across G20 member countries",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
+             patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+            response = run(self.service.process_query("show only US", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        execute_intent.assert_awaited_once()
 
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
@@ -1620,6 +1735,76 @@ class QueryServiceTests(unittest.TestCase):
         options = response.clarificationOptions or []
         self.assertEqual(options[0].label, "compare member countries")
         self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
+
+    def test_process_query_uses_pending_country_follow_up_before_semantic_reply(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-process-pending-country-follow-up")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "group_scope",
+                "region": "G20",
+                "original_query": "imports share of gdp in G20",
+                "question_lines": ["Choose the scope you want:"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "compare member countries",
+                        "value": "imports share of gdp across G20 member countries",
+                    },
+                    {
+                        "id": "2",
+                        "label": "one overall group value (aggregate/average if available)",
+                        "value": "imports share of gdp for the G20 group as a whole",
+                    },
+                ],
+            },
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "_try_resolve_pending_country_follow_up", AsyncMock(return_value=expected_response)) as pending_follow_up, \
+             patch.object(self.service, "_try_resolve_pending_semantic_clarification", AsyncMock()) as pending_semantic:
+            response = run(self.service.process_query("show only US", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        pending_follow_up.assert_awaited_once()
+        pending_semantic.assert_not_awaited()
+
+    def test_prefetch_clarification_allows_direct_worldbank_translation(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["imports as % of GDP"],
+            parameters={"country": "China"},
+            clarificationNeeded=False,
+            originalQuery="imports share of gdp in china",
+        )
+
+        with patch("backend.services.query.get_indicator_resolver") as get_resolver, \
+             patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
+            get_resolver.return_value.resolve.return_value = None
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-direct-translation",
+                    query="imports share of gdp in china",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(response)
+        self.assertEqual(
+            self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
+                "WORLDBANK",
+                "imports as % of GDP",
+            ),
+            "NE.IMP.GNFS.ZS",
+        )
 
     def test_is_resolved_indicator_plausible_rejects_unrequested_specialized_slice(self) -> None:
         plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -2954,6 +3139,7 @@ class QueryServiceTests(unittest.TestCase):
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch.object(self.service, "_fetch_data", return_value=[]), \
+             patch.object(self.service, "_build_post_parse_clarification", return_value=None), \
              patch.object(self.service, "_try_with_fallback", return_value=[sample_series()]) as fallback_mock:
             response = run(self.service.process_query("imports share of gdp in china", auto_pro_mode=False))
 
@@ -2985,6 +3171,7 @@ class QueryServiceTests(unittest.TestCase):
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch.object(self.service, "_fetch_data", return_value=[china_series]), \
+             patch.object(self.service, "_build_post_parse_clarification", return_value=None), \
              patch.object(self.service, "_try_with_fallback", side_effect=DataNotAvailableError("no fallback")), \
              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None):
             response = run(self.service.process_query("import share of gdp in china and us", auto_pro_mode=False))

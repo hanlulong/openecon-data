@@ -60,12 +60,68 @@ function mapProcessingStepsToTimeline(steps?: ProcessingStep[]): ProcessingTimel
   if (!steps || steps.length === 0) {
     return []
   }
-  return steps.map(step => ({
-    step: step.step,
-    description: step.description,
-    status: 'completed' as const,
-    durationMs: step.duration_ms,
-  }))
+
+  const orderedKeys: string[] = []
+  const deduped = new Map<string, ProcessingTimelineStep>()
+  steps.forEach((step) => {
+    const key = `${step.step}:${step.description}`
+    if (!deduped.has(key)) {
+      orderedKeys.push(key)
+    }
+    deduped.set(key, {
+      step: step.step,
+      description: step.description,
+      status: 'completed' as const,
+      durationMs: step.duration_ms,
+    })
+  })
+
+  return orderedKeys
+    .map((key) => deduped.get(key))
+    .filter((step): step is ProcessingTimelineStep => Boolean(step))
+}
+
+function sanitizeClarificationContent(content: string, clarificationOptions?: ClarificationOption[]): string {
+  if (!content) {
+    return content
+  }
+  if (!clarificationOptions || clarificationOptions.length === 0) {
+    return content
+  }
+
+  const optionIds = new Set(
+    clarificationOptions
+      .map((option) => String(option.id || '').trim())
+      .filter(Boolean)
+  )
+
+  return content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false
+      }
+      if (/^reply with the option number/i.test(line)) {
+        return false
+      }
+      const numberedOptionMatch = line.match(/^(\d+)\.\s+/)
+      if (numberedOptionMatch && optionIds.has(numberedOptionMatch[1])) {
+        return false
+      }
+      return true
+    })
+    .join('\n')
+}
+
+function getDisplayContent(message: Message): string {
+  if (!message.content) {
+    return ''
+  }
+  if (message.role === 'assistant') {
+    return sanitizeClarificationContent(message.content, message.clarificationOptions)
+  }
+  return message.content
 }
 
 // Example queries array - consistent with landing page
@@ -253,6 +309,7 @@ export function ChatPage() {
           // Update or add processing step in real-time
           // If step has a status field, use it; if it has duration_ms, it's completed
           const status = step.status || (step.duration_ms !== undefined ? 'completed' : 'in-progress')
+          const stepKey = `${step.step}:${step.description}`
 
           const timelineStep: ProcessingTimelineStep = {
             step: step.step,
@@ -260,7 +317,7 @@ export function ChatPage() {
             status: status as 'pending' | 'in-progress' | 'completed',
             durationMs: step.duration_ms,
           }
-          stepMap.set(step.step, timelineStep)
+          stepMap.set(stepKey, timelineStep)
           setActiveProcessingSteps(Array.from(stepMap.values()))
         },
         onData: (response) => {
@@ -1017,12 +1074,12 @@ print(f"\\nData source: ${sourceUrl}")
               </div>
             )}
 
-            {messages.map((msg, i) => (
+            {messages.map((msg, i) => {
+              const displayContent = getDisplayContent(msg)
+              return (
               <div key={i} className={`message-bubble ${msg.role} ${msg.isProMode ? 'pro-mode' : ''}`}>
-                {/* Hide message content for standard queries with data - user only sees progress + chart */}
-                {/* Show content for: user messages, errors, clarifications, Pro Mode, or messages without data */}
-                {(msg.role === 'user' || msg.isProMode || !msg.data || msg.data.length === 0) && msg.content && (
-                  <div className="bubble-content">{msg.content}</div>
+                {displayContent && (
+                  <div className="bubble-content">{displayContent}</div>
                 )}
 
                 {msg.role === 'assistant' && msg.clarificationOptions && msg.clarificationOptions.length > 0 && (
@@ -1070,7 +1127,8 @@ print(f"\\nData source: ${sourceUrl}")
                   />
                 )}
               </div>
-            ))}
+              )
+            })}
             {processingQuery.current !== null && (
               <div className="message-bubble assistant">
                 <div className="bubble-content">

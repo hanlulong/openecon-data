@@ -130,6 +130,14 @@ class ConversationManager:
                 for msg in list(conversation.messages)
             ]
 
+    def get_last_intent(self, conversation_id: str) -> Optional[ParsedIntent]:
+        """Return the latest stored intent for a conversation."""
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation or conversation.last_intent is None:
+                return None
+            return conversation.last_intent.model_copy(deep=True)
+
     def set_pending_indicator_options(self, conversation_id: str, payload: Dict[str, Any]) -> None:
         """Persist pending indicator-choice clarification options for a conversation."""
         with self._lock:

@@ -285,6 +285,77 @@ describe('ChatPage', () => {
         expect(input).toHaveValue('');
       });
     });
+
+    it('renders clarification buttons without duplicating numbered options in the text bubble', async () => {
+      const user = userEvent.setup();
+      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, _proMode, callbacks) => {
+        callbacks.onData?.({
+          conversationId: 'conv-clarification',
+          clarificationNeeded: true,
+          clarificationQuestions: [
+            'Your query uses a broad concept: employment.',
+            'To avoid guessing the wrong indicator, choose the metric you want:',
+            '1. number employed',
+            '2. employment rate',
+            'Reply with the option number, or type a different metric.',
+          ],
+          clarificationOptions: [
+            { id: '1', label: 'number employed', value: 'number employed in Canada' },
+            { id: '2', label: 'employment rate', value: 'employment rate in Canada' },
+          ],
+        });
+        callbacks.onDone?.('conv-clarification');
+      });
+
+      renderChatPage();
+
+      const input = await screen.findByPlaceholderText(/Ask about economic data/i);
+      await user.type(input, 'employment in Canada');
+      fireEvent.submit(input.closest('form')!);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Your query uses a broad concept: employment/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /number employed/i })).toBeInTheDocument();
+        expect(screen.queryByText('1. number employed')).not.toBeInTheDocument();
+        expect(screen.queryByText('2. employment rate')).not.toBeInTheDocument();
+      });
+    });
+
+    it('shows assistant warning text even when chart data is returned', async () => {
+      const user = userEvent.setup();
+      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, _proMode, callbacks) => {
+        callbacks.onData?.({
+          conversationId: 'conv-data-warning',
+          clarificationNeeded: false,
+          message: 'Data is only available for a subset of requested countries. Missing: AU, JP.',
+          data: [
+            {
+              metadata: {
+                source: 'WorldBank',
+                indicator: 'Employment rate',
+                country: 'US',
+                frequency: 'annual',
+                unit: '%',
+                lastUpdated: '2026-03-20',
+              },
+              data: [{ date: '2024-01-01', value: 60 }],
+            },
+          ],
+        });
+        callbacks.onDone?.('conv-data-warning');
+      });
+
+      renderChatPage();
+
+      const input = await screen.findByPlaceholderText(/Ask about economic data/i);
+      await user.type(input, 'employment rate in G20');
+      fireEvent.submit(input.closest('form')!);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Data is only available for a subset of requested countries/i)).toBeInTheDocument();
+        expect(screen.getByTestId('message-chart')).toBeInTheDocument();
+      });
+    });
   });
 
   describe('Pro Mode', () => {
