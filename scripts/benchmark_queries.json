@@ -245,6 +245,55 @@
       "timeout_s": 20
     },
     {
+      "id": "acc-13",
+      "dimension": "accuracy",
+      "query": "consumer price index Japan 2019-2024",
+      "notes": "CPI from WorldBank",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-14",
+      "dimension": "accuracy",
+      "query": "labor force participation rate US 2018-2024 from FRED",
+      "notes": "FRED CIVPART series",
+      "expected_min_points": 5,
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-15",
+      "dimension": "accuracy",
+      "query": "current account balance Germany 2015-2023",
+      "notes": "IMF balance of payments",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-16",
+      "dimension": "accuracy",
+      "query": "foreign direct investment in Brazil 2010-2023",
+      "notes": "WorldBank FDI indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-17",
+      "dimension": "accuracy",
+      "query": "US housing starts from FRED last 3 years",
+      "notes": "FRED housing construction series",
+      "expected_min_points": 10,
+      "timeout_s": 15
+    },
+    {
+      "id": "mc-06",
+      "dimension": "multi_country",
+      "query": "GDP per capita PPP for India and China 2015-2023",
+      "notes": "PPP-adjusted comparison, WorldBank",
+      "expected_min_series": 2,
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
       "id": "acc-09",
       "dimension": "accuracy",
       "query": "unemployment rate Australia 2020-2024",
