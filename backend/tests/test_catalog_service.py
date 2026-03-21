@@ -108,6 +108,13 @@ def test_get_best_provider_prefers_imf_for_real_effective_exchange_rate():
     assert code == "EREER"
 
 
+def test_get_best_provider_prefers_global_coverage_without_country_context():
+    reload_catalog()
+    provider, code, _ = get_best_provider("gdp_per_capita")
+    assert provider == "WorldBank"
+    assert code == "NY.GDP.PCAP.CD"
+
+
 def test_real_effective_exchange_rate_worldbank_fallback_code_exists():
     reload_catalog()
     code = get_indicator_code("real_effective_exchange_rate", "WorldBank")

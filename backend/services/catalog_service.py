@@ -492,6 +492,45 @@ def _check_coverage(coverage: Any, countries: Optional[List[str]]) -> bool:
     return False
 
 
+def _coverage_preference_bonus(coverage: Any, countries: Optional[List[str]]) -> float:
+    """
+    Apply a small ranking bonus for broader coverage when no country context is provided.
+
+    Without geography, global providers are safer defaults than region-limited or
+    single-country sources, even if the narrower source has slightly higher catalog
+    confidence.
+    """
+    if countries:
+        return 0.0
+
+    if isinstance(coverage, list):
+        normalized_items = {
+            (CountryResolver.normalize(c) or str(c).upper())
+            for c in coverage
+            if c
+        }
+        coverage_count = len(normalized_items)
+        if coverage_count <= 1:
+            return -0.08
+        if coverage_count <= 5:
+            return -0.04
+        return 0.0
+
+    if isinstance(coverage, str):
+        coverage_normalized = coverage.split("#", 1)[0].strip().lower()
+    else:
+        coverage_normalized = str(coverage or "").strip().lower()
+
+    if coverage_normalized in {"global", "partial_global"}:
+        return 0.08
+    if coverage_normalized == "44_countries":
+        return 0.04
+    if coverage_normalized in {"us_only", "us"}:
+        return -0.08
+
+    return 0.0
+
+
 def get_best_provider(
     concept_name: str,
     countries: Optional[List[str]] = None,
@@ -539,6 +578,7 @@ def get_best_provider(
     best_provider = None
     best_code = None
     best_confidence = 0.0
+    best_score = float("-inf")
 
     for provider_name, provider_info in providers.items():
         if provider_name.lower() in not_available_lower:
@@ -557,10 +597,12 @@ def get_best_provider(
             continue
 
         confidence = primary.get("confidence", 0.8)
-        if confidence > best_confidence:
+        ranking_score = confidence + _coverage_preference_bonus(coverage, countries)
+        if ranking_score > best_score:
             best_provider = provider_name
             best_code = code
             best_confidence = confidence
+            best_score = ranking_score
 
     return best_provider, best_code, best_confidence
 

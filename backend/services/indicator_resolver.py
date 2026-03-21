@@ -247,11 +247,20 @@ class IndicatorResolver:
         if not result and provider:
             provider_translator_candidate = self._build_translator_candidate(query, provider)
 
-        # Provider-agnostic translation path (prevents implicit FRED bias).
+        # Provider-agnostic concept resolution should prefer an explicit catalog
+        # concept hit over the translator's coarser inferred concept. This keeps
+        # newer catalog concepts from collapsing into broader legacy concepts.
         if not result and not provider:
             try:
-                concept_name = self.translator.infer_concept(query)
-                if concept_name:
+                concept_candidates: List[Tuple[str, str]] = []
+                if query_concept:
+                    concept_candidates.append((query_concept, "catalog"))
+
+                inferred_concept = self.translator.infer_concept(query)
+                if inferred_concept and all(inferred_concept != name for name, _ in concept_candidates):
+                    concept_candidates.append((inferred_concept, "translator"))
+
+                for concept_name, source in concept_candidates:
                     best_provider, best_code, best_confidence = get_best_provider(
                         concept_name,
                         context_countries or None,
@@ -266,16 +275,22 @@ class IndicatorResolver:
                             code=best_code,
                             provider=best_provider,
                             name=metadata.get("name", concept_name or query),
-                            confidence=max(0.72, min(0.90, float(best_confidence or 0.75))),
-                            source="translator",
+                            confidence=(
+                                max(0.80, min(0.96, float(best_confidence or 0.85)))
+                                if source == "catalog"
+                                else max(0.72, min(0.90, float(best_confidence or 0.75)))
+                            ),
+                            source=source,
                             metadata=metadata,
                         )
                         logger.debug(
-                            "Translator concept match: %s -> %s:%s",
+                            "Provider-agnostic %s concept match: %s -> %s:%s",
+                            source,
                             query,
                             best_provider,
                             best_code,
                         )
+                        break
             except Exception as e:
                 logger.debug(f"Provider-agnostic translator lookup failed: {e}")
 

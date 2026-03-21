@@ -62,7 +62,47 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.provider, "WorldBank")
         self.assertEqual(result.code, "FI.RES.TOTL.CD")
-        self.assertEqual(result.source, "translator")
+        self.assertIn(result.source, {"translator", "catalog"})
+
+    def test_provider_agnostic_catalog_concept_beats_coarse_translator_inference(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=IndicatorTranslator())
+
+        result = resolver.resolve(
+            "research and development spending share of gdp",
+            provider=None,
+            use_cache=False,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.provider, "WorldBank")
+        self.assertEqual(result.code, "GB.XPD.RSDV.GD.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_provider_agnostic_catalog_concept_preserves_specific_youth_unemployment(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=IndicatorTranslator())
+
+        result = resolver.resolve("youth unemployment rate", provider=None, use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.provider, "WorldBank")
+        self.assertEqual(result.code, "JI.UEM.1524.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_provider_agnostic_catalog_concept_preserves_effective_exchange_rate(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=IndicatorTranslator())
+
+        result = resolver.resolve("effective exchange rate", provider=None, use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.provider, "BIS")
+        self.assertIn(result.code, {"WS_EER", "BIS_WS_EER"})
+        self.assertEqual(result.source, "catalog")
 
     def test_resolves_long_context_ppi_query_via_translator(self):
         lookup = _FakeLookup(search_results=[])
