@@ -337,6 +337,31 @@
       "timeout_s": 20
     },
     {
+      "id": "acc-18",
+      "dimension": "accuracy",
+      "query": "US real GDP growth quarterly from FRED",
+      "notes": "FRED quarterly GDP growth rate",
+      "expected_min_points": 10,
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-19",
+      "dimension": "accuracy",
+      "query": "manufacturing PMI United States",
+      "notes": "FRED PMI/ISM manufacturing index",
+      "expected_min_points": 1,
+      "timeout_s": 20
+    },
+    {
+      "id": "session-05",
+      "dimension": "session",
+      "query": "US GDP last 5 years",
+      "follow_up": "Also include Japan",
+      "notes": "Multi-turn: add country with 'also include' pattern",
+      "expected_min_series_turn2": 1,
+      "timeout_s": 15
+    },
+    {
       "id": "cov-09",
       "dimension": "coverage",
       "query": "gold price in USD",

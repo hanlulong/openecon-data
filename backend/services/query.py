@@ -8729,11 +8729,13 @@ class QueryService:
             if parse_stage_clarification:
                 return parse_stage_clarification
 
-            # Add current query to history
+            # Add current query to history WITH intent so follow-up queries
+            # can reference the last intent via get_last_intent().
             updated_conversation_id = conversation_manager.add_message_safe(
                 conversation_id,
                 "user",
                 query,
+                intent=intent,
             )
             if updated_conversation_id != conversation_id:
                 conversation_id = updated_conversation_id
