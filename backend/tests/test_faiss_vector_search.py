@@ -11,12 +11,12 @@ class _FakeIndex:
     ntotal = 3
 
     def search(self, query_np, k):
-        distances = np.array([[0.11, 0.22, 0.33]], dtype=np.float32)
+        distances = np.array([[0.91, 0.82, 0.73]], dtype=np.float32)
         indices = np.array([[0, 1, 2]], dtype=np.int64)
         return distances, indices
 
 
-def test_search_uses_raw_rank_distance_when_provider_filter_skips_items():
+def test_search_uses_raw_rank_score_when_provider_filter_skips_items():
     searcher = object.__new__(FAISSVectorSearch)
     searcher.index = _FakeIndex()
     searcher.metadata_list = [
@@ -31,8 +31,8 @@ def test_search_uses_raw_rank_distance_when_provider_filter_skips_items():
     assert len(results) == 2
     assert results[0].code == "A"
     assert results[1].code == "C"
-    # Second kept result should keep its original FAISS rank distance (0.33), not 0.22.
-    assert float(results[1].distance) == float(np.float32(0.33))
+    # Second kept result should keep its original FAISS rank score (0.73), not 0.82.
+    assert float(results[1].distance) == float(np.float32(0.73))
 
 
 class _FakeEmbeddingsClient:
@@ -43,8 +43,8 @@ class _FakeEmbeddingsClient:
         self.calls.append(kwargs)
         return SimpleNamespace(
             data=[
-                SimpleNamespace(embedding=[0.1, 0.2]),
-                SimpleNamespace(embedding=[0.3, 0.4]),
+                SimpleNamespace(embedding=[3.0, 4.0]),
+                SimpleNamespace(embedding=[0.0, 5.0]),
             ]
         )
 
@@ -67,7 +67,7 @@ def test_embed_batch_uses_openai_embeddings_for_openai_models():
 
     results = searcher.embed_batch(["inflation", "gdp"])
 
-    assert results == [[0.1, 0.2], [0.3, 0.4]]
+    assert np.allclose(results, [[0.6, 0.8], [0.0, 1.0]])
     assert searcher.model.embeddings.calls == [
         {
             "input": ["inflation", "gdp"],

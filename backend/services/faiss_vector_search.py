@@ -70,13 +70,12 @@ class VectorSearchResult:
     code: str
     name: str
     provider: str
-    distance: float  # Lower is better (L2 distance for FAISS)
+    distance: float  # Raw FAISS metric output (cosine via inner product)
 
     @property
     def similarity(self) -> float:
-        """Convert L2 distance to similarity score (0-1, higher is better)."""
-        # For L2 distance, similarity = 1 / (1 + distance)
-        return 1.0 / (1.0 + self.distance)
+        """Convert cosine-like inner-product score to a bounded 0-1 similarity."""
+        return max(0.0, min(1.0, (self.distance + 1.0) / 2.0))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -159,6 +158,7 @@ class FAISSVectorSearch:
         self.metadata_path = self.index_dir / f"{index_name}_metadata.json"
         self.id_map_path = self.index_dir / f"{index_name}_id_map.json"  # Changed from .pkl to .json
         self.embedding_cache_path = self.index_dir / f"{index_name}_embedding_cache.json"
+        self.manifest_path = self.index_dir / f"{index_name}_manifest.json"
 
         logger.info(f"🚀 Initializing FAISSVectorSearch")
         logger.info(f"   - Model: {model_name}")
@@ -220,6 +220,15 @@ class FAISSVectorSearch:
                 # Load FAISS index
                 self.index = faiss.read_index(str(self.index_path))
 
+                if not self._loaded_index_is_compatible():
+                    logger.warning(
+                        "⚠️  Existing FAISS index is incompatible with cosine-normalized retrieval. "
+                        "Rebuild required before vector search can be used."
+                    )
+                    self.embedding_cache = {}
+                    self._create_empty_index()
+                    return
+
                 # Load metadata
                 with open(self.metadata_path, 'r') as f:
                     self.metadata_list = json.load(f)
@@ -272,17 +281,70 @@ class FAISSVectorSearch:
             return
 
         try:
-            # Create simple flat L2 index for reliability
-            # For 500k+ vectors, would use IVF, but for now flat indexing is simpler
-            self.index = faiss.IndexFlatL2(self.embedding_dim)
+            # Use cosine-style retrieval via normalized embeddings + inner product.
+            self.index = faiss.IndexFlatIP(self.embedding_dim)
 
             self.metadata_list = []
             self.id_to_idx = {}
 
-            logger.info(f"✅ Created new empty FAISS index (FlatL2 with {self.embedding_dim} dimensions)")
+            logger.info(
+                f"✅ Created new empty FAISS index (FlatIP/cosine with {self.embedding_dim} dimensions)"
+            )
         except Exception as e:
             logger.error(f"❌ Failed to create index: {e}", exc_info=True)
             raise
+
+    def _desired_index_manifest(self) -> Dict[str, Any]:
+        """Return the expected persisted index configuration."""
+        return {
+            "model_name": self.model_name,
+            "embedding_dim": self.embedding_dim,
+            "metric": "cosine_ip",
+        }
+
+    def _load_index_manifest(self) -> Dict[str, Any]:
+        """Load persisted index manifest if present, otherwise infer from index."""
+        if self.manifest_path.exists():
+            try:
+                with open(self.manifest_path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"   ⚠️ Could not load FAISS index manifest: {e}")
+
+        metric_type = getattr(self.index, "metric_type", None)
+        metric_name = "cosine_ip" if metric_type == getattr(faiss, "METRIC_INNER_PRODUCT", None) else "l2"
+        return {
+            "model_name": self.model_name,
+            "embedding_dim": getattr(self.index, "d", self.embedding_dim),
+            "metric": metric_name,
+        }
+
+    def _loaded_index_is_compatible(self) -> bool:
+        """Check whether an on-disk index matches the active embedding configuration."""
+        if self.index is None:
+            return False
+
+        manifest = self._load_index_manifest()
+        desired = self._desired_index_manifest()
+        return (
+            manifest.get("metric") == desired["metric"]
+            and int(manifest.get("embedding_dim", -1)) == desired["embedding_dim"]
+            and str(manifest.get("model_name") or "") == desired["model_name"]
+        )
+
+    def _normalize_embeddings(self, embeddings: List[List[float]]) -> List[List[float]]:
+        """Normalize embeddings to unit length for cosine similarity search."""
+        if not embeddings or np is None:
+            return embeddings
+
+        embeddings_np = np.array(embeddings, dtype=np.float32)
+        if embeddings_np.ndim == 1:
+            embeddings_np = embeddings_np.reshape(1, -1)
+
+        norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        normalized = embeddings_np / norms
+        return normalized.astype(np.float32).tolist()
 
     def embed_text(self, text: str) -> List[float]:
         """
@@ -300,9 +362,9 @@ class FAISSVectorSearch:
 
         try:
             if self.is_openai_embedding:
-                return self._embed_batch_openai([text])[0]
+                return self._normalize_embeddings(self._embed_batch_openai([text]))[0]
             embedding = self.model.encode(text, convert_to_numpy=True)
-            return embedding.tolist()
+            return self._normalize_embeddings([embedding.tolist()])[0]
         except Exception as e:
             logger.error(f"❌ Error embedding text: {e}")
             return [0.0] * self.embedding_dim
@@ -368,6 +430,7 @@ class FAISSVectorSearch:
                         convert_to_numpy=True
                     )
                     new_embeddings_list = new_embeddings.tolist()
+                new_embeddings_list = self._normalize_embeddings(new_embeddings_list)
 
                 # Store in cache and result
                 for idx, embedding in zip(indices_to_embed, new_embeddings_list):
@@ -540,7 +603,8 @@ class FAISSVectorSearch:
 
             # Search in FAISS
             start = time.time()
-            distances, indices = self.index.search(query_np, min(limit * 2, self.index.ntotal))
+            search_limit = self.index.ntotal if provider_filter else min(limit * 2, self.index.ntotal)
+            distances, indices = self.index.search(query_np, search_limit)
             search_time = (time.time() - start) * 1000  # Convert to ms
 
             logger.debug(f"Search completed in {search_time:.2f}ms")
@@ -590,6 +654,14 @@ class FAISSVectorSearch:
         except Exception as e:
             logger.error(f"❌ Failed to save ID map: {e}", exc_info=True)
 
+    def _save_manifest(self):
+        """Persist index configuration so incompatible indexes can be rejected safely."""
+        try:
+            with open(self.manifest_path, 'w') as f:
+                json.dump(self._desired_index_manifest(), f, indent=2)
+        except Exception as e:
+            logger.error(f"❌ Failed to save FAISS manifest: {e}", exc_info=True)
+
     def _save_embedding_cache(self):
         """Save embedding cache to JSON file for reuse."""
         try:
@@ -619,6 +691,9 @@ class FAISSVectorSearch:
             # Save ID map (JSON instead of pickle for security)
             self._save_id_map()
 
+            # Save index manifest for compatibility checks
+            self._save_manifest()
+
             # Save embedding cache
             self._save_embedding_cache()
 
@@ -643,6 +718,7 @@ class FAISSVectorSearch:
             "metadata_entries": len(self.metadata_list),
             "model": self.model_name,
             "embedding_dim": self.embedding_dim,
+            "metric": "cosine_ip",
             "index_persisted": self.index_path.exists(),
             "default_batch_size": self.default_batch_size,
         }

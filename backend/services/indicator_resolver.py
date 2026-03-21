@@ -47,6 +47,7 @@ from .catalog_service import (
     get_all_synonyms,
     get_exclusions,
     get_best_provider,
+    get_provider_info,
     is_provider_available,
 )
 
@@ -210,6 +211,7 @@ class IndicatorResolver:
 
         # Try resolution methods in priority order
         result = None
+        provider_translator_candidate: Optional[ResolvedIndicator] = None
         concept_query = self._normalize_query_for_concept_lookup(query)
         query_concept = find_concept_by_term(concept_query) or find_concept_by_term(query)
         preferred_catalog_codes: Set[str] = set()
@@ -239,24 +241,11 @@ class IndicatorResolver:
                     metadata=exact,
                 )
 
-        # 2. INFRASTRUCTURE FIX: Check IndicatorTranslator BEFORE FTS5 search
-        # This ensures curated universal concepts (like consumer_credit -> TOTALSL)
-        # take priority over raw database matches (which may include discontinued series)
+        # 2. Capture provider-specific translator output as a scored candidate.
+        # This keeps curated mappings in play without letting them preempt
+        # stronger lexical/semantic matches from the database path.
         if not result and provider:
-            try:
-                translated = self.translator.translate_indicator(query, target_provider=provider)
-                if translated and translated[0]:
-                    code, concept_name = translated
-                    result = ResolvedIndicator(
-                        code=code,
-                        provider=provider,
-                        name=concept_name or query,
-                        confidence=0.75,  # Good confidence for curated mappings
-                        source="translator",
-                    )
-                    logger.debug(f"Translator match: {query} -> {code}")
-            except Exception as e:
-                logger.debug(f"Translator lookup failed: {e}")
+            provider_translator_candidate = self._build_translator_candidate(query, provider)
 
         # Provider-agnostic translation path (prevents implicit FRED bias).
         if not result and not provider:
@@ -268,12 +257,18 @@ class IndicatorResolver:
                         context_countries or None,
                     )
                     if best_provider and best_code:
+                        metadata = self._get_catalog_metadata(
+                            concept_name=concept_name,
+                            provider=best_provider,
+                            code=best_code,
+                        )
                         result = ResolvedIndicator(
                             code=best_code,
                             provider=best_provider,
-                            name=concept_name or query,
+                            name=metadata.get("name", concept_name or query),
                             confidence=max(0.72, min(0.90, float(best_confidence or 0.75))),
                             source="translator",
+                            metadata=metadata,
                         )
                         logger.debug(
                             "Translator concept match: %s -> %s:%s",
@@ -298,12 +293,11 @@ class IndicatorResolver:
         # (e.g., CoinGecko/Comtrade). Prefer this catalog signal over low-quality
         # lexical matches that may map to unrelated provider-specific IDs.
         if not result and provider and query_concept and placeholder_catalog_code:
-            result = ResolvedIndicator(
-                code=placeholder_catalog_code,
+            result = self._build_catalog_result(
+                concept_name=query_concept,
                 provider=provider,
-                name=query_concept.replace("_", " ").title(),
+                code=placeholder_catalog_code,
                 confidence=0.82,
-                source="catalog",
             )
 
         # 4. Try FTS5 search in database (fallback for terms not in translator/catalog)
@@ -314,6 +308,11 @@ class IndicatorResolver:
                 provider=provider,
                 search_results=search_results,
             )
+            if provider_translator_candidate:
+                search_results = self._merge_translator_candidate(
+                    search_results,
+                    provider_translator_candidate,
+                )
             if search_results:
                 best, best_confidence = self._pick_best_search_result(
                     query,
@@ -335,14 +334,32 @@ class IndicatorResolver:
                             best_confidence,
                         )
                     else:
-                        result = ResolvedIndicator(
-                            code=best.get("code"),
-                            provider=best.get("provider", provider),
-                            name=best.get("name", query),
-                            confidence=best_confidence,
-                            source="database",
-                            metadata=best,
+                        translator_match = (
+                            provider_translator_candidate is not None
+                            and bool(best.get("_translator_candidate"))
+                            and self._normalize_code(best.get("code"))
+                            == self._normalize_code(provider_translator_candidate.code)
                         )
+                        if translator_match:
+                            translator_metadata = dict(best)
+                            translator_metadata.pop("_translator_candidate", None)
+                            result = ResolvedIndicator(
+                                code=provider_translator_candidate.code,
+                                provider=provider_translator_candidate.provider,
+                                name=translator_metadata.get("name", provider_translator_candidate.name),
+                                confidence=max(best_confidence, provider_translator_candidate.confidence),
+                                source="translator",
+                                metadata=translator_metadata or provider_translator_candidate.metadata,
+                            )
+                        else:
+                            result = ResolvedIndicator(
+                                code=best.get("code"),
+                                provider=best.get("provider", provider),
+                                name=best.get("name", query),
+                                confidence=best_confidence,
+                                source="database",
+                                metadata=best,
+                            )
                 elif best:
                     logger.info(
                         "Rejecting low-confidence FTS match for '%s': %s (conf=%.2f)",
@@ -354,11 +371,12 @@ class IndicatorResolver:
         # 5. Try IndicatorTranslator again if FTS5 returned low confidence
         if result and result.confidence < 0.7 and result.source == "database":
             try:
-                translated = None
-                translated_provider = provider
-                if provider:
-                    translated = self.translator.translate_indicator(query, target_provider=provider)
-                else:
+                if provider and provider_translator_candidate:
+                    if provider_translator_candidate.confidence > result.confidence:
+                        result = provider_translator_candidate
+                elif not provider:
+                    translated = None
+                    translated_provider = provider
                     concept_name = self.translator.infer_concept(query)
                     if concept_name:
                         translated_provider, translated_code, _ = get_best_provider(
@@ -367,26 +385,18 @@ class IndicatorResolver:
                         )
                         if translated_provider and translated_code:
                             translated = (translated_code, concept_name)
-                        else:
-                            translated = None
-                    else:
-                        translated = None
 
-                if translated and translated[0]:
-                    code, concept_name = translated
-                    trans_confidence = 0.75
-                    if translated_provider is None:
-                        translated_provider = provider
-
-                    # Only use if better than current result
-                    if translated_provider and trans_confidence > result.confidence:
-                        result = ResolvedIndicator(
-                            code=code,
-                            provider=translated_provider,
-                            name=concept_name or query,
-                            confidence=trans_confidence,
-                            source="translator",
-                        )
+                    if translated and translated[0]:
+                        code, concept_name = translated
+                        trans_confidence = 0.75
+                        if translated_provider and trans_confidence > result.confidence:
+                            result = ResolvedIndicator(
+                                code=code,
+                                provider=translated_provider,
+                                name=concept_name or query,
+                                confidence=trans_confidence,
+                                source="translator",
+                            )
             except Exception as e:
                 logger.debug(f"IndicatorTranslator failed: {e}")
 
@@ -401,7 +411,7 @@ class IndicatorResolver:
                 if result.source == "translator":
                     off_catalog_threshold = 0.90
                 elif result.source == "database":
-                    off_catalog_threshold = 0.78
+                    off_catalog_threshold = 0.70
                 if result.confidence < off_catalog_threshold:
                     should_try_catalog = True
 
@@ -409,12 +419,11 @@ class IndicatorResolver:
             if provider and is_provider_available(query_concept, provider):
                 code = get_indicator_code(query_concept, provider)
                 if code:
-                    result = ResolvedIndicator(
-                        code=code,
+                    result = self._build_catalog_result(
+                        concept_name=query_concept,
                         provider=provider,
-                        name=query_concept.replace("_", " ").title(),
+                        code=code,
                         confidence=0.85,
-                        source="catalog",
                     )
             elif not provider:
                 # Find best provider for concept
@@ -422,13 +431,15 @@ class IndicatorResolver:
                     query_concept, context_countries or None
                 )
                 if best_provider and code:
-                    result = ResolvedIndicator(
-                        code=code,
+                    result = self._build_catalog_result(
+                        concept_name=query_concept,
                         provider=best_provider,
-                        name=query_concept.replace("_", " ").title(),
+                        code=code,
                         confidence=confidence,
-                        source="catalog",
                     )
+
+        if not result and provider_translator_candidate:
+            result = provider_translator_candidate
 
         # Cache successful result
         if result and use_cache:
@@ -589,6 +600,157 @@ class IndicatorResolver:
             logger.warning("Hybrid vector reranking disabled (vector service unavailable): %s", exc)
             self._vector_search_service = None
         return self._vector_search_service
+
+    def _build_translator_candidate(
+        self,
+        query: str,
+        provider: str,
+    ) -> Optional[ResolvedIndicator]:
+        """Resolve a provider-specific translator candidate without short-circuiting search."""
+        try:
+            translated = self.translator.translate_indicator(query, target_provider=provider)
+            if translated and translated[0]:
+                code, concept_name = translated
+                catalog_concept = find_concept_by_term(concept_name) or concept_name
+                metadata = self._get_catalog_metadata(
+                    concept_name=catalog_concept,
+                    provider=provider,
+                    code=code,
+                )
+                logger.debug(f"Translator match: {query} -> {code}")
+                return ResolvedIndicator(
+                    code=code,
+                    provider=metadata.get("provider", provider),
+                    name=metadata.get("name", concept_name or query),
+                    confidence=0.75,
+                    source="translator",
+                    metadata=metadata,
+                )
+        except Exception as e:
+            logger.debug(f"Translator lookup failed: {e}")
+        return None
+
+    def _merge_translator_candidate(
+        self,
+        search_results: List[Dict[str, Any]],
+        translator_candidate: ResolvedIndicator,
+    ) -> List[Dict[str, Any]]:
+        """Inject a translator suggestion into the scored search candidate set."""
+        merged_results = [dict(candidate) for candidate in search_results]
+        translator_code = self._normalize_code(translator_candidate.code)
+        translator_provider = self._normalize_provider_key(translator_candidate.provider)
+
+        for candidate in merged_results:
+            if (
+                self._normalize_code(candidate.get("code")) == translator_code
+                and self._normalize_provider_key(candidate.get("provider")) == translator_provider
+            ):
+                candidate["_translator_candidate"] = True
+                return merged_results
+
+        metadata = self.lookup.get(translator_candidate.provider, translator_candidate.code) or {}
+        if not metadata and translator_candidate.metadata:
+            metadata = dict(translator_candidate.metadata)
+        translator_search_candidate = dict(metadata)
+        translator_search_candidate.setdefault("code", translator_candidate.code)
+        translator_search_candidate.setdefault("provider", translator_candidate.provider)
+        translator_search_candidate.setdefault("name", translator_candidate.name)
+        translator_search_candidate.setdefault("description", "")
+        translator_search_candidate["_translator_candidate"] = True
+        merged_results.append(translator_search_candidate)
+        return merged_results
+
+    def _build_catalog_result(
+        self,
+        concept_name: str,
+        provider: str,
+        code: str,
+        confidence: float,
+    ) -> ResolvedIndicator:
+        """Build a catalog result with DB metadata when available and YAML metadata otherwise."""
+        metadata = self._get_catalog_metadata(
+            concept_name=concept_name,
+            provider=provider,
+            code=code,
+        )
+        return ResolvedIndicator(
+            code=metadata.get("code", code),
+            provider=metadata.get("provider", provider),
+            name=metadata.get("name", concept_name.replace("_", " ").title()),
+            confidence=confidence,
+            source="catalog",
+            metadata=metadata,
+        )
+
+    def _get_catalog_metadata(
+        self,
+        concept_name: Optional[str],
+        provider: str,
+        code: Optional[str],
+    ) -> Dict[str, Any]:
+        """Get provider metadata from the DB first, then fall back to catalog YAML."""
+        if provider and code:
+            metadata = self.lookup.get(provider, code)
+            if metadata:
+                return dict(metadata)
+
+        catalog_metadata = self._catalog_metadata_from_definition(
+            concept_name=concept_name,
+            provider=provider,
+            code=code,
+        )
+        return catalog_metadata or {}
+
+    def _catalog_metadata_from_definition(
+        self,
+        concept_name: Optional[str],
+        provider: str,
+        code: Optional[str],
+    ) -> Dict[str, Any]:
+        """Build provider metadata from catalog YAML when no DB row is available."""
+        if not concept_name or not provider:
+            return {}
+
+        provider_info = get_provider_info(concept_name, provider)
+        if not provider_info:
+            return {}
+
+        normalized_code = self._normalize_code(code)
+        mapping = self._find_catalog_mapping(provider_info, normalized_code)
+        if not mapping and isinstance(provider_info.get("primary"), dict):
+            mapping = provider_info.get("primary")
+
+        metadata = dict(mapping or {})
+        if code:
+            metadata.setdefault("code", code)
+        metadata.setdefault("provider", provider)
+        metadata.setdefault("name", concept_name.replace("_", " ").title())
+        metadata["concept"] = concept_name
+        return metadata
+
+    def _find_catalog_mapping(
+        self,
+        node: Any,
+        target_code: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Recursively locate the catalog mapping that owns a specific provider code."""
+        if isinstance(node, dict):
+            node_code = self._normalize_code(node.get("code"))
+            if target_code and node_code and node_code == target_code:
+                return node
+            for value in node.values():
+                match = self._find_catalog_mapping(value, target_code)
+                if match:
+                    return match
+            return None
+
+        if isinstance(node, list):
+            for item in node:
+                match = self._find_catalog_mapping(item, target_code)
+                if match:
+                    return match
+
+        return None
 
     def _fuse_semantic_candidates(
         self,

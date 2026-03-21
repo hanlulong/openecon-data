@@ -15,6 +15,7 @@ synonyms:
     - longevity
     - average lifespan
     - expected lifespan
+    - average lifespan at birth
 
 explicit_exclusions:
   - mortality

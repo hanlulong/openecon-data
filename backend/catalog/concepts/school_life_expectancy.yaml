@@ -1,0 +1,41 @@
+# School Life Expectancy Indicator Catalog
+concept: school_life_expectancy
+category: education
+domain: social
+
+description: |
+  Expected number of years of schooling from primary to tertiary
+  education for a child entering school.
+
+synonyms:
+  primary:
+    - school life expectancy
+    - expected years of schooling
+  secondary:
+    - school life expectancy primary to tertiary
+    - school years expectancy
+
+explicit_exclusions:
+  - life expectancy at birth
+  - lifespan
+  - mortality
+
+providers:
+  WorldBank:
+    primary:
+      code: SE.SCH.LIFE
+      name: "School life expectancy, primary to tertiary, both sexes (years)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - IMF
+  - Eurostat
+  - OECD
+  - StatsCan
+  - BIS
+  - FRED
+  - Comtrade
+  - ExchangeRate
+  - CoinGecko

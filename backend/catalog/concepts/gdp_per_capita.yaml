@@ -1,0 +1,50 @@
+# GDP per Capita Indicator Catalog
+concept: gdp_per_capita
+category: national_accounts
+domain: macroeconomics
+
+description: |
+  Gross domestic product per person, expressed in current prices,
+  constant prices, or purchasing power standards.
+
+synonyms:
+  primary:
+    - gdp per capita
+    - gdp per person
+  secondary:
+    - gdp per capita in pps
+    - real gdp per capita
+    - gross domestic product per capita
+    - gdp per head
+
+explicit_exclusions:
+  - gdp growth
+  - gdp level
+  - total gdp
+
+providers:
+  WorldBank:
+    primary:
+      code: NY.GDP.PCAP.CD
+      name: "GDP per capita (current US$)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+  Eurostat:
+    primary:
+      code: TEC00114
+      name: "GDP per capita in PPS"
+      confidence: 0.95
+      coverage: eu_members
+      frequency: annual
+
+not_available:
+  - IMF
+  - OECD
+  - StatsCan
+  - BIS
+  - FRED
+  - Comtrade
+  - ExchangeRate
+  - CoinGecko

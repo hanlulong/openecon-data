@@ -1,0 +1,48 @@
+# Credit-to-GDP Gap Indicator Catalog
+concept: credit_to_gdp_gap
+category: financial_stability
+domain: finance
+
+description: |
+  The gap between the credit-to-GDP ratio and its long-run trend,
+  commonly used as a financial-cycle vulnerability indicator.
+
+synonyms:
+  primary:
+    - credit to gdp gap
+    - credit-to-gdp gap
+  secondary:
+    - credit to gdp gaps
+    - credit-to-gdp gaps
+    - credit gap
+
+explicit_exclusions:
+  - total credit
+  - private credit
+  - bank credit
+
+providers:
+  BIS:
+    primary:
+      code: WS_CREDIT_GAP
+      name: "Credit-to-GDP gaps"
+      confidence: 0.95
+      coverage: global
+      frequency: quarterly
+    alternate:
+      code: BIS_WS_CREDIT_GAP
+      name: "Credit-to-GDP gaps"
+      confidence: 0.92
+      coverage: global
+      frequency: quarterly
+
+not_available:
+  - IMF
+  - WorldBank
+  - Eurostat
+  - OECD
+  - StatsCan
+  - FRED
+  - Comtrade
+  - ExchangeRate
+  - CoinGecko

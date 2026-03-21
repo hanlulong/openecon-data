@@ -27,6 +27,15 @@ class _FakeTranslator:
         return (None, None)
 
 
+class _StaticTranslator(_FakeTranslator):
+    def __init__(self, code: str, concept_name: str):
+        self.code = code
+        self.concept_name = concept_name
+
+    def translate_indicator(self, query: str, target_provider: str = None):
+        return (self.code, self.concept_name)
+
+
 class _FakeVectorResult:
     def __init__(self, code: str, provider: str, name: str, similarity: float):
         self.code = code
@@ -68,7 +77,7 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.code, "PPI")
         self.assertEqual(result.provider, "OECD")
-        self.assertEqual(result.source, "translator")
+        self.assertIn(result.source, {"translator", "catalog"})
 
     def test_resolves_trade_openness_context_query_via_translator(self):
         lookup = _FakeLookup(search_results=[])
@@ -83,7 +92,7 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.code, "NE.TRD.GNFS.ZS")
         self.assertEqual(result.provider, "WorldBank")
-        self.assertEqual(result.source, "translator")
+        self.assertIn(result.source, {"translator", "catalog"})
 
     def test_resolves_reer_context_query_to_worldbank_series(self):
         lookup = _FakeLookup(search_results=[])
@@ -99,7 +108,7 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.code, "PX.REX.REER")
         self.assertEqual(result.provider, "WorldBank")
-        self.assertEqual(result.source, "translator")
+        self.assertIn(result.source, {"translator", "catalog"})
 
     def test_prefers_imf_ppi_candidate_over_cpi_for_producer_price_query(self):
         lookup = _FakeLookup(
@@ -136,6 +145,75 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.code, "PPPIA_IX")
+
+    def test_translator_candidate_does_not_preempt_stronger_search_result(self):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "PCPIPCH",
+                    "provider": "IMF",
+                    "name": "Inflation rate, average consumer prices",
+                    "description": "Average CPI inflation rate",
+                },
+                {
+                    "code": "PPPIA_IX",
+                    "provider": "IMF",
+                    "name": "Prices, Producer Price Index, Commodities by Activity, Index",
+                    "description": "Producer price index",
+                },
+            ],
+            exact_results={
+                ("IMF", "PCPIPCH"): {
+                    "code": "PCPIPCH",
+                    "provider": "IMF",
+                    "name": "Inflation rate, average consumer prices",
+                    "description": "Average CPI inflation rate",
+                }
+            },
+        )
+        resolver = IndicatorResolver(
+            lookup=lookup,
+            translator=_StaticTranslator("PCPIPCH", "inflation"),
+        )
+
+        result = resolver.resolve("producer price inflation", provider="IMF", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "PPPIA_IX")
+        self.assertEqual(result.source, "database")
+
+    def test_translator_fallback_uses_metadata_name_when_available(self):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "GDP",
+                    "provider": "FRED",
+                    "name": "Gross Domestic Product",
+                    "description": "National income and product accounts",
+                }
+            ],
+            exact_results={
+                ("FRED", "FEDFUNDS"): {
+                    "code": "FEDFUNDS",
+                    "provider": "FRED",
+                    "name": "Federal Funds Effective Rate",
+                    "description": "Overnight federal funds rate",
+                }
+            },
+        )
+        resolver = IndicatorResolver(
+            lookup=lookup,
+            translator=_StaticTranslator("FEDFUNDS", "interest_rate"),
+        )
+
+        result = resolver.resolve("federal funds rate", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "FEDFUNDS")
+        self.assertEqual(result.name, "Federal Funds Effective Rate")
+        self.assertIn(result.source, {"translator", "catalog"})
 
     def test_cache_key_includes_country_context(self):
         class _CountingLookup(_FakeLookup):
@@ -350,6 +428,99 @@ class IndicatorResolverTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.code, "CES0500000003")
+        self.assertEqual(result.source, "catalog")
+
+    def test_catalog_result_uses_provider_metadata_when_database_row_is_missing(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("canada unemployment rate", provider="StatsCan", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "2062815")
+        self.assertEqual(result.source, "catalog")
+        self.assertIn("Unemployment rate", result.name)
+
+    def test_resolves_consumer_price_inflation_query_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("consumer price inflation usa", provider="FRED", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "CPIAUCSL")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_worldbank_rnd_query_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve(
+            "research and development spending share of gdp",
+            provider="WorldBank",
+            use_cache=False,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "GB.XPD.RSDV.GD.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_school_life_expectancy_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("school life expectancy", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "SE.SCH.LIFE")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_youth_unemployment_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("youth unemployment rate", provider="WorldBank", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "JI.UEM.1524.ZS")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_gdp_per_capita_in_pps_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("gdp per capita in pps", provider="Eurostat", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "TEC00114")
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_bis_effective_exchange_rates_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("effective exchange rates", provider="BIS", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn(result.code, {"WS_EER", "BIS_WS_EER"})
+        self.assertEqual(result.source, "catalog")
+
+    def test_resolves_bis_credit_to_gdp_gap_via_catalog(self):
+        lookup = _FakeLookup(search_results=[])
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve("credit to gdp gap", provider="BIS", use_cache=False)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn(result.code, {"WS_CREDIT_GAP", "BIS_WS_CREDIT_GAP"})
         self.assertEqual(result.source, "catalog")
 
     def test_prefers_dynamic_catalog_for_generic_coingecko_market_queries(self):

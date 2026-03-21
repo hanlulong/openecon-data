@@ -1,0 +1,56 @@
+# Research and Development Expenditure Indicator Catalog
+concept: research_and_development_expenditure
+category: innovation
+domain: science_and_technology
+
+description: |
+  Spending on research and development activities, often measured
+  as a share of GDP or as business enterprise expenditures.
+
+synonyms:
+  primary:
+    - research and development expenditure
+    - research and development spending
+    - r and d expenditure
+    - r and d spending
+  secondary:
+    - research and development spending share of gdp
+    - research and development expenditure share of gdp
+    - business research and development expenditures
+    - business enterprise r and d expenditure
+    - business enterprise research and development expenditure
+    - r&d expenditure
+    - r&d spending
+
+explicit_exclusions:
+  - education expenditure
+  - imports
+  - exports
+  - capital expenditure
+
+providers:
+  WorldBank:
+    primary:
+      code: GB.XPD.RSDV.GD.ZS
+      name: "Research and development expenditure (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "27100001"
+      name: "Average business enterprise in-house research and development expenditures"
+      confidence: 0.90
+      coverage: [CA]
+      frequency: annual
+
+not_available:
+  - IMF
+  - Eurostat
+  - OECD
+  - BIS
+  - FRED
+  - Comtrade
+  - ExchangeRate
+  - CoinGecko

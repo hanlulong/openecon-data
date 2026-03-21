@@ -11,11 +11,14 @@ synonyms:
   primary:
     - public debt
     - national debt
+    - gross public debt
   secondary:
     - sovereign debt
     - central government debt
     - debt to gdp
     - debt ratio
+    - gross public debt percent of gdp
+    - general government gross debt
 
 explicit_exclusions:
   - household debt

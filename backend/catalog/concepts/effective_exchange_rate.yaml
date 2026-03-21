@@ -1,0 +1,50 @@
+# Effective Exchange Rate Indicator Catalog
+concept: effective_exchange_rate
+category: currency
+domain: finance
+
+description: |
+  A trade-weighted exchange-rate index, typically referring to the
+  nominal effective exchange rate rather than the inflation-adjusted REER.
+
+synonyms:
+  primary:
+    - effective exchange rate
+    - effective exchange rates
+    - nominal effective exchange rate
+  secondary:
+    - trade weighted exchange rate
+    - trade-weighted exchange rate
+    - nominal broad effective exchange rate
+
+explicit_exclusions:
+  - real effective exchange rate
+  - reer
+  - bilateral exchange rate
+  - spot exchange rate
+
+providers:
+  BIS:
+    primary:
+      code: WS_EER
+      name: "Effective exchange rates"
+      confidence: 0.95
+      coverage: global
+      frequency: monthly
+    alternate:
+      code: BIS_WS_EER
+      name: "Effective exchange rates"
+      confidence: 0.92
+      coverage: global
+      frequency: monthly
+
+not_available:
+  - IMF
+  - WorldBank
+  - Eurostat
+  - OECD
+  - StatsCan
+  - FRED
+  - Comtrade
+  - ExchangeRate
+  - CoinGecko
