@@ -756,6 +756,12 @@ class QueryService:
             query,
             intent.indicators,
         )
+        explicit_provider_requested = normalize_provider_name(
+            self._detect_explicit_provider(query or intent.originalQuery or "") or ""
+        )
+        if explicit_provider_requested:
+            intent.apiProvider = explicit_provider_requested
+            return explicit_provider_requested
         if countries and len(countries) > 1 and not self._provider_covers_country_list(routed_provider, countries):
             logger.info(
                 "🧭 Coverage override: %s does not cover countries=%s, using WorldBank baseline",
@@ -765,6 +771,26 @@ class QueryService:
             routed_provider = "WORLDBANK"
             deterministic_match_type = "coverage_override"
             deterministic_confidence = min(deterministic_confidence or 0.0, 0.78)
+
+        params_before_override = dict(params)
+        routed_provider_before_override = routed_provider
+        routed_provider, params = self._apply_concept_provider_override(
+            routed_provider,
+            intent,
+            params,
+        )
+        routed_provider = normalize_provider_name(routed_provider)
+        intent.parameters = params
+        if (
+            routed_provider != routed_provider_before_override
+            or params.get("indicator") != params_before_override.get("indicator")
+        ):
+            logger.info(
+                "🧭 Catalog concept override locked provider selection: %s -> %s",
+                routed_provider_before_override,
+                routed_provider,
+            )
+            return routed_provider
 
         if self.semantic_provider_router:
             try:
@@ -4773,6 +4799,7 @@ class QueryService:
         concept_candidates: List[str] = []
         if original_query:
             concept_candidates.append(original_query)
+
         if distilled_query and distilled_query not in concept_candidates:
             concept_candidates.append(distilled_query)
 
@@ -4788,11 +4815,19 @@ class QueryService:
 
             concept_name = None
             matched_query = ""
+            matched_candidates: List[tuple[str, str]] = []
             for candidate in concept_candidates:
-                concept_name = find_concept_by_term(candidate)
-                if concept_name:
-                    matched_query = candidate
-                    break
+                matched_concept = find_concept_by_term(candidate)
+                if matched_concept:
+                    matched_candidates.append((matched_concept, candidate))
+            if matched_candidates:
+                concept_name, matched_query = max(
+                    matched_candidates,
+                    key=lambda item: (
+                        len(str(item[0]).split("_")),
+                        len(str(item[1]).strip()),
+                    ),
+                )
             if not concept_name:
                 return provider, params
 
@@ -4840,6 +4875,25 @@ class QueryService:
                     and confidence_gain < (0.18 if low_confidence_current else 0.28)
                 ):
                     return provider, params
+                current_indicator = params.get("indicator")
+                current_indicator_is_code = (
+                    bool(current_indicator)
+                    and self._looks_like_provider_indicator_code(provider, str(current_indicator))
+                )
+                canonical_code = preferred_code if provider_supported else best_code
+                if canonical_code and (not current_indicator or not current_indicator_is_code):
+                    params = {**params, "indicator": canonical_code}
+                    intent.parameters = params
+                    distinct_indicators = {str(value) for value in (intent.indicators or []) if value}
+                    if not distinct_indicators or len(distinct_indicators) == 1:
+                        intent.indicators = [canonical_code]
+                    logger.info(
+                        "📋 Concept code override: %s -> %s for provider %s",
+                        matched_query,
+                        canonical_code,
+                        provider,
+                    )
+
                 if (
                     not best_provider_normalized
                     or best_provider_normalized == provider

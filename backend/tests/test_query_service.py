@@ -652,6 +652,138 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.apiProvider, "BIS")
         self.assertNotEqual(new_params.get("indicator"), "EREER")
 
+    def test_apply_concept_provider_override_prefers_distilled_indicator_concept(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["youth unemployment rate"],
+            parameters={"country": "Brazil"},
+            clarificationNeeded=False,
+            originalQuery="youth unemployment rate in Brazil",
+        )
+
+        def _mock_find_concept(term: str):
+            normalized = str(term or "").strip().lower()
+            if normalized == "youth unemployment rate in brazil":
+                return "unemployment"
+            if normalized == "youth unemployment rate":
+                return "youth_unemployment"
+            return None
+
+        def _mock_best_provider(concept, countries=None, preferred_provider=None):
+            if concept == "youth_unemployment":
+                if preferred_provider:
+                    return ("WorldBank", "JI.UEM.1524.ZS", 0.95)
+                return ("WorldBank", "JI.UEM.1524.ZS", 0.95)
+            if concept == "unemployment":
+                if preferred_provider:
+                    return ("IMF", "LUR", 0.90)
+                return ("IMF", "LUR", 0.90)
+            return (None, None, 0.0)
+
+        with patch.object(self.service, "_build_distilled_indicator_query", return_value="youth unemployment rate"), \
+             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="youth unemployment rate"), \
+             patch("backend.services.catalog_service.find_concept_by_term", side_effect=_mock_find_concept), \
+             patch("backend.services.catalog_service.is_provider_available", return_value=False), \
+             patch("backend.services.catalog_service.get_best_provider", side_effect=_mock_best_provider):
+            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+                "IMF",
+                intent,
+                dict(intent.parameters),
+            )
+
+        self.assertEqual(provider, "WORLDBANK")
+        self.assertEqual(intent.apiProvider, "WorldBank")
+        self.assertEqual(params.get("indicator"), "JI.UEM.1524.ZS")
+
+    def test_apply_concept_provider_override_injects_canonical_code_when_provider_already_matches(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["effective exchange rate"],
+            parameters={"country": "Japan"},
+            clarificationNeeded=False,
+            originalQuery="effective exchange rate in Japan",
+        )
+
+        with patch.object(self.service, "_build_distilled_indicator_query", return_value="effective exchange rate"), \
+             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="effective exchange rate"), \
+             patch("backend.services.catalog_service.find_concept_by_term", return_value="effective_exchange_rate"), \
+             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
+             patch("backend.services.catalog_service.get_best_provider", side_effect=[
+                 ("BIS", "WS_EER", 0.95),
+                 ("BIS", "WS_EER", 0.95),
+             ]):
+            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+                "BIS",
+                intent,
+                dict(intent.parameters),
+            )
+
+        self.assertEqual(provider, "BIS")
+        self.assertEqual(params.get("indicator"), "WS_EER")
+
+    def test_select_routed_provider_locks_catalog_override_before_semantic_reroute(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["research and development spending share of gdp"],
+            parameters={},
+            clarificationNeeded=False,
+            originalQuery="research and development spending share of gdp",
+        )
+
+        self.service.semantic_provider_router = None
+        self.service.unified_router.route = Mock(
+            return_value=RoutingDecision(
+                provider="OECD",
+                confidence=0.95,
+                match_type="indicator",
+                reasoning="keyword",
+            )
+        )
+
+        with patch.object(
+            self.service,
+            "_apply_concept_provider_override",
+            return_value=("WORLDBANK", {"indicator": "GB.XPD.RSDV.GD.ZS"}),
+        ) as override_mock:
+            provider = run(
+                self.service._select_routed_provider(
+                    intent,
+                    "research and development spending share of gdp",
+                )
+            )
+
+        self.assertEqual(provider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "GB.XPD.RSDV.GD.ZS")
+        override_mock.assert_called_once()
+
+    def test_select_routed_provider_honors_explicit_provider_request(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["GDP"],
+            parameters={"country": "Italy"},
+            clarificationNeeded=False,
+            originalQuery="Get Italy GDP from OECD",
+        )
+
+        self.service.unified_router.route = Mock(
+            return_value=RoutingDecision(
+                provider="WorldBank",
+                confidence=0.95,
+                match_type="indicator",
+                reasoning="keyword",
+            )
+        )
+
+        provider = run(
+            self.service._select_routed_provider(
+                intent,
+                "Get Italy GDP from OECD",
+            )
+        )
+
+        self.assertEqual(provider, "OECD")
+        self.assertEqual(intent.apiProvider, "OECD")
+
     def test_normalize_bis_metadata_labels_replaces_opaque_code(self) -> None:
         bis_series = NormalizedData.model_validate(
             {
@@ -2563,7 +2695,7 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "imports as % of GDP")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
 
     def test_code_semantic_hint_infers_worldbank_import_ratio_cues(self) -> None:
         hint = self.service._code_semantic_hint(  # pylint: disable=protected-access
