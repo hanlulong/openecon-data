@@ -1181,6 +1181,27 @@ class QueryServiceTests(unittest.TestCase):
     def test_semantic_clarifier_does_not_repeat_for_number_employed_query(self) -> None:
         self.assertIsNone(self.service.semantic_clarifier.detect("number employed in Canada"))
 
+    def test_semantic_clarifier_bypasses_informational_employment_query(self) -> None:
+        """Informational queries about available data should bypass semantic clarification."""
+        self.assertIsNone(self.service.semantic_clarifier.detect(
+            "What employment series does World Bank have?"
+        ))
+
+    def test_semantic_clarifier_bypasses_informational_list_query(self) -> None:
+        self.assertIsNone(self.service.semantic_clarifier.detect(
+            "List available trade indicators"
+        ))
+
+    def test_semantic_clarifier_bypasses_informational_does_have_query(self) -> None:
+        self.assertIsNone(self.service.semantic_clarifier.detect(
+            "Does FRED have interest rate data?"
+        ))
+
+    def test_semantic_clarifier_still_fires_for_broad_data_query(self) -> None:
+        """Non-informational broad queries should still trigger clarification."""
+        result = self.service.semantic_clarifier.detect("total employment in Canada")
+        self.assertIsNotNone(result)
+
     def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
         conversation_manager.clear_pending_indicator_options(conv_id)

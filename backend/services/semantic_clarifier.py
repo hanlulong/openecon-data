@@ -239,12 +239,31 @@ class SemanticClarifier:
         ),
     )
 
+    # Patterns indicating the user is asking ABOUT available data/indicators,
+    # not requesting data.  When these match, semantic ambiguity clarification
+    # is skipped so the query reaches the LLM for queryType classification.
+    _INFORMATIONAL_BYPASS_PATTERNS = (
+        r"\bwhat\s+.*\s+(?:series|indicators?|datasets?|metrics?)\b",
+        r"\bavailable\s+(?:\w+\s+)*(?:indicators?|series|data)\b",
+        r"\blist\s+(?:\w+\s+)*(?:indicators?|series|data)\b",
+        r"\bwhich\s+(?:\w+\s+)*(?:indicators?|series|data)\b",
+        r"\bdoes\s+\w+\s+(?:have|offer|provide)\s+(?:\w+\s+)*(?:data|indicators?|series)\b",
+        r"\bwhat\s+(?:data|indicators?|series)\s+(?:is|are)\s+available\b",
+        r"\b(?:browse|search|find)\s+(?:\w+\s+)*(?:indicators?|series)\b",
+    )
+
     def detect(self, query: str) -> Optional[Dict[str, Any]]:
         query_text = str(query or "").strip()
         if not query_text:
             return None
 
         query_lower = query_text.lower()
+
+        # Skip semantic ambiguity for informational/metadata queries.
+        # These should reach the LLM for proper queryType classification.
+        for pattern in self._INFORMATIONAL_BYPASS_PATTERNS:
+            if re.search(pattern, query_lower):
+                return None
         for profile in self.PROFILES:
             if any(re.search(pattern, query_lower) for pattern in profile.block_patterns):
                 continue

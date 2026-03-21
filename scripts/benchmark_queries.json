@@ -211,6 +211,47 @@
       "expected_min_series": 3,
       "expected_min_points": 5,
       "timeout_s": 30
+    },
+    {
+      "id": "info-01",
+      "dimension": "informational",
+      "query": "What employment series does World Bank have?",
+      "notes": "Should return text listing available indicators, not data",
+      "expected_queryType": "informational",
+      "timeout_s": 20
+    },
+    {
+      "id": "info-02",
+      "dimension": "informational",
+      "query": "Does FRED have unemployment indicators?",
+      "notes": "Should return text listing FRED unemployment series",
+      "expected_queryType": "informational",
+      "timeout_s": 20
+    },
+    {
+      "id": "info-03",
+      "dimension": "informational",
+      "query": "Which providers have trade data?",
+      "notes": "Should list providers with trade indicators",
+      "expected_queryType": "informational",
+      "timeout_s": 20
+    },
+    {
+      "id": "info-04",
+      "dimension": "informational",
+      "query": "List available GDP indicators",
+      "notes": "Should return indicator list across all providers",
+      "expected_queryType": "informational",
+      "timeout_s": 20
+    },
+    {
+      "id": "session-01",
+      "dimension": "session",
+      "query": "US GDP last 5 years",
+      "follow_up": "Add Germany",
+      "notes": "Multi-turn: first query then follow-up with same conversationId",
+      "expected_min_series_turn2": 2,
+      "timeout_s": 15
     }
   ]
 }

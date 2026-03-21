@@ -3034,6 +3034,25 @@ class QueryService:
     # Informational / Metadata Query Handling
     # ======================================================================
 
+    @staticmethod
+    def _looks_informational(query: str) -> bool:
+        """
+        Lightweight pre-LLM check for probable informational queries.
+
+        This is NOT the authoritative classifier — the LLM's queryType field
+        is.  This just ensures informational queries bypass the orchestrator
+        so they reach the LLM parse step.  Uses word co-occurrence rather
+        than exact phrases to handle varied word orders.
+        """
+        q = str(query or "").lower()
+        # Must contain at least one "question" word AND one "metadata" word
+        question_words = {"what", "which", "list", "does", "browse", "search", "available", "show"}
+        metadata_words = {"series", "indicators", "indicator", "datasets", "metrics", "providers"}
+        words = set(q.split())
+        has_question = bool(words & question_words)
+        has_metadata = bool(words & metadata_words)
+        return has_question and has_metadata
+
     def _handle_informational_intent(
         self,
         query: str,
@@ -6872,6 +6891,12 @@ class QueryService:
             from ..config import get_settings
             settings = get_settings()
             bypass_orchestrator = self._is_temporal_split_query(query)
+            # Also bypass orchestrator for queries that look informational —
+            # the orchestrator doesn't handle metadata queries.  Let them
+            # flow to the LLM parse step where queryType is classified.
+            if not bypass_orchestrator and self._looks_informational(query):
+                bypass_orchestrator = True
+                logger.info("⏭️ Bypassing orchestrator for possible informational query")
             if allow_orchestrator and (use_orchestrator or settings.use_langchain_orchestrator) and not bypass_orchestrator:
                 logger.info("🤖 Using LangChain orchestrator for intelligent query routing")
                 return await self._execute_with_orchestrator(query, conv_id, tracker)
