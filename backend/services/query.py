@@ -3682,21 +3682,32 @@ class QueryService:
                 resolved=resolved,
             )
             primary_accepted = float(getattr(resolved, "confidence", 0.0) or 0.0) >= threshold
-            if primary_accepted and not self._is_resolved_indicator_plausible(
-                provider=provider,
-                indicator_query=indicator_query,
-                resolved_code=str(resolved.code),
-                resolved_name=" ".join(
-                    part
-                    for part in [
-                        str(getattr(resolved, "name", "") or ""),
-                        str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
-                        str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
-                    ]
-                    if part
-                ),
-            ):
-                primary_accepted = False
+            resolved_name_full = " ".join(
+                part
+                for part in [
+                    str(getattr(resolved, "name", "") or ""),
+                    str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
+                    str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
+                ]
+                if part
+            )
+            logger.info(
+                "🔬 Prefetch resolution: query='%s' code=%s conf=%.2f threshold=%.2f "
+                "relevance=%.2f accepted=%s",
+                indicator_query, resolved.code,
+                float(getattr(resolved, "confidence", 0.0) or 0.0),
+                threshold, primary_relevance, primary_accepted,
+            )
+            if primary_accepted:
+                plausible = self._is_resolved_indicator_plausible(
+                    provider=provider,
+                    indicator_query=indicator_query,
+                    resolved_code=str(resolved.code),
+                    resolved_name=resolved_name_full,
+                )
+                logger.info("🔬 Plausibility check: %s (code=%s)", plausible, resolved.code)
+                if not plausible:
+                    primary_accepted = False
             if primary_accepted and primary_relevance < self._minimum_resolved_relevance_threshold(indicator_query):
                 primary_accepted = False
 
@@ -5456,6 +5467,10 @@ class QueryService:
             return "GDP deflator inflation"
         if "employment_population" in cues:
             return "employment to population ratio"
+        # Check unemployment BEFORE employment_rate — "unemployment rate"
+        # produces both cues, and returning "employment rate" would be wrong.
+        if "unemployment" in cues:
+            return "unemployment rate"
         if "employment_rate" in cues:
             return "employment rate"
         if "producer_price" in cues:
@@ -5506,8 +5521,7 @@ class QueryService:
             if has_ratio:
                 return "exports as % of GDP"
             return "exports"
-        if "unemployment" in cues:
-            return "unemployment rate"
+        # NOTE: "unemployment" cue is handled earlier (before employment_rate)
         if "hicp" in cues:
             return "HICP inflation"
         if "inflation" in cues:

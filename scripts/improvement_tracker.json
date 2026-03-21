@@ -1,35 +1,22 @@
 {
   "_description": "Tracks improvement scores across automated cycles. Each cycle adds an entry with dimension scores (0-100).",
   "cycles": [
+    {"cycle": 1, "timestamp": "2026-03-21T04:01:00Z", "dimension_scores": {"accuracy": 75, "coverage": 80, "multi_country": 80, "reliability": 50, "edge_cases": 100}, "focus_area": "multi_country", "commit_sha": "9cab464"},
+    {"cycle": 2, "timestamp": "2026-03-21T04:55:00Z", "dimension_scores": {"accuracy": 83, "coverage": 50, "multi_country": 90, "reliability": 50, "edge_cases": 100, "informational": 75}, "focus_area": "informational", "commit_sha": "5d895b6"},
+    {"cycle": 3, "timestamp": "2026-03-21T06:50:00Z", "dimension_scores": {"accuracy": 83, "coverage": 33, "multi_country": 60, "reliability": 50, "edge_cases": 100, "informational": 75, "session": 0}, "focus_area": "OECD routing", "commit_sha": "44a540e"},
     {
-      "cycle": 1,
-      "timestamp": "2026-03-21T04:01:00Z",
-      "dimension_scores": {"accuracy": 75, "coverage": 80, "multi_country": 80, "reliability": 50, "edge_cases": 100},
-      "focus_area": "multi_country",
-      "fix_description": "Added scope markers, auto-resolve broad concepts for region groups",
-      "commit_sha": "9cab464"
-    },
-    {
-      "cycle": 2,
-      "timestamp": "2026-03-21T04:55:00Z",
-      "dimension_scores": {"accuracy": 83, "coverage": 50, "multi_country": 90, "reliability": 50, "edge_cases": 100, "informational": 75},
-      "focus_area": "informational",
-      "fix_description": "Semantic clarifier bypass + orchestrator bypass for informational queries",
-      "commit_sha": "5d895b6"
-    },
-    {
-      "cycle": 3,
-      "timestamp": "2026-03-21T06:50:00Z",
-      "dimension_scores": {"accuracy": 83, "coverage": 33, "multi_country": 60, "reliability": 50, "edge_cases": 100, "informational": 75, "session": 0},
-      "focus_area": "accuracy (OECD routing)",
-      "root_cause": "OECD non-EU countries (Japan, Australia, S.Korea) with standard macro indicators (unemployment, GDP) were routed to OECD which has unreliable indicator resolution. UnifiedRouter rule at line 926 matched too broadly.",
-      "fix_description": "1) Split OECD routing into OECD-specific indicators (R&D, Gini, tax) vs standard macro (GDP, unemployment). Standard macro → WorldBank for OECD non-EU countries. 2) Added prefetch fallback: when primary provider indicator resolution fails, try fallback providers before giving up. 3) Simple single-country macro queries bypass orchestrator for deterministic pipeline. 4) Added 3 new benchmark queries (acc-09, acc-10, cov-07).",
-      "queries_improved": ["acc-02 (routing fixed: OECD→WorldBank)"],
-      "note": "acc-02 routing now correct (WorldBank not OECD), but WorldBank indicator resolution for 'unemployment rate' still fails — needs indicator resolution quality improvement in next cycle",
+      "cycle": 4,
+      "timestamp": "2026-03-21T08:50:00Z",
+      "dimension_scores": {"accuracy": 67, "coverage": 67, "multi_country": 80, "reliability": 50, "edge_cases": 100, "informational": 100, "session": 0},
+      "focus_area": "indicator resolution quality",
+      "root_cause": "_labor_rate_specificity_penalty incorrectly penalized SL.UEM.TOTL.ZS (2.0 penalty) because 'Unemployment, total (% of total labor force)' lacks the word 'rate'. The penalty system didn't recognize '% of labor force' as equivalent to 'rate'.",
+      "fix_description": "1) Fixed _labor_rate_specificity_penalty to recognize '% of labor force' indicators as equivalent to 'rate'. Penalty dropped from 2.0 to 0.45. 2) Expanded FTS5 query normalization: 'unemployment' now includes 'total' and 'labor force' terms. 3) Added aggregate indicator boost in _rank_results: total/aggregate indicators ranked higher than youth/gender/age-bracket variants.",
+      "queries_improved": ["Resolution path for acc-02, acc-09, mc-05 — plausibility check now passes"],
+      "note": "Direct testing confirms: penalty fixed (2.0→0.45), plausibility passes (True), resolver finds SL.UEM.TOTL.ZS with 0.85 confidence. Full end-to-end query still fails due to upstream flow issue (query goes through orchestrator or prefetch check differently in live server). Root cause identified, fix verified in unit tests — remaining issue is flow integration.",
       "tests_added": 0,
       "tests_total": 412,
       "benchmark_queries_total": 33,
-      "commit_sha": "pending"
+      "commit_sha": "5aaa674"
     }
   ]
 }
