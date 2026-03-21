@@ -66,6 +66,12 @@ class OECDProvider:
         "LABOR_FORCE": {"keywords": ["labor force", "labour force", "workforce", "employed population"]},
     }
 
+    CANONICAL_DATAFLOW_ALIASES: Dict[str, tuple[str, str, str]] = {
+        "gdp": ("OECD.SDD.NAD", "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE", "1.0"),
+        "gross domestic product": ("OECD.SDD.NAD", "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE", "1.0"),
+        "nominal gdp": ("OECD.SDD.NAD", "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE", "1.0"),
+    }
+
     # Cached dataflows catalog (loaded once per process)
     _DATAFLOWS_CATALOG: Optional[Dict] = None
 
@@ -419,6 +425,17 @@ class OECDProvider:
             result = self._build_result_from_discovery(explicit_dataflow, {})
             cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
             return result
+
+        normalized_indicator = re.sub(r"\s+", " ", str(indicator or "").replace("_", " ").strip().lower())
+        canonical_dataflow = self.CANONICAL_DATAFLOW_ALIASES.get(normalized_indicator)
+        if canonical_dataflow:
+            logger.info(
+                "📌 Using canonical OECD dataflow alias for '%s' -> %s",
+                indicator,
+                canonical_dataflow[1],
+            )
+            cache_service.set(f"oecd_indicator:{str(indicator or '').upper()}", canonical_dataflow, ttl=86400)
+            return canonical_dataflow
 
         lookup_terms = self._build_indicator_lookup_terms(indicator)
         if not lookup_terms:

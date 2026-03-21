@@ -7230,13 +7230,27 @@ class QueryService:
                         bool(intent.indicators)
                         and indicator_query != str(intent.indicators[0] or "").strip()
                     )
-
-                    resolved = resolver.resolve(
-                        indicator_query,
+                    direct_translation_code: Optional[str] = None
+                    direct_translation = self._get_direct_provider_indicator_translation(
                         provider=provider,
-                        country=country_context,
-                        countries=countries_context,
+                        indicator_query=indicator_query,
                     )
+                    if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+                        logger.info(
+                            "📌 Using direct %s indicator translation: '%s' -> '%s'",
+                            provider,
+                            indicator_query,
+                            direct_translation,
+                        )
+                        direct_translation_code = str(direct_translation)
+                        resolved = None
+                    else:
+                        resolved = resolver.resolve(
+                            indicator_query,
+                            provider=provider,
+                            country=country_context,
+                            countries=countries_context,
+                        )
 
                     accepted_resolved = False
                     if resolved:
@@ -7285,7 +7299,9 @@ class QueryService:
                             accepted_resolved,
                         )
 
-                    if accepted_resolved and resolved:
+                    if direct_translation_code:
+                        params = {**params, "indicator": direct_translation_code}
+                    elif accepted_resolved and resolved:
                         params = {**params, "indicator": resolved.code}
                         # World Bank fetch path can iterate raw intent.indicators when multiple
                         # are present. If we intentionally overrode the parsed indicator query

@@ -1949,6 +1949,15 @@ class QueryServiceTests(unittest.TestCase):
             "NE.IMP.GNFS.ZS",
         )
 
+    def test_get_direct_provider_indicator_translation_returns_canonical_oecd_gdp_dataflow(self) -> None:
+        self.assertEqual(
+            self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
+                "OECD",
+                "GDP",
+            ),
+            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
+        )
+
     def test_is_resolved_indicator_plausible_rejects_unrequested_specialized_slice(self) -> None:
         plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
             provider="WorldBank",
@@ -2707,6 +2716,38 @@ class QueryServiceTests(unittest.TestCase):
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
+
+    def test_fetch_data_prefers_direct_oecd_gdp_translation_over_resolver_candidate(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["GDP"],
+            parameters={"country": "Italy"},
+            clarificationNeeded=False,
+            originalQuery="Get Italy GDP from OECD",
+        )
+
+        class _Resolved:
+            def __init__(self):
+                self.code = "DSD_NAMAIN10@DF_TABLE2_B5N_HCPC"
+                self.confidence = 0.99
+                self.source = "database"
+                self.name = "Annual net national income per capita, US $, current prices, current PPPs"
+                self.provider = "OECD"
+                self.metadata = {}
+
+        class _Resolver:
+            def resolve(self, *args, **kwargs):
+                return _Resolved()
+
+        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(
+            fetch_mock.call_args.kwargs.get("indicator"),
+            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
+        )
 
     def test_code_semantic_hint_infers_worldbank_import_ratio_cues(self) -> None:
         hint = self.service._code_semantic_hint(  # pylint: disable=protected-access

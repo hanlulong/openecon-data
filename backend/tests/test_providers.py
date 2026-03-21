@@ -55,6 +55,15 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
         self.assertEqual(version, "1.0")
 
+    def test_oecd_resolve_indicator_uses_canonical_gdp_dataflow(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        agency, dataflow, version = run(provider._resolve_indicator("GDP"))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.SDD.NAD")
+        self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
+        self.assertEqual(version, "1.0")
+
     def test_fred_series_id_mapping(self) -> None:
         """Test that indicator names are properly mapped to FRED series IDs."""
         provider = FREDProvider(api_key="test-key")

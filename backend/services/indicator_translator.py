@@ -44,7 +44,7 @@ class IndicatorTranslator:
                 "WORLDBANK": ["NY.GDP.MKTP.CD", "NY.GDP.MKTP.KD"],
                 "IMF": ["NGDP_RPCH"],
                 "EUROSTAT": ["nama_10_gdp"],
-                "OECD": ["GDP"],
+                "OECD": ["DSD_NAMAIN10@DF_TABLE1_EXPENDITURE"],
                 "BIS": [],  # BIS doesn't have GDP
                 "STATSCAN": ["65201210"],
             }
