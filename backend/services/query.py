@@ -3220,6 +3220,12 @@ class QueryService:
         if intent and intent.indicators and len(intent.indicators) > 1:
             return None
 
+        explicit_provider = self._normalize_provider_alias(
+            self._detect_explicit_provider(query)
+        )
+        if explicit_provider:
+            return None
+
         regions = CountryResolver.detect_regions_in_query(query)
         if len(regions) != 1:
             return None

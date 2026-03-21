@@ -1094,6 +1094,17 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
 
+    def test_build_group_scope_clarification_skips_explicit_provider_request(self) -> None:
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-group-provider",
+            query="Get Italy GDP from OECD",
+            intent=None,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNone(clarification)
+
     def test_semantic_clarifier_does_not_repeat_for_number_employed_query(self) -> None:
         self.assertIsNone(self.service.semantic_clarifier.detect("number employed in Canada"))
 
