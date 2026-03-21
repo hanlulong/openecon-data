@@ -1841,6 +1841,56 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response, expected_response)
         execute_intent.assert_awaited_once()
 
+    def test_process_query_handles_add_country_follow_up(self) -> None:
+        """'Add Germany' after a GDP query should reuse the GDP intent."""
+        conv_id = conversation_manager.get_or_create("conv-add-country-follow-up")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "US GDP last 5 years",
+            intent=ParsedIntent(
+                apiProvider="FRED",
+                indicators=["GDP"],
+                parameters={"country": "US"},
+                clarificationNeeded=False,
+                originalQuery="US GDP last 5 years",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
+             patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+            response = run(self.service.process_query("Add Germany", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        execute_intent.assert_awaited_once()
+        # Verify the intent was refined with Germany
+        call_kwargs = execute_intent.call_args
+        refined_intent = call_kwargs.kwargs.get("intent") or call_kwargs.args[2] if len(call_kwargs.args) > 2 else None
+        if refined_intent:
+            params = refined_intent.parameters or {}
+            target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
+            self.assertIn("DE", [c.upper() for c in target_countries])
+
+    def test_looks_like_country_follow_up_accepts_add_pattern(self) -> None:
+        """'Add Germany' should be recognized as a country follow-up."""
+        result = self.service._looks_like_country_follow_up("Add Germany", ["DE"])
+        self.assertTrue(result)
+
+    def test_looks_like_country_follow_up_accepts_what_about_pattern(self) -> None:
+        """'What about France?' should be recognized as a country follow-up."""
+        result = self.service._looks_like_country_follow_up("What about France?", ["FR"])
+        self.assertTrue(result)
+
+    def test_looks_like_country_follow_up_accepts_also_include_pattern(self) -> None:
+        """'Also include Japan' should be recognized as a country follow-up."""
+        result = self.service._looks_like_country_follow_up("Also include Japan", ["JP"])
+        self.assertTrue(result)
+
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
             "[IMF] Trade Balance (% of GDP) (BT_GDP)",

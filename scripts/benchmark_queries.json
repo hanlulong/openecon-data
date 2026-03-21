@@ -277,6 +277,24 @@
       "notes": "Multi-turn: first query then follow-up with same conversationId",
       "expected_min_series_turn2": 2,
       "timeout_s": 15
+    },
+    {
+      "id": "session-02",
+      "dimension": "session",
+      "query": "inflation rate in France 2019-2023",
+      "follow_up": "What about Japan?",
+      "notes": "Multi-turn: country switch follow-up",
+      "expected_min_series_turn2": 1,
+      "timeout_s": 15
+    },
+    {
+      "id": "session-03",
+      "dimension": "session",
+      "query": "unemployment rate G7 countries 2020-2024",
+      "follow_up": "show only US",
+      "notes": "Multi-turn: filter down from group query",
+      "expected_min_series_turn2": 1,
+      "timeout_s": 15
     }
   ]
 }

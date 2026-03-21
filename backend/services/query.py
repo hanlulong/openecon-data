@@ -467,14 +467,21 @@ class QueryService:
         allowed_tokens = {
             "show", "only", "just", "keep", "filter", "now", "instead",
             "use", "plot", "display", "me", "the", "for", "in", "to",
+            "add", "also", "include", "plus", "and", "with", "compare",
+            "what", "about", "how", "same", "but",
         }
         geography_tokens = {country.lower() for country in target_countries}
         for country in target_countries:
             if country.upper() == "US":
-                geography_tokens.update({"united", "states", "usa", "us"})
+                geography_tokens.update({"united", "states", "usa", "us", "america"})
             iso3 = CountryResolver.to_iso3(country)
             if iso3:
                 geography_tokens.add(iso3.lower())
+            # Add common country name tokens so "Add Germany" matches ["DE"]
+            for alias, code in CountryResolver.COUNTRY_ALIASES.items():
+                if code == country.upper():
+                    for token in alias.split():
+                        geography_tokens.add(token.lower())
 
         non_geography_tokens = [
             token for token in tokens
