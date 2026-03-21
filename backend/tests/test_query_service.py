@@ -3535,7 +3535,7 @@ class QueryServiceTests(unittest.TestCase):
 
 
 class InformationalQueryTests(unittest.TestCase):
-    """Tests for informational/metadata query detection and handling."""
+    """Tests for LLM-based informational/metadata query handling."""
 
     def setUp(self) -> None:
         self.service = QueryService.__new__(QueryService)
@@ -3543,71 +3543,109 @@ class InformationalQueryTests(unittest.TestCase):
             "backend.services.semantic_clarifier", fromlist=["SemanticClarifier"]
         ).SemanticClarifier()
 
-    def test_detects_informational_query_what_series(self) -> None:
-        self.assertTrue(self.service._is_informational_query(
-            "What employment series does World Bank have?"
-        ))
-
-    def test_detects_informational_query_list_indicators(self) -> None:
-        self.assertTrue(self.service._is_informational_query(
-            "List all available GDP indicators in FRED"
-        ))
-
-    def test_detects_informational_query_which_providers(self) -> None:
-        self.assertTrue(self.service._is_informational_query(
-            "Which providers have trade data?"
-        ))
-
-    def test_detects_informational_query_does_have(self) -> None:
-        self.assertTrue(self.service._is_informational_query(
-            "Does IMF have inflation data for developing countries?"
-        ))
-
-    def test_detects_informational_query_available(self) -> None:
-        self.assertTrue(self.service._is_informational_query(
-            "What indicators are available for unemployment?"
-        ))
-
-    def test_rejects_data_fetch_whats_gdp(self) -> None:
-        """'What's the GDP of France?' is a data-fetch query, not informational."""
-        self.assertFalse(self.service._is_informational_query(
-            "What's the GDP of France 2020-2023?"
-        ))
-
-    def test_rejects_data_fetch_show_me_data(self) -> None:
-        self.assertFalse(self.service._is_informational_query(
-            "Show me US GDP last 5 years"
-        ))
-
-    def test_rejects_data_fetch_compare(self) -> None:
-        self.assertFalse(self.service._is_informational_query(
-            "Compare GDP growth rate in G7 countries"
-        ))
-
-    def test_rejects_data_fetch_trend(self) -> None:
-        self.assertFalse(self.service._is_informational_query(
-            "What is the inflation trend in Germany?"
-        ))
-
-    def test_extracts_provider_and_topic(self) -> None:
-        context = self.service._extract_informational_context(
-            "What employment series does World Bank have?"
+    def test_handle_informational_intent_with_provider(self) -> None:
+        """Informational intent with specific provider returns indicator list."""
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["employment"],
+            parameters={},
+            clarificationNeeded=False,
+            queryType="informational",
         )
-        self.assertEqual(context["provider"], "WorldBank")
-        self.assertIn("employment", context["topic"])
-
-    def test_extracts_provider_fred(self) -> None:
-        context = self.service._extract_informational_context(
-            "List available unemployment indicators in FRED"
+        response = self.service._handle_informational_intent(
+            query="What employment series does World Bank have?",
+            intent=intent,
+            conversation_id="conv-info-1",
         )
-        self.assertEqual(context["provider"], "FRED")
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIsNotNone(response.message)
+        self.assertIn("indicator", response.message.lower())
 
-    def test_extracts_no_provider(self) -> None:
-        context = self.service._extract_informational_context(
-            "What GDP indicators are available?"
+    def test_handle_informational_intent_without_provider(self) -> None:
+        """Informational intent without specific provider searches all."""
+        intent = ParsedIntent(
+            apiProvider="WorldBank",  # neutral placeholder
+            indicators=["GDP"],
+            parameters={},
+            clarificationNeeded=False,
+            queryType="informational",
         )
-        self.assertIsNone(context["provider"])
-        self.assertIn("gdp", context["topic"])
+        response = self.service._handle_informational_intent(
+            query="What GDP indicators are available?",
+            intent=intent,
+            conversation_id="conv-info-2",
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIsNotNone(response.message)
+        self.assertIn("GDP", response.message.upper())
+
+    def test_handle_informational_intent_fred(self) -> None:
+        """Informational intent with FRED provider returns FRED indicators."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["unemployment"],
+            parameters={},
+            clarificationNeeded=False,
+            queryType="informational",
+        )
+        response = self.service._handle_informational_intent(
+            query="Does FRED have unemployment indicators?",
+            intent=intent,
+            conversation_id="conv-info-3",
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("FRED", response.message)
+
+    def test_data_fetch_intent_not_routed_as_informational(self) -> None:
+        """Data-fetch queryType should not be handled by informational handler."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            queryType="data_fetch",
+        )
+        # _handle_informational_intent should never be called for data_fetch,
+        # but verify the queryType field works
+        self.assertEqual(intent.queryType, "data_fetch")
+
+    def test_parsed_intent_querytype_default(self) -> None:
+        """ParsedIntent defaults to data_fetch queryType."""
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["GDP"],
+            parameters={},
+            clarificationNeeded=False,
+        )
+        self.assertEqual(intent.queryType, "data_fetch")
+
+    def test_parsed_intent_querytype_informational(self) -> None:
+        """ParsedIntent accepts informational queryType."""
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["trade indicators"],
+            parameters={},
+            clarificationNeeded=False,
+            queryType="informational",
+        )
+        self.assertEqual(intent.queryType, "informational")
+
+    def test_format_informational_results(self) -> None:
+        """Formatted results contain provider names and indicator codes."""
+        results = [
+            {"provider": "FRED", "code": "UNRATE", "name": "Unemployment Rate"},
+            {"provider": "FRED", "code": "U6RATE", "name": "Total Unemployed"},
+            {"provider": "WorldBank", "code": "SL.UEM.TOTL.ZS", "name": "Unemployment Total"},
+        ]
+        message = self.service._format_informational_results(
+            results, None, "unemployment", "What unemployment data is available?"
+        )
+        self.assertIn("FRED", message)
+        self.assertIn("WorldBank", message)
+        self.assertIn("UNRATE", message)
 
 
 if __name__ == "__main__":

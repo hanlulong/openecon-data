@@ -3034,132 +3034,52 @@ class QueryService:
     # Informational / Metadata Query Handling
     # ======================================================================
 
-    # Patterns that indicate the user is asking ABOUT available data, not
-    # requesting data itself.  Must be combined with block patterns to avoid
-    # false positives on data-fetch queries like "What's the GDP of France?"
-    _INFORMATIONAL_TRIGGER_PATTERNS = [
-        r"\bwhat\s+(?:indicators?|series|data(?:sets?)?|metrics?)\b.*\b(?:have|available|exist|offer|provide|cover)\b",
-        r"\b(?:list|show|browse|display)\s+(?:all\s+)?(?:available\s+)?(?:\w+\s+)*(?:indicators?|series|data(?:sets?)?|metrics?)\b",
-        r"\bwhich\s+(?:providers?|sources?)\s+(?:has|have|cover|offer|provide)\b",
-        r"\b(?:does|do)\s+\w+\s+have\s+(?:\w+\s+)*(?:data|indicators?|series|metrics?)\b",
-        r"\bwhat\s+(?:data|indicators?|series)\s+(?:is|are)\s+available\b",
-        r"\b(?:is|are)\s+there\s+(?:any\s+)?(?:data|indicators?|series)\b.*\bfor\b",
-        r"\bwhat\s+(?:kind|type)s?\s+of\s+(?:data|indicators?|economic)\b",
-        r"\bwhat\s+(?:\w+\s+){0,3}(?:series|indicators?)\s+does\b",
-        r"\b(?:available|supported)\s+(?:indicators?|series|data(?:sets?)?)\b",
-        r"\bhow\s+(?:many|much)\s+(?:indicators?|series|data)\b",
-    ]
-
-    # Block patterns — if these match, it's a data-fetch query, not informational.
-    _INFORMATIONAL_BLOCK_PATTERNS = [
-        r"\b(?:of|in|for)\s+(?:the\s+)?(?:US|USA|China|Japan|Germany|France|India|Brazil|UK|Canada)\b.*\b\d{4}\b",
-        r"\b(?:last|past|recent)\s+\d+\s+(?:years?|months?|quarters?)\b",
-        r"\b\d{4}\s*[-–]\s*\d{4}\b",  # date ranges like 2018-2023
-        r"\b(?:growth|rate|trend|change|increase|decrease|decline)\b",
-        r"\b(?:compare|comparison|versus|vs\.?)\b",
-    ]
-
-    def _is_informational_query(self, query: str) -> bool:
-        """Detect whether a query is asking ABOUT available data, not requesting data."""
-        q = str(query or "").lower().strip()
-        if not q or len(q) < 10:
-            return False
-
-        # Block patterns take priority — if any match, it's data-fetch
-        for pattern in self._INFORMATIONAL_BLOCK_PATTERNS:
-            if re.search(pattern, q, re.IGNORECASE):
-                return False
-
-        # Check trigger patterns
-        for pattern in self._INFORMATIONAL_TRIGGER_PATTERNS:
-            if re.search(pattern, q, re.IGNORECASE):
-                return True
-
-        return False
-
-    def _extract_informational_context(self, query: str) -> Dict[str, Optional[str]]:
-        """Extract provider and topic from an informational query."""
-        q = str(query or "").lower().strip()
-
-        # Detect provider mentions
-        provider_patterns = {
-            "FRED": r"\bfred\b",
-            "WorldBank": r"\b(?:world\s*bank|wb)\b",
-            "IMF": r"\bimf\b",
-            "Eurostat": r"\beurostat\b",
-            "OECD": r"\boecd\b",
-            "StatsCan": r"\b(?:statscan|statistics?\s*canada|statcan)\b",
-            "BIS": r"\bbis\b",
-            "Comtrade": r"\bcomtrade\b",
-            "CoinGecko": r"\b(?:coingecko|coin\s*gecko)\b",
-            "ExchangeRate": r"\b(?:exchange\s*rate)\b",
-        }
-
-        detected_provider = None
-        for provider_name, pattern in provider_patterns.items():
-            if re.search(pattern, q):
-                detected_provider = provider_name
-                break
-
-        # Extract topic keywords — remove provider names, question words, filler
-        topic = re.sub(
-            r"\b(?:what|which|does|do|have|has|available|list|show|browse|"
-            r"all|the|are|is|there|any|for|in|from|of|me|data|indicators?|"
-            r"series|datasets?|metrics?|about|tell|can|you|provide|providers?|"
-            r"offer|cover|supported|kind|types?|sources?)\b",
-            " ", q,
-        )
-        # Also remove provider names from topic
-        for pattern in provider_patterns.values():
-            topic = re.sub(pattern, " ", topic)
-        # Strip punctuation and normalize whitespace
-        topic = re.sub(r"[?!.,;:'\"]", "", topic)
-        topic = " ".join(topic.split()).strip()
-
-        return {
-            "provider": detected_provider,
-            "topic": topic if topic else None,
-        }
-
-    def _try_handle_informational_query(
+    def _handle_informational_intent(
         self,
         query: str,
+        intent: ParsedIntent,
         conversation_id: str,
         tracker: Optional["ProcessingTracker"] = None,
     ) -> Optional[QueryResponse]:
         """
-        Handle informational queries about available data/indicators.
+        Handle informational queries classified by the LLM (queryType=informational).
 
-        Returns a text-only QueryResponse if the query is informational,
-        or None if it should be handled as a normal data-fetch query.
+        Uses the LLM-extracted indicators and provider from the intent rather
+        than regex pattern matching — future-proof and handles novel phrasings.
         """
-        if not self._is_informational_query(query):
+        # Use LLM-extracted provider (if user specified one)
+        provider = str(intent.apiProvider or "").strip()
+        if provider.lower() in ("worldbank", "world bank", ""):
+            # "WorldBank" is the neutral placeholder — don't filter by it
+            # unless user explicitly said "World Bank"
+            query_lower = str(query or "").lower()
+            if "world bank" not in query_lower and "worldbank" not in query_lower:
+                provider = None
+
+        # Use LLM-extracted indicators as search terms
+        search_terms = " ".join(str(ind) for ind in (intent.indicators or []))
+        # Clean search terms — remove meta-language the LLM might include
+        search_terms = re.sub(
+            r"\b(?:available|indicators?|series|datasets?|metrics?)\b",
+            " ", search_terms, flags=re.IGNORECASE,
+        )
+        search_terms = " ".join(search_terms.split()).strip()
+
+        if not search_terms and not provider:
             return None
 
-        logger.info("📖 Detected informational/metadata query: %s", query)
-
-        context = self._extract_informational_context(query)
-        provider = context.get("provider")
-        topic = context.get("topic")
-
-        if not topic and not provider:
-            return None
-
-        # Search the indicator database
         from .indicator_lookup import IndicatorLookup
         lookup = IndicatorLookup()
 
-        search_query = topic or ""
-        results = lookup.search(search_query, provider=provider, limit=30)
+        results = lookup.search(search_terms or "", provider=provider, limit=30)
 
-        if not results:
+        if not results and provider and search_terms:
             # Try broader search without provider filter
-            if provider and topic:
-                results = lookup.search(search_query, provider=None, limit=20)
+            results = lookup.search(search_terms, provider=None, limit=20)
 
         if not results:
             provider_label = provider or "any provider"
-            topic_label = topic or "that topic"
+            topic_label = search_terms or "that topic"
             message = (
                 f"I couldn't find indicators matching \"{topic_label}\" "
                 f"in {provider_label}. Try rephrasing or searching a different provider."
@@ -3171,8 +3091,7 @@ class QueryService:
                 processingSteps=tracker.to_list() if tracker else None,
             )
 
-        # Format results grouped by provider
-        message = self._format_informational_results(results, provider, topic, query)
+        message = self._format_informational_results(results, provider, search_terms, query)
 
         return QueryResponse(
             conversationId=conversation_id,
@@ -6904,22 +6823,10 @@ class QueryService:
             if pending_semantic_response is not None:
                 return pending_semantic_response
 
-            # Check for informational/metadata queries (e.g., "What indicators
-            # does World Bank have for employment?").  These return text answers
-            # about available data rather than fetching time-series.
-            informational_response = self._try_handle_informational_query(
-                query=query,
-                conversation_id=conv_id,
-                tracker=tracker,
-            )
-            if informational_response is not None:
-                conv_id = conversation_manager.add_message_safe(
-                    conv_id, "user", query,
-                )
-                conversation_manager.add_message_safe(
-                    conv_id, "assistant", informational_response.message or "",
-                )
-                return informational_response
+            # NOTE: Informational query routing has been moved to AFTER the
+            # LLM parse step.  The LLM classifies queryType as part of intent
+            # extraction (same API call, zero additional cost).  See the
+            # queryType == "informational" check below the parse step.
 
             contextual_follow_up = self._build_intent_from_contextual_follow_up(
                 query=query,
@@ -6995,6 +6902,25 @@ class QueryService:
             self._maybe_resolve_region_clarification(query, intent)
             self._maybe_resolve_temporal_comparison_clarification(query, intent)
             self._maybe_expand_multi_concept_intent(query, intent)
+
+            # Route informational queries — the LLM classified queryType as
+            # part of intent extraction (same API call, zero cost).
+            if str(intent.queryType or "").strip().lower() == "informational":
+                logger.info("📖 LLM classified query as informational: %s", query)
+                informational_response = self._handle_informational_intent(
+                    query=query,
+                    intent=intent,
+                    conversation_id=conv_id,
+                    tracker=tracker,
+                )
+                if informational_response is not None:
+                    conv_id = conversation_manager.add_message_safe(
+                        conv_id, "user", query, intent=intent,
+                    )
+                    conversation_manager.add_message_safe(
+                        conv_id, "assistant", informational_response.message or "",
+                    )
+                    return informational_response
 
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
 

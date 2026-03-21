@@ -81,6 +81,7 @@ Decomposition extraction:
 
 Output schema (all keys required unless noted null):
 {{
+  "queryType": "data_fetch",
   "apiProvider": "WorldBank",
   "indicators": ["..."] ,
   "parameters": {{
@@ -107,8 +108,14 @@ Output schema (all keys required unless noted null):
 }}
 
 Required formatting rules:
+- queryType: one of "data_fetch", "informational", "analysis", "comparison"
+  - "data_fetch": user wants actual data/time series (default, most queries)
+  - "informational": user is asking ABOUT available data, indicators, or providers
+    (e.g., "What GDP indicators does World Bank have?", "Which providers cover trade data?")
+  - "analysis": user wants complex analysis requiring code execution
+  - "comparison": user wants structured comparison across entities
 - apiProvider: string
-- indicators: non-empty array of strings
+- indicators: non-empty array of strings (for informational queries, use search terms like ["employment indicators"])
 - parameters: object (use null values or omit unrelated keys)
 - clarificationNeeded: boolean
 - clarificationQuestions: array (empty when clarificationNeeded=false)
@@ -135,6 +142,17 @@ Set startDate="2015-01-01", endDate="2020-12-31".
 
 User: "plot unemployment for all canadian provinces"
 Set needsDecomposition=true, decompositionType="provinces".
+
+User: "What GDP indicators does World Bank have?"
+Set queryType="informational", indicators=["GDP"], apiProvider="WorldBank".
+This is NOT a data request — user is asking about available indicators.
+
+User: "Which providers have trade data?"
+Set queryType="informational", indicators=["trade"].
+User is asking about data availability, not requesting data.
+
+User: "What's the GDP of France in 2023?"
+Set queryType="data_fetch". This IS a data request despite starting with "What".
 
 Final rule:
 Return JSON only. No prose.

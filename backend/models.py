@@ -83,6 +83,13 @@ class ParsedIntent(BaseModel):
     confidence: Optional[float] = None
     recommendedChartType: Optional[str] = Field(default=None, pattern="^(line|bar|scatter|table)$")
 
+    # Query type classification — determines routing path
+    # data_fetch: standard data retrieval (default)
+    # informational: questions about available data/indicators
+    # analysis: complex analysis requiring Pro Mode
+    # comparison: structured comparisons across entities
+    queryType: Optional[str] = "data_fetch"
+
     # Original query text for downstream processing (e.g., time period extraction)
     originalQuery: Optional[str] = None
 
