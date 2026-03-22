@@ -548,6 +548,116 @@ class QueryService:
             return f"{distilled_indicator} {new_scope}"
         return None
 
+    # Known indicator terms for detecting indicator-switch follow-ups
+    _INDICATOR_SWITCH_TERMS = {
+        "gdp", "inflation", "unemployment", "cpi", "trade balance",
+        "trade openness", "population", "debt", "interest rate",
+        "exchange rate", "exports", "imports", "employment",
+        "life expectancy", "fertility", "savings", "investment",
+        "current account", "gdp growth", "gdp per capita",
+    }
+
+    def _build_intent_from_indicator_switch(
+        self,
+        query: str,
+        conversation_id: str,
+    ) -> Optional[Tuple[str, ParsedIntent, ParseRouteResult]]:
+        """
+        Resolve indicator-switch follow-ups that keep the country but change the metric.
+
+        Example:
+        - previous: "GDP of Germany 2018-2023"
+        - follow-up: "what about inflation"
+        - rewritten query: "inflation in Germany 2018-2023"
+        """
+        last_intent = conversation_manager.get_last_intent(conversation_id)
+        if not last_intent or last_intent.clarificationNeeded:
+            return None
+
+        query_lower = str(query or "").lower().strip()
+        if not query_lower or len(query_lower) > 60:
+            return None
+
+        # Must contain an indicator switch marker
+        switch_markers = {"what about", "show", "how about", "switch to", "instead", "now"}
+        if not any(marker in query_lower for marker in switch_markers):
+            return None
+
+        # Must mention a known indicator
+        matched_indicator = None
+        for term in sorted(self._INDICATOR_SWITCH_TERMS, key=len, reverse=True):
+            if term in query_lower:
+                matched_indicator = term
+                break
+        if not matched_indicator:
+            return None
+
+        # Must NOT mention a new country (that would be a country follow-up)
+        extracted_countries = self._extract_countries_from_query(query)
+        if extracted_countries:
+            return None
+
+        # Reuse country from prior intent
+        prior_countries = self._collect_target_countries(last_intent.parameters)
+        if not prior_countries:
+            return None
+
+        # Build new query: "indicator in country(ies)"
+        if len(prior_countries) == 1:
+            refined_query = f"{matched_indicator} in {prior_countries[0]}"
+        else:
+            refined_query = f"{matched_indicator} across {', '.join(prior_countries)}"
+
+        # Preserve time period from prior intent
+        params = dict(last_intent.parameters or {})
+        start_date = params.get("startDate")
+        end_date = params.get("endDate")
+        if start_date and end_date:
+            refined_query += f" {start_date[:4]}-{end_date[:4]}"
+
+        logger.info(
+            "🔄 Indicator switch follow-up: '%s' → '%s' (preserving countries=%s)",
+            query, refined_query, prior_countries,
+        )
+
+        # Route the new query
+        routing_decision = self.unified_router.route(
+            query=refined_query,
+            indicators=[matched_indicator],
+            country=prior_countries[0] if len(prior_countries) == 1 else None,
+            countries=prior_countries if len(prior_countries) > 1 else None,
+        )
+        api_provider = normalize_provider_name(routing_decision.provider)
+
+        # Build new intent
+        new_params: Dict[str, Any] = {}
+        if start_date:
+            new_params["startDate"] = start_date
+        if end_date:
+            new_params["endDate"] = end_date
+        if len(prior_countries) == 1:
+            new_params["country"] = prior_countries[0]
+        else:
+            new_params["countries"] = prior_countries
+
+        intent = ParsedIntent(
+            apiProvider=api_provider,
+            indicators=[matched_indicator],
+            parameters=new_params,
+            clarificationNeeded=False,
+            originalQuery=refined_query,
+            confidence=0.90,
+        )
+
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider=api_provider,
+            validation_warning=None,
+        )
+
+        return refined_query, intent, parse_result
+
     def _build_intent_from_contextual_follow_up(
         self,
         query: str,
@@ -6983,6 +7093,23 @@ class QueryService:
                     conversation_id=conv_id,
                     intent=contextual_intent,
                     parse_result=contextual_parse_result,
+                    tracker=tracker,
+                )
+
+            # Check for indicator-switch follow-ups ("what about inflation",
+            # "show unemployment instead") — keeps country, changes metric.
+            indicator_switch = self._build_intent_from_indicator_switch(
+                query=query,
+                conversation_id=conv_id,
+            )
+            if indicator_switch is not None:
+                refined_query, switch_intent, switch_parse_result = indicator_switch
+                return await self._execute_resolved_intent(
+                    query=refined_query,
+                    skip_prefetch_clarification=True,
+                    conversation_id=conv_id,
+                    intent=switch_intent,
+                    parse_result=switch_parse_result,
                     tracker=tracker,
                 )
 
