@@ -404,6 +404,39 @@
       "timeout_s": 25
     },
     {
+      "id": "acc-24",
+      "dimension": "accuracy",
+      "query": "compare GDP growth between US and China over the last decade",
+      "notes": "Natural phrasing, multi-country comparison with relative time",
+      "expected_min_series": 2,
+      "expected_min_points": 5,
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-25",
+      "dimension": "accuracy",
+      "query": "how much does Japan export",
+      "notes": "Casual phrasing for trade/exports data",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-26",
+      "dimension": "accuracy",
+      "query": "show me inflation data, preferably from IMF",
+      "notes": "Explicit provider preference in natural language",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "session-08",
+      "dimension": "session",
+      "query": "GDP of France 2018-2023",
+      "follow_ups": ["compare with Germany", "what about inflation", "show only France"],
+      "notes": "4-turn: country add → indicator switch → country filter. Tests full conversation capability.",
+      "timeout_s": 30
+    },
+    {
       "id": "edge-04",
       "dimension": "edge_cases",
       "query": "What is the GDP of Atlantis?",
