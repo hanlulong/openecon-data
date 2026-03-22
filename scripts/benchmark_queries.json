@@ -379,6 +379,31 @@
       "timeout_s": 90
     },
     {
+      "id": "acc-21",
+      "dimension": "accuracy",
+      "query": "US real interest rate 2015-2024",
+      "notes": "FRED real interest rate series",
+      "expected_min_points": 3,
+      "timeout_s": 20
+    },
+    {
+      "id": "acc-22",
+      "dimension": "accuracy",
+      "query": "life expectancy Japan vs US 2010-2023",
+      "notes": "WorldBank life expectancy comparison",
+      "expected_min_series": 2,
+      "expected_min_points": 5,
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-23",
+      "dimension": "accuracy",
+      "query": "energy imports as percent of GDP Germany",
+      "notes": "WorldBank energy indicator",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
       "id": "edge-04",
       "dimension": "edge_cases",
       "query": "What is the GDP of Atlantis?",

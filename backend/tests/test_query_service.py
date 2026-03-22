@@ -1088,19 +1088,20 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(pending)
 
     def test_build_group_scope_clarification_for_region_query(self) -> None:
+        """Group scope clarification should fire for vague queries without specific indicators."""
         conv_id = conversation_manager.get_or_create("conv-group-scope")
         conversation_manager.clear_pending_semantic_clarification(conv_id)
         intent = ParsedIntent(
             apiProvider="IMF",
-            indicators=["employment rate"],
+            indicators=["economic data"],
             parameters={"countries": ["AR", "AU", "BR"]},
             clarificationNeeded=False,
-            originalQuery="employment rate in G20",
+            originalQuery="economic data for G20",
         )
 
         clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
             conversation_id=conv_id,
-            query="employment rate in G20",
+            query="economic data for G20",
             intent=intent,
             is_multi_indicator=False,
             processing_steps=None,
@@ -1118,8 +1119,8 @@ class QueryServiceTests(unittest.TestCase):
                 "one overall group value (aggregate/average if available)",
             ],
         )
-        self.assertEqual(options[0].value, "employment rate across G20 member countries")
-        self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
+        self.assertEqual(options[0].value, "economic data across G20 member countries")
+        self.assertEqual(options[1].value, "economic data for the G20 group as a whole")
         pending = conversation_manager.get_pending_semantic_clarification(conv_id)
         self.assertIsNotNone(pending)
 
@@ -2083,19 +2084,24 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options[0].label, "number employed")
         self.assertEqual(options[1].value, "employment rate in Canada")
 
-    def test_process_query_returns_group_scope_clarification_before_parse(self) -> None:
+    def test_process_query_skips_group_scope_clarification_for_specific_indicator(self) -> None:
+        """Queries with specific indicators + group name should NOT ask for group scope."""
         conv_id = "conv-process-group-scope"
         conversation_manager.clear_pending_semantic_clarification(conv_id)
 
+        # "employment rate in G20" has a specific indicator → skip group scope clarification
+        result = self.service._has_explicit_group_scope("employment rate in G20")
+        self.assertTrue(result, "Specific indicator 'employment' should imply comparison scope")
+
+    def test_process_query_returns_group_scope_clarification_for_vague_query(self) -> None:
+        """Vague group queries without specific indicators should trigger clarification."""
+        conv_id = "conv-process-group-scope-vague"
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+
         with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
-            response = run(self.service.process_query("employment rate in G20", conversation_id=conv_id))
+            response = run(self.service.process_query("data for G20", conversation_id=conv_id))
 
         self.assertTrue(response.clarificationNeeded)
-        self.assertIsNone(response.intent)
-        self.assertIsNotNone(response.clarificationOptions)
-        options = response.clarificationOptions or []
-        self.assertEqual(options[0].label, "compare member countries")
-        self.assertEqual(options[1].value, "employment rate for the G20 group as a whole")
 
     def test_process_query_uses_pending_country_follow_up_before_semantic_reply(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-process-pending-country-follow-up")

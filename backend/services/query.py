@@ -3377,7 +3377,23 @@ class QueryService:
             "combined",
             "total for the group",
         ]
-        return any(marker in query_lower for marker in explicit_markers)
+        if any(marker in query_lower for marker in explicit_markers):
+            return True
+
+        # When a SPECIFIC indicator is named alongside a group, default to
+        # comparison.  Users who say "trade openness G7" or "inflation BRICS"
+        # want to compare member countries, not get one aggregate value.
+        specific_indicators = [
+            "gdp", "inflation", "unemployment", "trade openness",
+            "trade balance", "debt", "cpi", "interest rate", "policy rate",
+            "population", "life expectancy", "fertility", "reserves",
+            "savings", "investment", "exports", "imports", "employment",
+            "labor force", "current account", "fiscal balance",
+        ]
+        if any(ind in query_lower for ind in specific_indicators):
+            return True
+
+        return False
 
     def _rewrite_group_scope_query(
         self,
