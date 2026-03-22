@@ -7,11 +7,23 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
 import httpx
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 from ..models import NormalizedData
 from ..utils.retry import DataNotAvailableError
 
 logger = logging.getLogger(__name__)
+
+
+class _TransientHTTPError(Exception):
+    """Internal marker for HTTP errors that should trigger tenacity retry."""
+    pass
 
 
 class BaseProvider(ABC):
@@ -73,7 +85,11 @@ class BaseProvider(ABC):
         url: str,
         **kwargs
     ) -> httpx.Response:
-        """Get request with automatic retry on transient failures.
+        """Get request with automatic retry on transient failures (powered by tenacity).
+
+        Retries on: HTTP 429 (rate limit), HTTP 5xx (server error),
+        connection errors, timeouts.
+        Does NOT retry on: HTTP 404/403 (not found/forbidden), other client errors.
 
         Args:
             client: httpx AsyncClient
@@ -86,56 +102,47 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
-        last_error = None
+        @retry(
+            stop=stop_after_attempt(self.MAX_RETRIES),
+            wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
+            retry=retry_if_exception_type((
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.ReadTimeout,
+                _TransientHTTPError,
+            )),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+            reraise=True,
+        )
+        async def _do_get():
+            response = await client.get(url, **kwargs, timeout=self.timeout)
 
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                response = await client.get(url, **kwargs, timeout=self.timeout)
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 60))
+                self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
+                raise _TransientHTTPError(f"Rate limited (429). Retry after {retry_after}s")
 
-                # Check for rate limiting
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", 60))
-                    self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
-                    logger.warning(f"Rate limited. Retry after {retry_after}s")
+            if response.status_code >= 500:
+                raise _TransientHTTPError(f"Server error ({response.status_code})")
 
-                response.raise_for_status()
-                return response
+            response.raise_for_status()
+            return response
 
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                status = e.response.status_code
-
-                if status == 429:
-                    # Rate limited - wait and retry
-                    continue
-                elif status in (404, 403):
-                    # Not found or forbidden - don't retry
-                    raise DataNotAvailableError(
-                        f"API returned {status}: {e.response.text[:200]}"
-                    )
-                elif status >= 500:
-                    # Server error - retry
-                    if attempt < self.MAX_RETRIES - 1:
-                        logger.warning(f"Server error {status}, retrying...")
-                        continue
-                    raise DataNotAvailableError(f"Server error {status} after {self.MAX_RETRIES} retries")
-                else:
-                    # Other client error
-                    raise DataNotAvailableError(str(e))
-
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout) as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES - 1:
-                    logger.warning(f"Connection error, retrying... (attempt {attempt + 1})")
-                    continue
-                raise DataNotAvailableError(f"Connection failed after {self.MAX_RETRIES} retries: {str(e)}")
-
-            except Exception as e:
-                last_error = e
-                raise DataNotAvailableError(f"Request failed: {str(e)}")
-
-        # All retries exhausted
-        raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {str(last_error)}")
+        try:
+            return await _do_get()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (404, 403):
+                raise DataNotAvailableError(
+                    f"API returned {status}: {e.response.text[:200]}"
+                )
+            raise DataNotAvailableError(str(e))
+        except _TransientHTTPError as e:
+            raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {e}")
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout) as e:
+            raise DataNotAvailableError(f"Connection failed after {self.MAX_RETRIES} retries: {e}")
+        except Exception as e:
+            raise DataNotAvailableError(f"Request failed: {e}")
 
     async def _post_with_retry(
         self,
@@ -143,7 +150,7 @@ class BaseProvider(ABC):
         url: str,
         **kwargs
     ) -> httpx.Response:
-        """Post request with automatic retry on transient failures.
+        """Post request with automatic retry on transient failures (powered by tenacity).
 
         Args:
             client: httpx AsyncClient
@@ -156,36 +163,37 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
-        last_error = None
+        @retry(
+            stop=stop_after_attempt(self.MAX_RETRIES),
+            wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
+            retry=retry_if_exception_type((
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                _TransientHTTPError,
+            )),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+            reraise=True,
+        )
+        async def _do_post():
+            response = await client.post(url, **kwargs, timeout=self.timeout)
+            if response.status_code >= 500:
+                raise _TransientHTTPError(f"Server error ({response.status_code})")
+            response.raise_for_status()
+            return response
 
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                response = await client.post(url, **kwargs, timeout=self.timeout)
-                response.raise_for_status()
-                return response
-
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                status = e.response.status_code
-
-                if status in (404, 403):
-                    raise DataNotAvailableError(f"API returned {status}")
-                elif status >= 500 and attempt < self.MAX_RETRIES - 1:
-                    logger.warning(f"Server error {status}, retrying...")
-                    continue
-                elif status >= 500:
-                    raise DataNotAvailableError(f"Server error {status} after retries")
-                else:
-                    raise DataNotAvailableError(str(e))
-
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES - 1:
-                    logger.warning(f"Connection error, retrying...")
-                    continue
-                raise DataNotAvailableError(f"Connection failed: {str(e)}")
-
-        raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {str(last_error)}")
+        try:
+            return await _do_post()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (404, 403):
+                raise DataNotAvailableError(f"API returned {status}")
+            raise DataNotAvailableError(str(e))
+        except _TransientHTTPError as e:
+            raise DataNotAvailableError(f"Failed after {self.MAX_RETRIES} retries: {e}")
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            raise DataNotAvailableError(f"Connection failed after retries: {e}")
+        except Exception as e:
+            raise DataNotAvailableError(f"Request failed: {e}")
 
     @staticmethod
     def _normalize_country_code(country: str, mappings: Dict[str, str]) -> str:
