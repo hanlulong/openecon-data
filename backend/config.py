@@ -71,9 +71,9 @@ class Settings(BaseSettings):
         description="Enable hybrid provider routing (deterministic candidates + LLM ranking)"
     )
     embedding_model: str = Field(
-        default="BAAI/bge-base-en-v1.5",
+        default="sentence-transformers/all-MiniLM-L6-v2",
         alias="EMBEDDING_MODEL",
-        description="Embedding model for vector search. Default: bge-base-en-v1.5 (768d, 84.7% accuracy). Previous: all-MiniLM-L6-v2 (384d, 78.1%). Rebuild FAISS index after changing."
+        description="Embedding model for vector search. Options: all-MiniLM-L6-v2 (384d, default), BAAI/bge-base-en-v1.5 (768d, +6.6% accuracy). Rebuild FAISS index after changing."
     )
     embedding_dimensions: int | None = Field(
         default=None,
