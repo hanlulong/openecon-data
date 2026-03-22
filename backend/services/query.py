@@ -468,7 +468,7 @@ class QueryService:
             "show", "only", "just", "keep", "filter", "now", "instead",
             "use", "plot", "display", "me", "the", "for", "in", "to",
             "add", "also", "include", "plus", "and", "with", "compare",
-            "what", "about", "how", "same", "but",
+            "what", "about", "how", "same", "but", "too", "well", "as",
         }
         geography_tokens = {country.lower() for country in target_countries}
         for country in target_countries:
