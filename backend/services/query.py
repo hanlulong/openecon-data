@@ -3982,6 +3982,7 @@ class QueryService:
         intent: ParsedIntent,
         parse_result: ParseRouteResult,
         tracker: Optional['ProcessingTracker'] = None,
+        skip_prefetch_clarification: bool = False,
     ) -> QueryResponse:
         """Run validation, clarification guardrails, and fetch for an already-built intent."""
         conv_id = conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
@@ -4054,15 +4055,16 @@ class QueryService:
         if validation.suggestions and validation.suggestions.get('warning'):
             logger.info("Validation warning: %s", validation.suggestions['warning'])
 
-        parse_stage_clarification = await self._build_post_parse_clarification(
-            conversation_id=conv_id,
-            query=query,
-            parse_result=parse_result,
-            validation=validation,
-            processing_steps=tracker.to_list() if tracker else None,
-        )
-        if parse_stage_clarification:
-            return parse_stage_clarification
+        if not skip_prefetch_clarification:
+            parse_stage_clarification = await self._build_post_parse_clarification(
+                conversation_id=conv_id,
+                query=query,
+                parse_result=parse_result,
+                validation=validation,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if parse_stage_clarification:
+                return parse_stage_clarification
 
         if validation.is_multi_indicator:
             logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
@@ -6944,6 +6946,7 @@ class QueryService:
                 refined_query, contextual_intent, contextual_parse_result = contextual_follow_up
                 return await self._execute_resolved_intent(
                     query=refined_query,
+                    skip_prefetch_clarification=True,  # Trust contextual follow-up — intent was verified against prior query
                     conversation_id=conv_id,
                     intent=contextual_intent,
                     parse_result=contextual_parse_result,
