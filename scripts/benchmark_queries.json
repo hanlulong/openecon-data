@@ -362,6 +362,30 @@
       "timeout_s": 15
     },
     {
+      "id": "acc-20",
+      "dimension": "accuracy",
+      "query": "US trade balance 2018-2023 from FRED",
+      "notes": "FRED trade balance series BOPGSTB",
+      "expected_min_points": 5,
+      "timeout_s": 15
+    },
+    {
+      "id": "mc-07",
+      "dimension": "multi_country",
+      "query": "inflation rate EU countries from Eurostat 2020-2024",
+      "notes": "Eurostat HICP for EU members - Eurostat can be slow",
+      "expected_min_series": 5,
+      "expected_min_points": 2,
+      "timeout_s": 90
+    },
+    {
+      "id": "edge-04",
+      "dimension": "edge_cases",
+      "query": "What is the GDP of Atlantis?",
+      "notes": "Should gracefully fail for fictional country",
+      "timeout_s": 15
+    },
+    {
       "id": "cov-09",
       "dimension": "coverage",
       "query": "gold price in USD",
