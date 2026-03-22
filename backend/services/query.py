@@ -571,6 +571,23 @@ class QueryService:
         if not self._looks_like_country_follow_up(query, target_countries):
             return None
 
+        # Detect ADDITIVE follow-ups ("compare with", "add", "also include", "plus")
+        # vs REPLACEMENT follow-ups ("show only", "just", "filter to")
+        query_lower = str(query or "").lower()
+        additive_markers = {"compare", "add", "also", "include", "plus", "too", "well", "and"}
+        is_additive = bool(set(query_lower.split()) & additive_markers)
+
+        # For additive follow-ups, merge new countries with prior countries
+        if is_additive:
+            prior_countries = self._collect_target_countries(last_intent.parameters)
+            merged = list(dict.fromkeys(prior_countries + target_countries))  # Dedupe, preserve order
+            if len(merged) > len(target_countries):
+                target_countries = merged
+                logger.info(
+                    "🔗 Additive follow-up: merged %s with prior %s → %s",
+                    target_countries[-len(target_countries):], prior_countries, merged,
+                )
+
         refined_query = self._build_contextual_follow_up_query(last_intent, target_countries)
         if not refined_query:
             return None

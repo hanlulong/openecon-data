@@ -1898,6 +1898,57 @@ class QueryServiceTests(unittest.TestCase):
             target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
             self.assertIn("DE", [c.upper() for c in target_countries])
 
+    def test_additive_follow_up_compare_with_merges_countries(self) -> None:
+        """'compare with India' after 'GDP of China' should return BOTH countries."""
+        conv_id = conversation_manager.get_or_create("conv-additive-compare")
+        conversation_manager.add_message_safe(
+            conv_id, "user", "GDP of China 2018-2023",
+            intent=ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=["GDP"],
+                parameters={"country": "CN"},
+                clarificationNeeded=False,
+                originalQuery="GDP of China 2018-2023",
+            ),
+        )
+
+        result = self.service._build_intent_from_contextual_follow_up(
+            query="compare with India",
+            conversation_id=conv_id,
+        )
+        self.assertIsNotNone(result)
+        refined_query, intent, _ = result
+        params = intent.parameters or {}
+        countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
+        country_codes = [c.upper() for c in countries]
+        self.assertIn("CN", country_codes, "Should preserve China from prior query")
+        self.assertIn("IN", country_codes, "Should add India from follow-up")
+
+    def test_replacement_follow_up_show_only_replaces(self) -> None:
+        """'show only US' should REPLACE, not add to prior countries."""
+        conv_id = conversation_manager.get_or_create("conv-replacement-show-only")
+        conversation_manager.add_message_safe(
+            conv_id, "user", "GDP growth G7 countries",
+            intent=ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=["GDP growth"],
+                parameters={"countries": sorted(CountryResolver.G7_MEMBERS)},
+                clarificationNeeded=False,
+                originalQuery="GDP growth G7 countries",
+            ),
+        )
+
+        result = self.service._build_intent_from_contextual_follow_up(
+            query="show only US",
+            conversation_id=conv_id,
+        )
+        self.assertIsNotNone(result)
+        _, intent, _ = result
+        params = intent.parameters or {}
+        countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
+        self.assertEqual(len(countries), 1, "Should have only US, not all G7")
+        self.assertEqual(countries[0].upper(), "US")
+
     def test_looks_like_country_follow_up_accepts_add_pattern(self) -> None:
         """'Add Germany' should be recognized as a country follow-up."""
         result = self.service._looks_like_country_follow_up("Add Germany", ["DE"])

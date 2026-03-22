@@ -424,6 +424,24 @@
       "timeout_s": 15
     },
     {
+      "id": "session-06",
+      "dimension": "session",
+      "query": "GDP of China 2018-2023",
+      "follow_up": "compare with India",
+      "notes": "Additive follow-up: should return BOTH China AND India, not just India",
+      "expected_min_series_turn2": 2,
+      "timeout_s": 30
+    },
+    {
+      "id": "session-07",
+      "dimension": "session",
+      "query": "GDP of China 2018-2023",
+      "follow_up": "add Japan too",
+      "notes": "Additive follow-up: should return China AND Japan",
+      "expected_min_series_turn2": 2,
+      "timeout_s": 30
+    },
+    {
       "id": "session-02",
       "dimension": "session",
       "query": "inflation rate in France 2019-2023",
