@@ -606,6 +606,201 @@
       "timeout_s": 20
     },
     {
+      "id": "acc-37",
+      "dimension": "accuracy",
+      "query": "total exports from US to China 2018-2023 from Comtrade",
+      "notes": "Comtrade bilateral trade — explicit provider",
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-38",
+      "dimension": "accuracy",
+      "query": "trade balance between Japan and US",
+      "notes": "WorldBank bilateral trade balance — 2 series",
+      "expected_min_series": 2,
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "mc-09",
+      "dimension": "multi_country",
+      "query": "inflation rate ASEAN countries 2019-2023",
+      "notes": "ASEAN = 10 countries, WorldBank",
+      "expected_min_series": 5,
+      "expected_min_points": 2,
+      "timeout_s": 40
+    },
+    {
+      "id": "acc-39",
+      "dimension": "accuracy",
+      "query": "gross enrollment ratio tertiary education South Korea",
+      "notes": "WorldBank education indicator",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-40",
+      "dimension": "accuracy",
+      "query": "research and development expenditure percent of GDP Israel",
+      "notes": "WorldBank science/tech indicator — Israel is a leader in R&D",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "cov-10",
+      "dimension": "coverage",
+      "query": "exchange rate GBP to USD last year",
+      "notes": "ExchangeRate provider — GBP/USD pair",
+      "expected_min_points": 1,
+      "timeout_s": 15
+    },
+    {
+      "id": "info-06",
+      "dimension": "informational",
+      "query": "What BIS indicators are available?",
+      "notes": "Informational about BIS provider",
+      "timeout_s": 20
+    },
+    {
+      "id": "acc-41",
+      "dimension": "accuracy",
+      "query": "maternal mortality ratio India 2010-2023",
+      "notes": "WorldBank health indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-42",
+      "dimension": "accuracy",
+      "query": "air transport passengers carried US 2010-2023",
+      "notes": "WorldBank infrastructure/transport indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-43",
+      "dimension": "accuracy",
+      "query": "high technology exports percent of manufactured exports South Korea",
+      "notes": "WorldBank technology/trade indicator",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-44",
+      "dimension": "accuracy",
+      "query": "broad money supply percent of GDP US 2015-2023",
+      "notes": "WorldBank monetary indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-45",
+      "dimension": "accuracy",
+      "query": "stock market capitalization percent of GDP Japan",
+      "notes": "WorldBank financial markets indicator",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "mc-10",
+      "dimension": "multi_country",
+      "query": "domestic credit to private sector US and China 2015-2023",
+      "notes": "WorldBank financial comparison — 2 countries",
+      "expected_min_series": 2,
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "info-07",
+      "dimension": "informational",
+      "query": "What unemployment data does Eurostat have for Spain?",
+      "notes": "Provider + country specific informational query",
+      "timeout_s": 20
+    },
+    {
+      "id": "acc-46",
+      "dimension": "accuracy",
+      "query": "GDP deflator US 2015-2023",
+      "notes": "WorldBank price level indicator",
+      "expected_min_points": 3,
+      "timeout_s": 20
+    },
+    {
+      "id": "acc-47",
+      "dimension": "accuracy",
+      "query": "industrial production index Germany from FRED",
+      "notes": "FRED international series",
+      "expected_min_points": 5,
+      "timeout_s": 15
+    },
+    {
+      "id": "acc-48",
+      "dimension": "accuracy",
+      "query": "government expenditure as percent of GDP UK 2015-2023",
+      "notes": "WorldBank fiscal indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-49",
+      "dimension": "accuracy",
+      "query": "gross savings percent of GDP China 2010-2023",
+      "notes": "WorldBank savings indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-50",
+      "dimension": "accuracy",
+      "query": "foreign exchange reserves China 2015-2023",
+      "notes": "WorldBank financial reserves",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "acc-51",
+      "dimension": "accuracy",
+      "query": "poverty headcount ratio at 1.90 dollar a day Brazil",
+      "notes": "WorldBank poverty indicator with specific threshold",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
+      "id": "mc-11",
+      "dimension": "multi_country",
+      "query": "tax revenue percent of GDP OECD countries",
+      "notes": "OECD group with fiscal indicator — should skip group scope clarification",
+      "expected_min_series": 10,
+      "expected_min_points": 1,
+      "timeout_s": 40
+    },
+    {
+      "id": "acc-52",
+      "dimension": "accuracy",
+      "query": "total natural resources rents percent of GDP Russia",
+      "notes": "WorldBank natural resources indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "mc-12",
+      "dimension": "multi_country",
+      "query": "GDP per capita US vs Japan vs Germany 2015-2023",
+      "notes": "3-country comparison with 'vs' phrasing",
+      "expected_min_series": 3,
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-53",
+      "dimension": "accuracy",
+      "query": "average lending rate from BIS",
+      "notes": "BIS banking statistics — explicit provider",
+      "expected_min_points": 1,
+      "timeout_s": 25
+    },
+    {
       "id": "session-06",
       "dimension": "session",
       "query": "GDP of China 2018-2023",

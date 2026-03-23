@@ -629,9 +629,8 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
     # Auto-detect complex queries and route to Pro Mode (code execution)
-    # when needed. Authenticated users get full Pro Mode capability;
-    # anonymous users get standard data fetch only.
-    auto_pro = bool(user) and settings.promode_enabled
+    # when needed. Available for all users (no auth required).
+    auto_pro = settings.promode_enabled
     result = await query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro)
 
     # Don't treat "data_not_available" as a server error - return 200 with error message
@@ -710,8 +709,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
             tracker_token = activate_processing_tracker(tracker)
 
             # Start processing query in background (don't await yet)
-            # Auto-detect complex queries for Pro Mode (authenticated users only)
-            auto_pro = bool(user) and settings.promode_enabled
+            # Auto-detect complex queries for Pro Mode (all users)
+            auto_pro = settings.promode_enabled
             query_task = asyncio.create_task(query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro))
 
             # Stream events as they come
@@ -843,7 +842,7 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
     tags=["Pro Mode"],
     dependencies=[Depends(require_promode)],
 )
-async def query_pro_endpoint(request: QueryRequest, user: User = Depends(get_current_user)) -> QueryResponse:
+async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
     """Pro Mode endpoint: Generate and execute Python code using Grok"""
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
@@ -1036,7 +1035,7 @@ async def query_pro_endpoint(request: QueryRequest, user: User = Depends(get_cur
     tags=["Pro Mode"],
     dependencies=[Depends(require_promode)],
 )
-async def query_pro_stream_endpoint(request: QueryRequest, user: User = Depends(get_current_user)):
+async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)):
     """Streaming Pro Mode endpoint with real-time code generation and execution updates"""
     import json
     import asyncio
