@@ -1912,14 +1912,13 @@
 
   .export-buttons {
     width: 100%;
-    justify-content: stretch;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: 0.375rem;
   }
 
   .export-btn {
-    flex: 1;
-    font-size: 0.8125rem;
-    padding: 0.625rem 0.875rem;
+    font-size: 0.75rem;
+    padding: 0.5rem 0.625rem;
   }
 
   .api-url-container {
