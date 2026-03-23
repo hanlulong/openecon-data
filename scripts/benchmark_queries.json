@@ -482,6 +482,23 @@
       "timeout_s": 15
     },
     {
+      "id": "acc-27",
+      "dimension": "accuracy",
+      "query": "renewable energy consumption China 2010-2023",
+      "notes": "WorldBank energy indicator",
+      "expected_min_points": 3,
+      "timeout_s": 25
+    },
+    {
+      "id": "session-09",
+      "dimension": "session",
+      "query": "US 10 year treasury yield from FRED",
+      "follow_up": "what about unemployment",
+      "notes": "FRED indicator switch — tests provider-to-country inference (FRED→US)",
+      "expected_min_series_turn2": 1,
+      "timeout_s": 30
+    },
+    {
       "id": "session-06",
       "dimension": "session",
       "query": "GDP of China 2018-2023",
