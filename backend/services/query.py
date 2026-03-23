@@ -550,11 +550,23 @@ class QueryService:
 
     # Known indicator terms for detecting indicator-switch follow-ups
     _INDICATOR_SWITCH_TERMS = {
-        "gdp", "inflation", "unemployment", "cpi", "trade balance",
-        "trade openness", "population", "debt", "interest rate",
-        "exchange rate", "exports", "imports", "employment",
-        "life expectancy", "fertility", "savings", "investment",
-        "current account", "gdp growth", "gdp per capita",
+        "gdp", "gdp growth", "gdp per capita", "real gdp",
+        "inflation", "cpi", "consumer prices",
+        "unemployment", "employment", "labor force", "jobs",
+        "trade balance", "trade openness", "exports", "imports", "trade",
+        "population", "population growth",
+        "debt", "government debt", "debt to gdp", "public debt",
+        "interest rate", "policy rate", "federal funds rate",
+        "exchange rate", "currency",
+        "life expectancy", "fertility", "mortality",
+        "savings", "investment", "fdi", "foreign direct investment",
+        "current account", "fiscal balance", "budget deficit",
+        "poverty", "inequality", "gini",
+        "co2 emissions", "energy", "renewable energy",
+        "money supply", "m2",
+        "housing", "house prices", "housing starts",
+        "bitcoin", "ethereum", "crypto",
+        "gold", "oil", "commodity",
     }
 
     def _build_intent_from_indicator_switch(
@@ -684,8 +696,11 @@ class QueryService:
         # Detect ADDITIVE follow-ups ("compare with", "add", "also include", "plus")
         # vs REPLACEMENT follow-ups ("show only", "just", "filter to")
         query_lower = str(query or "").lower()
-        additive_markers = {"compare", "add", "also", "include", "plus", "too", "well", "and"}
-        is_additive = bool(set(query_lower.split()) & additive_markers)
+        additive_markers = {"compare", "add", "also", "include", "plus", "too", "well"}
+        # "and" excluded — too generic ("show only US and China" is replacement, not addition)
+        replacement_markers = {"only", "just", "filter", "keep"}
+        query_words = set(query_lower.split())
+        is_additive = bool(query_words & additive_markers) and not bool(query_words & replacement_markers)
 
         # For additive follow-ups, merge new countries with prior countries
         if is_additive:
