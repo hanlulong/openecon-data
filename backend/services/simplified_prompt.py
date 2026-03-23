@@ -38,6 +38,13 @@ Important constraints:
 - Only set a specific provider when user explicitly requests one (for example: "from IMF").
 - If no provider is explicitly requested, set apiProvider to "WorldBank" as a neutral placeholder.
 - Do not invent indicator codes. Use natural-language indicator names unless user explicitly gives a code.
+- Preserve ALL semantic modifiers in indicator names — these change the meaning:
+  - "GDP growth rate" is different from "GDP" (growth % vs level)
+  - "real interest rate" is different from "interest rate" (inflation-adjusted vs nominal)
+  - "GDP per capita" is different from "GDP" (per person vs total)
+  - If user says "growth rate", include "growth rate" in the indicator name
+  - If user says "real", include "real" (not just the base indicator)
+  - If user says "per capita", include "per capita"
 - Preserve directional meaning exactly:
   - "imports" is different from "exports"
   - "trade balance" is different from "imports" and "exports"

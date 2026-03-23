@@ -121,11 +121,19 @@ class IndicatorResolver:
             "country", "countries", "from", "with", "by", "on", "at",
         }
         # Context terms often appear in many indicators and are weak discriminators.
+        # Semantic discriminators — terms that fundamentally change the meaning
+        # of an indicator. These are NOT noise; they flip between different datasets.
+        # "growth" vs "level" = different data. "real" vs "nominal" = different measure.
+        self._semantic_discriminators: Set[str] = {
+            "growth", "real", "nominal", "level", "per capita",
+            "constant", "current", "change", "rate",
+        }
+        # Context terms — genuinely low-signal words for FTS matching
         self._context_terms: Set[str] = {
-            "gdp", "ratio", "share", "rate", "index", "value", "values",
-            "annual", "quarterly", "monthly", "yearly", "current", "constant",
-            "real", "nominal", "level", "levels", "total", "overall", "change",
-            "growth", "percent", "percentage",
+            "gdp", "ratio", "share", "index", "value", "values",
+            "annual", "quarterly", "monthly", "yearly",
+            "levels", "total", "overall",
+            "percent", "percentage",
         }
         self._directional_terms: Set[str] = {
             "export", "import", "saving", "debt", "inflation", "unemployment",
@@ -1267,6 +1275,25 @@ class IndicatorResolver:
             + fuzzy_bonus
             + semantic_bonus
         )
+
+        # Semantic discriminator scoring — terms that fundamentally change meaning.
+        # "growth" vs "level", "real" vs "nominal" = different datasets entirely.
+        query_discriminators = query_terms & self._semantic_discriminators
+        for disc in query_discriminators:
+            if disc in candidate_terms:
+                confidence += 0.15  # Boost for matching semantic constraint
+            else:
+                confidence -= 0.12  # Penalize for missing constraint
+
+        # Real vs nominal mutual exclusion — these are incompatible measures.
+        if "real" in query_terms and "nominal" in candidate_text_lower and "real" not in candidate_text_lower:
+            confidence -= 0.30
+        if "nominal" in query_terms and "real" in candidate_text_lower and "nominal" not in candidate_text_lower:
+            confidence -= 0.28
+
+        # Growth vs level distinction
+        if "growth" in query_terms and "level" in candidate_text_lower and "growth" not in candidate_text_lower:
+            confidence -= 0.25
 
         # Strongly penalize candidates with zero lexical overlap.
         if overlap_count == 0 and (query_text not in name_lower) and (query_text not in code.lower()):
