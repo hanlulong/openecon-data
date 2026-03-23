@@ -612,7 +612,14 @@ class QueryService:
         # Reuse country from prior intent
         prior_countries = self._collect_target_countries(last_intent.parameters)
         if not prior_countries:
-            return None
+            # Infer country from provider — FRED is US-only, StatsCan is CA-only
+            prior_provider = normalize_provider_name(last_intent.apiProvider or "")
+            if prior_provider == "FRED":
+                prior_countries = ["US"]
+            elif prior_provider in ("STATSCAN", "STATISTICS CANADA"):
+                prior_countries = ["CA"]
+            else:
+                return None
 
         # Build new query: "indicator in country(ies)"
         if len(prior_countries) == 1:
