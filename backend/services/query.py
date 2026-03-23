@@ -5324,6 +5324,26 @@ class QueryService:
                 )
                 canonical_code = preferred_code if provider_supported else best_code
                 if canonical_code and (not current_indicator or not current_indicator_is_code):
+                    # Semantic verification: check if the canonical code's series
+                    # name matches the query's semantic discriminators before
+                    # overriding.  Prevents "GDP growth rate" being mapped to a
+                    # GDP level code just because the catalog concept maps there.
+                    original_lower = (original_query or "").lower()
+                    from .indicator_resolver import get_indicator_resolver
+                    _resolver = get_indicator_resolver()
+                    query_discs = {d for d in _resolver._semantic_discriminators if d in original_lower}
+                    if query_discs:
+                        code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
+                        code_name_lower = (code_meta.get("name", "") if code_meta else "").lower()
+                        missing_discs = {d for d in query_discs if d not in code_name_lower and d not in canonical_code.lower()}
+                        if missing_discs:
+                            logger.info(
+                                "🔬 Concept override blocked: %s (%s) missing discriminators %s from '%s'",
+                                canonical_code, code_name_lower[:40], missing_discs, original_query,
+                            )
+                            # Don't override — let downstream resolution find a better match
+                            return provider, params
+
                     params = {**params, "indicator": canonical_code}
                     intent.parameters = params
                     distinct_indicators = {str(value) for value in (intent.indicators or []) if value}

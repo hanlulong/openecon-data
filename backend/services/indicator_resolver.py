@@ -219,6 +219,7 @@ class IndicatorResolver:
 
         # Try resolution methods in priority order
         result = None
+        catalog_fallback: Optional[ResolvedIndicator] = None  # Demoted catalog result
         provider_translator_candidate: Optional[ResolvedIndicator] = None
         concept_query = self._normalize_query_for_concept_lookup(query)
         query_concept = find_concept_by_term(concept_query) or find_concept_by_term(query)
@@ -291,6 +292,21 @@ class IndicatorResolver:
                             source=source,
                             metadata=metadata,
                         )
+                        # Semantic verification: check resolved name matches
+                        # query discriminators before accepting
+                        query_lower = query.lower()
+                        res_name_lower = (result.name or "").lower()
+                        q_discs = {d for d in self._semantic_discriminators if d in query_lower}
+                        missing = {d for d in q_discs if d not in res_name_lower and d not in (result.code or "").lower()}
+                        if missing:
+                            logger.info(
+                                "🔬 Provider-agnostic result '%s' missing discriminators %s — trying next candidate",
+                                result.code, missing,
+                            )
+                            catalog_fallback = catalog_fallback or result
+                            result = None
+                            continue  # Try next concept candidate
+
                         logger.debug(
                             "Provider-agnostic %s concept match: %s -> %s:%s",
                             source,
@@ -311,6 +327,31 @@ class IndicatorResolver:
                 concept_name=query_concept,
                 preferred_codes=preferred_catalog_codes,
             )
+
+        # 3a. Semantic verification — if catalog returned a code but query has
+        # semantic discriminators that the resolved name doesn't match, demote
+        # to allow FTS to find a better match.  This prevents "GDP growth rate"
+        # resolving to a GDP level series just because the catalog maps
+        # "gdp_growth" to a level code for that provider.
+        if result and result.source in ("database", "catalog"):
+            query_lower = query.lower()
+            result_name_lower = (result.name or "").lower()
+            query_discs = {d for d in self._semantic_discriminators if d in query_lower}
+            missing_discs = {
+                d for d in query_discs
+                if d not in result_name_lower
+                and d not in (result.code or "").lower()
+            }
+            if missing_discs:
+                logger.info(
+                    "🔬 Catalog result '%s' (%s) missing semantic discriminators %s "
+                    "from query '%s' — demoting to allow FTS fallback",
+                    result.code, result.name[:40] if result.name else "?",
+                    missing_discs, query,
+                )
+                # Keep as fallback but allow FTS to potentially override
+                catalog_fallback = result
+                result = None
 
         # 3b. Some concepts intentionally use dynamic provider-side discovery
         # (e.g., CoinGecko/Comtrade). Prefer this catalog signal over low-quality
@@ -463,6 +504,14 @@ class IndicatorResolver:
 
         if not result and provider_translator_candidate:
             result = provider_translator_candidate
+
+        # Use demoted catalog result as final fallback (better than nothing)
+        if not result and catalog_fallback:
+            logger.info(
+                "🔬 Using demoted catalog fallback: %s (%s)",
+                catalog_fallback.code, catalog_fallback.name[:40] if catalog_fallback.name else "?",
+            )
+            result = catalog_fallback
 
         # Cache successful result
         if result and use_cache:
