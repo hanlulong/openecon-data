@@ -628,7 +628,11 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     conversation_id = get_request_conversation_id(request, user)
     logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
-    result = await query_service.process_query(request.query, conversation_id)
+    # Auto-detect complex queries and route to Pro Mode (code execution)
+    # when needed. Authenticated users get full Pro Mode capability;
+    # anonymous users get standard data fetch only.
+    auto_pro = bool(user) and settings.promode_enabled
+    result = await query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro)
 
     # Don't treat "data_not_available" as a server error - return 200 with error message
     # Only return 500 for actual processing errors
@@ -706,7 +710,9 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
             tracker_token = activate_processing_tracker(tracker)
 
             # Start processing query in background (don't await yet)
-            query_task = asyncio.create_task(query_service.process_query(request.query, conversation_id))
+            # Auto-detect complex queries for Pro Mode (authenticated users only)
+            auto_pro = bool(user) and settings.promode_enabled
+            query_task = asyncio.create_task(query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro))
 
             # Stream events as they come
             processing_complete = False

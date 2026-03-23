@@ -70,7 +70,7 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(result, QueryResponse)
         self.assertEqual(result.conversationId, "123")
         self.assertFalse(result.clarificationNeeded)
-        process_query.assert_awaited_once_with("GDP", None)
+        process_query.assert_awaited_once_with("GDP", None, auto_pro_mode=False)
 
     def test_query_endpoint_uses_anonymous_session_id_as_conversation(self) -> None:
         mock_response = QueryResponse(conversationId="session-123", clarificationNeeded=True)
@@ -84,7 +84,7 @@ class ApiTests(unittest.TestCase):
             )
 
         self.assertEqual(result.conversationId, "session-123")
-        process_query.assert_awaited_once_with("1", "session-123")
+        process_query.assert_awaited_once_with("1", "session-123", auto_pro_mode=False)
 
     def test_get_request_conversation_id_prefers_explicit_conversation(self) -> None:
         request = QueryRequest(query="GDP", conversationId="conv-1", sessionId="session-1")

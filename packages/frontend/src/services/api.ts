@@ -173,8 +173,8 @@ export const api = {
       headers.Authorization = `Bearer ${token}`;
     }
 
-    // Use Pro Mode streaming endpoint if Pro Mode is enabled
-    const endpoint = proMode ? `${API_BASE_URL}/query/pro/stream` : `${API_BASE_URL}/query/stream`;
+    // Always use standard endpoint — Pro Mode is auto-detected by backend
+    const endpoint = `${API_BASE_URL}/query/stream`;
 
     // Get session ID for anonymous users
     const sessionId = !token ? getOrCreateSessionId() : undefined;

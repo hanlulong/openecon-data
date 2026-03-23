@@ -144,7 +144,8 @@ export function ChatPage() {
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [proMode, setProMode] = useState(false)
+  // Pro Mode is now auto-detected by the backend — no manual toggle needed
+  const proMode = false
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [pythonCodeModal, setPythonCodeModal] = useState<{ show: boolean; code: string; loading: boolean; error?: string; copied?: boolean }>({
     show: false,
@@ -296,7 +297,7 @@ export function ChatPage() {
     }
 
     processingQuery.current = q
-    setLoadingStatus(proMode ? '🚀 Pro Mode processing...' : '🤖 Processing your query...')
+    setLoadingStatus('🤖 Processing your query...')
     setActiveProcessingSteps([]) // Clear any previous steps
 
     const startTime = Date.now()
@@ -886,15 +887,7 @@ print(f"\\nData source: ${sourceUrl}")
                 <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               </svg>
             </button>
-            <button
-              className={`mobile-pro-mode-toggle ${proMode ? 'active' : ''}`}
-              onClick={() => setProMode(!proMode)}
-              title={proMode ? 'Pro Mode: ON' : 'Pro Mode: OFF'}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
+            {/* Pro Mode toggle removed — auto-detected by backend */}
           </div>
         </div>
       )}
@@ -927,19 +920,7 @@ print(f"\\nData source: ${sourceUrl}")
             <span>New chat</span>
           </button>
 
-          <button
-            className={`sidebar-action-btn pro-mode-sidebar-toggle ${proMode ? 'active' : ''}`}
-            onClick={() => setProMode(!proMode)}
-            title={proMode ? 'Pro Mode: AI-powered code generation' : 'Enable Pro Mode'}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <span>Pro Mode</span>
-            <span className={`pro-mode-badge ${proMode ? 'on' : 'off'}`}>
-              {proMode ? 'ON' : 'OFF'}
-            </span>
-          </button>
+          {/* Pro Mode toggle removed — auto-detected by backend */}
 
           {messages.length > 0 && (
             <button
@@ -1158,8 +1139,8 @@ print(f"\\nData source: ${sourceUrl}")
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                aria-label={proMode ? "Ask for custom analysis with code execution" : "Ask about economic data"}
-                placeholder={proMode ? "Ask for custom analysis with code execution..." : "Ask about economic data..."}
+                aria-label="Ask about economic data"
+                placeholder="Ask about economic data..."
                 className="query-input"
                 disabled={processingQuery.current !== null}
                 autoFocus
