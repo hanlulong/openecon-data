@@ -225,11 +225,13 @@ class IndicatorLookup:
         # These expansions help FTS5 find related terms that users might not type exactly
         replacements = {
             "gdp": "gdp gross domestic product",
+            "growth": "growth annual percent change rate",
             "cpi": "cpi consumer price index",
             "ppi": "ppi producer price index",
             "unemployment": "unemployment rate total jobless labor force",
-            "inflation": "inflation cpi price",
+            "inflation": "inflation cpi price consumer",
             "interest": "interest rate",
+            "real": "real adjusted inflation",
             "forex": "foreign exchange currency",
             "fx": "foreign exchange currency",
             # Lending synonyms - users searching for "lending rates" often want prime rate
