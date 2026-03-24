@@ -3415,6 +3415,20 @@ class QueryService:
                 )
                 return None
 
+        # Skip semantic ambiguity when query has BOTH a clear country AND
+        # a specific time reference.  "US unemployment during 2020" has
+        # enough context — the user knows what they want.
+        query_lower = str(query or "").lower()
+        has_country = bool(CountryResolver.detect_all_countries_in_query(query))
+        has_time = bool(re.search(r"\b(20\d{2}|19\d{2}|last|since|during|after|before)\b", query_lower))
+        if has_country and has_time:
+            logger.info(
+                "⏭️ Skipping semantic ambiguity clarification — query has clear "
+                "country + time context: '%s'",
+                query[:60],
+            )
+            return None
+
         options = [
             ClarificationOption(
                 id=str(idx),
