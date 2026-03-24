@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
 import httpx
+import pybreaker
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -19,6 +20,24 @@ from ..models import NormalizedData
 from ..utils.retry import DataNotAvailableError
 
 logger = logging.getLogger(__name__)
+
+# Per-provider circuit breakers — shared across instances.
+# When a provider fails 5 times consecutively, the circuit opens
+# for 60 seconds, instantly failing subsequent calls instead of
+# wasting time on timeouts.  This prevents cascading slowdowns
+# when a provider API is down.
+_provider_breakers: Dict[str, pybreaker.CircuitBreaker] = {}
+
+
+def _get_breaker(provider_name: str) -> pybreaker.CircuitBreaker:
+    """Get or create a circuit breaker for a provider."""
+    if provider_name not in _provider_breakers:
+        _provider_breakers[provider_name] = pybreaker.CircuitBreaker(
+            fail_max=5,
+            reset_timeout=60,
+            name=provider_name,
+        )
+    return _provider_breakers[provider_name]
 
 
 class _TransientHTTPError(Exception):
@@ -128,8 +147,14 @@ class BaseProvider(ABC):
             response.raise_for_status()
             return response
 
+        # Circuit breaker: fail fast if provider has been failing
+        breaker = _get_breaker(self.provider_name)
         try:
-            return await _do_get()
+            return await breaker.call_async(_do_get)
+        except pybreaker.CircuitBreakerError:
+            raise DataNotAvailableError(
+                f"{self.provider_name} circuit breaker OPEN — provider is down, skipping (resets in 60s)"
+            )
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status in (404, 403):
