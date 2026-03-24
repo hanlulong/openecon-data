@@ -1,75 +1,44 @@
 # Research Plan: Agent Frameworks & Tools
 
 **Created:** 2026-03-24
-**Status:** PLANNED (not yet started)
-**Owner:** hanlulong
+**Updated:** 2026-03-24
+**Status:** PHASE 1 COMPLETE — Top 10 tools identified and prioritized
 
 ---
 
-## User Request
+## Top 10 Tools (Prioritized by Impact/Effort)
 
-Conduct a deep research of all relevant information and resources in GitHub, LangChain. List top 50 repos. Investigate each of them. Find useful tools and agent frameworks. Evaluate and have multiple agents to debate before incorporating to our existing approach. This is a long term project, conduct a detailed plan and implement in multiple cycles.
-
----
-
-## Research Areas
-
-### 1. Agent Frameworks
-- LangGraph (already integrated)
-- CrewAI
-- AutoGen / Microsoft Agent Framework
-- PydanticAI
-- Haystack
-- LlamaIndex agents
-- Semantic Kernel
-
-### 2. Structured Output / LLM Tools
-- instructor (installed, integration pending)
-- Outlines (grammar-guided generation)
-- guidance (llguidance)
-- LMQL
-
-### 3. Embedding & Search
-- BAAI/bge models (downloaded, migration pending)
-- Nomic Embed v2
-- Cross-encoder rerankers
-- ColBERT / late interaction models
-
-### 4. Economic Data Tools
-- OpenBB Platform
-- fedfred (async FRED client)
-- weo-reader (IMF WEO)
-- TAM MCP Server
-
-### 5. Memory & State
-- Mem0
-- Letta
-- Zep / Graphiti
-- LangGraph checkpoint persistence
-
-### 6. Monitoring & Observability
-- LangSmith
-- Langfuse
-- Phoenix (Arize)
+| Rank | Tool | Stars | Effort | Impact | Priority |
+|------|------|-------|--------|--------|----------|
+| 1 | **Instructor** | 11K | LOW | LLM output validation | Immediate (installed, needs integration) |
+| 2 | **PydanticAI** | 15.4K | MEDIUM | Agent orchestration with DI | Near-term |
+| 3 | **FedFred** | Small | LOW | Async FRED + rate limiting | Immediate |
+| 4 | **LiteLLM** | 38.6K | LOW-MED | Unified LLM gateway (100+ providers) | Near-term |
+| 5 | **OpenBB** | 63.4K | MED-HIGH | Multi-provider economic data | Strategic |
+| 6 | **LangGraph** | 24.8K | HIGH | Stateful agent orchestration | Strategic (already partial) |
+| 7 | **DSPy** | 23K | MED-HIGH | Programmatic prompt optimization | Strategic |
+| 8 | **Agno** | 38.7K | HIGH | Full agent runtime | Evaluate |
+| 9 | **OpenAI Agents SDK** | Active | MEDIUM | Multi-agent workflows | Evaluate |
+| 10 | **Mirascope** | 1.4K | LOW-MED | Lightweight LLM interaction | Optional |
 
 ---
 
-## Implementation Plan
+## Recommended Integration Order
 
-### Phase 1: Research (2-3 cycles)
-- Web search for top 50 repos in each category
-- Read documentation, check GitHub stars, last commit date
-- Create comparison matrix
+### Phase A: Quick Wins (1-2 cycles each)
+1. **Instructor** — replace manual JSON parsing with Pydantic response_model validation
+2. **FedFred** — replace custom FRED httpx calls with async client + rate limiting
 
-### Phase 2: Evaluation (2-3 cycles)
-- Spawn 3+ agents to debate each tool's fit
-- Evaluate against OpenEcon's specific needs
-- Consider: API compatibility, performance, maintenance burden
+### Phase B: LLM Layer (2-3 cycles)
+3. **LiteLLM** — replace custom LLM provider abstraction with unified gateway
 
-### Phase 3: Integration (5+ cycles)
-- Start with lowest-risk, highest-impact tools
-- Implement with proper migration path
-- Test against 100+ benchmarks
+### Phase C: Agent Architecture (5+ cycles)
+4. **PydanticAI** — restructure query pipeline into typed agent definitions
+5. **OpenBB** — evaluate as data aggregation layer for 4-5 providers
+
+### Phase D: Advanced (future)
+6. **DSPy** — optimize prompts programmatically
+7. **LangGraph** checkpoint persistence
 
 ---
 
@@ -77,4 +46,7 @@ Conduct a deep research of all relevant information and resources in GitHub, Lan
 
 | Cycle | Date | Activity | Status |
 |-------|------|----------|--------|
-| - | - | Not yet started | PLANNED |
+| 55 | 2026-03-24 | Phase 1: Research complete. Top 10 identified. | ✅ DONE |
+| - | - | Phase 2: Debate (3 agents evaluate top 3) | NEXT |
+| - | - | Phase A: Instructor integration | PLANNED |
+| - | - | Phase A: FedFred integration | PLANNED |
