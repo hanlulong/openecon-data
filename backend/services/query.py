@@ -5341,7 +5341,26 @@ class QueryService:
                                 "🔬 Concept override blocked: %s (%s) missing discriminators %s from '%s'",
                                 canonical_code, code_name_lower[:40], missing_discs, original_query,
                             )
-                            # Don't override — let downstream resolution find a better match
+                            # Try provider-agnostic resolution — another provider
+                            # might have a code that matches the discriminators
+                            alt_provider, alt_code, alt_conf = get_best_provider(
+                                concept_name, countries_ctx
+                            )
+                            alt_normalized = normalize_provider_name(alt_provider or "")
+                            if alt_normalized and alt_normalized != provider and alt_code:
+                                alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
+                                alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
+                                alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
+                                if not alt_missing or len(alt_missing) < len(missing_discs):
+                                    logger.info(
+                                        "🔄 Switching provider %s → %s (code %s matches discriminators better)",
+                                        provider, alt_normalized, alt_code,
+                                    )
+                                    params = {**params, "indicator": alt_code}
+                                    intent.parameters = params
+                                    intent.indicators = [alt_code]
+                                    intent.apiProvider = alt_normalized
+                                    return alt_normalized, params
                             return provider, params
 
                     params = {**params, "indicator": canonical_code}
