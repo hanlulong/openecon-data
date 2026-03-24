@@ -297,7 +297,14 @@ class IndicatorResolver:
                         query_lower = query.lower()
                         res_name_lower = (result.name or "").lower()
                         q_discs = {d for d in self._semantic_discriminators if d in query_lower}
-                        missing = {d for d in q_discs if d not in res_name_lower and d not in (result.code or "").lower()}
+
+                        def _dp(disc: str, text: str) -> bool:
+                            if disc in text: return True
+                            if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
+                            if disc == "growth" and ("annual %" in text or "percent change" in text): return True
+                            return False
+
+                        missing = {d for d in q_discs if not _dp(d, res_name_lower) and not _dp(d, (result.code or "").lower())}
                         if missing:
                             logger.info(
                                 "🔬 Provider-agnostic result '%s' missing discriminators %s — trying next candidate",
@@ -337,10 +344,21 @@ class IndicatorResolver:
             query_lower = query.lower()
             result_name_lower = (result.name or "").lower()
             query_discs = {d for d in self._semantic_discriminators if d in query_lower}
+            # Check if discriminators are present in name/code, accounting
+            # for equivalent expressions: "rate" = "% of", "growth" = "annual %"
+            def _disc_present(disc: str, text: str) -> bool:
+                if disc in text:
+                    return True
+                if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text):
+                    return True
+                if disc == "growth" and ("annual %" in text or "percent change" in text):
+                    return True
+                return False
+
             missing_discs = {
                 d for d in query_discs
-                if d not in result_name_lower
-                and d not in (result.code or "").lower()
+                if not _disc_present(d, result_name_lower)
+                and not _disc_present(d, (result.code or "").lower())
             }
             if missing_discs:
                 logger.info(

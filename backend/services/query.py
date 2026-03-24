@@ -5349,7 +5349,12 @@ class QueryService:
                     if query_discs:
                         code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
                         code_name_lower = (code_meta.get("name", "") if code_meta else "").lower()
-                        missing_discs = {d for d in query_discs if d not in code_name_lower and d not in canonical_code.lower()}
+                        def _disc_match(disc, text):
+                            if disc in text: return True
+                            if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
+                            if disc == "growth" and ("annual %" in text or "percent change" in text): return True
+                            return False
+                        missing_discs = {d for d in query_discs if not _disc_match(d, code_name_lower) and not _disc_match(d, canonical_code.lower())}
                         if missing_discs:
                             logger.info(
                                 "🔬 Concept override blocked: %s (%s) missing discriminators %s from '%s'",
