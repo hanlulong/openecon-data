@@ -817,6 +817,24 @@
       "timeout_s": 30
     },
     {
+      "id": "mc-13",
+      "dimension": "multi_country",
+      "query": "central bank interest rates comparison US EU Japan",
+      "notes": "3-region comparison with interest rates — multi-provider",
+      "expected_min_series": 3,
+      "expected_min_points": 1,
+      "timeout_s": 30
+    },
+    {
+      "id": "mc-14",
+      "dimension": "multi_country",
+      "query": "how does Brazil GDP compare to the rest of Latin America",
+      "notes": "Natural phrasing with 'rest of' region reference",
+      "expected_min_series": 2,
+      "expected_min_points": 1,
+      "timeout_s": 30
+    },
+    {
       "id": "session-06",
       "dimension": "session",
       "query": "GDP of China 2018-2023",
