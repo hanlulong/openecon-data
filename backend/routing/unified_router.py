@@ -822,6 +822,24 @@ class UnifiedRouter:
                 reasoning="Canadian imports/exports (no partner) → StatsCan",
             )
 
+        # For basic global indicators, prefer WorldBank over StatsCan
+        # (StatsCan has complex table IDs that don't resolve well for
+        # simple concepts like "population" or "GDP")
+        global_indicators = [
+            "population", "life expectancy", "fertility", "mortality",
+            "gdp", "gdp per capita", "gdp growth",
+            "co2", "emissions", "forest", "renewable energy",
+            "literacy", "education", "poverty",
+        ]
+        if any(term in combined for term in global_indicators):
+            return self._create_decision(
+                provider="WorldBank",
+                confidence=0.80,
+                match_type="indicator",
+                matched_pattern="Canada global indicator",
+                reasoning="Canadian query with global indicator → WorldBank (broader coverage)",
+            )
+
         # Default for Canadian queries → StatsCan
         return self._create_decision(
             provider="StatsCan",
