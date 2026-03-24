@@ -127,6 +127,7 @@ class IndicatorResolver:
         self._semantic_discriminators: Set[str] = {
             "growth", "real", "nominal", "level", "per capita",
             "constant", "current", "change", "rate",
+            "ppp", "purchasing power",
         }
         # Context terms — genuinely low-signal words for FTS matching
         self._context_terms: Set[str] = {
@@ -302,6 +303,7 @@ class IndicatorResolver:
                             if disc in text: return True
                             if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
                             if disc == "growth" and ("annual %" in text or "percent change" in text): return True
+                            if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
                             return False
 
                         missing = {d for d in q_discs if not _dp(d, res_name_lower) and not _dp(d, (result.code or "").lower())}
@@ -352,6 +354,10 @@ class IndicatorResolver:
                 if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text):
                     return True
                 if disc == "growth" and ("annual %" in text or "percent change" in text):
+                    return True
+                if disc == "ppp" and ("purchasing power" in text or "international $" in text):
+                    return True
+                if disc == "purchasing power" and ("ppp" in text or "international $" in text):
                     return True
                 return False
 

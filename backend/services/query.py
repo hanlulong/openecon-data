@@ -5353,6 +5353,7 @@ class QueryService:
                             if disc in text: return True
                             if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
                             if disc == "growth" and ("annual %" in text or "percent change" in text): return True
+                            if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
                             return False
                         missing_discs = {d for d in query_discs if not _disc_match(d, code_name_lower) and not _disc_match(d, canonical_code.lower())}
                         if missing_discs:
@@ -7775,6 +7776,30 @@ class QueryService:
                         provider=provider,
                         indicator_query=indicator_query,
                     )
+                    if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+                        # Semantic verification: check direct translation matches
+                        # query discriminators before accepting
+                        original_lower = str(intent.originalQuery or indicator_query or "").lower()
+                        _r = get_indicator_resolver()
+                        _disc_set = getattr(_r, '_semantic_discriminators', set())
+                        _q_discs = {d for d in _disc_set if d in original_lower}
+                        if _q_discs:
+                            _meta = _r.lookup.get(provider, direct_translation)
+                            _name = (_meta.get("name", "") if _meta else "").lower()
+                            def _dm(disc, text):
+                                if disc in text: return True
+                                if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
+                                if disc == "rate" and ("%" in text or "percent" in text): return True
+                                if disc == "growth" and ("annual %" in text or "percent change" in text): return True
+                                return False
+                            _missing = {d for d in _q_discs if not _dm(d, _name) and not _dm(d, direct_translation.lower())}
+                            if _missing:
+                                logger.info(
+                                    "🔬 Direct translation blocked: %s (%s) missing %s from '%s'",
+                                    direct_translation, _name[:40], _missing, original_lower[:40],
+                                )
+                                direct_translation = None  # Block — let resolver find better match
+
                     if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
                         logger.info(
                             "📌 Using direct %s indicator translation: '%s' -> '%s'",
