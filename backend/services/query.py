@@ -7193,31 +7193,13 @@ class QueryService:
                     tracker=tracker,
                 )
 
-            early_semantic_clarification = self._build_semantic_ambiguity_clarification(
-                conversation_id=conv_id,
-                query=query,
-                intent=None,
-                is_multi_indicator=False,
-                processing_steps=tracker.to_list(),
-            )
-            if early_semantic_clarification:
-                return early_semantic_clarification
+            # CONSOLIDATED: Semantic ambiguity and group scope checks now run
+            # ONLY after LLM parse (in _build_post_parse_clarification) where
+            # they have full intent context.  Pre-parse checks with intent=None
+            # were redundant and less accurate.
 
             # Auto-rewrite broad concepts for multi-country region queries.
-            # When the semantic check was skipped (region detected), the broad
-            # term (e.g. "employment") would resolve to the wrong indicator.
-            # Pick the default metric from the clarifier profile instead.
             query = self._auto_resolve_broad_concept_for_region(query)
-
-            early_group_scope_clarification = self._build_group_scope_clarification(
-                conversation_id=conv_id,
-                query=query,
-                intent=None,
-                is_multi_indicator=False,
-                processing_steps=tracker.to_list(),
-            )
-            if early_group_scope_clarification:
-                return early_group_scope_clarification
 
             # Check if LangChain orchestrator should be used
             from ..config import get_settings

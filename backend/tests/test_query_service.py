@@ -2069,18 +2069,19 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options_payload[0].provider, "IMF")
         self.assertEqual(options_payload[1].provider, "WORLDBANK")
 
-    def test_process_query_returns_semantic_clarification_for_single_country(self) -> None:
-        """Semantic clarification should fire for single-country broad queries (not region groups)."""
-        conv_id = "conv-process-semantic"
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-
-        with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
-            response = run(self.service.process_query("total employment in Canada", conversation_id=conv_id))
-
-        self.assertTrue(response.clarificationNeeded)
-        self.assertIsNone(response.intent)
-        self.assertIsNotNone(response.clarificationOptions)
-        options = response.clarificationOptions or []
+    def test_semantic_clarification_detects_broad_employment_query(self) -> None:
+        """Semantic clarification should detect broad employment queries."""
+        # Consolidated: semantic check now runs post-parse only.
+        # Test detection method directly.
+        clarification = self.service._build_semantic_ambiguity_clarification(
+            conversation_id="conv-semantic-direct",
+            query="total employment in Canada",
+            intent=None,
+            is_multi_indicator=False,
+        )
+        self.assertIsNotNone(clarification)
+        self.assertTrue(clarification.clarificationNeeded)
+        options = clarification.clarificationOptions or []
         self.assertEqual(options[0].label, "number employed")
         self.assertEqual(options[1].value, "employment rate in Canada")
 
@@ -2093,15 +2094,18 @@ class QueryServiceTests(unittest.TestCase):
         result = self.service._has_explicit_group_scope("employment rate in G20")
         self.assertTrue(result, "Specific indicator 'employment' should imply comparison scope")
 
-    def test_process_query_returns_group_scope_clarification_for_vague_query(self) -> None:
-        """Vague group queries without specific indicators should trigger clarification."""
-        conv_id = "conv-process-group-scope-vague"
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-
-        with patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
-            response = run(self.service.process_query("data for G20", conversation_id=conv_id))
-
-        self.assertTrue(response.clarificationNeeded)
+    def test_group_scope_clarification_detects_vague_group_query(self) -> None:
+        """Vague group queries without specific indicators should trigger group scope clarification."""
+        # Group scope check now runs post-parse (consolidated from pre-parse).
+        # Test the detection method directly instead of through process_query.
+        clarification = self.service._build_group_scope_clarification(
+            conversation_id="conv-group-scope-vague",
+            query="data for G20",
+            intent=None,
+            is_multi_indicator=False,
+        )
+        self.assertIsNotNone(clarification)
+        self.assertTrue(clarification.clarificationNeeded)
 
     def test_process_query_uses_pending_country_follow_up_before_semantic_reply(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-process-pending-country-follow-up")
