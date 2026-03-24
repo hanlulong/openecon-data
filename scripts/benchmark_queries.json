@@ -801,6 +801,22 @@
       "timeout_s": 25
     },
     {
+      "id": "acc-54",
+      "dimension": "accuracy",
+      "query": "GDP growth rate US 2020-2024",
+      "notes": "Should return GDP growth % (WorldBank), NOT GDP level (FRED). Framework fix in cycle 43.",
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
+      "id": "acc-55",
+      "dimension": "accuracy",
+      "query": "GDP growth rate China 2018-2023",
+      "notes": "GDP growth rate for non-US country — validates cross-country framework fix",
+      "expected_min_points": 3,
+      "timeout_s": 30
+    },
+    {
       "id": "session-06",
       "dimension": "session",
       "query": "GDP of China 2018-2023",
