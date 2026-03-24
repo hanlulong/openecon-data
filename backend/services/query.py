@@ -3341,6 +3341,51 @@ class QueryService:
         lines.append("To fetch data for any indicator, just ask: *\"Show me [indicator name]\"*")
         return "\n".join(lines)
 
+    def _verify_semantic_discriminators(
+        self,
+        original_query: str,
+        code: str,
+        series_name: str,
+    ) -> bool:
+        """
+        Unified semantic verification — single source of truth.
+
+        Returns True if the code/name matches the query's semantic discriminators.
+        Used by all resolution paths (concept override, catalog, translator,
+        direct translation, fetch_data) to prevent wrong indicator types.
+        """
+        original_lower = str(original_query or "").lower()
+        resolver = get_indicator_resolver()
+        disc_set = getattr(resolver, '_semantic_discriminators', set())
+        query_discs = {d for d in disc_set if d in original_lower}
+        if not query_discs:
+            return True  # No discriminators in query — accept anything
+
+        name_lower = str(series_name or "").lower()
+        code_lower = str(code or "").lower()
+
+        def _matches(disc: str, text: str) -> bool:
+            if disc in text:
+                return True
+            if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text):
+                return True
+            if disc == "growth" and ("annual %" in text or "percent change" in text):
+                return True
+            if disc == "ppp" and ("purchasing power" in text or "international $" in text):
+                return True
+            if disc == "purchasing power" and ("ppp" in text or "international $" in text):
+                return True
+            return False
+
+        missing = {d for d in query_discs if not _matches(d, name_lower) and not _matches(d, code_lower)}
+        if missing:
+            logger.info(
+                "🔬 Semantic verification: '%s' (%s) missing discriminators %s from '%s'",
+                code, name_lower[:40], missing, original_lower[:40],
+            )
+            return False
+        return True
+
     def _auto_resolve_broad_concept_for_region(self, query: str) -> str:
         """
         Auto-rewrite broad concepts to their default metric for region queries.
@@ -5338,29 +5383,14 @@ class QueryService:
                 )
                 canonical_code = preferred_code if provider_supported else best_code
                 if canonical_code and (not current_indicator or not current_indicator_is_code):
-                    # Semantic verification: check if the canonical code's series
-                    # name matches the query's semantic discriminators before
-                    # overriding.  Prevents "GDP growth rate" being mapped to a
-                    # GDP level code just because the catalog concept maps there.
-                    original_lower = (original_query or "").lower()
+                    # Unified semantic verification — single source of truth
                     from .indicator_resolver import get_indicator_resolver
                     _resolver = get_indicator_resolver()
-                    query_discs = {d for d in _resolver._semantic_discriminators if d in original_lower}
-                    if query_discs:
-                        code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
-                        code_name_lower = (code_meta.get("name", "") if code_meta else "").lower()
-                        def _disc_match(disc, text):
-                            if disc in text: return True
-                            if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
-                            if disc == "growth" and ("annual %" in text or "percent change" in text): return True
-                            if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
-                            return False
-                        missing_discs = {d for d in query_discs if not _disc_match(d, code_name_lower) and not _disc_match(d, canonical_code.lower())}
+                    code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
+                    code_name = (code_meta.get("name", "") if code_meta else "")
+                    if not self._verify_semantic_discriminators(original_query, canonical_code, code_name):
+                        missing_discs = True  # Flag for downstream logic
                         if missing_discs:
-                            logger.info(
-                                "🔬 Concept override blocked: %s (%s) missing discriminators %s from '%s'",
-                                canonical_code, code_name_lower[:40], missing_discs, original_query,
-                            )
                             # Try provider-agnostic resolution — another provider
                             # might have a code that matches the discriminators
                             alt_provider, alt_code, alt_conf = get_best_provider(
@@ -7777,28 +7807,17 @@ class QueryService:
                         indicator_query=indicator_query,
                     )
                     if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
-                        # Semantic verification: check direct translation matches
-                        # query discriminators before accepting
-                        original_lower = str(intent.originalQuery or indicator_query or "").lower()
-                        _r = get_indicator_resolver()
-                        _disc_set = getattr(_r, '_semantic_discriminators', set())
-                        _q_discs = {d for d in _disc_set if d in original_lower}
-                        if _q_discs:
-                            _meta = _r.lookup.get(provider, direct_translation)
-                            _name = (_meta.get("name", "") if _meta else "").lower()
-                            def _dm(disc, text):
-                                if disc in text: return True
-                                if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
-                                if disc == "rate" and ("%" in text or "percent" in text): return True
-                                if disc == "growth" and ("annual %" in text or "percent change" in text): return True
-                                return False
-                            _missing = {d for d in _q_discs if not _dm(d, _name) and not _dm(d, direct_translation.lower())}
-                            if _missing:
-                                logger.info(
-                                    "🔬 Direct translation blocked: %s (%s) missing %s from '%s'",
-                                    direct_translation, _name[:40], _missing, original_lower[:40],
-                                )
-                                direct_translation = None  # Block — let resolver find better match
+                        # Unified semantic verification
+                        _resolver_inst = get_indicator_resolver()
+                        _lookup = getattr(_resolver_inst, 'lookup', None)
+                        _meta = _lookup.get(provider, direct_translation) if _lookup else None
+                        _name = (_meta.get("name", "") if _meta else "")
+                        if not self._verify_semantic_discriminators(
+                            intent.originalQuery or indicator_query,
+                            direct_translation,
+                            _name,
+                        ):
+                            direct_translation = None  # Block — let resolver find better match
 
                     if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
                         logger.info(
