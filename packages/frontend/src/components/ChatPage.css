@@ -91,41 +91,7 @@
   color: #667eea;
 }
 
-/* Pro Mode Sidebar Toggle */
-.sidebar-action-btn.pro-mode-sidebar-toggle {
-  position: relative;
-}
-
-.sidebar-action-btn.pro-mode-sidebar-toggle.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-color: #667eea;
-  color: white;
-}
-
-.sidebar-action-btn.pro-mode-sidebar-toggle.active:hover {
-  background: linear-gradient(135deg, #7e8ff3 0%, #8a5cb5 100%);
-  border-color: #7e8ff3;
-  color: white;
-}
-
-.pro-mode-badge {
-  margin-left: auto;
-  padding: 0.125rem 0.5rem;
-  border-radius: 10px;
-  font-size: 0.625rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.pro-mode-badge.off {
-  background: #e5e7eb;
-  color: #6b7280;
-}
-
-.sidebar-action-btn.pro-mode-sidebar-toggle.active .pro-mode-badge.on {
-  background: rgba(255, 255, 255, 0.25);
-  color: white;
-}
+/* Pro Mode CSS removed — auto-detected by backend, no UI toggle */
 
 /* Feedback Button */
 .sidebar-action-btn.feedback-btn {
@@ -561,33 +527,8 @@
   padding-left: 0.125rem;
 }
 
-/* Pro Mode Message Styling */
-.message-bubble.assistant.pro-mode .bubble-content {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-  border: 1px solid rgba(102, 126, 234, 0.3);
-  position: relative;
-}
-
-.message-bubble.assistant.pro-mode .bubble-content::before {
-  content: '⚡ Pro Mode';
-  position: absolute;
-  top: -0.5rem;
-  left: 0.75rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-size: 0.625rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 10px;
-  font-weight: 600;
-}
-
 /* Hide empty bubble content (when only showing chart) */
 .message-bubble.assistant .bubble-content:empty {
-  display: none;
-}
-
-/* Also hide Pro Mode badge if content is empty */
-.message-bubble.assistant.pro-mode .bubble-content:empty::before {
   display: none;
 }
 
@@ -1028,30 +969,7 @@
     align-items: center;
   }
 
-  .mobile-pro-mode-toggle {
-    background: transparent;
-    border: 1px solid #e5e7eb;
-    color: #6b7280;
-    cursor: pointer;
-    padding: 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    transition: all 0.2s;
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .mobile-pro-mode-toggle:hover {
-    background: #f3f4f6;
-  }
-
-  .mobile-pro-mode-toggle.active {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-color: #667eea;
-    color: white;
-  }
+  /* Pro Mode mobile toggle CSS removed */
 
   .mobile-header-right {
     display: flex;

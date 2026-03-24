@@ -29,7 +29,7 @@ from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
 from ..services.provider_router import ProviderRouter
 from ..services.indicator_translator import IndicatorTranslator
-from ..services.indicator_resolver import get_indicator_resolver, resolve_indicator
+from ..services.indicator_resolver import get_indicator_resolver
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
 from ..routing.country_resolver import CountryResolver
 from ..routing.unified_router import UnifiedRouter
@@ -47,7 +47,7 @@ from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import normalize_canadian_region_list
 from ..utils.retry import retry_async, DataNotAvailableError
-from ..services.rate_limiter import is_provider_circuit_open
+# rate_limiter import removed — was unused
 from ..services.time_range_defaults import apply_default_time_range
 from ..services.semantic_clarifier import SemanticClarifier
 from ..utils.processing_steps import (

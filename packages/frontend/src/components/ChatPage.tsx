@@ -144,8 +144,7 @@ export function ChatPage() {
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  // Pro Mode is now auto-detected by the backend — no manual toggle needed
-  const proMode = false
+  // Pro Mode auto-detected by backend (no UI toggle)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [pythonCodeModal, setPythonCodeModal] = useState<{ show: boolean; code: string; loading: boolean; error?: string; copied?: boolean }>({
     show: false,
@@ -305,7 +304,7 @@ export function ChatPage() {
 
     // Use streaming for both regular and Pro Mode
     try {
-      await api.queryStream(q, conversationId, proMode, {
+      await api.queryStream(q, conversationId, false, {
         onStep: (step: StreamProcessingStepEvent) => {
           // Update or add processing step in real-time
           // If step has a status field, use it; if it has duration_ms, it's completed
@@ -419,7 +418,7 @@ export function ChatPage() {
         timestamp: new Date(),
       }])
     }
-  }, [conversationId, proMode, isAuthenticated, loadHistory, loadSessionHistory])
+  }, [conversationId, isAuthenticated, loadHistory, loadSessionHistory])
 
   const streamingQueryRef = useRef(handleStreamingQuery)
   useEffect(() => {
