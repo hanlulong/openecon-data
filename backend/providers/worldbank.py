@@ -824,77 +824,94 @@ class WorldBankProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance
         client = get_http_client()
-        for country_code_raw in country_list:
-            try:
-                country_code = self._country_code(country_code_raw)
-                url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
 
-                date_param = None
-                if start_date and end_date:
-                    date_param = f"{start_date[:4]}:{end_date[:4]}"
+        # Batch multi-country requests using WorldBank's semicolon-separated
+        # country codes: /country/USA;GBR;FRA/indicator/X — single API call
+        # instead of N sequential calls.  Dramatically faster for G7/BRICS/etc.
+        resolved_codes = {}
+        for raw in country_list:
+            code = self._country_code(raw)
+            resolved_codes[code] = raw  # Map resolved → original for metadata
 
-                params = {"format": "json", "per_page": 1000}
-                if date_param:
-                    params["date"] = date_param
+        batch_codes = ";".join(resolved_codes.keys())
+        url = f"{self.base_url}/country/{batch_codes}/indicator/{indic}"
 
-                response = await client.get(url, params=params, headers=headers, timeout=30.0)
-                response.raise_for_status()
-                payload = response.json()
+        date_param = None
+        if start_date and end_date:
+            date_param = f"{start_date[:4]}:{end_date[:4]}"
 
-                # Check for error messages from World Bank API
-                if isinstance(payload, list) and len(payload) > 0:
-                    if isinstance(payload[0], dict) and "message" in payload[0]:
-                        error_msg = payload[0]["message"]
-                        if isinstance(error_msg, list) and len(error_msg) > 0:
-                            error_detail = error_msg[0].get("value", "Unknown error")
-                            logger.warning(
-                                f"World Bank API error for country {country_code_raw} ({country_code}) "
-                                f"indicator {indic}: {error_detail}. Skipping this country."
-                            )
-                            continue
+        params = {"format": "json", "per_page": 1000}
+        if date_param:
+            params["date"] = date_param
 
-                if len(payload) < 2 or not payload[1]:
-                    logger.debug(f"No data for {country_code_raw} ({country_code}) indicator {indic}")
+        # Single batched request for all countries
+        payload = None
+        try:
+            response = await client.get(url, params=params, headers=headers, timeout=30.0)
+            response.raise_for_status()
+            payload = response.json()
+
+            if isinstance(payload, list) and len(payload) > 0:
+                if isinstance(payload[0], dict) and "message" in payload[0]:
+                    error_msg = payload[0]["message"]
+                    if isinstance(error_msg, list) and len(error_msg) > 0:
+                        error_detail = error_msg[0].get("value", "Unknown error")
+                        logger.warning(f"World Bank API error: {error_detail}")
+                        payload = None
+
+            if payload and (len(payload) < 2 or not payload[1]):
+                logger.debug(f"No data for {batch_codes} indicator {indic}")
+                payload = None
+        except httpx.HTTPError as e:
+            logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
+            payload = None
+        except Exception as e:
+            logger.warning(f"Error fetching batched data: {e}")
+            payload = None
+
+        # If batch request failed, fall back to sequential per-country
+        if not payload:
+            for country_code_raw in country_list:
+                try:
+                    country_code = self._country_code(country_code_raw)
+                    single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
+                    response = await client.get(single_url, params=params, headers=headers, timeout=30.0)
+                    response.raise_for_status()
+                    single_payload = response.json()
+                    if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
+                        payload = [single_payload[0], single_payload[1]]
+                        # Will be processed below
+                except Exception as e:
+                    logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
                     continue
-            except httpx.HTTPError as e:
-                error_msg = str(e)
-                # Provide helpful error messages for common issues
-                if "400" in error_msg:
-                    logger.warning(
-                        f"Bad Request (400) for {country_code_raw} ({country_code}). "
-                        f"This may indicate an invalid country/region code or indicator combination. "
-                        f"Skipping this country."
-                    )
-                elif "404" in error_msg:
-                    logger.warning(
-                        f"Not Found (404) for {country_code_raw} ({country_code}). "
-                        f"Data may not be available for this country/region. Skipping."
-                    )
-                else:
-                    logger.warning(
-                        f"HTTP error fetching data for {country_code_raw} ({country_code}): {e}. "
-                        f"Skipping this country."
-                    )
-                continue
-            except Exception as e:
-                logger.warning(
-                    f"Error processing {country_code_raw}: {e}. Skipping this country."
-                )
-                continue
 
-            records = payload[1]
-            # Validate records array is non-empty before accessing
-            if not records or len(records) == 0:
-                logger.warning(f"Empty records for {country_code_raw}/{indic}. Skipping.")
+        # Process batched payload — group records by country
+        if not payload or len(payload) < 2 or not payload[1]:
+            return results
+
+        all_records = payload[1]
+        if not all_records:
+            return results
+
+        # Group records by country code
+        from collections import defaultdict
+        by_country: dict[str, list] = defaultdict(list)
+        for record in all_records:
+            if isinstance(record, dict):
+                cc = record.get("countryiso3code") or record.get("country", {}).get("id", "")
+                by_country[cc].append(record)
+
+        for country_code_key, records in by_country.items():
+            if not records:
                 continue
             first_record = records[0]
             if not first_record or not isinstance(first_record, dict):
-                logger.warning(f"Invalid first record for {country_code_raw}/{indic}. Skipping.")
                 continue
             indicator_name = first_record.get("indicator", {}).get("value", indic)
-            country_name = first_record.get("country", {}).get("value", country_code_raw)
+            country_name = first_record.get("country", {}).get("value", country_code_key)
+            country_code = country_code_key
 
-            api_url = f"{url}?format=json&per_page=1000"
+            api_url = f"{self.base_url}/country/{country_code}/indicator/{indic}?format=json&per_page=1000"
             if date_param:
                 api_url += f"&date={date_param}"
 
