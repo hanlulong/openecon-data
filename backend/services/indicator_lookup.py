@@ -226,6 +226,7 @@ class IndicatorLookup:
         replacements = {
             "gdp": "gdp gross domestic product",
             "growth": "growth annual percent change rate",
+            "ppp": "ppp purchasing power parity international",
             "cpi": "cpi consumer price index",
             "ppi": "ppi producer price index",
             "unemployment": "unemployment rate total jobless labor force",
