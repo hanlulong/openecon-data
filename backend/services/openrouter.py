@@ -206,7 +206,7 @@ class OpenRouterService:
             model=self.instructor_model,
             messages=messages,
             response_model=ParsedIntent,
-            max_retries=2,
+            max_retries=3,
             temperature=0.0,
             max_tokens=max_tok,
         )
