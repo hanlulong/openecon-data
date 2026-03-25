@@ -590,11 +590,6 @@ class QueryService:
         if not query_lower or len(query_lower) > 60:
             return None
 
-        # Must contain an indicator switch marker
-        switch_markers = {"what about", "show", "how about", "switch to", "instead", "now"}
-        if not any(marker in query_lower for marker in switch_markers):
-            return None
-
         # Must mention a known indicator
         matched_indicator = None
         for term in sorted(self._INDICATOR_SWITCH_TERMS, key=len, reverse=True):
@@ -603,6 +598,23 @@ class QueryService:
                 break
         if not matched_indicator:
             return None
+
+        # Check for switch marker OR bare indicator term (1-3 words, unambiguous).
+        # Bare terms like "unemployment" or "inflation" are clear indicator switches
+        # when conversation context exists. Ambiguous single words are excluded.
+        switch_markers = {"what about", "show", "how about", "switch to", "instead", "now", "what is", "what's"}
+        has_marker = any(marker in query_lower for marker in switch_markers)
+        if not has_marker:
+            # Allow bare indicator terms only if query is very short (1-3 words)
+            # and the matched term is unambiguous
+            word_count = len(query_lower.split())
+            _ambiguous_bare_terms = {
+                "trade", "energy", "jobs", "currency", "commodity",
+                "crypto", "gold", "oil", "housing", "savings",
+                "investment", "debt",
+            }
+            if word_count > 3 or matched_indicator in _ambiguous_bare_terms:
+                return None
 
         # Must NOT mention a new country (that would be a country follow-up)
         extracted_countries = self._extract_countries_from_query(query)
@@ -5553,6 +5565,262 @@ class QueryService:
 
         return threshold
 
+    def _apply_catalog_availability_override(
+        self,
+        provider: str,
+        intent: ParsedIntent,
+        params: dict,
+        fallback_excluded_providers: set,
+    ) -> tuple[str, dict]:
+        """Check catalog availability and re-route to a better provider if needed.
+
+        If the current provider is in the not_available list for the resolved
+        indicator, proactively switches to the best alternative provider.
+        Respects explicit provider requests from the user.
+
+        Returns (provider, params) — both may be updated.
+        """
+        indicator_term = (params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
+        logger.info(f"📋 Catalog check: indicator='{indicator_term}', provider='{provider}'")
+
+        original_query = intent.originalQuery or ""
+        explicit_provider_requested = normalize_provider_name(self._detect_explicit_provider(original_query) or "")
+        if explicit_provider_requested and explicit_provider_requested == provider:
+            logger.info(f"📋 Skipping catalog override - user explicitly requested {provider}")
+            return provider, params
+
+        if not indicator_term or not provider:
+            return provider, params
+
+        try:
+            from .catalog_service import find_concept_by_term, get_best_provider, is_provider_available
+            concept = find_concept_by_term(indicator_term)
+            logger.info(f"📋 Catalog concept: '{concept}' for term '{indicator_term}'")
+            if concept and not is_provider_available(concept, provider):
+                countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
+                if not countries_ctx:
+                    country = params.get("country") or params.get("region")
+                    countries_ctx = [country] if country else None
+
+                alt_provider, alt_code, _ = get_best_provider(concept, countries_ctx)
+                if alt_provider and alt_provider.upper() != provider:
+                    alt_provider_normalized = normalize_provider_name(alt_provider)
+                    if (
+                        fallback_excluded_providers
+                        and alt_provider_normalized
+                        and alt_provider_normalized != provider
+                    ):
+                        logger.info(
+                            "📋 Catalog reroute skipped in fallback context: keeping %s instead of %s",
+                            provider,
+                            alt_provider_normalized,
+                        )
+                    elif alt_provider_normalized in fallback_excluded_providers:
+                        logger.info(
+                            "📋 Catalog reroute skipped: candidate provider %s is blocked in this fallback context",
+                            alt_provider_normalized,
+                        )
+                    else:
+                        logger.info(
+                            "📋 Catalog: %s not available for '%s', routing to %s",
+                            provider,
+                            indicator_term,
+                            alt_provider,
+                        )
+                        intent.apiProvider = alt_provider
+                        provider = alt_provider_normalized
+
+                        if alt_code:
+                            params = {**params, "indicator": alt_code}
+                            intent.parameters = params
+                            if not intent.indicators or len(intent.indicators) == 1:
+                                intent.indicators = [alt_code]
+                            logger.info(
+                                "📋 Catalog remapped indicator for %s: %s -> %s",
+                                provider,
+                                indicator_term,
+                                alt_code,
+                            )
+        except Exception as e:
+            logger.warning(f"Catalog availability check failed: {e}")
+
+        return provider, params
+
+    def _resolve_indicator_for_fetch(
+        self,
+        provider: str,
+        intent: ParsedIntent,
+        params: dict,
+    ) -> dict:
+        """Resolve and validate the indicator code for a fetch operation.
+
+        Extracted from _fetch_data() to consolidate the 4 indicator resolution
+        paths (explicit code validation, direct translation, IndicatorResolver,
+        fallback) into a single, testable method.
+
+        Mutates intent.parameters and potentially intent.indicators (for
+        WorldBank multi-indicator collapse). Returns the updated params dict.
+        """
+        resolver = get_indicator_resolver()
+
+        if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
+            return params
+
+        existing_indicator = str(params.get("indicator") or "").strip()
+        has_explicit_code = bool(
+            existing_indicator
+            and self._looks_like_provider_indicator_code(provider, existing_indicator)
+        )
+
+        # Path 1: Validate explicit code against query context
+        if has_explicit_code:
+            plausibility_query = self._select_indicator_query_for_resolution(intent)
+            if not plausibility_query:
+                plausibility_query = str(intent.originalQuery or "").strip()
+            if not plausibility_query:
+                plausibility_query = str(intent.indicators[0] if intent.indicators else existing_indicator)
+
+            if plausibility_query and not self._is_resolved_indicator_plausible(
+                provider=provider,
+                indicator_query=plausibility_query,
+                resolved_code=existing_indicator,
+            ):
+                logger.info(
+                    "🔎 Explicit %s indicator '%s' conflicts with query context '%s'; attempting dynamic resolution",
+                    provider,
+                    existing_indicator,
+                    plausibility_query,
+                )
+                has_explicit_code = False
+
+        if has_explicit_code:
+            logger.info(
+                "🔒 Keeping explicit %s indicator code: %s",
+                provider,
+                existing_indicator,
+            )
+            params = {**params, "indicator": existing_indicator}
+            intent.parameters = params
+            return params
+
+        # Path 2-4: Dynamic resolution (direct translation → resolver → raw query)
+        indicator_query = self._select_indicator_query_for_resolution(intent)
+        if not indicator_query and intent.indicators:
+            indicator_query = str(intent.indicators[0] or "").strip()
+        if not indicator_query:
+            indicator_query = existing_indicator
+
+        if not indicator_query:
+            return params
+
+        country_context = params.get("country")
+        countries_context = params.get("countries") if isinstance(params.get("countries"), list) else None
+        selected_query_override = (
+            bool(intent.indicators)
+            and indicator_query != str(intent.indicators[0] or "").strip()
+        )
+
+        # Path 2: Direct translation lookup
+        direct_translation_code: Optional[str] = None
+        direct_translation = self._get_direct_provider_indicator_translation(
+            provider=provider,
+            indicator_query=indicator_query,
+        )
+        if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+            _resolver_inst = get_indicator_resolver()
+            _lookup = getattr(_resolver_inst, 'lookup', None)
+            _meta = _lookup.get(provider, direct_translation) if _lookup else None
+            _name = (_meta.get("name", "") if _meta else "")
+            if not self._verify_semantic_discriminators(
+                intent.originalQuery or indicator_query,
+                direct_translation,
+                _name,
+            ):
+                direct_translation = None
+
+        if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+            logger.info(
+                "📌 Using direct %s indicator translation: '%s' -> '%s'",
+                provider,
+                indicator_query,
+                direct_translation,
+            )
+            direct_translation_code = str(direct_translation)
+            resolved = None
+        else:
+            # Path 3: IndicatorResolver (database FTS + vector search)
+            resolved = resolver.resolve(
+                indicator_query,
+                provider=provider,
+                country=country_context,
+                countries=countries_context,
+            )
+
+        # Evaluate resolver result
+        accepted_resolved = False
+        if resolved:
+            threshold = self._indicator_resolution_threshold(
+                indicator_query=indicator_query,
+                resolved_source=resolved.source,
+            )
+            relevance_threshold = self._minimum_resolved_relevance_threshold(
+                indicator_query,
+            )
+            resolved_relevance = self._score_resolved_indicator_relevance(
+                indicator_query=indicator_query,
+                provider=provider,
+                resolved=resolved,
+            )
+            accepted_resolved = resolved.confidence >= threshold
+            if accepted_resolved and not self._is_resolved_indicator_plausible(
+                provider=provider,
+                indicator_query=indicator_query,
+                resolved_code=resolved.code,
+                resolved_name=" ".join(
+                    part
+                    for part in [
+                        str(getattr(resolved, "name", "") or ""),
+                        str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
+                        str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
+                    ]
+                    if part
+                ),
+            ):
+                accepted_resolved = False
+            if accepted_resolved and resolved_relevance < relevance_threshold:
+                accepted_resolved = False
+            logger.info(
+                (
+                    "🔍 IndicatorResolver candidate: '%s' → '%s' "
+                    "(conf=%.2f, src=%s, threshold=%.2f, relevance=%.2f, min_relevance=%.2f, accepted=%s)"
+                ),
+                indicator_query,
+                resolved.code,
+                resolved.confidence,
+                resolved.source,
+                threshold,
+                resolved_relevance,
+                relevance_threshold,
+                accepted_resolved,
+            )
+
+        # Path 4: Apply best result or fall back to raw query
+        if direct_translation_code:
+            params = {**params, "indicator": direct_translation_code}
+        elif accepted_resolved and resolved:
+            params = {**params, "indicator": resolved.code}
+            if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
+                logger.info(
+                    "🔎 Collapsing World Bank multi-indicator intent to resolved indicator '%s' after semantic override",
+                    resolved.code,
+                )
+                intent.indicators = [resolved.code]
+        else:
+            params = {**params, "indicator": indicator_query}
+
+        intent.parameters = params
+        return params
+
     def _select_indicator_query_for_resolution(self, intent: ParsedIntent) -> str:
         """
         Pick the best query string for indicator resolution.
@@ -7187,10 +7455,10 @@ class QueryService:
             if pending_semantic_response is not None:
                 return pending_semantic_response
 
-            # NOTE: Informational query routing has been moved to AFTER the
-            # LLM parse step.  The LLM classifies queryType as part of intent
-            # extraction (same API call, zero additional cost).  See the
-            # queryType == "informational" check below the parse step.
+            # All pending clarification attempts failed — this is a new query.
+            # Clear stale pending states to prevent them from interfering with
+            # future turns (fixes zombie clarification bug).
+            conversation_manager.clear_all_pending(conv_id)
 
             contextual_follow_up = self._build_intent_from_contextual_follow_up(
                 query=query,
@@ -7744,229 +8012,13 @@ class QueryService:
         provider, params = self._apply_concept_provider_override(provider, intent, params)
         intent.parameters = params
 
-        # PHASE B: Use IndicatorResolver as the unified entry point for indicator resolution
-        # This replaces scattered resolution logic across providers
-        resolver = get_indicator_resolver()
+        # PHASE B: Resolve indicator code via unified resolution pipeline
+        params = self._resolve_indicator_for_fetch(provider, intent, params)
 
-        # Resolve/validate indicator for providers that require normalized indicator codes.
-        # IMPORTANT: run this even when params already has "indicator" because LLM-provided
-        # values can be noisy (raw query text, wrong provider code, or invalid pseudo-codes).
-        if provider in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
-            existing_indicator = str(params.get("indicator") or "").strip()
-            has_explicit_code = bool(
-                existing_indicator
-                and self._looks_like_provider_indicator_code(provider, existing_indicator)
-            )
-
-            if has_explicit_code:
-                plausibility_query = self._select_indicator_query_for_resolution(intent)
-                if not plausibility_query:
-                    plausibility_query = str(intent.originalQuery or "").strip()
-                if not plausibility_query:
-                    plausibility_query = str(intent.indicators[0] if intent.indicators else existing_indicator)
-
-                if plausibility_query and not self._is_resolved_indicator_plausible(
-                    provider=provider,
-                    indicator_query=plausibility_query,
-                    resolved_code=existing_indicator,
-                ):
-                    logger.info(
-                        "🔎 Explicit %s indicator '%s' conflicts with query context '%s'; attempting dynamic resolution",
-                        provider,
-                        existing_indicator,
-                        plausibility_query,
-                    )
-                    has_explicit_code = False
-
-            if has_explicit_code:
-                # Respect explicit provider-native series IDs from upstream parse/routing.
-                logger.info(
-                    "🔒 Keeping explicit %s indicator code: %s",
-                    provider,
-                    existing_indicator,
-                )
-                params = {**params, "indicator": existing_indicator}
-                intent.parameters = params
-            else:
-                indicator_query = self._select_indicator_query_for_resolution(intent)
-                if not indicator_query and intent.indicators:
-                    indicator_query = str(intent.indicators[0] or "").strip()
-                if not indicator_query:
-                    indicator_query = existing_indicator
-
-                if indicator_query:
-                    country_context = params.get("country")
-                    countries_context = params.get("countries") if isinstance(params.get("countries"), list) else None
-                    selected_query_override = (
-                        bool(intent.indicators)
-                        and indicator_query != str(intent.indicators[0] or "").strip()
-                    )
-                    direct_translation_code: Optional[str] = None
-                    direct_translation = self._get_direct_provider_indicator_translation(
-                        provider=provider,
-                        indicator_query=indicator_query,
-                    )
-                    if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
-                        # Unified semantic verification
-                        _resolver_inst = get_indicator_resolver()
-                        _lookup = getattr(_resolver_inst, 'lookup', None)
-                        _meta = _lookup.get(provider, direct_translation) if _lookup else None
-                        _name = (_meta.get("name", "") if _meta else "")
-                        if not self._verify_semantic_discriminators(
-                            intent.originalQuery or indicator_query,
-                            direct_translation,
-                            _name,
-                        ):
-                            direct_translation = None  # Block — let resolver find better match
-
-                    if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
-                        logger.info(
-                            "📌 Using direct %s indicator translation: '%s' -> '%s'",
-                            provider,
-                            indicator_query,
-                            direct_translation,
-                        )
-                        direct_translation_code = str(direct_translation)
-                        resolved = None
-                    else:
-                        resolved = resolver.resolve(
-                            indicator_query,
-                            provider=provider,
-                            country=country_context,
-                            countries=countries_context,
-                        )
-
-                    accepted_resolved = False
-                    if resolved:
-                        threshold = self._indicator_resolution_threshold(
-                            indicator_query=indicator_query,
-                            resolved_source=resolved.source,
-                        )
-                        relevance_threshold = self._minimum_resolved_relevance_threshold(
-                            indicator_query,
-                        )
-                        resolved_relevance = self._score_resolved_indicator_relevance(
-                            indicator_query=indicator_query,
-                            provider=provider,
-                            resolved=resolved,
-                        )
-                        accepted_resolved = resolved.confidence >= threshold
-                        if accepted_resolved and not self._is_resolved_indicator_plausible(
-                            provider=provider,
-                            indicator_query=indicator_query,
-                            resolved_code=resolved.code,
-                            resolved_name=" ".join(
-                                part
-                                for part in [
-                                    str(getattr(resolved, "name", "") or ""),
-                                    str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
-                                    str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
-                                ]
-                                if part
-                            ),
-                        ):
-                            accepted_resolved = False
-                        if accepted_resolved and resolved_relevance < relevance_threshold:
-                            accepted_resolved = False
-                        logger.info(
-                            (
-                                "🔍 IndicatorResolver candidate: '%s' → '%s' "
-                                "(conf=%.2f, src=%s, threshold=%.2f, relevance=%.2f, min_relevance=%.2f, accepted=%s)"
-                            ),
-                            indicator_query,
-                            resolved.code,
-                            resolved.confidence,
-                            resolved.source,
-                            threshold,
-                            resolved_relevance,
-                            relevance_threshold,
-                            accepted_resolved,
-                        )
-
-                    if direct_translation_code:
-                        params = {**params, "indicator": direct_translation_code}
-                    elif accepted_resolved and resolved:
-                        params = {**params, "indicator": resolved.code}
-                        # World Bank fetch path can iterate raw intent.indicators when multiple
-                        # are present. If we intentionally overrode the parsed indicator query
-                        # for better semantic alignment, collapse to the resolved indicator to avoid
-                        # reintroducing LLM-parsed mismatched indicators.
-                        if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
-                            logger.info(
-                                "🔎 Collapsing World Bank multi-indicator intent to resolved indicator '%s' after semantic override",
-                                resolved.code,
-                            )
-                            intent.indicators = [resolved.code]
-                    else:
-                        params = {**params, "indicator": indicator_query}
-
-                    intent.parameters = params  # ensure downstream consumers see indicator
-
-        # Check catalog availability: if provider is in not_available list for this indicator,
-        # proactively re-route to a better provider before wasting time on failed API calls
-        # EXCEPTION: If user EXPLICITLY requested a provider (e.g., "from Eurostat"), respect their request
-        indicator_term = (params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
-        logger.info(f"📋 Catalog check: indicator='{indicator_term}', provider='{provider}'")
-
-        # CRITICAL: Check if user explicitly requested this provider
-        # If so, skip catalog override - user's explicit request has highest priority
-        original_query = intent.originalQuery or ""
-        explicit_provider_requested = normalize_provider_name(self._detect_explicit_provider(original_query) or "")
-        if explicit_provider_requested and explicit_provider_requested == provider:
-            logger.info(f"📋 Skipping catalog override - user explicitly requested {provider}")
-        elif indicator_term and provider:
-            try:
-                from .catalog_service import find_concept_by_term, get_best_provider, is_provider_available
-                concept = find_concept_by_term(indicator_term)
-                logger.info(f"📋 Catalog concept: '{concept}' for term '{indicator_term}'")
-                if concept and not is_provider_available(concept, provider):
-                    # Provider is in not_available list - find alternative
-                    countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
-                    if not countries_ctx:
-                        country = params.get("country") or params.get("region")
-                        countries_ctx = [country] if country else None
-
-                    alt_provider, alt_code, _ = get_best_provider(concept, countries_ctx)
-                    if alt_provider and alt_provider.upper() != provider:
-                        alt_provider_normalized = normalize_provider_name(alt_provider)
-                        if (
-                            fallback_excluded_providers
-                            and alt_provider_normalized
-                            and alt_provider_normalized != provider
-                        ):
-                            logger.info(
-                                "📋 Catalog reroute skipped in fallback context: keeping %s instead of %s",
-                                provider,
-                                alt_provider_normalized,
-                            )
-                        elif alt_provider_normalized in fallback_excluded_providers:
-                            logger.info(
-                                "📋 Catalog reroute skipped: candidate provider %s is blocked in this fallback context",
-                                alt_provider_normalized,
-                            )
-                        else:
-                            logger.info(
-                                "📋 Catalog: %s not available for '%s', routing to %s",
-                                provider,
-                                indicator_term,
-                                alt_provider,
-                            )
-                            intent.apiProvider = alt_provider
-                            provider = alt_provider_normalized
-
-                            if alt_code:
-                                params = {**params, "indicator": alt_code}
-                                intent.parameters = params
-                                if not intent.indicators or len(intent.indicators) == 1:
-                                    intent.indicators = [alt_code]
-                                logger.info(
-                                    "📋 Catalog remapped indicator for %s: %s -> %s",
-                                    provider,
-                                    indicator_term,
-                                    alt_code,
-                                )
-            except Exception as e:
-                logger.warning(f"Catalog availability check failed: {e}")
+        # Check catalog availability and re-route if needed
+        provider, params = self._apply_catalog_availability_override(
+            provider, intent, params, fallback_excluded_providers
+        )
 
         internal_param_keys = {"__fallback_excluded_providers"}
         if any(key in params for key in internal_param_keys):

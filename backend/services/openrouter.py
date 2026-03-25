@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 import httpx
+import instructor
+from openai import AsyncOpenAI
 
 from ..models import ParsedIntent
 from ..config import Settings, get_settings
@@ -73,6 +75,37 @@ class OpenRouterService:
             logger.warning("Falling back to direct OpenRouter API calls")
             self.llm_provider = None
 
+        # Initialize Instructor client for structured output parsing.
+        # Works with any OpenAI-compatible API (OpenRouter, vLLM, LM-Studio).
+        self.instructor_client = None
+        try:
+            llm_provider_name = (self.settings.llm_provider or "openrouter").lower()
+            if llm_provider_name in ("openrouter", "vllm", "lm-studio"):
+                if llm_provider_name == "openrouter":
+                    base_url = "https://openrouter.ai/api/v1"
+                    client_api_key = api_key
+                else:
+                    base_url = (self.settings.llm_base_url or "http://localhost:8000").rstrip("/") + "/v1"
+                    client_api_key = self.settings.vllm_api_key or "EMPTY"
+
+                raw_client = AsyncOpenAI(
+                    api_key=client_api_key,
+                    base_url=base_url,
+                    timeout=float(self.settings.llm_timeout or 120),
+                    default_headers={
+                        "HTTP-Referer": "https://openecon.ai",
+                        "X-Title": "OpenEcon Data",
+                    },
+                )
+                self.instructor_client = instructor.from_openai(
+                    raw_client, mode=instructor.Mode.JSON
+                )
+                self.instructor_model = self.settings.llm_model or self.MODEL
+                logger.info(f"Instructor client initialized (mode=JSON, provider={llm_provider_name})")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Instructor client: {e}")
+            self.instructor_client = None
+
     @staticmethod
     def _years_ago(years: int) -> str:
         target = datetime.now(timezone.utc) - timedelta(days=365 * years)
@@ -89,33 +122,22 @@ class OpenRouterService:
 
     @staticmethod
     def _validate_format(parsed: dict) -> tuple[bool, Optional[str]]:
-        """Validate that the parsed JSON has the required format"""
-        # Check required fields
-        if not parsed.get("apiProvider"):
-            return False, "Missing required field: apiProvider"
+        """Validate parsed JSON before constructing ParsedIntent.
 
-        if not parsed.get("indicators"):
-            return False, "Missing required field: indicators"
+        ParsedIntent's Pydantic validators enforce the same core rules
+        (non-empty apiProvider/indicators, clarification consistency).
+        This pre-check gives clearer error messages for the LLM retry loop.
+        """
+        from pydantic import ValidationError
+        try:
+            # Pydantic handles: apiProvider non-empty, indicators non-empty,
+            # clarificationQuestions required when clarificationNeeded=true
+            ParsedIntent.model_validate(parsed)
+        except ValidationError as e:
+            first_err = e.errors()[0]
+            return False, f"{first_err.get('loc', ['?'])}: {first_err['msg']}"
 
-        if not isinstance(parsed.get("indicators"), list):
-            return False, "Field 'indicators' must be an array"
-
-        if len(parsed.get("indicators", [])) == 0:
-            return False, "Field 'indicators' cannot be empty"
-
-        # Check clarificationNeeded logic
-        if "clarificationNeeded" not in parsed:
-            return False, "Missing required field: clarificationNeeded"
-
-        if parsed.get("clarificationNeeded") is True:
-            if not parsed.get("clarificationQuestions"):
-                return False, "If clarificationNeeded=true, must include clarificationQuestions"
-            if not isinstance(parsed.get("clarificationQuestions"), list):
-                return False, "Field 'clarificationQuestions' must be an array"
-            if len(parsed.get("clarificationQuestions", [])) == 0:
-                return False, "Field 'clarificationQuestions' cannot be empty when clarificationNeeded=true"
-
-        # Check StatsCan-specific requirements
+        # StatsCan-specific requirement
         if parsed.get("apiProvider", "").upper() in ("STATSCAN", "STATISTICS CANADA"):
             params = parsed.get("parameters", {})
             indicators = parsed.get("indicators", [])
@@ -130,8 +152,8 @@ class OpenRouterService:
         """
         Parse a natural language query into structured intent.
 
-        Uses the configured LLM provider (OpenRouter, vLLM, Ollama, etc.)
-        with model-specific prompt handling.
+        Uses Instructor for Pydantic-validated structured output when available,
+        falling back to manual JSON parsing.
 
         Args:
             query: Natural language query from user
@@ -143,16 +165,60 @@ class OpenRouterService:
         Raises:
             RuntimeError: If LLM fails to return valid format after retries
         """
-        # Use LLM provider abstraction if available
+        # Primary path: Instructor-based structured output
+        if self.instructor_client:
+            try:
+                return await self._parse_with_instructor(query, conversation_history)
+            except Exception as e:
+                logger.warning(f"Instructor parsing failed, falling back to manual: {e}")
+
+        # Fallback: manual JSON parsing
         if self.llm_provider:
             return await self._parse_with_provider(query, conversation_history)
         else:
             return await self._parse_direct(query, conversation_history)
 
+    async def _parse_with_instructor(
+        self, query: str, conversation_history: Optional[List[str]] = None
+    ) -> ParsedIntent:
+        """Parse query using Instructor for Pydantic-validated structured output.
+
+        Instructor automatically:
+        - Validates LLM output against ParsedIntent schema
+        - Retries with corrective prompts on validation failure
+        - Handles JSON extraction from raw text
+        """
+        system_prompt = self._system_prompt()
+
+        # Build messages
+        messages = [{"role": "system", "content": system_prompt}]
+        if conversation_history:
+            for i, msg in enumerate(conversation_history):
+                role = "user" if i % 2 == 0 else "assistant"
+                messages.append({"role": role, "content": msg})
+        messages.append({"role": "user", "content": query})
+
+        # Use higher max_tokens for reasoning models (they spend tokens on
+        # internal reasoning before producing the JSON output).
+        max_tok = 2000 if self.settings.llm_provider in ("vllm",) else 500
+
+        intent: ParsedIntent = await self.instructor_client.chat.completions.create(
+            model=self.instructor_model,
+            messages=messages,
+            response_model=ParsedIntent,
+            max_retries=2,
+            temperature=0.0,
+            max_tokens=max_tok,
+        )
+        intent.originalQuery = query
+        logger.info(f"Instructor parsed: provider={intent.apiProvider}, "
+                     f"indicators={intent.indicators}, type={intent.queryType}")
+        return intent
+
     async def _parse_with_provider(
         self, query: str, conversation_history: Optional[List[str]] = None
     ) -> ParsedIntent:
-        """Parse query using LLM provider abstraction"""
+        """Parse query using LLM provider abstraction (manual JSON fallback)"""
 
         system_prompt = self._system_prompt()
         max_retries = 3

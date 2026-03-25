@@ -58,6 +58,7 @@ class SecurityValidator:
         'input', 'raw_input', 'file',
         'webbrowser', 'antigravity', 'this',
         'pickle', 'shelve', 'dill',  # Pickle vulnerabilities
+        'inspect', 'types', 'gc', '__main__', 'pdb',  # Reflection/debugging escape vectors
     }
 
     # Restricted modules (allowed with limitations)

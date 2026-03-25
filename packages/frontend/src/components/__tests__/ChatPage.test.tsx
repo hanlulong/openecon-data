@@ -223,13 +223,6 @@ describe('ChatPage', () => {
       expect(newChatButton).toBeInTheDocument();
     });
 
-    it('renders Pro Mode toggle in sidebar', async () => {
-      renderChatPage();
-
-      const proModeToggle = await screen.findByText(/Pro Mode/i);
-      expect(proModeToggle).toBeInTheDocument();
-    });
-
     it('renders Feedback button', async () => {
       renderChatPage();
 
@@ -354,42 +347,6 @@ describe('ChatPage', () => {
       await waitFor(() => {
         expect(screen.getByText(/Data is only available for a subset of requested countries/i)).toBeInTheDocument();
         expect(screen.getByTestId('message-chart')).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('Pro Mode', () => {
-    it('toggles Pro Mode when button is clicked', async () => {
-      const user = userEvent.setup();
-      renderChatPage();
-
-      const proModeText = await screen.findByText(/Pro Mode/i);
-      const proModeButton = proModeText.closest('button');
-      expect(proModeButton).not.toBeNull();
-
-      // Initially OFF
-      expect(screen.getByText('OFF')).toBeInTheDocument();
-
-      // Click to toggle
-      await user.click(proModeButton!);
-
-      // Should now be ON
-      await waitFor(() => {
-        expect(screen.getByText('ON')).toBeInTheDocument();
-      });
-    });
-
-    it('shows different placeholder when Pro Mode is enabled', async () => {
-      const user = userEvent.setup();
-      renderChatPage();
-
-      const proModeText = await screen.findByText(/Pro Mode/i);
-      const proModeButton = proModeText.closest('button');
-      expect(proModeButton).not.toBeNull();
-      await user.click(proModeButton!);
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText(/custom analysis/i)).toBeInTheDocument();
       });
     });
   });

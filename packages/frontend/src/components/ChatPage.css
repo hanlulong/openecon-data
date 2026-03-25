@@ -746,67 +746,6 @@
   padding-top: 4rem;
 }
 
-/* Pro Mode Toggle */
-.pro-mode-toggle-container {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 0.75rem;
-}
-
-.pro-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #6b7280;
-}
-
-.pro-mode-toggle:hover {
-  background: #f3f4f6;
-  border-color: #d1d5db;
-}
-
-.pro-mode-toggle.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-color: #667eea;
-  color: white;
-  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-}
-
-.pro-mode-toggle .toggle-icon {
-  font-size: 1rem;
-  display: flex;
-  align-items: center;
-}
-
-.pro-mode-toggle .toggle-label {
-  font-weight: 600;
-}
-
-.pro-mode-toggle .toggle-status {
-  font-size: 0.75rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 10px;
-  font-weight: 600;
-}
-
-.pro-mode-toggle .toggle-status.off {
-  background: #e5e7eb;
-  color: #6b7280;
-}
-
-.pro-mode-toggle.active .toggle-status.on {
-  background: rgba(255, 255, 255, 0.3);
-  color: white;
-}
-
 .input-form {
   display: flex;
   align-items: center;

@@ -138,14 +138,31 @@ class ConversationManager:
                 return None
             return conversation.last_intent.model_copy(deep=True)
 
+    def clear_all_pending(self, conversation_id: str) -> None:
+        """Clear all pending clarification states for a conversation.
+
+        Call at the start of process_query to prevent stale state
+        from interfering with new queries.
+        """
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return
+            conversation.pending_indicator_options = None
+            conversation.pending_semantic_clarification = None
+
     def set_pending_indicator_options(self, conversation_id: str, payload: Dict[str, Any]) -> None:
-        """Persist pending indicator-choice clarification options for a conversation."""
+        """Persist pending indicator-choice clarification options for a conversation.
+
+        Clears any pending semantic clarification (mutual exclusion).
+        """
         with self._lock:
             conversation = self._get_locked(conversation_id)
             if not conversation:
                 raise ValueError("Conversation not found")
 
             conversation.pending_indicator_options = dict(payload or {})
+            conversation.pending_semantic_clarification = None  # mutual exclusion
             conversation.updated_at = self._now()
 
     def get_pending_indicator_options(self, conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -167,13 +184,17 @@ class ConversationManager:
             conversation.updated_at = self._now()
 
     def set_pending_semantic_clarification(self, conversation_id: str, payload: Dict[str, Any]) -> None:
-        """Persist pending semantic clarification state for a conversation."""
+        """Persist pending semantic clarification state for a conversation.
+
+        Clears any pending indicator options (mutual exclusion).
+        """
         with self._lock:
             conversation = self._get_locked(conversation_id)
             if not conversation:
                 raise ValueError("Conversation not found")
 
             conversation.pending_semantic_clarification = dict(payload or {})
+            conversation.pending_indicator_options = None  # mutual exclusion
             conversation.updated_at = self._now()
 
     def get_pending_semantic_clarification(self, conversation_id: str) -> Optional[Dict[str, Any]]:

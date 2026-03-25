@@ -13,6 +13,7 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError, retry_async
+from .base import BaseProvider
 from ..services.dsd_cache import get_dimension_key_builder
 from ..services.cache import cache_service
 from ..services.rate_limiter import (
@@ -30,11 +31,15 @@ if TYPE_CHECKING:
     from ..services.metadata_search import MetadataSearchService
 
 
-class OECDProvider:
+class OECDProvider(BaseProvider):
     """OECD Statistics API provider for international economic data.
 
     Uses SDMX-JSON format. No API key required.
     Documentation: https://www.oecd.org/en/data/insights/data-explainers/2024/09/api.html
+
+    Inherits from BaseProvider for circuit breaker protection and
+    standardized provider interface. Keeps custom SDMX-specific HTTP/retry
+    logic (rate limiter, DSD cache) since OECD's API has unique requirements.
 
     Dynamic metadata discovery:
     - Loads OECD dataflows catalog from disk
@@ -262,9 +267,23 @@ class OECDProvider:
     }
 
     def __init__(self, metadata_search_service: Optional["MetadataSearchService"] = None) -> None:
+        super().__init__(timeout=50.0)  # OECD SDMX API is slow
         settings = get_settings()
         self.base_url = settings.oecd_base_url.rstrip("/")
         self.metadata_search = metadata_search_service
+
+    @property
+    def provider_name(self) -> str:
+        return "OECD"
+
+    async def _fetch_data(self, **params) -> NormalizedData | list[NormalizedData]:
+        """Route to fetch_indicator for BaseProvider interface compliance."""
+        return await self.fetch_indicator(
+            indicator=params.get("indicator", "GDP"),
+            country=params.get("country", "USA"),
+            start_year=params.get("start_year"),
+            end_year=params.get("end_year"),
+        )
 
     @classmethod
     def _load_dataflows_catalog(cls) -> Dict:

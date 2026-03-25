@@ -532,7 +532,7 @@ async def me(user: User = Depends(get_current_user)) -> AuthUser:
 
 
 @app.get("/api/user/history")
-async def history(limit: Optional[int] = Query(default=None), user: User = Depends(get_current_user)):
+async def history(limit: Optional[int] = Query(default=None, ge=1, le=500), user: User = Depends(get_current_user)):
     """Get user query history from Supabase (persisted across server restarts)."""
     try:
         logger.info(f"📋 Fetching history for user_id={user.id}, email={user.email}, limit={limit or 50}")
@@ -594,7 +594,7 @@ async def clear_history(user: User = Depends(get_current_user)):
 
 
 @app.get("/api/session/history")
-async def session_history(session_id: str = Query(..., description="Session ID"), limit: Optional[int] = Query(default=None)):
+async def session_history(session_id: str = Query(..., description="Session ID", max_length=100), limit: Optional[int] = Query(default=None, ge=1, le=500)):
     """Get anonymous session query history from Supabase."""
     try:
         supabase_service = get_supabase_service()
@@ -1515,6 +1515,11 @@ async def export_endpoint(request: ExportRequest) -> Response:
         media_type = "application/json"
 
     filename = request.filename or export_service.generate_filename(request.data, request.format)
+    # Sanitize filename to prevent path traversal and header injection
+    import re as _re
+    filename = _re.sub(r'[^\w\s\-.]', '', filename.split('/')[-1].split('\\')[-1])[:200]
+    if not filename:
+        filename = "export"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
 
     return Response(content=content, media_type=media_type, headers=headers)

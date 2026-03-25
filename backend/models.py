@@ -2,7 +2,7 @@ import math
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 #
@@ -98,6 +98,29 @@ class ParsedIntent(BaseModel):
     decompositionType: Optional[str] = None  # "provinces", "states", "regions", "countries"
     decompositionEntities: Optional[List[str]] = None  # e.g., ["Ontario", "Quebec", "BC", ...]
     useProMode: Optional[bool] = False  # Auto-switch to Pro Mode for complex aggregations
+
+    @field_validator('apiProvider')
+    @classmethod
+    def api_provider_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('apiProvider must not be empty')
+        return v
+
+    @field_validator('indicators')
+    @classmethod
+    def indicators_not_empty(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError('indicators must contain at least one item')
+        return v
+
+    @model_validator(mode='after')
+    def clarification_consistency(self) -> 'ParsedIntent':
+        if self.clarificationNeeded:
+            if not self.clarificationQuestions:
+                raise ValueError(
+                    'clarificationQuestions must be non-empty when clarificationNeeded=true'
+                )
+        return self
 
 
 class ClarificationOption(BaseModel):

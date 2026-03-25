@@ -170,7 +170,7 @@ def cleanup_frontend():
 
 def verify_venv() -> bool:
     """Verify that the backend virtual environment exists"""
-    venv_path = Path("/home/hanlulong/econ-data-mcp/backend/.venv")
+    venv_path = Path("/home/hanlulong/OpenEcon/backend/.venv")
 
     if not venv_path.exists():
         print_error("Virtual environment not found at backend/.venv")
@@ -199,7 +199,7 @@ def start_backend() -> bool:
         return False
 
     # Change to project directory
-    os.chdir("/home/hanlulong/econ-data-mcp")
+    os.chdir("/home/hanlulong/OpenEcon")
 
     # Start uvicorn in background with development environment variables
     # ALLOW_TEST_USER=true enables the test user for development mode
@@ -260,7 +260,7 @@ def start_frontend() -> bool:
     print_step("Starting frontend server...")
 
     # Change to project directory
-    os.chdir("/home/hanlulong/econ-data-mcp")
+    os.chdir("/home/hanlulong/OpenEcon")
 
     # Check if node_modules exists
     if not Path("node_modules").exists():
