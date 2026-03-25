@@ -143,6 +143,19 @@
       "benchmark_queries_total": 22,
       "benchmark_pass_rate": "15/22 local (68% — WorldBank outage) + FRED/CoinGecko/ExchangeRate unaffected",
       "commit_sha": "no changes — monitoring only"
+    },
+    {
+      "cycle": 73,
+      "timestamp": "2026-03-25T21:15:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 75, "session": 100},
+      "focus_area": "Fix GDP per capita returning wrong data (Eurostat PPS index instead of WorldBank USD)",
+      "root_cause": "Catalog concept 'gdp_per_capita' gave Eurostat TEC00114 higher confidence (0.95) than WorldBank NY.GDP.PCAP.CD (0.90). Eurostat returns PPS index (EU27=100) while WorldBank returns the expected USD value. All EU country GDP per capita queries returned wrong data (115 instead of $50K+).",
+      "fix_description": "Swapped catalog confidence: WorldBank 0.90→0.95, Eurostat 0.95→0.80. Now routes to WorldBank for GDP per capita. Germany: 115→$56,104, France: $46,103, Italy: $40,385. Also: WorldBank API recovered from earlier 502 outage.",
+      "production_tests": ["Germany GDP/cap $56K PASS", "France GDP/cap $46K PASS", "Italy GDP/cap $40K PASS"],
+      "tests_total": 483,
+      "benchmark_queries_total": 23,
+      "benchmark_pass_rate": "22/23 local (96%) — World population still fails (country extraction issue)",
+      "commit_sha": "0f95ca1"
     }
   ]
 }

@@ -958,7 +958,7 @@ class WorldBankProvider(BaseProvider):
 
             # Skip countries/regions with no actual data values
             if not data_list:
-                logger.debug(f"No data values for {country_code_raw} ({country_code}) indicator {indic} - all values null")
+                logger.debug(f"No data values for {country_code_key} ({country_code}) indicator {indic} - all values null")
                 continue
 
             # These are safe now due to the guard clause above
