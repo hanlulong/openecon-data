@@ -65,6 +65,19 @@
       "benchmark_queries_total": 21,
       "benchmark_pass_rate": "21/21 local (100%) + 3/3 prod (100%)",
       "commit_sha": "5c4b070"
+    },
+    {
+      "cycle": 67,
+      "timestamp": "2026-03-25T08:55:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Fix country follow-up after indicator switch (session regression)",
+      "root_cause": "When adding non-US country after FRED indicator switch (e.g., 'add France' after unemployment/UNRATE), provider stayed FRED and indicator UNRATE was passed to WorldBank. _provider_covers_country_list only checked plural countries, not singular. Indicator code wasn't re-resolved to concept term.",
+      "fix_description": "1) Extended provider coverage check to both singular/plural country params. 2) Added _extract_concept_from_indicator() to map provider-specific codes (UNRATE) back to concept terms (unemployment). 3) Rebuilt refined_query with concept term after provider switch. Result: FRED/UNRATE → WorldBank/SL.UEM.TOTL.ZS with 2 series.",
+      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "Bitcoin PASS"],
+      "tests_total": 459,
+      "benchmark_queries_total": 23,
+      "benchmark_pass_rate": "Before: 22/23 (95%), After: 23/23 (100%)",
+      "commit_sha": "4227c55"
     }
   ]
 }

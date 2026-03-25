@@ -145,7 +145,10 @@ class UnifiedRouter:
             )
 
         # Priority 2: US-only indicators (MUST use FRED)
-        match = KeywordMatcher.detect_us_only_indicator(query, indicators)
+        # Pass country context so non-US queries skip this check
+        match = KeywordMatcher.detect_us_only_indicator(
+            query, indicators, country=country, countries=countries
+        )
         if match and match.provider:
             return self._create_decision(
                 provider=match.provider,

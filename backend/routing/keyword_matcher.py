@@ -416,17 +416,38 @@ class KeywordMatcher:
         return None
 
     @classmethod
-    def detect_us_only_indicator(cls, query: str, indicators: List[str]) -> Optional[MatchResult]:
+    def detect_us_only_indicator(
+        cls,
+        query: str,
+        indicators: List[str],
+        country: Optional[str] = None,
+        countries: Optional[List[str]] = None,
+    ) -> Optional[MatchResult]:
         """
         Check if query contains US-only indicators (must use FRED).
+
+        Skips the check when non-US countries are explicitly requested,
+        so queries like "consumer sentiment in Germany" fall through to
+        the correct provider (Eurostat/WorldBank) instead of FRED.
 
         Args:
             query: User's query
             indicators: List of parsed indicators
+            country: Single country from parsed intent
+            countries: Multiple countries from parsed intent
 
         Returns:
-            MatchResult if US-only indicator found
+            MatchResult if US-only indicator found and no non-US country context
         """
+        # If any non-US country is explicitly requested, skip US-only check.
+        # This lets "consumer sentiment in Germany" route to Eurostat, not FRED.
+        all_countries = countries or ([country] if country else [])
+        if all_countries:
+            non_us = [c for c in all_countries
+                      if c.upper() not in ("US", "USA", "UNITED STATES", "UNITED_STATES")]
+            if non_us:
+                return None
+
         query_lower = query.lower()
         indicators_str = " ".join(indicators).lower() if indicators else ""
         combined = f"{query_lower} {indicators_str}"
