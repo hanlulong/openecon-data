@@ -96,6 +96,24 @@ class CacheService:
             self.hits += 1
             return entry.value
 
+    def get_stale(self, key: str) -> Any | None:
+        """Return cached value even if expired (stale-while-revalidate).
+
+        Used as a fallback when the primary data provider is down.
+        A 1-hour-old GDP dataset is infinitely more useful than
+        'No Data Available' during a transient API outage.
+        """
+        with self._lock:
+            entry = self._cache.get(key)
+            if not entry:
+                return None
+            return entry.value
+
+    def get_data_stale(self, provider: str, params: dict) -> Any | None:
+        """Get cached data even if expired, for provider failure fallback."""
+        key = self._key(provider, params)
+        return self.get_stale(key)
+
     def delete(self, key: str) -> bool:
         """Delete a raw cache key. Returns True when key existed."""
         with self._lock:

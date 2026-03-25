@@ -345,6 +345,7 @@ export function ChatPage() {
               content: displayMessage,
               timestamp: new Date(),
               processingSteps: response.processingSteps,
+              isError: true,
             }])
             return
           }
@@ -1060,7 +1061,7 @@ print(f"\\nData source: ${sourceUrl}")
             {messages.map((msg, i) => {
               const displayContent = getDisplayContent(msg)
               return (
-              <div key={i} className={`message-bubble ${msg.role} ${msg.isProMode ? 'pro-mode' : ''}`}>
+              <div key={i} className={`message-bubble ${msg.role} ${msg.isProMode ? 'pro-mode' : ''} ${msg.isError ? 'error-response' : ''}`}>
                 {displayContent && (
                   <div className="bubble-content">{displayContent}</div>
                 )}

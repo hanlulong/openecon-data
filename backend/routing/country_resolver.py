@@ -218,6 +218,10 @@ class CountryResolver:
         "mozambique": "MZ", "mz": "MZ", "moz": "MZ",
         "namibia": "NA", "na": "NA", "nam": "NA",
         "rwanda": "RW", "rw": "RW", "rwa": "RW",
+
+        # World/Global aggregates (WorldBank uses "1W" or country code "WLD")
+        "world": "1W", "global": "1W", "worldwide": "1W",
+        "wld": "1W", "1w": "1W",
     }
 
     # ==========================================================================

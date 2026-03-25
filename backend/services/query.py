@@ -489,6 +489,317 @@ class QueryService:
         ]
         return len(non_geography_tokens) == 0
 
+    async def _fetch_from_coingecko(
+        self,
+        intent: ParsedIntent,
+        params: dict,
+    ) -> list:
+        """Fetch cryptocurrency data from CoinGecko.
+
+        Handles:
+        - Coin ID mapping (ticker symbols → CoinGecko IDs)
+        - Time period extraction from query text
+        - Historical data (date range or days)
+        - Current price/market_cap/volume/24h_change
+        - Top N rankings by market cap
+
+        Returns list of NormalizedData.
+        """
+        import re
+
+        logger.info(f"🔍 CoinGecko Query Parameters:")
+        logger.info(f"   - Indicators: {intent.indicators}")
+
+        query_lower = intent.originalQuery.lower() if intent.originalQuery else ""
+
+        # Extract time periods from query text
+        time_patterns = ["last", "past", "previous", "recent", "historical",
+                         "days", "weeks", "months", "year", "history"]
+        mentions_time = any(p in query_lower for p in time_patterns)
+
+        days_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+days?', query_lower)
+        weeks_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+weeks?', query_lower)
+        months_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+months?', query_lower)
+        year_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+years?', query_lower)
+
+        if not params.get("days"):
+            extracted_days = None
+            if days_match:
+                extracted_days = int(days_match.group(1))
+            elif weeks_match:
+                extracted_days = int(weeks_match.group(1)) * 7
+            elif months_match:
+                extracted_days = int(months_match.group(1)) * 30
+            elif year_match:
+                extracted_days = int(year_match.group(1)) * 365
+            elif mentions_time:
+                extracted_days = 30
+            if extracted_days:
+                params["days"] = extracted_days
+                params.pop("startDate", None)
+                params.pop("endDate", None)
+
+        # Parse coin IDs from params
+        raw_coin_ids = params.get("coinIds")
+        if isinstance(raw_coin_ids, list):
+            coin_ids = [str(cid).strip() for cid in raw_coin_ids if str(cid).strip()]
+        elif isinstance(raw_coin_ids, str):
+            coin_ids = [p.strip() for p in raw_coin_ids.split(",") if p.strip()]
+        else:
+            coin_ids = []
+
+        # Sanitize vs_currency
+        raw_vs = str(params.get("vsCurrency") or "usd").strip().lower()
+        invalid_tokens = {"right", "now", "today", "current", "recent", "latest",
+                          "trend", "performance", "history", "historical"}
+        vs_currency = raw_vs if raw_vs not in invalid_tokens and re.fullmatch(r"[a-z]{3,10}", raw_vs) else "usd"
+        params["vsCurrency"] = vs_currency
+
+        # Coin name → CoinGecko ID mapping
+        coin_map = {
+            "bitcoin": "bitcoin", "btc": "bitcoin",
+            "ethereum": "ethereum", "eth": "ethereum",
+            "solana": "solana", "sol": "solana",
+            "cardano": "cardano", "ada": "cardano",
+            "polkadot": "polkadot", "dot": "polkadot",
+            "avalanche": "avalanche-2", "avax": "avalanche-2",
+            "polygon": "matic-network", "matic": "matic-network",
+            "chainlink": "chainlink", "link": "chainlink",
+            "uniswap": "uniswap", "uni": "uniswap",
+            "dogecoin": "dogecoin", "doge": "dogecoin",
+            "shiba": "shiba-inu", "shib": "shiba-inu",
+            "ripple": "ripple", "xrp": "ripple",
+            "binance": "binancecoin", "bnb": "binancecoin",
+            "litecoin": "litecoin", "ltc": "litecoin",
+            "tron": "tron", "trx": "tron",
+            "stellar": "stellar", "xlm": "stellar",
+            "cosmos": "cosmos", "atom": "cosmos",
+            "near": "near", "nearprotocol": "near",
+            "algorand": "algorand", "algo": "algorand",
+        }
+
+        # Map provided coin IDs
+        if coin_ids:
+            coin_ids = [coin_map.get(c.lower(), c) for c in coin_ids]
+        else:
+            # Auto-detect from indicators
+            for indicator in (intent.indicators or []):
+                ind_lower = indicator.lower().replace(" ", "")
+                for name, cid in coin_map.items():
+                    if name in ind_lower:
+                        coin_ids.append(cid)
+                        break
+
+            # Fallback: check query text
+            if not coin_ids:
+                for name, cid in coin_map.items():
+                    if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", query_lower):
+                        if cid not in coin_ids:
+                            coin_ids.append(cid)
+                if not coin_ids:
+                    coin_ids = ["bitcoin"]
+
+        logger.info(f"   - Resolved coins: {coin_ids}, vs={vs_currency}")
+
+        indicator_lower = " ".join(intent.indicators).lower() if intent.indicators else ""
+        metric_text = f"{indicator_lower} {query_lower}".strip()
+
+        # Historical data request
+        if params.get("startDate") or params.get("endDate") or params.get("days"):
+            hist_metric = "price"
+            if any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
+                hist_metric = "market_cap"
+            elif any(t in metric_text for t in ["volume", "trading volume", "24h volume"]):
+                hist_metric = "volume"
+
+            if params.get("startDate") and params.get("endDate"):
+                series_list = []
+                for coin_id in coin_ids:
+                    data = await self.coingecko_provider.get_historical_data_range(
+                        coin_id=coin_id, vs_currency=vs_currency,
+                        from_date=params["startDate"], to_date=params["endDate"],
+                        metric=hist_metric,
+                    )
+                    series_list.extend(data)
+                return series_list
+            else:
+                days = params.get("days", 30)
+                series_list = []
+                for coin_id in coin_ids:
+                    data = await self.coingecko_provider.get_historical_data(
+                        coin_id=coin_id, vs_currency=vs_currency,
+                        metric=hist_metric, days=days,
+                    )
+                    series_list.extend(data)
+                return series_list
+
+        # Current data
+        ranking_keywords = ["top", "top 10", "top 5", "top 20", "ranking", "rankings", "largest", "biggest"]
+        is_ranking = any(t in metric_text for t in ranking_keywords)
+
+        if is_ranking and "market cap" in metric_text:
+            top_n_match = re.search(r'top\s+(\d+)', query_lower)
+            per_page = int(top_n_match.group(1)) if top_n_match else 10
+            per_page = max(1, min(250, per_page))
+            return await self.coingecko_provider.get_market_data(
+                vs_currency=vs_currency, order="market_cap_desc", per_page=per_page,
+            )
+
+        metric = "price"
+        if any(t in metric_text for t in ["volume", "trading volume", "24h volume", "24-hour volume"]):
+            metric = "volume"
+        elif any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
+            metric = "market_cap"
+        elif any(t in metric_text for t in ["24h change", "24 hour change", "price change", "change"]):
+            metric = "24h_change"
+
+        return await self.coingecko_provider.get_simple_price(
+            coin_ids=coin_ids, vs_currency=vs_currency, metric=metric,
+        )
+
+    async def _fetch_exchange_rate_with_historical_fallback(
+        self,
+        intent: ParsedIntent,
+        params: dict,
+    ) -> list:
+        """Fetch exchange rate data, falling back to FRED for historical requests.
+
+        The ExchangeRate-API free tier only supports current rates.
+        For historical data, we fall back to FRED which has daily exchange
+        rate series for 21 major currency pairs.
+
+        Returns list of NormalizedData.
+        Raises DataNotAvailableError if neither source can serve the request.
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        logger.info("🔍 ExchangeRate Query Parameters:")
+        logger.info(f"   - baseCurrency: {params.get('baseCurrency', 'USD')}")
+        logger.info(f"   - targetCurrency: {params.get('targetCurrency')}")
+        logger.info(f"   - startDate: {params.get('startDate')}")
+
+        # Detect if user is requesting historical data
+        has_historical = False
+        query_lower = (intent.originalQuery or "").lower()
+        historical_patterns = [
+            r'\bfor\s+20\d{2}\b',
+            r'\b20\d{2}\s*-\s*20\d{2}\b',
+            r'\blast\s+\d+\s+(month|year|day|week)s?\b',
+            r'\bhistory\b', r'\bhistorical\b',
+            r'\bfrom\s+20\d{2}\b', r'\bsince\s+20\d{2}\b',
+        ]
+        for pat in historical_patterns:
+            if re.search(pat, query_lower):
+                has_historical = True
+                logger.info(f"   📅 Historical request detected: '{pat}'")
+                break
+
+        if not has_historical:
+            start_date = params.get("startDate")
+            end_date = params.get("endDate")
+            if start_date or end_date:
+                try:
+                    today = datetime.now().date()
+                    week_ago = today - timedelta(days=7)
+                    if start_date:
+                        start_dt = datetime.fromisoformat(start_date[:10]).date()
+                        if start_dt < week_ago:
+                            has_historical = True
+                    if end_date and not has_historical:
+                        end_dt = datetime.fromisoformat(end_date[:10]).date()
+                        if end_dt < today - timedelta(days=1):
+                            has_historical = True
+                except (ValueError, AttributeError):
+                    pass
+
+        if has_historical:
+            logger.warning("⚠️ ExchangeRate: Historical data requested — falling back to FRED")
+            result = await self._fetch_historical_exchange_from_fred(intent, params)
+            if result:
+                return result
+            raise DataNotAvailableError(
+                "Historical exchange rate data is not available with the free ExchangeRate API tier. "
+                "\n\n💡 **Alternatives:**\n"
+                "1. For **current rates**: Rephrase without time references\n"
+                "2. For **historical rates**: Use a paid ExchangeRate API key\n"
+                "3. For **Real Effective Exchange Rate** (REER): Ask for 'REER' (uses IMF data)\n\n"
+                "Note: Some bilateral exchange rates are available via FRED for major currency pairs."
+            )
+
+        # Current rate — use ExchangeRate-API
+        series = await self.exchangerate_provider.fetch_exchange_rate(
+            base_currency=params.get("baseCurrency", "USD"),
+            target_currency=params.get("targetCurrency"),
+            target_currencies=params.get("targetCurrencies"),
+        )
+        return [series]
+
+    async def _fetch_historical_exchange_from_fred(
+        self,
+        intent: ParsedIntent,
+        params: dict,
+    ) -> Optional[list]:
+        """Attempt to fetch historical exchange rate from FRED.
+
+        FRED has daily exchange rate series for 21 major currency pairs.
+        Returns list of NormalizedData on success, None if currency not supported.
+        """
+        import re
+
+        base_currency = params.get("baseCurrency", "USD")
+        target_currency = params.get("targetCurrency")
+
+        if not target_currency:
+            query_upper = (intent.originalQuery or "").upper()
+            to_match = re.search(r'\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b', query_upper)
+            slash_match = re.search(r'\b([A-Z]{3})[/\s](?:VS\s)?([A-Z]{3})\b', query_upper)
+            if to_match:
+                base_currency, target_currency = to_match.group(1), to_match.group(2)
+            elif slash_match:
+                base_currency, target_currency = slash_match.group(1), slash_match.group(2)
+
+        if not target_currency:
+            return None
+
+        # FRED USD-based exchange rate series
+        fred_fx = {
+            "EUR": "DEXUSEU", "GBP": "DEXUSUK", "JPY": "DEXJPUS",
+            "CAD": "DEXCAUS", "CHF": "DEXSZUS", "AUD": "DEXUSAL",
+            "CNY": "DEXCHUS", "MXN": "DEXMXUS", "INR": "DEXINUS",
+            "BRL": "DEXBZUS", "KRW": "DEXKOUS", "SEK": "DEXSDUS",
+            "NOK": "DEXNOUS", "DKK": "DEXDNUS", "SGD": "DEXSIUS",
+            "HKD": "DEXHKUS", "NZD": "DEXUSNZ", "ZAR": "DEXSFUS",
+            "THB": "DEXTHUS", "MYR": "DEXMAUS", "TWD": "DEXTAUS",
+        }
+
+        target_upper = target_currency.upper()
+        base_upper = base_currency.upper()
+
+        fred_series_id = None
+        if target_upper in fred_fx and target_upper != "USD":
+            fred_series_id = fred_fx[target_upper]
+        elif base_upper in fred_fx and target_upper == "USD":
+            fred_series_id = fred_fx[base_upper]
+        elif base_upper != "USD" and target_upper != "USD":
+            fred_series_id = fred_fx.get(base_upper) or fred_fx.get(target_upper)
+
+        if not fred_series_id:
+            return None
+
+        try:
+            series = await self.fred_provider.fetch_series({
+                "seriesId": fred_series_id,
+                "startDate": params.get("startDate"),
+                "endDate": params.get("endDate"),
+            })
+            series.metadata.indicator = f"{base_upper} to {target_upper} Exchange Rate"
+            series.metadata.source = "FRED (Federal Reserve)"
+            return [series]
+        except Exception as e:
+            logger.warning(f"FRED exchange rate fallback failed: {e}")
+            return None
+
     def _extract_concept_from_indicator(
         self,
         indicators: List[str],
@@ -6629,6 +6940,18 @@ class QueryService:
 
         return None
 
+    async def _get_stale_from_cache(self, provider: str, params: dict):
+        """Get stale (expired) cached data as fallback when provider is down.
+
+        Returns data even if TTL has expired — a 1-hour-old GDP dataset
+        is better than 'No Data Available' during a transient API outage.
+        """
+        cache_params = self._build_cache_params(provider, params)
+        stale = cache_service.get_data_stale(provider, cache_params)
+        if stale:
+            logger.info(f"📦 Serving STALE cache for {provider} (provider may be down)")
+        return stale
+
     async def _save_to_cache(self, provider: str, params: dict, data: list):
         """
         Save data to both Redis and in-memory cache.
@@ -7908,6 +8231,23 @@ class QueryService:
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
 
+            # Last resort: serve stale (expired) cached data rather than returning nothing.
+            # A 1-hour-old GDP dataset is better than "No Data Available" during an API outage.
+            if "intent" in locals() and intent:
+                stale_data = await self._get_stale_from_cache(
+                    normalize_provider_name(intent.apiProvider), intent.parameters or {}
+                )
+                if stale_data:
+                    stale_list = stale_data if isinstance(stale_data, list) else [stale_data]
+                    return QueryResponse(
+                        conversationId=conv_id,
+                        intent=intent,
+                        data=stale_list,
+                        clarificationNeeded=False,
+                        message="⚠️ The data provider is temporarily unavailable. Showing cached data (may not be the latest).",
+                        processingSteps=tracker.to_list(),
+                    )
+
             clarification_response = self._build_no_data_indicator_clarification(
                 conversation_id=conv_id,
                 query=query,
@@ -8375,178 +8715,7 @@ class QueryService:
                         )
                         return [series]
             if provider in {"EXCHANGERATE", "EXCHANGE_RATE", "FX"}:
-                logger.info(f"🔍 ExchangeRate Query Parameters:")
-                logger.info(f"   - Full params: {params}")
-                logger.info(f"   - baseCurrency: {params.get('baseCurrency', 'USD')}")
-                logger.info(f"   - targetCurrency: {params.get('targetCurrency')}")
-                logger.info(f"   - targetCurrencies: {params.get('targetCurrencies')}")
-                logger.info(f"   - startDate: {params.get('startDate')}")
-                logger.info(f"   - endDate: {params.get('endDate')}")
-
-                # ExchangeRate-API free tier limitation:
-                # Historical data is NOT available without a paid API key.
-                # Only current rates are supported via the free tier.
-                #
-                # Check if the user is requesting historical data:
-                # - If startDate is more than 7 days in the past, it's historical
-                # - If endDate is before today, it's historical
-                from datetime import datetime, timedelta
-
-                has_historical_request = False
-                start_date = params.get("startDate")
-                end_date = params.get("endDate")
-
-                # First check for time references in query text
-                query_lower = (intent.originalQuery or "").lower()
-                import re
-                historical_patterns = [
-                    r'\bfor\s+20\d{2}\b',           # "for 2023"
-                    r'\b20\d{2}\s*-\s*20\d{2}\b',    # "2022-2023"
-                    r'\blast\s+\d+\s+(month|year|day|week)s?\b',  # "last 6 months"
-                    r'\bhistory\b',                 # "history"
-                    r'\bhistorical\b',              # "historical"
-                    r'\bfrom\s+20\d{2}\b',          # "from 2020"
-                    r'\bsince\s+20\d{2}\b',         # "since 2020"
-                ]
-                for pattern in historical_patterns:
-                    if re.search(pattern, query_lower):
-                        has_historical_request = True
-                        logger.info(f"   📅 Historical request detected from query text: '{pattern}'")
-                        break
-
-                if not has_historical_request and (start_date or end_date):
-                    try:
-                        today = datetime.now().date()
-                        week_ago = today - timedelta(days=7)
-
-                        # Check if start date is more than a week old (historical query)
-                        if start_date:
-                            start_dt = datetime.fromisoformat(start_date[:10]).date()
-                            if start_dt < week_ago:
-                                has_historical_request = True
-                                logger.info(f"   📅 Historical request detected: startDate {start_date} is > 7 days ago")
-
-                        # Check if end date is before today (historical query)
-                        if end_date and not has_historical_request:
-                            end_dt = datetime.fromisoformat(end_date[:10]).date()
-                            yesterday = today - timedelta(days=1)
-                            if end_dt < yesterday:
-                                has_historical_request = True
-                                logger.info(f"   📅 Historical request detected: endDate {end_date} is before yesterday")
-                    except (ValueError, AttributeError) as e:
-                        logger.warning(f"   ⚠️ Could not parse dates: {e}")
-                        # If we can't parse dates, assume it's not historical
-                        pass
-
-                if has_historical_request:
-                    logger.warning("⚠️ ExchangeRate: Historical data requested - falling back to FRED")
-
-                    # FRED has excellent historical exchange rate data
-                    # Use FRED exchange rate series instead
-                    base_currency = params.get("baseCurrency", "USD")
-                    target_currency = params.get("targetCurrency")
-
-                    # If target currency not in params, try to extract from query
-                    if not target_currency:
-                        query_upper = (intent.originalQuery or "").upper()
-                        # Try to match patterns like "USD to EUR", "EUR/USD", etc.
-                        import re
-                        # Pattern: "X to Y" exchange rate
-                        to_pattern = re.search(r'\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b', query_upper)
-                        # Pattern: "X/Y" or "X vs Y"
-                        slash_pattern = re.search(r'\b([A-Z]{3})[/\s](?:VS\s)?([A-Z]{3})\b', query_upper)
-
-                        if to_pattern:
-                            base_currency = to_pattern.group(1)
-                            target_currency = to_pattern.group(2)
-                            logger.info(f"   📝 Extracted from query: {base_currency} to {target_currency}")
-                        elif slash_pattern:
-                            base_currency = slash_pattern.group(1)
-                            target_currency = slash_pattern.group(2)
-                            logger.info(f"   📝 Extracted from query: {base_currency}/{target_currency}")
-
-                    if target_currency:
-                        # FRED exchange rate series mapping (USD-based)
-                        fred_exchange_series = {
-                            "EUR": "DEXUSEU",  # US Dollar to Euro
-                            "GBP": "DEXUSUK",  # US Dollar to UK Pound
-                            "JPY": "DEXJPUS",  # Japanese Yen to US Dollar
-                            "CAD": "DEXCAUS",  # Canadian Dollar to US Dollar
-                            "CHF": "DEXSZUS",  # Swiss Franc to US Dollar
-                            "AUD": "DEXUSAL",  # US Dollar to Australian Dollar
-                            "CNY": "DEXCHUS",  # Chinese Yuan to US Dollar
-                            "MXN": "DEXMXUS",  # Mexican Peso to US Dollar
-                            "INR": "DEXINUS",  # Indian Rupee to US Dollar
-                            "BRL": "DEXBZUS",  # Brazilian Real to US Dollar
-                            "KRW": "DEXKOUS",  # South Korean Won to US Dollar
-                            "SEK": "DEXSDUS",  # Swedish Krona to US Dollar
-                            "NOK": "DEXNOUS",  # Norwegian Krone to US Dollar
-                            "DKK": "DEXDNUS",  # Danish Krone to US Dollar
-                            "SGD": "DEXSIUS",  # Singapore Dollar to US Dollar
-                            "HKD": "DEXHKUS",  # Hong Kong Dollar to US Dollar
-                            "NZD": "DEXUSNZ",  # US Dollar to New Zealand Dollar
-                            "ZAR": "DEXSFUS",  # South African Rand to US Dollar
-                            "THB": "DEXTHUS",  # Thai Baht to US Dollar
-                            "MYR": "DEXMAUS",  # Malaysian Ringgit to US Dollar
-                            "TWD": "DEXTAUS",  # Taiwan Dollar to US Dollar
-                        }
-
-                        # Normalize currencies
-                        target_upper = target_currency.upper()
-                        base_upper = base_currency.upper()
-
-                        # FRED series are USD-based, so we need to handle both directions:
-                        # 1. If target is foreign (USD to EUR), look up target in series
-                        # 2. If target is USD (EUR to USD), look up base in series
-                        fred_series_id = None
-                        if target_upper in fred_exchange_series and target_upper != "USD":
-                            fred_series_id = fred_exchange_series[target_upper]
-                            logger.info(f"   📈 Using FRED series {fred_series_id} for USD to {target_upper}")
-                        elif base_upper in fred_exchange_series and target_upper == "USD":
-                            # Reverse lookup: X to USD uses the same series as USD to X
-                            fred_series_id = fred_exchange_series[base_upper]
-                            logger.info(f"   📈 Using FRED series {fred_series_id} for {base_upper} to USD (will invert if needed)")
-                        elif base_upper != "USD" and target_upper != "USD":
-                            # Cross rate: e.g., CHF to EUR - try to find any series we have
-                            if base_upper in fred_exchange_series:
-                                fred_series_id = fred_exchange_series[base_upper]
-                                logger.info(f"   📈 Using FRED series {fred_series_id} for {base_upper}/USD as proxy")
-                            elif target_upper in fred_exchange_series:
-                                fred_series_id = fred_exchange_series[target_upper]
-                                logger.info(f"   📈 Using FRED series {fred_series_id} for USD/{target_upper} as proxy")
-
-                        if fred_series_id:
-                            try:
-                                # FRED provider expects params dict with seriesId
-                                fred_params = {
-                                    "seriesId": fred_series_id,
-                                    "startDate": params.get("startDate"),
-                                    "endDate": params.get("endDate"),
-                                }
-                                series = await self.fred_provider.fetch_series(fred_params)
-                                # Update metadata to indicate this is historical exchange rate data
-                                series.metadata.indicator = f"{base_upper} to {target_upper} Exchange Rate"
-                                series.metadata.source = "FRED (Federal Reserve)"
-                                return [series]
-                            except Exception as fred_error:
-                                logger.warning(f"   ⚠️ FRED fallback failed: {fred_error}")
-                                # Continue to original error if FRED fails
-
-                    # If we couldn't use FRED, show the original error
-                    raise DataNotAvailableError(
-                        "Historical exchange rate data is not available with the free ExchangeRate API tier. "
-                        "\n\n💡 **Alternatives:**\n"
-                        "1. For **current rates**: Rephrase your query without time references (e.g., 'Current USD to EUR rate')\n"
-                        "2. For **historical rates**: Use a paid ExchangeRate API key (https://www.exchangerate-api.com/)\n"
-                        "3. For **Real Effective Exchange Rate** (REER) over time: Ask for 'REER' which uses IMF data\n\n"
-                        "Note: Some bilateral exchange rates are available via FRED for major currency pairs."
-                    )
-
-                series = await self.exchangerate_provider.fetch_exchange_rate(
-                    base_currency=params.get("baseCurrency", "USD"),
-                    target_currency=params.get("targetCurrency"),
-                    target_currencies=params.get("targetCurrencies"),
-                )
+                return await self._fetch_exchange_rate_with_historical_fallback(intent, params)
                 return [series]
             if provider == "BIS":
                 indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "POLICY_RATE"))
@@ -8727,257 +8896,7 @@ class QueryService:
                         ) from exc
                     raise
             if provider in {"COINGECKO", "COIN GECKO"}:
-                logger.info(f"🔍 CoinGecko Query Parameters:")
-                logger.info(f"   - Full params: {params}")
-                logger.info(f"   - Indicators: {intent.indicators}")
-
-                # Apply CoinGecko defaults for time period if not set
-                # Check if query mentions time periods like "last X days", "past week", etc.
-                query_lower = intent.originalQuery.lower() if intent.originalQuery else ""
-                time_patterns = [
-                    "last", "past", "previous", "recent", "historical",
-                    "days", "weeks", "months", "year", "history"
-                ]
-                mentions_time = any(pattern in query_lower for pattern in time_patterns)
-
-                # Extract days from query patterns like "last 30 days", "past 7 days"
-                import re
-                days_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+days?', query_lower)
-                weeks_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+weeks?', query_lower)
-                months_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+months?', query_lower)
-                year_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+years?', query_lower)
-
-                # Set days based on query pattern - prefer extracted days over LLM-generated dates
-                # (LLM sometimes generates incorrect dates, especially for relative time periods)
-                if not params.get("days"):
-                    extracted_days = None
-                    if days_match:
-                        extracted_days = int(days_match.group(1))
-                        logger.info(f"   📅 Extracted days from query: {extracted_days}")
-                    elif weeks_match:
-                        extracted_days = int(weeks_match.group(1)) * 7
-                        logger.info(f"   📅 Extracted weeks from query, converted to days: {extracted_days}")
-                    elif months_match:
-                        extracted_days = int(months_match.group(1)) * 30
-                        logger.info(f"   📅 Extracted months from query, converted to days: {extracted_days}")
-                    elif year_match:
-                        extracted_days = int(year_match.group(1)) * 365
-                        logger.info(f"   📅 Extracted years from query, converted to days: {extracted_days}")
-                    elif mentions_time:
-                        # Default to 30 days for any time-related query
-                        extracted_days = 30
-                        logger.info(f"   📅 Time period mentioned, defaulting to 30 days")
-
-                    if extracted_days:
-                        params["days"] = extracted_days
-                        # Clear startDate/endDate to use days instead (more reliable)
-                        if params.get("startDate") or params.get("endDate"):
-                            logger.info(f"   ⚠️ Clearing LLM-generated dates in favor of extracted days")
-                            params.pop("startDate", None)
-                            params.pop("endDate", None)
-
-                # Determine query type based on indicators or params
-                raw_coin_ids = params.get("coinIds")
-                if isinstance(raw_coin_ids, list):
-                    coin_ids = [str(cid).strip() for cid in raw_coin_ids if str(cid).strip()]
-                elif isinstance(raw_coin_ids, str):
-                    coin_ids = [part.strip() for part in raw_coin_ids.split(",") if part.strip()]
-                else:
-                    coin_ids = []
-
-                raw_vs_currency = str(params.get("vsCurrency") or "usd").strip().lower()
-                invalid_currency_tokens = {
-                    "right", "now", "today", "current", "recent", "latest",
-                    "trend", "performance", "history", "historical",
-                }
-                if (
-                    raw_vs_currency in invalid_currency_tokens
-                    or not re.fullmatch(r"[a-z]{3,10}", raw_vs_currency)
-                ):
-                    vs_currency = "usd"
-                else:
-                    vs_currency = raw_vs_currency
-                params["vsCurrency"] = vs_currency
-
-                logger.info(f"   - Initial coin_ids: {coin_ids}")
-                logger.info(f"   - vs_currency: {vs_currency}")
-                logger.info(f"   - startDate: {params.get('startDate')}")
-                logger.info(f"   - endDate: {params.get('endDate')}")
-                logger.info(f"   - days: {params.get('days')}")
-
-                # Map common cryptocurrency names to CoinGecko IDs
-                # This mapping is applied ALWAYS (to both params-provided and indicator-derived coin_ids)
-                coin_map = {
-                    "bitcoin": "bitcoin", "btc": "bitcoin",
-                    "ethereum": "ethereum", "eth": "ethereum",
-                    "solana": "solana", "sol": "solana",
-                    "cardano": "cardano", "ada": "cardano",
-                    "polkadot": "polkadot", "dot": "polkadot",
-                    "avalanche": "avalanche-2", "avax": "avalanche-2",  # CoinGecko uses avalanche-2
-                    "polygon": "matic-network", "matic": "matic-network",
-                    "chainlink": "chainlink", "link": "chainlink",
-                    "uniswap": "uniswap", "uni": "uniswap",
-                    "dogecoin": "dogecoin", "doge": "dogecoin",
-                    "shiba": "shiba-inu", "shib": "shiba-inu",
-                    "ripple": "ripple", "xrp": "ripple",
-                    "binance": "binancecoin", "bnb": "binancecoin",
-                    "litecoin": "litecoin", "ltc": "litecoin",
-                    "tron": "tron", "trx": "tron",
-                    "stellar": "stellar", "xlm": "stellar",
-                    "cosmos": "cosmos", "atom": "cosmos",
-                    "near": "near", "nearprotocol": "near",
-                    "algorand": "algorand", "algo": "algorand",
-                }
-
-                # CRITICAL: Apply coin name mapping to params-provided coin_ids
-                # This fixes issues where LLM provides "avalanche" but CoinGecko needs "avalanche-2"
-                if coin_ids:
-                    mapped_ids = []
-                    for cid in coin_ids:
-                        cid_lower = cid.lower()
-                        mapped = coin_map.get(cid_lower, cid)  # Use mapped value or original
-                        if mapped != cid:
-                            logger.info(f"   🔄 Mapped coin ID: '{cid}' → '{mapped}'")
-                        mapped_ids.append(mapped)
-                    coin_ids = mapped_ids
-
-                # Auto-detect coin IDs from indicators if not explicitly set
-                if intent.indicators and not coin_ids:
-                    for indicator in intent.indicators:
-                        indicator_lower = indicator.lower().replace(" ", "")
-                        for name, coin_id in coin_map.items():
-                            if name in indicator_lower:
-                                coin_ids.append(coin_id)
-                                break
-
-                    # If no coins matched, try to extract coin name from indicator text
-                    # or default to bitcoin if no valid coin found
-                    if not coin_ids:
-                        # Try to detect coin name in indicator
-                        found_coin = False
-                        for indicator in intent.indicators:
-                            ind_lower = indicator.lower()
-                            for name, coin_id in coin_map.items():
-                                if name in ind_lower:
-                                    coin_ids.append(coin_id)
-                                    found_coin = True
-                                    break
-                            if found_coin:
-                                break
-                        # Default to bitcoin if no specific coin found
-                        if not coin_ids:
-                            # Fall back to direct query text (covers cases where
-                            # indicator resolution collapses to abstract/dynamic terms).
-                            matched_from_query: list[str] = []
-                            for name, coin_id in coin_map.items():
-                                if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", query_lower):
-                                    if coin_id not in matched_from_query:
-                                        matched_from_query.append(coin_id)
-                            if matched_from_query:
-                                coin_ids = matched_from_query
-                            else:
-                                logger.info(f"   🪙 No specific coin found in indicators/query, defaulting to 'bitcoin'")
-                                coin_ids = ["bitcoin"]
-
-                logger.info(f"   - Resolved coin_ids: {coin_ids}")
-
-                # Define indicator_lower for metric detection
-                indicator_lower = " ".join(intent.indicators).lower() if intent.indicators else ""
-                metric_text = f"{indicator_lower} {query_lower}".strip()
-
-                # Check if historical data is requested
-                if params.get("startDate") or params.get("endDate") or params.get("days"):
-                    logger.info(f"📈 Historical data request detected")
-
-                    # Determine the metric for historical data
-                    hist_metric = "price"  # Default
-                    if any(term in metric_text for term in ["market cap", "market capitalization", "marketcap"]):
-                        hist_metric = "market_cap"
-                        logger.info(f"   📈 Historical market cap request detected")
-                    elif any(term in metric_text for term in ["volume", "trading volume", "24h volume"]):
-                        hist_metric = "volume"
-                        logger.info(f"   📊 Historical volume request detected")
-
-                    # Historical data range query
-                    if params.get("startDate") and params.get("endDate"):
-                        logger.info(f"   Using date range: {params['startDate']} to {params['endDate']}, metric: {hist_metric}")
-                        series_list = []
-                        for coin_id in coin_ids:
-                            logger.info(f"   Fetching {hist_metric} data for {coin_id}...")
-                            data = await self.coingecko_provider.get_historical_data_range(
-                                coin_id=coin_id,
-                                vs_currency=vs_currency,
-                                from_date=params["startDate"],
-                                to_date=params["endDate"],
-                                metric=hist_metric,
-                            )
-                            logger.info(f"   ✅ Got {len(data)} series for {coin_id}")
-                            series_list.extend(data)
-                        logger.info(f"🎉 CoinGecko: Returning {len(series_list)} series")
-                        return series_list
-                    else:
-                        # Historical data with days parameter
-                        days = params.get("days", 30)
-                        logger.info(f"   Using days parameter: {days}, metric: {hist_metric}")
-                        series_list = []
-                        for coin_id in coin_ids:
-                            logger.info(f"   Fetching {hist_metric} data for {coin_id}...")
-                            data = await self.coingecko_provider.get_historical_data(
-                                coin_id=coin_id,
-                                vs_currency=vs_currency,
-                                metric=hist_metric,
-                                days=days,
-                            )
-                            logger.info(f"   ✅ Got {len(data)} series for {coin_id}")
-                            series_list.extend(data)
-                        logger.info(f"🎉 CoinGecko: Returning {len(series_list)} series")
-                        return series_list
-                else:
-                    # Current data (simple price endpoint)
-                    # Determine which metric to extract based on indicators
-                    metric = "price"  # Default
-                    # indicator_lower is already defined above
-
-                    # Check for ranking/top coins request
-                    ranking_keywords = ["top", "top 10", "top 5", "top 20", "ranking", "rankings", "largest", "biggest"]
-                    is_ranking_request = any(term in metric_text for term in ranking_keywords) or \
-                                       any(term in query_lower for term in ranking_keywords)
-
-                    if is_ranking_request and ("market cap" in metric_text or "market cap" in query_lower):
-                        # Top N cryptocurrencies by market cap
-                        logger.info(f"🏆 Top cryptocurrencies by market cap request")
-
-                        # Extract N from query (e.g., "top 10")
-                        top_n_match = re.search(r'top\s+(\d+)', query_lower)
-                        per_page = int(top_n_match.group(1)) if top_n_match else 10
-                        per_page = max(1, min(250, per_page))
-
-                        result = await self.coingecko_provider.get_market_data(
-                            vs_currency=vs_currency,
-                            order="market_cap_desc",
-                            per_page=per_page,
-                        )
-                        logger.info(f"🎉 CoinGecko: Returning top {len(result)} cryptocurrencies")
-                        return result
-
-                    if any(term in metric_text for term in ["volume", "trading volume", "24h volume", "24-hour volume"]):
-                        metric = "volume"
-                        logger.info(f"📊 Volume request detected")
-                    elif any(term in metric_text for term in ["market cap", "market capitalization", "marketcap"]):
-                        metric = "market_cap"
-                        logger.info(f"📈 Market cap request detected")
-                    elif any(term in metric_text for term in ["24h change", "24 hour change", "price change", "change"]):
-                        metric = "24h_change"
-                        logger.info(f"📉 24h change request detected")
-
-                    logger.info(f"💰 Current {metric} request for {len(coin_ids)} coins")
-                    result = await self.coingecko_provider.get_simple_price(
-                        coin_ids=coin_ids,
-                        vs_currency=vs_currency,
-                        metric=metric,
-                    )
-                    logger.info(f"🎉 CoinGecko: Returning {len(result)} {metric} points")
-                    return result
+                return await self._fetch_from_coingecko(intent, params)
             raise DataNotAvailableError(
                 f"Provider {intent.apiProvider} is not yet implemented. Available providers: FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate, BIS, Eurostat, OECD, CoinGecko"
             )

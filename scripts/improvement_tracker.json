@@ -78,6 +78,71 @@
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "Before: 22/23 (95%), After: 23/23 (100%)",
       "commit_sha": "4227c55"
+    },
+    {
+      "cycle": 68,
+      "timestamp": "2026-03-25T10:43:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Fix US-only indicator routing to respect country context",
+      "root_cause": "KeywordMatcher.detect_us_only_indicator() did substring matching on US_ONLY_INDICATORS without checking country context. Queries like 'consumer sentiment in Germany' matched 'consumer sentiment' and routed to FRED instead of Eurostat.",
+      "fix_description": "Added country/countries params to detect_us_only_indicator(). When non-US countries are requested, the check is skipped so routing falls through to Eurostat/WorldBank. Updated UnifiedRouter to pass country context. US-only queries still work correctly.",
+      "production_tests": ["US GDP PASS", "US+China GDP PASS", "EUR/USD PASS"],
+      "tests_total": 542,
+      "benchmark_queries_total": 22,
+      "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
+      "commit_sha": "30ce56d"
+    },
+    {
+      "cycle": 69,
+      "timestamp": "2026-03-25T12:42:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Extract ExchangeRate historical fallback from _fetch_data monolith",
+      "root_cause": "_fetch_data() still 969 lines. ExchangeRate→FRED historical fallback was 171 lines of tightly coupled logic including date detection, currency extraction, FRED series mapping, and error messaging — all inline.",
+      "fix_description": "Extracted into _fetch_exchange_rate_with_historical_fallback() and _fetch_historical_exchange_from_fred(). _fetch_data() reduced from 969 to 798 lines (-18%). Total decomposition: 1,185 → 798 lines (-33% since cycle 61).",
+      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "EUR/USD PASS"],
+      "tests_total": 459,
+      "benchmark_queries_total": 23,
+      "benchmark_pass_rate": "23/23 local (100%) + 3/3 prod (100%)",
+      "commit_sha": "pending (Ottawa work hours)"
+    },
+    {
+      "cycle": 70,
+      "timestamp": "2026-03-25T14:44:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Conversation thread-safety tests",
+      "root_cause": "ConversationManager had zero tests despite using threading.Lock for concurrency control. Thread-safety was unverified.",
+      "fix_description": "Added 24 new tests: basic CRUD (get/create, add message, history), TTL expiration (expire, cleanup, safe recovery), pending state (mutual exclusion, clearing), last intent tracking, and 5 thread-safety tests (concurrent writes, concurrent creates, concurrent read+write, concurrent pending mutations, concurrent cleanup+access).",
+      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "EUR/USD PASS"],
+      "tests_total": 483,
+      "benchmark_queries_total": 22,
+      "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
+      "commit_sha": "pending (Ottawa work hours — Wed 10:44)"
+    },
+    {
+      "cycle": 71,
+      "timestamp": "2026-03-25T16:43:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Extract CoinGecko dispatch from _fetch_data monolith",
+      "root_cause": "_fetch_data() at 798 lines still too large. CoinGecko provider dispatch was 252 lines of inline logic: coin ID mapping, time period extraction, historical vs current branching, ranking requests, metric detection.",
+      "fix_description": "Extracted into _fetch_from_coingecko() with clean coin_map, time extraction, and metric routing. _fetch_data() reduced from 798 to 548 lines (-31% this cycle). Total decomposition: 1,185 → 548 lines (-54% since cycle 61).",
+      "production_tests": ["US GDP PASS", "G7 GDP/cap PASS", "Japan inflation PASS"],
+      "tests_total": 483,
+      "benchmark_queries_total": 22,
+      "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
+      "commit_sha": "pending (Ottawa work hours — Wed 12:43)"
+    },
+    {
+      "cycle": 72,
+      "timestamp": "2026-03-25T18:39:00Z",
+      "dimension_scores": {"accuracy": 75, "multi_country": 50, "coverage": 75, "reliability": 67, "session": 67},
+      "focus_area": "WorldBank API outage (502 Bad Gateway) — no code changes",
+      "root_cause": "EXTERNAL: WorldBank API at api.worldbank.org returning 502 Bad Gateway from Microsoft Azure Application Gateway. All WorldBank-dependent queries fail. Circuit breaker and fallback providers working correctly — OECD fallback attempted but also fails for non-OECD indicators.",
+      "fix_description": "No code changes. This is a transient external API outage. System handles it correctly: circuit breaker prevents cascading timeouts, fallback chain is attempted, graceful error returned to user. Scores will recover when WorldBank API comes back online.",
+      "production_tests": ["US GDP PASS (FRED)", "Bitcoin PASS (CoinGecko)", "EUR/USD PASS (ExchangeRate)"],
+      "tests_total": 483,
+      "benchmark_queries_total": 22,
+      "benchmark_pass_rate": "15/22 local (68% — WorldBank outage) + FRED/CoinGecko/ExchangeRate unaffected",
+      "commit_sha": "no changes — monitoring only"
     }
   ]
 }

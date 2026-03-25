@@ -429,6 +429,12 @@
   width: fit-content; /* Fit to content size */
 }
 
+/* Error response styling — visually distinct from normal assistant bubbles */
+.message-bubble.error-response .bubble-content {
+  border-left: 3px solid #e53e3e;
+  background: #fff5f5;
+}
+
 /* Override for messages with data visualizations - need more width */
 .message-bubble.assistant:has(.message-data) {
   width: 100%; /* Full width for data visualizations */
