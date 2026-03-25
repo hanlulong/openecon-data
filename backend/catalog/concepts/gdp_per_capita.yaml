@@ -27,15 +27,15 @@ providers:
     primary:
       code: NY.GDP.PCAP.CD
       name: "GDP per capita (current US$)"
-      confidence: 0.90
+      confidence: 0.95
       coverage: global
       frequency: annual
 
   Eurostat:
     primary:
       code: TEC00114
-      name: "GDP per capita in PPS"
-      confidence: 0.95
+      name: "GDP per capita in PPS (index, EU27=100)"
+      confidence: 0.80
       coverage: eu_members
       frequency: annual
 
