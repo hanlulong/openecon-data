@@ -39,6 +39,32 @@
       "benchmark_queries_total": 18,
       "benchmark_pass_rate": "18/18 local (100%) + 3/3 prod (100%)",
       "commit_sha": "05cbe34"
+    },
+    {
+      "cycle": 65,
+      "timestamp": "2026-03-25T04:44:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "FAISS test coverage + Instructor retry consistency",
+      "root_cause": "FAISS vector search had only 2 tests for 765-line implementation (0.26% coverage). Instructor retries inconsistent (2 vs 3).",
+      "fix_description": "Added 16 new FAISS tests (provider filter, empty state, bounds safety, cache, compatibility, reset, stats). Unified Instructor max_retries to 3. Investigated South Korea 24.8s latency — metadata validation LLM call is intentional safeguard, not a bug (review agent REJECTED skip).",
+      "production_tests": ["US GDP PASS", "Japan inflation PASS", "US+China GDP PASS", "Bitcoin PASS"],
+      "tests_total": 438,
+      "benchmark_queries_total": 20,
+      "benchmark_pass_rate": "20/20 local (100%) + 4/4 prod (100%)",
+      "commit_sha": "17982b6"
+    },
+    {
+      "cycle": 66,
+      "timestamp": "2026-03-25T06:39:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Error-handling test coverage for BaseProvider",
+      "root_cause": "Only 5/438 tests (1.1%) covered error paths. No tests for HTTP 429/5xx retry, circuit breaker, timeout recovery, or JSON parse safety.",
+      "fix_description": "Added 21 new error-handling tests covering: HTTP 429 rate limit (retry + reset tracking), HTTP 5xx retry, HTTP 404/403 instant fail, connection/timeout retries, circuit breaker open/close, transient-then-success recovery, JSON parse safety, POST retry, provider circuit isolation, country/indicator normalization.",
+      "production_tests": ["US GDP PASS", "G7 GDP/cap PASS", "Bitcoin PASS"],
+      "tests_total": 459,
+      "benchmark_queries_total": 21,
+      "benchmark_pass_rate": "21/21 local (100%) + 3/3 prod (100%)",
+      "commit_sha": "5c4b070"
     }
   ]
 }

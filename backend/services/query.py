@@ -489,6 +489,56 @@ class QueryService:
         ]
         return len(non_geography_tokens) == 0
 
+    def _extract_concept_from_indicator(
+        self,
+        indicators: List[str],
+        original_query: Optional[str],
+    ) -> Optional[str]:
+        """Extract the human-readable concept from provider-specific indicator codes.
+
+        When switching providers in a country follow-up (e.g., FRED→WorldBank),
+        we need the concept term ("unemployment") instead of the provider code
+        ("UNRATE") so the new provider's resolver can find the right indicator.
+
+        Strategy: prefer the original query's indicator term; fall back to
+        looking up the code's name in the indicator database.
+        """
+        if not indicators:
+            return None
+
+        code = str(indicators[0]).strip()
+
+        # If the indicator is already a natural-language concept, keep it
+        if " " in code or code.islower():
+            return code
+
+        # Try to extract concept from the original query
+        if original_query:
+            query_lower = str(original_query).lower()
+            # Check if any known indicator switch term appears in the query
+            for term in sorted(self._INDICATOR_SWITCH_TERMS, key=len, reverse=True):
+                if term in query_lower:
+                    return term
+
+        # Fall back to looking up the code's name in the indicator database
+        try:
+            resolver = get_indicator_resolver()
+            lookup = getattr(resolver, 'lookup', None)
+            if lookup:
+                for provider_name in ["FRED", "WORLDBANK", "IMF", "EUROSTAT"]:
+                    meta = lookup.get(provider_name, code)
+                    if meta and meta.get("name"):
+                        # Extract first meaningful word from the name
+                        name = meta["name"].lower()
+                        for term in sorted(self._INDICATOR_SWITCH_TERMS, key=len, reverse=True):
+                            if term in name:
+                                return term
+                        return name.split(",")[0].strip()[:50]
+        except Exception:
+            pass
+
+        return code.lower()
+
     def _build_contextual_follow_up_query(
         self,
         last_intent: ParsedIntent,
@@ -753,12 +803,40 @@ class QueryService:
             llm_provider=last_intent.apiProvider,
         )
         api_provider = normalize_provider_name(routing_decision.provider)
-        if params.get("countries") and len(params["countries"]) > 1 and not self._provider_covers_country_list(api_provider, params["countries"]):
+
+        # Check provider coverage for ALL target countries (both singular and plural).
+        # Handles: FRED (US-only) + "add France" → switch to WorldBank.
+        all_target = params.get("countries") or ([params["country"]] if params.get("country") else [])
+        provider_switched = False
+        if all_target and not self._provider_covers_country_list(api_provider, all_target):
+            logger.info(
+                "🔄 Country follow-up: %s can't cover %s, switching to WORLDBANK",
+                api_provider, all_target,
+            )
             api_provider = "WORLDBANK"
+            provider_switched = True
 
         intent = last_intent.model_copy(deep=True)
         intent.apiProvider = api_provider
         intent.parameters = params
+
+        # When provider switches, reset indicator to concept-level term so
+        # _resolve_indicator_for_fetch can find the right code for the new provider.
+        # E.g., FRED/UNRATE → "unemployment" for WorldBank resolution.
+        if provider_switched:
+            concept_indicator = self._extract_concept_from_indicator(
+                last_intent.indicators, last_intent.originalQuery
+            )
+            if concept_indicator:
+                intent.indicators = [concept_indicator]
+                params.pop("indicator", None)
+                intent.parameters = params
+                # Rebuild the refined query with the concept term
+                refined_query = self._build_contextual_follow_up_query(intent, target_countries)
+                logger.info(
+                    "🔄 Reset indicator to concept '%s' after provider switch → query='%s'",
+                    concept_indicator, refined_query,
+                )
         intent.clarificationNeeded = False
         intent.clarificationQuestions = []
         intent.confidence = max(float(last_intent.confidence or 0.0), 0.95)
