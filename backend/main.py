@@ -84,6 +84,20 @@ def get_query_service() -> QueryService:
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
     # === STARTUP ===
+    # Optional: OpenTelemetry auto-instrumentation for LLM observability.
+    # Activates ONLY when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    # Traces: LangChain calls, httpx requests, LLM token usage.
+    import os
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        try:
+            from opentelemetry.instrumentation.langchain import LangchainInstrumentor
+            from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+            LangchainInstrumentor().instrument()
+            HTTPXClientInstrumentor().instrument()
+            logger.info("📊 OpenTelemetry instrumentation enabled (LangChain + httpx)")
+        except Exception as e:
+            logger.warning(f"OpenTelemetry instrumentation failed: {e}")
+
     # Initialize HTTP client pool (reused for all external API calls)
     from .services.http_pool import HTTPClientPool
     logger.info("⚙️  Initializing HTTP client pool...")
