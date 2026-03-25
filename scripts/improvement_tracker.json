@@ -156,6 +156,19 @@
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "22/23 local (96%) — World population still fails (country extraction issue)",
       "commit_sha": "0f95ca1"
+    },
+    {
+      "cycle": 74,
+      "timestamp": "2026-03-25T22:44:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 67, "session": 100},
+      "focus_area": "Fix WorldBank UnboundLocalError crash + World country recognition",
+      "root_cause": "1) worldbank.py line 961 referenced `country_code_raw` (only defined in per-country fallback loop) inside batch processing loop — caused 500 error for ANY WorldBank query with all-null country data. 2) 'World'→'1W' mapping added to CountryResolver but indicator resolution picks wrong code (SI.SPR.PCAP.ZG instead of SP.POP.GROW).",
+      "fix_description": "Changed `country_code_raw` → `country_code_key` in batch loop (line 961). This was a server-crashing bug affecting all WorldBank multi-country queries where some countries have null data. World population growth still needs indicator resolution fix (SP.POP.GROW) in future cycle.",
+      "production_tests": ["US GDP PASS", "G7 GDP/cap 7 series PASS", "Germany GDP/cap $56K PASS"],
+      "tests_total": 483,
+      "benchmark_queries_total": 22,
+      "benchmark_pass_rate": "21/22 (95%) — World pop growth still needs indicator fix",
+      "commit_sha": "fb59392"
     }
   ]
 }

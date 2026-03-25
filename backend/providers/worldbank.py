@@ -840,7 +840,11 @@ class WorldBankProvider(BaseProvider):
         if start_date and end_date:
             date_param = f"{start_date[:4]}:{end_date[:4]}"
 
-        params = {"format": "json", "per_page": 1000}
+        # Scale per_page based on number of countries to avoid pagination
+        # cutting off countries (e.g., G20 × 65 years = 1,235 records > 1,000).
+        # WorldBank allows up to 32,500 per page.
+        per_page = max(1000, len(country_list) * 100)
+        params = {"format": "json", "per_page": min(per_page, 10000)}
         if date_param:
             params["date"] = date_param
 
