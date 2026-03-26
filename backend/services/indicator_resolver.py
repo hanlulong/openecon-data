@@ -1674,6 +1674,13 @@ class IndicatorResolver:
         if candidate_is_projection and not query_wants_projection:
             confidence -= 0.55  # Strong penalty — projections should almost never win
 
+        # Boost translator candidates: when the translator maps a query to a
+        # known concept (e.g., "industrial production" → NV.IND.TOTL.KD.ZG),
+        # give it a significant boost. The translator uses curated concept
+        # mappings that are more reliable than generic text search.
+        if candidate.get("_translator_candidate"):
+            confidence += 0.25
+
         # Penalize cross-domain mismatches (e.g., fisheries for industrial production).
         _domain_penalties = {
             "industrial": ("fisheries", "aquaculture", "fish catch", "forestry"),

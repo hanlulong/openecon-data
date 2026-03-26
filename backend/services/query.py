@@ -6956,11 +6956,18 @@ class QueryService:
         """
         Save data to both Redis and in-memory cache.
 
+        Never caches empty results — prevents cache-poisoning from
+        transient API outages (e.g., WorldBank 502 caches empty response,
+        then serves it even after the API recovers).
+
         Args:
             provider: Data provider name
             params: Query parameters
             data: Data to cache
         """
+        if not data:
+            logger.debug(f"Skipping cache save — empty data for {provider}")
+            return
         cache_params = self._build_cache_params(provider, params)
 
         # Save to Redis cache
