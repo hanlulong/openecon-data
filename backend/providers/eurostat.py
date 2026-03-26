@@ -191,7 +191,7 @@ class EurostatProvider(BaseProvider):
         "DENMARK": "DK",
         "FINLAND": "FI",
         "PORTUGAL": "PT",
-        "GREECE": "GR",
+        "GREECE": "EL",  # Eurostat uses "EL" for Greece (not ISO standard "GR")
         "CZECH REPUBLIC": "CZ",
         "CZECHIA": "CZ",
         "ROMANIA": "RO",

@@ -1660,6 +1660,20 @@ class IndicatorResolver:
         if "discontinued" in candidate_text_lower and "discontinued" not in query_text:
             confidence -= 0.42
 
+        # Prefer actual/historical data over projections, forecasts, and estimates.
+        # FOMC projections, IMF forecasts, survey expectations, etc. should not
+        # outrank actual data series (e.g., GDPC1CTMLR vs A191RL1Q225SBEA).
+        _projection_terms = (
+            "fomc", "projection", "projections", "forecast", "forecasts",
+            "outlook", "summary of economic projections", "central tendency",
+            "median forecast", "consensus", "expected", "expectations",
+            "survey of professional forecasters",
+        )
+        query_wants_projection = any(t in query_text for t in _projection_terms)
+        candidate_is_projection = any(t in candidate_text_lower for t in _projection_terms)
+        if candidate_is_projection and not query_wants_projection:
+            confidence -= 0.55  # Strong penalty — projections should almost never win
+
         confidence -= self._specialization_penalty(query_text, candidate_text_lower)
 
         # Guardrail: single-term lexical hits are often semantically ambiguous
