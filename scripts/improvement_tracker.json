@@ -182,6 +182,19 @@
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "All group queries now return complete country sets",
       "commit_sha": "90bb60b"
+    },
+    {
+      "cycle": 77,
+      "timestamp": "2026-03-26T02:45:00Z",
+      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "focus_area": "Fix US GDP growth returning FOMC projections + Greece missing from Eurostat",
+      "root_cause": "1) Indicator resolver scored FOMC projection series (GDPC1CTMLR) higher than actual GDP growth (A191RL1Q225SBEA) because 'Growth Rate of Real Gross Domestic Product' matched query terms well. 2) Eurostat COUNTRY_CODES mapped Greece to 'GR' (ISO) but Eurostat API uses 'EL'.",
+      "fix_description": "1) Added -0.55 confidence penalty for candidates containing projection/forecast terms (FOMC, projection, forecast, outlook, central tendency, etc.) unless user explicitly asks for projections. Framework-level: applies to ALL providers. 2) Changed Greece code from GR→EL in Eurostat provider.",
+      "production_tests": ["US GDP growth → A191RL1Q225SBEA (correct)", "Greece Eurostat → 1 series (was 0)", "G20 19/19"],
+      "tests_total": 483,
+      "benchmark_queries_total": 18,
+      "benchmark_pass_rate": "18/18 + critical accuracy verified",
+      "commit_sha": "452471b"
     }
   ]
 }

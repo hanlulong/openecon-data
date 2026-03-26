@@ -1674,6 +1674,16 @@ class IndicatorResolver:
         if candidate_is_projection and not query_wants_projection:
             confidence -= 0.55  # Strong penalty — projections should almost never win
 
+        # Penalize cross-domain mismatches (e.g., fisheries for industrial production).
+        _domain_penalties = {
+            "industrial": ("fisheries", "aquaculture", "fish catch", "forestry"),
+            "manufacturing": ("fisheries", "aquaculture", "fish catch"),
+            "factory": ("fisheries", "aquaculture", "fish catch"),
+        }
+        for domain_key, wrong_terms in _domain_penalties.items():
+            if domain_key in query_text and any(t in candidate_text_lower for t in wrong_terms):
+                confidence -= 0.50
+
         confidence -= self._specialization_penalty(query_text, candidate_text_lower)
 
         # Guardrail: single-term lexical hits are often semantically ambiguous

@@ -373,6 +373,27 @@ class IndicatorLookup:
                 except (ValueError, TypeError):
                     pass
 
+            # Penalize projection/forecast indicators (framework-level fix).
+            # Users asking for "GDP growth" want actual historical data, not FOMC
+            # projections, IMF forecasts, or survey expectations.
+            name_lower = (r.get("name") or "").lower()
+            _proj_terms = ("fomc", "projection", "projections", "forecast",
+                           "forecasts", "outlook", "central tendency",
+                           "summary of economic projections", "longer run")
+            query_wants_proj = any(t in query_lower for t in _proj_terms)
+            if not query_wants_proj and any(t in name_lower for t in _proj_terms):
+                score -= 15 if "fomc" in name_lower else 10
+
+            # Penalize cross-domain mismatches (e.g., fisheries for industrial queries).
+            _domain_mismatches = {
+                "industrial": ("fisheries", "aquaculture", "fish", "forestry"),
+                "manufacturing": ("fisheries", "aquaculture", "fish"),
+                "factory": ("fisheries", "aquaculture", "fish"),
+            }
+            for query_domain, wrong_domains in _domain_mismatches.items():
+                if query_domain in query_lower and any(w in name_lower for w in wrong_domains):
+                    score -= 12
+
             r["_score"] = score
             ranked.append(r)
 
