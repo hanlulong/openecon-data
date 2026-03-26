@@ -1083,6 +1083,15 @@ class WorldBankProvider(BaseProvider):
 
     async def _resolve_indicator_code(self, indicator: str) -> str:
         """Resolve WorldBank indicator code through IndicatorResolver (unified), hardcoded mappings, or metadata search."""
+        # Short-circuit: if indicator is already a valid WorldBank code
+        # (contains dots like "NY.GDP.MKTP.CD" or "NV.IND.TOTL.KD.ZG"),
+        # return it directly without re-resolving through the resolver.
+        # This prevents double-resolution where an already-correct code
+        # gets re-resolved to a different (wrong) indicator.
+        if indicator and "." in indicator and indicator[0].isalpha():
+            logger.info(f"🔒 WorldBank: Using pre-resolved indicator code: {indicator}")
+            return indicator
+
         # PHASE B: Use IndicatorResolver as the unified first attempt
         # This consolidates FTS5 search, translator, and catalog into one service
         try:
