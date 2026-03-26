@@ -866,6 +866,19 @@ class WorldBankProvider(BaseProvider):
             if payload and (len(payload) < 2 or not payload[1]):
                 logger.debug(f"No data for {batch_codes} indicator {indic}")
                 payload = None
+
+            # Detect pagination truncation: if API says there are more pages,
+            # the batch response is incomplete — fall back to sequential fetch.
+            if payload and isinstance(payload[0], dict):
+                total_pages = payload[0].get("pages", 1)
+                if total_pages > 1:
+                    total_records = payload[0].get("total", 0)
+                    returned = len(payload[1]) if len(payload) > 1 and payload[1] else 0
+                    logger.warning(
+                        f"WorldBank pagination truncation: got {returned}/{total_records} records "
+                        f"(page 1/{total_pages}). Falling back to sequential fetch."
+                    )
+                    payload = None  # Force fallback to per-country sequential fetch
         except httpx.HTTPError as e:
             logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
             payload = None

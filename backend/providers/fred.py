@@ -431,7 +431,7 @@ class FREDProvider(BaseProvider):
                 days_old = (datetime.datetime.now() - end_date).days
                 if days_old > 365:  # Discontinued over a year ago
                     score -= 5.0
-            except:
+            except (ValueError, TypeError):
                 pass
 
         return score
