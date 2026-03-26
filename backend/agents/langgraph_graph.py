@@ -236,6 +236,7 @@ async def data_node(state: AgentState) -> Dict[str, Any]:
         result = await data_agent.process(query, context, conv_state)
 
     # DataResponse is a dataclass with attributes: success, data, data_reference, intent, message, error
+    logger.info(f"📊 DataAgent result: success={result.success}, data_count={len(result.data) if result.data else 0}, error={result.error}")
     # Keep entity context from state (DataAgent doesn't update it)
     updated_context = state.get("entity_context") or EntityContext()
     updated_refs = dict(state.get("data_references", {}))

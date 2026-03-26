@@ -8512,6 +8512,7 @@ class QueryService:
                     return [series]
             if provider in {"WORLDBANK", "WORLD BANK"}:
                 resolved_indicator = params.get("indicator")
+                logger.info(f"🌍 WorldBank dispatch: indicator={resolved_indicator}, country={params.get('country')}, countries={params.get('countries')}, startDate={params.get('startDate')}")
                 # Handle multiple indicators for World Bank
                 if len(intent.indicators) > 1:
                     all_data = []
@@ -8532,13 +8533,18 @@ class QueryService:
                     return all_data
                 else:
                     indicator = str(resolved_indicator or (intent.indicators[0] if intent.indicators else ""))
-                    return await self.world_bank_provider.fetch_indicator(
+                    wb_result = await self.world_bank_provider.fetch_indicator(
                         indicator=indicator,
                         country=params.get("country"),
                         countries=params.get("countries"),
                         start_date=params.get("startDate"),
                         end_date=params.get("endDate"),
                     )
+                    if isinstance(wb_result, list):
+                        logger.info(f"🌍 WorldBank returned: {len(wb_result)} series, data_pts={[len(r.data) for r in wb_result if r]}")
+                    else:
+                        logger.info(f"🌍 WorldBank returned: type={type(wb_result)}, data_pts={len(wb_result.data) if wb_result and wb_result.data else 0}")
+                    return wb_result
             if provider == "COMTRADE":
                 indicators = [indicator.lower() for indicator in intent.indicators]
                 if any("balance" in indicator for indicator in indicators):
@@ -9841,13 +9847,16 @@ class QueryService:
 
             # Handle standard data result
             query_result = result.get("result", {})
+            logger.info(f"🔍 LangGraph query_result type={type(query_result)}, keys={list(query_result.keys()) if isinstance(query_result, dict) else 'NOT_DICT'}")
             data = query_result.get("data", [])
+            logger.info(f"🔍 LangGraph data type={type(data)}, len={len(data) if isinstance(data, (list,tuple)) else 'NOT_LIST'}")
             if isinstance(data, list):
                 self._normalize_bis_metadata_labels(data)
             if isinstance(data, list) and data:
                 data = self._rerank_data_by_query_relevance(query, data)
                 data = self._apply_ranking_projection(query, data)
 
+            logger.info(f"🔍 LangGraph data after rerank: type={type(data)}, len={len(data) if isinstance(data, (list,tuple)) else 'N/A'}")
             # Guardrail: if LangGraph returns data whose semantic cues do not
             # match high-signal cues from the original query (e.g., import vs debt),
             # retry through the standard deterministic path.
@@ -10081,7 +10090,10 @@ class QueryService:
                     processing_steps=tracker.to_list() if tracker else None,
                 )
                 if clarification_response:
+                    logger.warning(f"⚠️ LangGraph: Uncertain result converted to clarification (data had {len(data)} series)")
                     return clarification_response
+
+                logger.info(f"✅ LangGraph: Returning {len(data)} series successfully")
 
             # If research query, add message
             if result.get("query_type") == "research":

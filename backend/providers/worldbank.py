@@ -849,9 +849,11 @@ class WorldBankProvider(BaseProvider):
             params["date"] = date_param
 
         # Single batched request for all countries
+        logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         try:
             response = await client.get(url, params=params, headers=headers, timeout=30.0)
+            logger.info(f"WorldBank API response: status={response.status_code}, content_length={len(response.content)}")
             response.raise_for_status()
             payload = response.json()
 
