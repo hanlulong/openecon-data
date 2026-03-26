@@ -4835,6 +4835,21 @@ class QueryService:
             # avoid forcing indicator-choice clarification loops.
             return False
 
+        # Skip clarification for high-confidence pre-resolved intents.
+        # When the concept override or translator already validated the indicator,
+        # second-guessing it with the uncertainty check discards valid data
+        # (e.g., "Germany industrial production" → NV.IND.TOTL.KD.ZG → 9 data pts
+        # was being replaced with a clarification prompt).
+        if intent and intent.confidence and intent.confidence >= 0.90:
+            # Check if indicator looks like a pre-resolved provider code
+            indicator = (intent.parameters or {}).get("indicator", "")
+            if indicator and "." in indicator and indicator[0].isalpha():
+                logger.info(
+                    "Skipping uncertainty check — high-confidence pre-resolved indicator: %s (conf=%.2f)",
+                    indicator, intent.confidence,
+                )
+                return False
+
         scored: List[tuple[float, Any]] = [
             (self._score_series_relevance(query, series), series)
             for series in data

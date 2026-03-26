@@ -125,6 +125,17 @@ class KeywordMatcher:
             "metal price index", "base metal", "base metals",
             "agricultural price", "agricultural commodity",
             "food price index", "energy price index",
+            # Commodity spot prices (FRED has daily/monthly commodity price series)
+            "gold price", "silver price", "oil price", "crude oil",
+            "wti", "brent", "natural gas price", "copper price",
+            "platinum price", "palladium price",
+            # Labor market (FRED has key employment/claims series)
+            "nonfarm payrolls", "payroll employment", "initial claims",
+            "jobless claims", "unemployment claims", "continuing claims",
+            "average hourly earnings", "us wages",
+            # Housing (FRED has housing starts, home sales, case-shiller)
+            "case-shiller", "case shiller", "home sales",
+            "existing home sales", "new home sales",
         ],
 
         # European countries → EUROSTAT (must come before OECD)

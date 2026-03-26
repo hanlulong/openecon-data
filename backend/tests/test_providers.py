@@ -161,26 +161,26 @@ class ProviderTests(unittest.TestCase):
     def test_worldbank_fetch_indicator(self) -> None:
         provider = WorldBankProvider()
 
-        responses = [
-            MockAsyncResponse(
+        batch_response = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
                 [
-                    {"page": 1},
-                    [
-                        {
-                            "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP (current US$)"},
-                            "country": {"id": "USA", "value": "United States"},
-                            "countryiso3code": "USA",
-                            "date": "2020",
-                            "value": 21000000000000,
-                            "unit": "",
-                            "obs_status": "",
-                            "decimal": 0,
-                        }
-                    ],
+                    {
+                        "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP (current US$)"},
+                        "country": {"id": "USA", "value": "United States"},
+                        "countryiso3code": "USA",
+                        "date": "2020",
+                        "value": 21000000000000,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 0,
+                    }
                 ],
-                headers={"Date": "Mon, 01 Jan 2024 00:00:00 GMT"}
-            )
-        ]
+            ],
+            headers={"Date": "Mon, 01 Jan 2024 00:00:00 GMT"}
+        )
+        # Provide enough responses for batch + potential fallback
+        responses = [batch_response, batch_response]
 
         with patch("backend.providers.worldbank.get_http_client", return_value=MockAsyncClient(responses)):
             results = run(
@@ -323,26 +323,25 @@ class ProviderTests(unittest.TestCase):
         provider = WorldBankProvider(metadata_search_service=metadata_stub)
         self.addCleanup(lambda: provider.INDICATOR_MAPPINGS.pop("CUSTOM_INDICATOR", None))
 
-        responses = [
-            MockAsyncResponse(
+        wb_resp = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
                 [
-                    {"page": 1},
-                    [
-                        {
-                            "indicator": {"id": "NY.CUSTOM.CODE", "value": "Custom Indicator"},
-                            "country": {"id": "USA", "value": "United States"},
-                            "countryiso3code": "USA",
-                            "date": "2021",
-                            "value": 123.4,
-                            "unit": "",
-                            "obs_status": "",
-                            "decimal": 0,
-                        }
+                    {
+                        "indicator": {"id": "NY.CUSTOM.CODE", "value": "Custom Indicator"},
+                        "country": {"id": "USA", "value": "United States"},
+                        "countryiso3code": "USA",
+                        "date": "2021",
+                        "value": 123.4,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 0,
+                    }
                     ],
                 ],
                 headers={"Date": "Tue, 02 Jan 2024 00:00:00 GMT"}
             )
-        ]
+        responses = [wb_resp, wb_resp]  # Enough for batch + potential fallback
 
         with patch("backend.providers.worldbank.get_http_client", return_value=MockAsyncClient(responses)):
             results = run(provider.fetch_indicator(indicator="custom indicator", country="US"))
