@@ -1,0 +1,32 @@
+concept: gold_price
+category: commodities
+domain: financial_markets
+
+description: |
+  Spot price of gold per troy ounce, based on London Bullion Market fixing.
+
+synonyms:
+  primary:
+    - gold price
+    - gold spot price
+    - gold commodity price
+    - gold per ounce
+    - price of gold
+  secondary:
+    - gold fixing
+    - bullion price
+    - gold market price
+    - xau
+
+not_available:
+  - StatsCan
+  - Comtrade
+
+providers:
+  FRED:
+    primary:
+      code: GOLDAMGBD228NLBM
+      name: "Gold Fixing Price 10:30 A.M. (London time) in London Bullion Market"
+      confidence: 0.95
+      coverage: global
+      frequency: daily

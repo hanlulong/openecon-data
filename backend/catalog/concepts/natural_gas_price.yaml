@@ -1,0 +1,33 @@
+concept: natural_gas_price
+category: commodities
+domain: energy
+
+description: |
+  Henry Hub natural gas spot price, the US benchmark for natural gas.
+
+synonyms:
+  primary:
+    - natural gas price
+    - gas price
+    - henry hub
+    - natural gas
+  secondary:
+    - natural gas spot
+    - gas spot price
+    - henry hub price
+    - nat gas
+
+not_available:
+  - WorldBank
+  - Eurostat
+  - StatsCan
+  - Comtrade
+
+providers:
+  FRED:
+    primary:
+      code: MHHNGSP
+      name: "Henry Hub Natural Gas Spot Price"
+      confidence: 0.95
+      coverage: global
+      frequency: monthly

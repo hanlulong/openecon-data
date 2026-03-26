@@ -1,0 +1,37 @@
+concept: nonfarm_payrolls
+category: labor_market
+domain: macroeconomics
+
+description: |
+  Total nonfarm employment (monthly jobs report), the most widely
+  watched US employment indicator.
+
+synonyms:
+  primary:
+    - nonfarm payrolls
+    - payroll employment
+    - nonfarm employment
+    - jobs report
+    - us jobs
+  secondary:
+    - total nonfarm
+    - all employees nonfarm
+    - employment nonfarm
+    - monthly jobs
+    - payrolls
+
+not_available:
+  - WorldBank
+  - Eurostat
+  - IMF
+  - StatsCan
+  - Comtrade
+
+providers:
+  FRED:
+    primary:
+      code: PAYEMS
+      name: "All Employees, Total Nonfarm"
+      confidence: 0.95
+      coverage: us
+      frequency: monthly

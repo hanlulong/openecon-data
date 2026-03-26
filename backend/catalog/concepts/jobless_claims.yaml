@@ -1,0 +1,34 @@
+concept: jobless_claims
+category: labor_market
+domain: macroeconomics
+
+description: |
+  Weekly initial unemployment insurance claims filed in the US.
+
+synonyms:
+  primary:
+    - initial claims
+    - jobless claims
+    - unemployment claims
+    - initial jobless claims
+  secondary:
+    - weekly claims
+    - unemployment insurance claims
+    - new claims
+    - weekly jobless
+
+not_available:
+  - WorldBank
+  - Eurostat
+  - IMF
+  - StatsCan
+  - Comtrade
+
+providers:
+  FRED:
+    primary:
+      code: ICSA
+      name: "Initial Claims"
+      confidence: 0.95
+      coverage: us
+      frequency: weekly

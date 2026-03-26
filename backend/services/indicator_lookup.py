@@ -395,6 +395,26 @@ class IndicatorLookup:
                 except (ValueError, TypeError):
                     pass
 
+            # Boost/penalize based on query context (price vs holdings/reserves).
+            # "Gold price" should rank gold commodity price higher than Federal
+            # Reserve gold bullion holdings. "Oil price" should rank crude oil
+            # price higher than petroleum reserves.
+            if "price" in query_lower:
+                if "price" in name_lower or "fixing" in name_lower or "spot" in name_lower:
+                    score += 8  # Boost actual price series
+                if any(t in name_lower for t in ("held", "reserves", "reserve bank", "deep storage",
+                                                  "vault", "mint", "book value", "stock")):
+                    score -= 15  # Penalize holdings/reserves/inventory series
+
+            # Boost series matching the primary employment concept.
+            # "Nonfarm payrolls" should rank total employment higher than
+            # hours worked, discontinued series, or sub-sector breakdowns.
+            if "payrolls" in query_lower or "employment" in query_lower:
+                if "all employees" in name_lower or "total nonfarm" in name_lower:
+                    score += 10
+                if "discontinued" in name_lower:
+                    score -= 8
+
             # Penalize projection/forecast indicators (framework-level fix).
             # Users asking for "GDP growth" want actual historical data, not FOMC
             # projections, IMF forecasts, or survey expectations.
