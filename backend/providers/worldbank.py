@@ -873,8 +873,12 @@ class WorldBankProvider(BaseProvider):
             logger.warning(f"Error fetching batched data: {e}")
             payload = None
 
-        # If batch request failed, fall back to sequential per-country
+        # If batch request failed, fall back to sequential per-country.
+        # Accumulate ALL country records into a single payload so the
+        # batch processing loop below handles all countries together.
         if not payload:
+            accumulated_records = []
+            fallback_meta = None
             for country_code_raw in country_list:
                 try:
                     country_code = self._country_code(country_code_raw)
@@ -883,11 +887,14 @@ class WorldBankProvider(BaseProvider):
                     response.raise_for_status()
                     single_payload = response.json()
                     if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
-                        payload = [single_payload[0], single_payload[1]]
-                        # Will be processed below
+                        accumulated_records.extend(single_payload[1])
+                        if not fallback_meta:
+                            fallback_meta = single_payload[0]
                 except Exception as e:
                     logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
                     continue
+            if accumulated_records and fallback_meta:
+                payload = [fallback_meta, accumulated_records]
 
         # Process batched payload — group records by country
         if not payload or len(payload) < 2 or not payload[1]:
