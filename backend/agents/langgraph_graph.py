@@ -219,9 +219,21 @@ async def data_node(state: AgentState) -> Dict[str, Any]:
 
     openrouter_service = query_service.openrouter if query_service else None
 
-    # Use DataAgent with required services
+    # Use DataAgent with required services.
+    # If we have a pre-resolved intent (from process_query's concept override +
+    # indicator resolution), pass it directly to avoid re-parsing which loses
+    # the carefully resolved indicator code.
     data_agent = DataAgent(query_service=query_service, openrouter_service=openrouter_service)
-    result = await data_agent.process(query, context, conv_state)
+    pre_resolved = state.get("parsed_intent")
+    if pre_resolved and hasattr(pre_resolved, 'apiProvider') and pre_resolved.apiProvider:
+        logger.info(
+            "📌 Using pre-resolved intent: %s/%s",
+            pre_resolved.apiProvider,
+            pre_resolved.parameters.get('indicator', pre_resolved.indicators),
+        )
+        result = await data_agent.process(query, context, conv_state, pre_resolved_intent=pre_resolved)
+    else:
+        result = await data_agent.process(query, context, conv_state)
 
     # DataResponse is a dataclass with attributes: success, data, data_reference, intent, message, error
     # Keep entity context from state (DataAgent doesn't update it)

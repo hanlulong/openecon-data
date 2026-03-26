@@ -61,7 +61,8 @@ class DataAgent:
         self,
         query: str,
         context: Dict[str, Any],
-        state: Optional[ConversationState] = None
+        state: Optional[ConversationState] = None,
+        pre_resolved_intent=None,
     ) -> DataResponse:
         """
         Process a data fetch request.
@@ -70,6 +71,9 @@ class DataAgent:
             query: Original user query
             context: Context from router (may include resolved references)
             state: Current conversation state
+            pre_resolved_intent: If provided, skip LLM re-parsing and use this intent directly.
+                This preserves concept overrides, indicator resolution, and semantic
+                validation from the main process_query pipeline.
 
         Returns:
             DataResponse with fetched data and reference
@@ -80,14 +84,15 @@ class DataAgent:
         if context.get("follow_up_mode") and context.get("base_dataset"):
             return await self._process_follow_up(query, context, state)
 
-        # Standard data fetch
-        return await self._process_standard(query, context, state)
+        # Standard data fetch (pass pre-resolved intent to skip re-parsing)
+        return await self._process_standard(query, context, state, pre_resolved_intent=pre_resolved_intent)
 
     async def _process_standard(
         self,
         query: str,
         context: Dict[str, Any],
-        state: Optional[ConversationState]
+        state: Optional[ConversationState],
+        pre_resolved_intent=None,
     ) -> DataResponse:
         """Process a standard (non-follow-up) data fetch"""
         if not self.query_service:
@@ -100,8 +105,12 @@ class DataAgent:
             # Get conversation history if available
             history = state.get_raw_history() if state else []
 
-            # Parse query to get intent
-            if self.openrouter_service:
+            # Use pre-resolved intent if available (avoids re-parsing which
+            # would lose concept overrides and indicator resolution).
+            if pre_resolved_intent:
+                intent = pre_resolved_intent
+                logger.info(f"Using pre-resolved intent: {intent.apiProvider}/{intent.parameters.get('indicator', intent.indicators)}")
+            elif self.openrouter_service:
                 intent = await self.openrouter_service.parse_query(query, history)
             else:
                 # Fallback - use query service's parsing

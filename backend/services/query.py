@@ -9073,10 +9073,14 @@ class QueryService:
                     query, conversation_id, conversation_history, tracker
                 )
 
-            # LangGraph mode - state-persistent agent orchestration
+            # LangGraph mode - state-persistent agent orchestration.
+            # Pass the pre-resolved intent so LangGraph doesn't re-parse from scratch
+            # (the intent has already been through concept override, indicator resolution,
+            # semantic validation, etc. — all of which would be lost on re-parse).
             if use_langgraph and not use_react_agent:
                 return await self._execute_with_langgraph(
-                    query, conversation_id, conversation_history, tracker
+                    query, conversation_id, conversation_history, tracker,
+                    pre_resolved_intent=intent,
                 )
 
             if use_react_agent:
@@ -9631,7 +9635,8 @@ class QueryService:
         query: str,
         conversation_id: str,
         conversation_history: list,
-        tracker: Optional['ProcessingTracker'] = None
+        tracker: Optional['ProcessingTracker'] = None,
+        pre_resolved_intent: Optional[ParsedIntent] = None,
     ) -> QueryResponse:
         """
         Execute query using LangGraph agent graph with persistent state.
@@ -9705,7 +9710,7 @@ class QueryService:
                 "query_type": None,
                 "resolved_context": {},
                 "requires_pro_mode": False,
-                "parsed_intent": None,
+                "parsed_intent": pre_resolved_intent,  # Pass pre-resolved intent to avoid re-parsing
                 "result": None,
                 "code_execution": None,
                 "is_pro_mode": False,
