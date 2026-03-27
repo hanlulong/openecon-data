@@ -28,9 +28,11 @@ explicit_exclusions:
 
 providers:
   OECD:
+    # REV is a legacy code no longer in the OECD SDMX database.
+    # DSD_REV_OECD@DF_REV_ALL covers tax revenues for all OECD countries.
     primary:
-      code: REV
-      name: "Total tax revenue as % of GDP"
+      code: DSD_REV_OECD@DF_REV_ALL
+      name: "Tax revenues, all OECD countries"
       confidence: 0.95
       coverage: oecd_members
       frequency: annual
@@ -45,8 +47,8 @@ providers:
 
   IMF:
     primary:
-      code: GGR_NGDP
-      name: "General government revenue (% of GDP)"
+      code: rev
+      name: "Government revenue, percent of GDP"
       confidence: 0.85
       coverage: global
       frequency: annual

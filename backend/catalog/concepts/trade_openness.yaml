@@ -34,10 +34,12 @@ providers:
       frequency: annual
 
   IMF:
+    # BFA_BOP_B_XS_GDP_PT was a Burkina Faso-specific code, not a general indicator.
+    # BX_GDP (Exports of Goods and Services as % of GDP) is the closest general proxy.
     primary:
-      code: BFA_BOP_B_XS_GDP_PT
-      name: "Exports plus Imports, percent of GDP"
-      confidence: 0.80
+      code: BX_GDP
+      name: "Exports of Goods and Services (% of GDP)"
+      confidence: 0.75
       coverage: global
       frequency: annual
 

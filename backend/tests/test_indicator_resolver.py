@@ -478,9 +478,9 @@ class IndicatorResolverTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result.code, "2062815")
+        self.assertEqual(result.code, "14100287")
         self.assertEqual(result.source, "catalog")
-        self.assertIn("Unemployment rate", result.name)
+        self.assertIn("Labour force characteristics", result.name)
 
     def test_resolves_consumer_price_inflation_query_via_catalog(self):
         lookup = _FakeLookup(search_results=[])
@@ -711,7 +711,7 @@ class IndicatorResolverTests(unittest.TestCase):
         result = resolver.resolve("manufacturing pmi", provider="FRED", use_cache=False)
 
         self.assertIsNotNone(result)
-        self.assertEqual(result.code, "NAPM")
+        self.assertEqual(result.code, "AMTMNO")
         self.assertEqual(result.source, "catalog")
 
     def test_exact_code_match_keeps_max_confidence(self):

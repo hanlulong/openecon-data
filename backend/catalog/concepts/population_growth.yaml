@@ -1,0 +1,34 @@
+concept: population_growth
+category: demographics
+domain: social_development
+
+description: |
+  Annual population growth rate as a percentage.
+
+synonyms:
+  primary:
+    - population growth
+    - population growth rate
+    - annual population growth
+    - population change
+  secondary:
+    - pop growth
+    - population increase
+    - population decline
+    - demographic growth
+
+not_available:
+  - FRED
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.POP.GROW
+      name: "Population growth (annual %)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

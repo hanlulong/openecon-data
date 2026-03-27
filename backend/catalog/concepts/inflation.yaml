@@ -69,8 +69,8 @@ providers:
 
   StatsCan:
     primary:
-      code: "41690973"
-      name: "CPI, all-items, year-over-year percentage change"
+      code: "18100004"
+      name: "Consumer Price Index, monthly, not seasonally adjusted"
       confidence: 0.95
       coverage: [CA]
       frequency: monthly

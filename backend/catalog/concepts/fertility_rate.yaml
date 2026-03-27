@@ -1,0 +1,34 @@
+concept: fertility_rate
+category: demographics
+domain: social_development
+
+description: |
+  Total fertility rate — average number of births per woman.
+
+synonyms:
+  primary:
+    - fertility rate
+    - total fertility rate
+    - births per woman
+    - fertility
+  secondary:
+    - TFR
+    - replacement rate
+    - fertility decline
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.DYN.TFRT.IN
+      name: "Fertility rate, total (births per woman)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

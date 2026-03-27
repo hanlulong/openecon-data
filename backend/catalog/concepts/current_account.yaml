@@ -43,9 +43,11 @@ providers:
       frequency: annual
 
   OECD:
+    # OECD uses dynamic SDMX DSD codes; B6BLTT is a legacy code no longer in the DB.
+    # DSD_BOP@DF_BOP covers balance of payments including current account.
     primary:
-      code: B6BLTT
-      name: "Current account balance"
+      code: DSD_BOP@DF_BOP
+      name: "Balance of payments"
       confidence: 0.85
       coverage: oecd_members
       frequency: quarterly

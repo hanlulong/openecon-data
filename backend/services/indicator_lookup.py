@@ -439,9 +439,14 @@ class IndicatorLookup:
                 "school": ("research and development", "health"),
                 "electricity": ("agriculture", "education"),
                 "solar": ("trade", "education"),
-                "corn": ("industry", "manufacturing"),
-                "wheat": ("industry", "manufacturing"),
-                "rice": ("industry", "manufacturing"),
+                "corn": ("industry", "manufacturing", "electricity"),
+                "wheat": ("industry", "manufacturing", "electricity"),
+                "rice": ("industry", "manufacturing", "electricity"),
+                "cocoa": ("industry", "manufacturing", "electricity", "renewable"),
+                "pension": ("research and development", "r&d", "trade", "electricity"),
+                "elderly": ("research and development", "r&d", "electricity"),
+                "mining": ("renewable", "education", "health"),
+                "crime": ("research and development", "education", "electricity"),
             }
             for query_domain, wrong_domains in _domain_mismatches.items():
                 if query_domain in query_lower and any(w in name_lower for w in wrong_domains):

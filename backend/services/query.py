@@ -96,6 +96,8 @@ PROVIDER_ALIASES = {
     "oecd": "OECD",
     "coingecko": "COINGECKO",
     "coin gecko": "COINGECKO",
+    # Special sentinel for catalog concepts with no available provider
+    "not_available": "NOT_AVAILABLE",
 }
 
 
@@ -1298,6 +1300,10 @@ class QueryService:
                 deterministic_decision.confidence,
                 deterministic_decision.match_type,
             )
+            # Short-circuit: catalog says no provider carries this concept
+            if routed_provider == "NOT_AVAILABLE":
+                intent.apiProvider = "not_available"
+                return "NOT_AVAILABLE"
         except Exception as exc:
             logger.warning(
                 "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
@@ -4269,6 +4275,17 @@ class QueryService:
         if intent.indicators and len(intent.indicators) > 1:
             return None
 
+        # Skip prefetch clarification when indicator was resolved via catalog.
+        # Catalog codes are hand-verified — second-guessing them with semantic
+        # plausibility checks causes false rejections (e.g., ICSA for "jobless claims").
+        params = dict(intent.parameters or {})
+        if params.get("__catalog_resolved"):
+            logger.info(
+                "Skipping prefetch clarification — catalog-resolved indicator: %s",
+                params.get("indicator", "?"),
+            )
+            return None
+
         query_text = str(query or "").strip()
         indicator_query = self._select_indicator_query_for_resolution(intent)
         if not indicator_query:
@@ -4279,7 +4296,6 @@ class QueryService:
             return None
 
         provider = normalize_provider_name(intent.apiProvider or "")
-        params = dict(intent.parameters or {})
         current_indicator = str(params.get("indicator") or "").strip()
         if (
             current_indicator
@@ -4511,6 +4527,24 @@ class QueryService:
     ) -> Optional[QueryResponse]:
         """Apply the shared clarification guardrails after parse/validation."""
         intent = parse_result.intent
+
+        # Early exit: concept is not available from any provider.
+        # The catalog explicitly marks these concepts as unavailable across all
+        # providers (e.g., gold spot prices were discontinued by FRED/WorldBank).
+        if normalize_provider_name(intent.apiProvider or "") == "NOT_AVAILABLE":
+            indicator_text = intent.indicators[0] if intent.indicators else query
+            return QueryResponse(
+                conversationId=conversation_id,
+                intent=intent,
+                data=None,
+                clarificationNeeded=False,
+                message=(
+                    f"'{indicator_text}' is not currently available through any of our "
+                    f"data providers. This may be because the data series has been "
+                    f"discontinued, archived, or is only available through specialized sources."
+                ),
+            )
+
         multi_concept_clarification = self._build_multi_concept_query_clarification(
             conversation_id=conversation_id,
             query=query,
@@ -4843,7 +4877,15 @@ class QueryService:
         if intent and intent.confidence and intent.confidence >= 0.90:
             # Check if indicator looks like a pre-resolved provider code
             indicator = (intent.parameters or {}).get("indicator", "")
+            provider_upper = normalize_provider_name(intent.apiProvider or "")
+            is_pre_resolved = False
             if indicator and "." in indicator and indicator[0].isalpha():
+                is_pre_resolved = True
+            # FRED codes are uppercase alphanumeric (e.g., ICSA, PAYEMS, MHHNGSP)
+            # and are valid when they came from catalog routing
+            elif indicator and provider_upper == "FRED" and re.fullmatch(r"[A-Z0-9]{3,}", indicator):
+                is_pre_resolved = True
+            if is_pre_resolved:
                 logger.info(
                     "Skipping uncertainty check — high-confidence pre-resolved indicator: %s (conf=%.2f)",
                     indicator, intent.confidence,
@@ -5829,7 +5871,7 @@ class QueryService:
                                     return alt_normalized, params
                             return provider, params
 
-                    params = {**params, "indicator": canonical_code}
+                    params = {**params, "indicator": canonical_code, "__catalog_resolved": True}
                     intent.parameters = params
                     distinct_indicators = {str(value) for value in (intent.indicators or []) if value}
                     if not distinct_indicators or len(distinct_indicators) == 1:
@@ -5892,7 +5934,7 @@ class QueryService:
             intent.apiProvider = alt_provider or provider
 
             if alt_code:
-                params = {**params, "indicator": alt_code}
+                params = {**params, "indicator": alt_code, "__catalog_resolved": True}
                 intent.parameters = params
                 if not intent.indicators or len(intent.indicators) <= 1:
                     intent.indicators = [alt_code]
@@ -6075,6 +6117,17 @@ class QueryService:
             existing_indicator
             and self._looks_like_provider_indicator_code(provider, existing_indicator)
         )
+
+        # Catalog-resolved codes are hand-verified and should not be second-guessed.
+        if has_explicit_code and params.get("__catalog_resolved"):
+            logger.info(
+                "🔒 Keeping catalog-resolved %s indicator: %s",
+                provider,
+                existing_indicator,
+            )
+            params = {**params, "indicator": existing_indicator}
+            intent.parameters = params
+            return params
 
         # Path 1: Validate explicit code against query context
         if has_explicit_code:
@@ -8434,6 +8487,26 @@ class QueryService:
         logger.info(f"🔍 _fetch_data called: provider={intent.apiProvider}, indicators={intent.indicators}")
 
         provider = normalize_provider_name(intent.apiProvider)
+
+        # Early exit: concept is not available from any provider (catalog said so)
+        if provider == "NOT_AVAILABLE":
+            indicator_text = intent.indicators[0] if intent.indicators else "this indicator"
+            logger.info(f"📚 Not available: {indicator_text} — no provider carries this data")
+            return [NormalizedData(
+                metadata=Metadata(
+                    source="Catalog",
+                    indicator=f"{indicator_text} — Not Available",
+                    frequency="N/A",
+                    unit="N/A",
+                    lastUpdated="",
+                    description=(
+                        f"'{indicator_text}' is not currently available through any of our "
+                        f"data providers. This may be because the data has been discontinued, "
+                        f"archived, or is only available through specialized sources."
+                    ),
+                ),
+                data=[],
+            )]
         params = intent.parameters or {}
         fallback_excluded_providers = {
             normalize_provider_name(str(candidate))
@@ -8460,7 +8533,7 @@ class QueryService:
             provider, intent, params, fallback_excluded_providers
         )
 
-        internal_param_keys = {"__fallback_excluded_providers"}
+        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved"}
         if any(key in params for key in internal_param_keys):
             params = {k: v for k, v in params.items() if k not in internal_param_keys}
             intent.parameters = params

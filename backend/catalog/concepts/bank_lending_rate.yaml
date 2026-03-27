@@ -1,0 +1,66 @@
+# Bank Lending Rate Indicator Catalog
+concept: bank_lending_rate
+category: interest_rates
+domain: finance
+
+description: |
+  The interest rate charged by banks on loans to prime borrowers.
+  In the US, this is the Bank Prime Loan Rate (DPRIME). Globally,
+  the World Bank tracks lending interest rates across countries.
+
+synonyms:
+  primary:
+    - bank lending rate
+    - lending rate
+    - lending interest rate
+    - bank prime rate
+    - prime lending rate
+  secondary:
+    - prime rate
+    - bank loan rate
+    - commercial lending rate
+    - borrowing rate
+
+explicit_exclusions:
+  - deposit rate
+  - savings rate
+  - policy rate
+  - federal funds rate
+  - bond yield
+  - mortgage rate
+  - bank lending volume
+  - bank credit
+
+providers:
+  FRED:
+    primary:
+      code: DPRIME
+      name: "Bank Prime Loan Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: daily
+    alternatives:
+      - code: MPRIME
+        name: "Bank Prime Loan Rate"
+        confidence: 0.90
+        coverage: [US]
+        frequency: monthly
+      - code: WPRIME
+        name: "Bank Prime Loan Rate"
+        confidence: 0.90
+        coverage: [US]
+        frequency: weekly
+
+  WorldBank:
+    primary:
+      code: FR.INR.LEND
+      name: "Lending interest rate (%)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

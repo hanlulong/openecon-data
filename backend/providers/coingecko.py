@@ -246,8 +246,13 @@ class CoinGeckoProvider(BaseProvider):
                 logger.warning(f"⚠️ Metric '{api_key}' not found for {coin_id}")
                 continue
 
+            try:
+                price_value = float(coin_data[api_key])
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid price for {coin_id}: {coin_data.get(api_key)}")
+                continue
             data_points = [
-                DataPoint(date=current_time, value=float(coin_data[api_key]))
+                DataPoint(date=current_time, value=price_value)
             ]
 
             # Build coin-specific API URL
@@ -334,8 +339,11 @@ class CoinGeckoProvider(BaseProvider):
         # Convert timestamps to ISO format and create data points
         data_points = []
         for timestamp, value in data.get(metric_key, []):
-            date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
-            data_points.append(DataPoint(date=date_str, value=float(value)))
+            try:
+                date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+                data_points.append(DataPoint(date=date_str, value=float(value)))
+            except (ValueError, TypeError):
+                continue
 
         logger.info(f"📊 Created {len(data_points)} data points for {metric}")
 
@@ -440,8 +448,11 @@ class CoinGeckoProvider(BaseProvider):
         # Convert timestamps to ISO format and create data points
         data_points = []
         for timestamp, value in data.get(metric_key, []):
-            date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
-            data_points.append(DataPoint(date=date_str, value=float(value)))
+            try:
+                date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+                data_points.append(DataPoint(date=date_str, value=float(value)))
+            except (ValueError, TypeError):
+                continue
 
         # Determine frequency based on date range
         days_diff = (to_timestamp - from_timestamp) / 86400
@@ -524,19 +535,32 @@ class CoinGeckoProvider(BaseProvider):
         display_url = f"{self.base_url}/coins/markets"
 
         for coin in data:
+            # Skip coins with missing essential fields
+            coin_name = coin.get("name")
+            coin_symbol = coin.get("symbol")
+            coin_id = coin.get("id")
+            if not coin_name or not coin_symbol or not coin_id:
+                continue
+
             # Create data point for current price
+            try:
+                price = float(coin.get("current_price", 0))
+            except (ValueError, TypeError):
+                price = 0.0
+            if price == 0.0:
+                continue  # Skip coins with no valid price data
             data_points = [
-                DataPoint(date=current_time, value=float(coin.get("current_price", 0)))
+                DataPoint(date=current_time, value=price)
             ]
 
             metadata = Metadata(
                 source="CoinGecko",
-                indicator=f"{coin['name']} ({coin['symbol'].upper()}) Market Price",
+                indicator=f"{coin_name} ({coin_symbol.upper()}) Market Price",
                 country=None,
                 frequency="real-time",
                 unit=vs_currency.upper(),
                 lastUpdated=current_time,
-                seriesId=coin["id"],
+                seriesId=coin_id,
                 apiUrl=display_url,
             )
 

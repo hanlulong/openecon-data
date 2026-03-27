@@ -79,10 +79,10 @@ providers:
           indicator_contains: ["broad money", "m3"]
 
   IMF:
-    # Note: IMF DataMapper doesn't have direct M2 series
+    # Note: IMF DataMapper uses FMB_GDP (not FM_BROAD_MONEY_GDP)
     # M2 data available via IFS database, not DataMapper API
     primary:
-      code: FM_BROAD_MONEY_GDP
+      code: FMB_GDP
       name: "Broad Money (% of GDP)"
       confidence: 0.70
       coverage: global

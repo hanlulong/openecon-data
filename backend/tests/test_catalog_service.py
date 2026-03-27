@@ -84,7 +84,7 @@ def test_get_best_provider_handles_oecd_coverage_labels_with_comments():
     reload_catalog()
     provider, code, _ = get_best_provider("gdp_growth", countries=["CA"], preferred_provider="OECD")
     assert provider == "OECD"
-    assert code == "B1_GA"
+    assert code == "DSD_NAMAIN1@DF_QNA_EXPENDITURE_GROWTH_OECD"
 
 
 def test_get_best_provider_handles_44_country_coverage_for_bis():

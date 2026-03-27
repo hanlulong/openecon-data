@@ -1,0 +1,59 @@
+# Clean Water Access Indicator Catalog
+concept: clean_water_access
+category: infrastructure
+domain: development
+
+description: |
+  The percentage of the population using at least basic drinking
+  water services. A key sustainable development goal (SDG 6)
+  indicator tracked globally by the World Bank and WHO/UNICEF.
+
+synonyms:
+  primary:
+    - clean water access
+    - access to clean water
+    - drinking water access
+    - access to drinking water
+    - safe water access
+  secondary:
+    - water access
+    - basic water services
+    - improved water source
+    - potable water access
+
+explicit_exclusions:
+  - sanitation access
+  - water treatment
+  - water pollution
+  - water consumption
+  - irrigation
+
+providers:
+  WorldBank:
+    primary:
+      code: SH.H2O.BASW.ZS
+      name: "People using at least basic drinking water services (% of population)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    alternatives:
+      - code: SH.H2O.BASW.RU.ZS
+        name: "People using at least basic drinking water services, rural (% of rural population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+      - code: SH.H2O.BASW.UR.ZS
+        name: "People using at least basic drinking water services, urban (% of urban population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Eurostat
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

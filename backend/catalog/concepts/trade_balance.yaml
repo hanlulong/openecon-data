@@ -58,8 +58,8 @@ providers:
 
   Eurostat:
     primary:
-      code: tet00034
-      name: "Trade balance"
+      code: TEIET215
+      name: "Balance of trade"
       confidence: 0.90
       coverage: eu_members
       frequency: annual

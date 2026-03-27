@@ -30,13 +30,27 @@ providers:
       coverage: global
       frequency: annual
 
+  FRED:
+    primary:
+      code: LNS14024887
+      name: "Unemployment Rate - 16-24 Yrs."
+      confidence: 0.90
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: TESEM140
+      name: "Youth unemployment rate by sex"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
 not_available:
   - IMF
-  - Eurostat
   - OECD
   - StatsCan
   - BIS
-  - FRED
   - Comtrade
   - ExchangeRate
   - CoinGecko

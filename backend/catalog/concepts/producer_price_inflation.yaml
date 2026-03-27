@@ -42,10 +42,13 @@ providers:
       frequency: annual
 
   OECD:
+    # OECD uses dynamic SDMX DSD codes; PPI is a legacy code no longer in the DB.
+    # DSD_STES@DF_INDSERV covers production, sales, work started and orders
+    # (includes producer price indicators). Use DSD_PRICES@DF_PRICES_ALL as fallback.
     primary:
-      code: PPI
-      name: "Producer Price Index"
-      confidence: 0.92
+      code: DSD_STES@DF_INDSERV
+      name: "Production, sales, work started and orders"
+      confidence: 0.70
       coverage: oecd_members
       frequency: monthly
 

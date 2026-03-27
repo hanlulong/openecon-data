@@ -11,10 +11,13 @@ synonyms:
   primary:
     - poverty rate
     - poverty headcount
+    - poverty headcount ratio
+    - poverty level
   secondary:
     - extreme poverty
     - people in poverty
-    - poverty level
+    - population below poverty line
+    - international poverty line
 
 explicit_exclusions:
   - inequality

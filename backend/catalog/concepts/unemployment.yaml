@@ -58,8 +58,8 @@ providers:
 
   StatsCan:
     primary:
-      code: "2062815"
-      name: "Unemployment rate, both sexes, 15 years and over"
+      code: "14100287"
+      name: "Labour force characteristics, monthly, seasonally adjusted and trend-cycle"
       confidence: 0.95
       coverage: [CA]
       frequency: monthly

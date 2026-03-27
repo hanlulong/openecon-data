@@ -1,0 +1,34 @@
+concept: co2_per_capita
+category: environment
+domain: sustainability
+
+description: |
+  CO2 emissions per capita in metric tons.
+
+synonyms:
+  primary:
+    - CO2 per capita
+    - carbon emissions per capita
+    - CO2 emissions per person
+    - carbon per capita
+  secondary:
+    - emissions per capita
+    - carbon footprint per capita
+    - greenhouse gas per capita
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: EN.GHG.CO2.PC.CE.AR5
+      name: "Carbon dioxide (CO2) emissions excluding LULUCF per capita"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

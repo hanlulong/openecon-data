@@ -1,0 +1,34 @@
+concept: birth_rate
+category: demographics
+domain: social_development
+
+description: |
+  Crude birth rate per 1,000 population.
+
+synonyms:
+  primary:
+    - birth rate
+    - crude birth rate
+    - births per thousand
+    - natality rate
+  secondary:
+    - live births
+    - birth statistics
+    - annual births
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.DYN.CBRT.IN
+      name: "Birth rate, crude (per 1,000 people)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

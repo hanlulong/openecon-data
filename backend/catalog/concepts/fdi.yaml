@@ -33,9 +33,10 @@ providers:
       frequency: annual
 
   OECD:
+    # DSD_FDI@DF_FDI_FLOW_PARTNER was renamed; using FDI flows main aggregates instead.
     primary:
-      code: DSD_FDI@DF_FDI_FLOW_PARTNER
-      name: "FDI flows by partner country"
+      code: DSD_FDI@DF_FDI_FLOW_AGGR
+      name: "FDI flows main aggregates, BMD4"
       confidence: 0.90
       coverage: oecd_members
       frequency: annual

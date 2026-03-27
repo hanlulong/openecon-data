@@ -1,0 +1,59 @@
+# Electricity Access Indicator Catalog
+concept: electricity_access
+category: infrastructure
+domain: development
+
+description: |
+  The percentage of the population with access to electricity.
+  A key development indicator reflecting energy infrastructure
+  and quality of life, tracked globally by the World Bank.
+
+synonyms:
+  primary:
+    - electricity access
+    - access to electricity
+    - electricity coverage
+    - electrification rate
+    - electricity access rate
+  secondary:
+    - power access
+    - electrical grid coverage
+    - energy access
+    - population with electricity
+
+explicit_exclusions:
+  - electricity production
+  - electricity consumption
+  - electricity price
+  - renewable energy
+  - energy intensity
+
+providers:
+  WorldBank:
+    primary:
+      code: EG.ELC.ACCS.ZS
+      name: "Access to electricity (% of population)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    alternatives:
+      - code: EG.ELC.ACCS.RU.ZS
+        name: "Access to electricity, rural (% of rural population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+      - code: EG.ELC.ACCS.UR.ZS
+        name: "Access to electricity, urban (% of urban population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Eurostat
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

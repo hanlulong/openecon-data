@@ -355,6 +355,17 @@ class UnifiedRouter:
                     reasoning=f"EU country ({country}) historical macro query routed to Eurostat",
                 )
 
+        # Priority 3.5: CatalogService lookup (curated concept → provider mappings)
+        # Placed after special-case handlers (crypto, exchange rate, trade flows,
+        # Eurostat EU) but before generic keyword matching. This ensures specific
+        # routing rules (e.g., bilateral trade → Comtrade) are respected, while
+        # catalog concepts (e.g., jobless_claims → FRED/ICSA) still override
+        # generic keyword and country-based routing.
+        if self._use_catalog and self._catalog_service:
+            catalog_decision = self._route_by_catalog(indicators, country, query=query)
+            if catalog_decision:
+                return catalog_decision
+
         # Priority 4: Keyword-based indicator patterns
         match = KeywordMatcher.detect_indicator_provider(query, indicators)
         if match and match.provider:
@@ -382,11 +393,7 @@ class UnifiedRouter:
         if country_decision:
             return country_decision
 
-        # Priority 7: CatalogService lookup (if available)
-        if self._use_catalog and self._catalog_service:
-            catalog_decision = self._route_by_catalog(indicators, country)
-            if catalog_decision:
-                return catalog_decision
+        # Priority 7: (Catalog lookup moved to Priority 1.5)
 
         # Priority 8: Multi-country with non-OECD → WorldBank
         if countries and len(countries) > 1:
@@ -990,15 +997,30 @@ class UnifiedRouter:
         self,
         indicators: List[str],
         country: Optional[str],
+        query: Optional[str] = None,
     ) -> Optional[RoutingDecision]:
-        """Route using CatalogService YAML mappings."""
-        if not self._catalog_service or not indicators:
+        """Route using CatalogService YAML mappings.
+
+        Checks both parsed indicators AND the raw query text against
+        catalog concepts. Returns a special 'not_available' decision
+        when all providers are marked as unavailable for a concept.
+        """
+        if not self._catalog_service:
+            return None
+
+        # Build candidate terms: parsed indicators + raw query
+        terms_to_check = list(indicators) if indicators else []
+        if query:
+            query_clean = query.strip()
+            if query_clean and query_clean not in terms_to_check:
+                terms_to_check.append(query_clean)
+
+        if not terms_to_check:
             return None
 
         # Try to find a matching concept in catalog
-        for indicator in indicators:
-            # CatalogService functions are module-level
-            concept_name = self._catalog_service.find_concept_by_term(indicator)
+        for term in terms_to_check:
+            concept_name = self._catalog_service.find_concept_by_term(term)
             if concept_name:
                 # Normalize country to list format for catalog
                 countries_list = [country] if country else None
@@ -1008,7 +1030,7 @@ class UnifiedRouter:
                     countries=countries_list,
                 )
                 if provider and confidence > 0.5:
-                    logger.info(f"📚 Catalog match: {indicator} → {concept_name} → {provider}")
+                    logger.info(f"📚 Catalog match: {term} → {concept_name} → {provider}")
                     return self._create_decision(
                         provider=provider,
                         confidence=confidence,
@@ -1016,6 +1038,29 @@ class UnifiedRouter:
                         matched_pattern=f"catalog:{concept_name}",
                         reasoning=f"Catalog lookup: {concept_name} → {provider} (code: {code})",
                     )
+
+                # Check if concept exists but ALL providers are unavailable
+                concept = self._catalog_service.get_concept(concept_name)
+                if concept:
+                    providers_map = concept.get("providers", {})
+                    not_available = concept.get("not_available", [])
+                    has_any_provider = bool(providers_map) and any(
+                        p.lower() not in [na.lower() for na in not_available]
+                        for p in providers_map
+                    )
+                    if not has_any_provider:
+                        desc = concept.get("description", "").strip()
+                        logger.info(
+                            f"📚 Catalog concept '{concept_name}' has no available providers"
+                        )
+                        return self._create_decision(
+                            provider="not_available",
+                            confidence=0.99,
+                            match_type="catalog",
+                            matched_pattern=f"catalog:{concept_name}:not_available",
+                            reasoning=f"Not available: {desc}" if desc else
+                            f"'{concept_name}' is not available through any provider",
+                        )
 
         return None
 

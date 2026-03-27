@@ -1,0 +1,57 @@
+# Sanitation Access Indicator Catalog
+concept: sanitation_access
+category: infrastructure
+domain: development
+
+description: |
+  The percentage of the population using at least basic sanitation
+  services. A key sustainable development goal (SDG 6) indicator
+  tracked globally by the World Bank and WHO/UNICEF.
+
+synonyms:
+  primary:
+    - sanitation access
+    - access to sanitation
+    - basic sanitation
+    - sanitation coverage
+    - sanitation rate
+  secondary:
+    - improved sanitation
+    - sanitation services
+    - sanitation facilities
+
+explicit_exclusions:
+  - water access
+  - drinking water
+  - hygiene
+  - sewage treatment
+
+providers:
+  WorldBank:
+    primary:
+      code: SH.STA.BASS.ZS
+      name: "People using at least basic sanitation services (% of population)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    alternatives:
+      - code: SH.STA.BASS.RU.ZS
+        name: "People using at least basic sanitation services, rural (% of rural population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+      - code: SH.STA.BASS.UR.ZS
+        name: "People using at least basic sanitation services, urban (% of urban population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Eurostat
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

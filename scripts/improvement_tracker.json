@@ -1,40 +1,176 @@
 {
   "_description": "Tracks improvement scores across automated cycles.",
   "cycles": [
-    {"cycle": 1, "dimension_scores": {"accuracy": 75, "multi_country": 80, "coverage": 80}, "commit_sha": "9cab464"},
-    {"cycle": 2, "dimension_scores": {"accuracy": 83, "multi_country": 90, "coverage": 50, "informational": 75}, "commit_sha": "5d895b6"},
-    {"cycle": 3, "dimension_scores": {"accuracy": 83, "multi_country": 60, "coverage": 33}, "commit_sha": "44a540e"},
-    {"cycle": 4, "dimension_scores": {"accuracy": 67, "multi_country": 80, "coverage": 67, "informational": 100}, "commit_sha": "5aaa674"},
-    {"cycle": 5, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "informational": 100}, "commit_sha": "d15c71f"},
-    {"cycle": 6, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 67, "session": 50}, "commit_sha": "f93d0d7"},
-    {"cycle": 7, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "session": 33}, "commit_sha": "ef45e84"},
-    {"cycle": 8, "dimension_scores": {"accuracy": 83, "multi_country": 100, "coverage": 100, "session": 100}, "commit_sha": "c9bbdb3"},
-    {"cycle": 9, "dimension_scores": {"accuracy": 100, "multi_country": 80, "coverage": 100, "reliability": 33, "session": 100}, "commit_sha": "b52f7f1"},
-    {"cycle": 10, "dimension_scores": {"accuracy": 100, "multi_country": 80, "coverage": 100}, "commit_sha": "955e7c5"},
-    {"cycle": 11, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "session": 75}, "commit_sha": "640bd47"},
-    {"cycle": 12, "dimension_scores": {"accuracy": 100, "multi_country": 80, "coverage": 100, "session": 75}, "commit_sha": "07a809a"},
-    {"cycle": 13, "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "session": 50}, "commit_sha": "6f209c1"},
+    {
+      "cycle": 1,
+      "dimension_scores": {
+        "accuracy": 75,
+        "multi_country": 80,
+        "coverage": 80
+      },
+      "commit_sha": "9cab464"
+    },
+    {
+      "cycle": 2,
+      "dimension_scores": {
+        "accuracy": 83,
+        "multi_country": 90,
+        "coverage": 50,
+        "informational": 75
+      },
+      "commit_sha": "5d895b6"
+    },
+    {
+      "cycle": 3,
+      "dimension_scores": {
+        "accuracy": 83,
+        "multi_country": 60,
+        "coverage": 33
+      },
+      "commit_sha": "44a540e"
+    },
+    {
+      "cycle": 4,
+      "dimension_scores": {
+        "accuracy": 67,
+        "multi_country": 80,
+        "coverage": 67,
+        "informational": 100
+      },
+      "commit_sha": "5aaa674"
+    },
+    {
+      "cycle": 5,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 67,
+        "informational": 100
+      },
+      "commit_sha": "d15c71f"
+    },
+    {
+      "cycle": 6,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 67,
+        "session": 50
+      },
+      "commit_sha": "f93d0d7"
+    },
+    {
+      "cycle": 7,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "session": 33
+      },
+      "commit_sha": "ef45e84"
+    },
+    {
+      "cycle": 8,
+      "dimension_scores": {
+        "accuracy": 83,
+        "multi_country": 100,
+        "coverage": 100,
+        "session": 100
+      },
+      "commit_sha": "c9bbdb3"
+    },
+    {
+      "cycle": 9,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 80,
+        "coverage": 100,
+        "reliability": 33,
+        "session": 100
+      },
+      "commit_sha": "b52f7f1"
+    },
+    {
+      "cycle": 10,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 80,
+        "coverage": 100
+      },
+      "commit_sha": "955e7c5"
+    },
+    {
+      "cycle": 11,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "session": 75
+      },
+      "commit_sha": "640bd47"
+    },
+    {
+      "cycle": 12,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 80,
+        "coverage": 100,
+        "session": 75
+      },
+      "commit_sha": "07a809a"
+    },
+    {
+      "cycle": 13,
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "session": 50
+      },
+      "commit_sha": "6f209c1"
+    },
     {
       "cycle": 14,
       "timestamp": "2026-03-22T04:35:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "edge_cases": 100, "informational": 100, "reliability": 50, "production": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "edge_cases": 100,
+        "informational": 100,
+        "reliability": 50,
+        "production": 100
+      },
       "focus_area": "stability verification (no-fix cycle)",
-      "root_cause": "N/A — system is stable. No code bugs found.",
+      "root_cause": "N/A \u2014 system is stable. No code bugs found.",
       "fix_description": "No code changes. Verified 17/18 local queries pass (94%) and 3/3 production queries pass (100%). Vague 'GDP' query correctly asks for country (not a bug).",
-      "production_tests": ["US GDP (FRED) OK", "Japan unemployment (WorldBank) OK", "Bitcoin price (CoinGecko) OK"],
+      "production_tests": [
+        "US GDP (FRED) OK",
+        "Japan unemployment (WorldBank) OK",
+        "Bitcoin price (CoinGecko) OK"
+      ],
       "tests_total": 419,
       "benchmark_queries_total": 53,
       "benchmark_pass_rate": "17/18 local (94%) + 3/3 prod (100%)",
-      "commit_sha": "6f209c1 (no new commit — stability cycle)"
+      "commit_sha": "6f209c1 (no new commit \u2014 stability cycle)"
     },
     {
       "cycle": 64,
       "timestamp": "2026-03-25T02:45:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "session": 100
+      },
       "focus_area": "Infrastructure integration + architecture decomposition + conversation fixes",
       "root_cause": "Bare indicator terms not recognized as conversation switches; _fetch_data monolith; manual JSON parsing fragile; OECD missing BaseProvider",
       "fix_description": "Cycles 59-64: Instructor integration (Pydantic LLM output), OECD BaseProvider migration, _fetch_data decomposition (-18%), conversation state mutual exclusion, bare indicator switch detection, security hardening",
-      "production_tests": ["US GDP PASS", "Japan inflation PASS", "US+China GDP PASS"],
+      "production_tests": [
+        "US GDP PASS",
+        "Japan inflation PASS",
+        "US+China GDP PASS"
+      ],
       "tests_total": 422,
       "benchmark_queries_total": 18,
       "benchmark_pass_rate": "18/18 local (100%) + 3/3 prod (100%)",
@@ -43,11 +179,22 @@
     {
       "cycle": 65,
       "timestamp": "2026-03-25T04:44:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "FAISS test coverage + Instructor retry consistency",
       "root_cause": "FAISS vector search had only 2 tests for 765-line implementation (0.26% coverage). Instructor retries inconsistent (2 vs 3).",
-      "fix_description": "Added 16 new FAISS tests (provider filter, empty state, bounds safety, cache, compatibility, reset, stats). Unified Instructor max_retries to 3. Investigated South Korea 24.8s latency — metadata validation LLM call is intentional safeguard, not a bug (review agent REJECTED skip).",
-      "production_tests": ["US GDP PASS", "Japan inflation PASS", "US+China GDP PASS", "Bitcoin PASS"],
+      "fix_description": "Added 16 new FAISS tests (provider filter, empty state, bounds safety, cache, compatibility, reset, stats). Unified Instructor max_retries to 3. Investigated South Korea 24.8s latency \u2014 metadata validation LLM call is intentional safeguard, not a bug (review agent REJECTED skip).",
+      "production_tests": [
+        "US GDP PASS",
+        "Japan inflation PASS",
+        "US+China GDP PASS",
+        "Bitcoin PASS"
+      ],
       "tests_total": 438,
       "benchmark_queries_total": 20,
       "benchmark_pass_rate": "20/20 local (100%) + 4/4 prod (100%)",
@@ -56,11 +203,21 @@
     {
       "cycle": 66,
       "timestamp": "2026-03-25T06:39:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Error-handling test coverage for BaseProvider",
       "root_cause": "Only 5/438 tests (1.1%) covered error paths. No tests for HTTP 429/5xx retry, circuit breaker, timeout recovery, or JSON parse safety.",
       "fix_description": "Added 21 new error-handling tests covering: HTTP 429 rate limit (retry + reset tracking), HTTP 5xx retry, HTTP 404/403 instant fail, connection/timeout retries, circuit breaker open/close, transient-then-success recovery, JSON parse safety, POST retry, provider circuit isolation, country/indicator normalization.",
-      "production_tests": ["US GDP PASS", "G7 GDP/cap PASS", "Bitcoin PASS"],
+      "production_tests": [
+        "US GDP PASS",
+        "G7 GDP/cap PASS",
+        "Bitcoin PASS"
+      ],
       "tests_total": 459,
       "benchmark_queries_total": 21,
       "benchmark_pass_rate": "21/21 local (100%) + 3/3 prod (100%)",
@@ -69,11 +226,21 @@
     {
       "cycle": 67,
       "timestamp": "2026-03-25T08:55:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Fix country follow-up after indicator switch (session regression)",
       "root_cause": "When adding non-US country after FRED indicator switch (e.g., 'add France' after unemployment/UNRATE), provider stayed FRED and indicator UNRATE was passed to WorldBank. _provider_covers_country_list only checked plural countries, not singular. Indicator code wasn't re-resolved to concept term.",
-      "fix_description": "1) Extended provider coverage check to both singular/plural country params. 2) Added _extract_concept_from_indicator() to map provider-specific codes (UNRATE) back to concept terms (unemployment). 3) Rebuilt refined_query with concept term after provider switch. Result: FRED/UNRATE → WorldBank/SL.UEM.TOTL.ZS with 2 series.",
-      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "Bitcoin PASS"],
+      "fix_description": "1) Extended provider coverage check to both singular/plural country params. 2) Added _extract_concept_from_indicator() to map provider-specific codes (UNRATE) back to concept terms (unemployment). 3) Rebuilt refined_query with concept term after provider switch. Result: FRED/UNRATE \u2192 WorldBank/SL.UEM.TOTL.ZS with 2 series.",
+      "production_tests": [
+        "US GDP PASS",
+        "BRICS inflation PASS",
+        "Bitcoin PASS"
+      ],
       "tests_total": 459,
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "Before: 22/23 (95%), After: 23/23 (100%)",
@@ -82,11 +249,21 @@
     {
       "cycle": 68,
       "timestamp": "2026-03-25T10:43:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Fix US-only indicator routing to respect country context",
       "root_cause": "KeywordMatcher.detect_us_only_indicator() did substring matching on US_ONLY_INDICATORS without checking country context. Queries like 'consumer sentiment in Germany' matched 'consumer sentiment' and routed to FRED instead of Eurostat.",
       "fix_description": "Added country/countries params to detect_us_only_indicator(). When non-US countries are requested, the check is skipped so routing falls through to Eurostat/WorldBank. Updated UnifiedRouter to pass country context. US-only queries still work correctly.",
-      "production_tests": ["US GDP PASS", "US+China GDP PASS", "EUR/USD PASS"],
+      "production_tests": [
+        "US GDP PASS",
+        "US+China GDP PASS",
+        "EUR/USD PASS"
+      ],
       "tests_total": 542,
       "benchmark_queries_total": 22,
       "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
@@ -95,11 +272,21 @@
     {
       "cycle": 69,
       "timestamp": "2026-03-25T12:42:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Extract ExchangeRate historical fallback from _fetch_data monolith",
-      "root_cause": "_fetch_data() still 969 lines. ExchangeRate→FRED historical fallback was 171 lines of tightly coupled logic including date detection, currency extraction, FRED series mapping, and error messaging — all inline.",
-      "fix_description": "Extracted into _fetch_exchange_rate_with_historical_fallback() and _fetch_historical_exchange_from_fred(). _fetch_data() reduced from 969 to 798 lines (-18%). Total decomposition: 1,185 → 798 lines (-33% since cycle 61).",
-      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "EUR/USD PASS"],
+      "root_cause": "_fetch_data() still 969 lines. ExchangeRate\u2192FRED historical fallback was 171 lines of tightly coupled logic including date detection, currency extraction, FRED series mapping, and error messaging \u2014 all inline.",
+      "fix_description": "Extracted into _fetch_exchange_rate_with_historical_fallback() and _fetch_historical_exchange_from_fred(). _fetch_data() reduced from 969 to 798 lines (-18%). Total decomposition: 1,185 \u2192 798 lines (-33% since cycle 61).",
+      "production_tests": [
+        "US GDP PASS",
+        "BRICS inflation PASS",
+        "EUR/USD PASS"
+      ],
       "tests_total": 459,
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "23/23 local (100%) + 3/3 prod (100%)",
@@ -108,76 +295,136 @@
     {
       "cycle": 70,
       "timestamp": "2026-03-25T14:44:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Conversation thread-safety tests",
       "root_cause": "ConversationManager had zero tests despite using threading.Lock for concurrency control. Thread-safety was unverified.",
       "fix_description": "Added 24 new tests: basic CRUD (get/create, add message, history), TTL expiration (expire, cleanup, safe recovery), pending state (mutual exclusion, clearing), last intent tracking, and 5 thread-safety tests (concurrent writes, concurrent creates, concurrent read+write, concurrent pending mutations, concurrent cleanup+access).",
-      "production_tests": ["US GDP PASS", "BRICS inflation PASS", "EUR/USD PASS"],
+      "production_tests": [
+        "US GDP PASS",
+        "BRICS inflation PASS",
+        "EUR/USD PASS"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 22,
       "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
-      "commit_sha": "pending (Ottawa work hours — Wed 10:44)"
+      "commit_sha": "pending (Ottawa work hours \u2014 Wed 10:44)"
     },
     {
       "cycle": 71,
       "timestamp": "2026-03-25T16:43:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Extract CoinGecko dispatch from _fetch_data monolith",
       "root_cause": "_fetch_data() at 798 lines still too large. CoinGecko provider dispatch was 252 lines of inline logic: coin ID mapping, time period extraction, historical vs current branching, ranking requests, metric detection.",
-      "fix_description": "Extracted into _fetch_from_coingecko() with clean coin_map, time extraction, and metric routing. _fetch_data() reduced from 798 to 548 lines (-31% this cycle). Total decomposition: 1,185 → 548 lines (-54% since cycle 61).",
-      "production_tests": ["US GDP PASS", "G7 GDP/cap PASS", "Japan inflation PASS"],
+      "fix_description": "Extracted into _fetch_from_coingecko() with clean coin_map, time extraction, and metric routing. _fetch_data() reduced from 798 to 548 lines (-31% this cycle). Total decomposition: 1,185 \u2192 548 lines (-54% since cycle 61).",
+      "production_tests": [
+        "US GDP PASS",
+        "G7 GDP/cap PASS",
+        "Japan inflation PASS"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 22,
       "benchmark_pass_rate": "22/22 local (100%) + 3/3 prod (100%)",
-      "commit_sha": "pending (Ottawa work hours — Wed 12:43)"
+      "commit_sha": "pending (Ottawa work hours \u2014 Wed 12:43)"
     },
     {
       "cycle": 72,
       "timestamp": "2026-03-25T18:39:00Z",
-      "dimension_scores": {"accuracy": 75, "multi_country": 50, "coverage": 75, "reliability": 67, "session": 67},
-      "focus_area": "WorldBank API outage (502 Bad Gateway) — no code changes",
-      "root_cause": "EXTERNAL: WorldBank API at api.worldbank.org returning 502 Bad Gateway from Microsoft Azure Application Gateway. All WorldBank-dependent queries fail. Circuit breaker and fallback providers working correctly — OECD fallback attempted but also fails for non-OECD indicators.",
+      "dimension_scores": {
+        "accuracy": 75,
+        "multi_country": 50,
+        "coverage": 75,
+        "reliability": 67,
+        "session": 67
+      },
+      "focus_area": "WorldBank API outage (502 Bad Gateway) \u2014 no code changes",
+      "root_cause": "EXTERNAL: WorldBank API at api.worldbank.org returning 502 Bad Gateway from Microsoft Azure Application Gateway. All WorldBank-dependent queries fail. Circuit breaker and fallback providers working correctly \u2014 OECD fallback attempted but also fails for non-OECD indicators.",
       "fix_description": "No code changes. This is a transient external API outage. System handles it correctly: circuit breaker prevents cascading timeouts, fallback chain is attempted, graceful error returned to user. Scores will recover when WorldBank API comes back online.",
-      "production_tests": ["US GDP PASS (FRED)", "Bitcoin PASS (CoinGecko)", "EUR/USD PASS (ExchangeRate)"],
+      "production_tests": [
+        "US GDP PASS (FRED)",
+        "Bitcoin PASS (CoinGecko)",
+        "EUR/USD PASS (ExchangeRate)"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 22,
-      "benchmark_pass_rate": "15/22 local (68% — WorldBank outage) + FRED/CoinGecko/ExchangeRate unaffected",
-      "commit_sha": "no changes — monitoring only"
+      "benchmark_pass_rate": "15/22 local (68% \u2014 WorldBank outage) + FRED/CoinGecko/ExchangeRate unaffected",
+      "commit_sha": "no changes \u2014 monitoring only"
     },
     {
       "cycle": 73,
       "timestamp": "2026-03-25T21:15:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 75, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 75,
+        "session": 100
+      },
       "focus_area": "Fix GDP per capita returning wrong data (Eurostat PPS index instead of WorldBank USD)",
       "root_cause": "Catalog concept 'gdp_per_capita' gave Eurostat TEC00114 higher confidence (0.95) than WorldBank NY.GDP.PCAP.CD (0.90). Eurostat returns PPS index (EU27=100) while WorldBank returns the expected USD value. All EU country GDP per capita queries returned wrong data (115 instead of $50K+).",
-      "fix_description": "Swapped catalog confidence: WorldBank 0.90→0.95, Eurostat 0.95→0.80. Now routes to WorldBank for GDP per capita. Germany: 115→$56,104, France: $46,103, Italy: $40,385. Also: WorldBank API recovered from earlier 502 outage.",
-      "production_tests": ["Germany GDP/cap $56K PASS", "France GDP/cap $46K PASS", "Italy GDP/cap $40K PASS"],
+      "fix_description": "Swapped catalog confidence: WorldBank 0.90\u21920.95, Eurostat 0.95\u21920.80. Now routes to WorldBank for GDP per capita. Germany: 115\u2192$56,104, France: $46,103, Italy: $40,385. Also: WorldBank API recovered from earlier 502 outage.",
+      "production_tests": [
+        "Germany GDP/cap $56K PASS",
+        "France GDP/cap $46K PASS",
+        "Italy GDP/cap $40K PASS"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 23,
-      "benchmark_pass_rate": "22/23 local (96%) — World population still fails (country extraction issue)",
+      "benchmark_pass_rate": "22/23 local (96%) \u2014 World population still fails (country extraction issue)",
       "commit_sha": "0f95ca1"
     },
     {
       "cycle": 74,
       "timestamp": "2026-03-25T22:44:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 67, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 67,
+        "session": 100
+      },
       "focus_area": "Fix WorldBank UnboundLocalError crash + World country recognition",
-      "root_cause": "1) worldbank.py line 961 referenced `country_code_raw` (only defined in per-country fallback loop) inside batch processing loop — caused 500 error for ANY WorldBank query with all-null country data. 2) 'World'→'1W' mapping added to CountryResolver but indicator resolution picks wrong code (SI.SPR.PCAP.ZG instead of SP.POP.GROW).",
-      "fix_description": "Changed `country_code_raw` → `country_code_key` in batch loop (line 961). This was a server-crashing bug affecting all WorldBank multi-country queries where some countries have null data. World population growth still needs indicator resolution fix (SP.POP.GROW) in future cycle.",
-      "production_tests": ["US GDP PASS", "G7 GDP/cap 7 series PASS", "Germany GDP/cap $56K PASS"],
+      "root_cause": "1) worldbank.py line 961 referenced `country_code_raw` (only defined in per-country fallback loop) inside batch processing loop \u2014 caused 500 error for ANY WorldBank query with all-null country data. 2) 'World'\u2192'1W' mapping added to CountryResolver but indicator resolution picks wrong code (SI.SPR.PCAP.ZG instead of SP.POP.GROW).",
+      "fix_description": "Changed `country_code_raw` \u2192 `country_code_key` in batch loop (line 961). This was a server-crashing bug affecting all WorldBank multi-country queries where some countries have null data. World population growth still needs indicator resolution fix (SP.POP.GROW) in future cycle.",
+      "production_tests": [
+        "US GDP PASS",
+        "G7 GDP/cap 7 series PASS",
+        "Germany GDP/cap $56K PASS"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 22,
-      "benchmark_pass_rate": "21/22 (95%) — World pop growth still needs indicator fix",
+      "benchmark_pass_rate": "21/22 (95%) \u2014 World pop growth still needs indicator fix",
       "commit_sha": "fb59392"
     },
     {
       "cycle": 75,
       "timestamp": "2026-03-26T00:35:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
-      "focus_area": "Deep parallel review — WorldBank fallback data loss bug + pagination fix verification",
-      "root_cause": "1) WorldBank batch pagination (per_page=1000) cut off G20 countries (US, Turkey, South Africa on page 2). 2) WorldBank fallback loop overwrote payload each iteration — only last country survived. 3) UnboundLocalError in batch null-data path.",
-      "fix_description": "3 commits: (a) Dynamic per_page scaling (max(1000, N×100)) for batch requests. (b) Fallback loop now accumulates all country records into combined payload. (c) Fixed variable reference in null-data logging. All found by mandatory parallel review agents.",
-      "production_tests": ["G20 GDP/cap 19/19 PASS", "G7 GDP/cap 7/7 PASS", "BRICS inflation 5/5 PASS"],
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
+      "focus_area": "Deep parallel review \u2014 WorldBank fallback data loss bug + pagination fix verification",
+      "root_cause": "1) WorldBank batch pagination (per_page=1000) cut off G20 countries (US, Turkey, South Africa on page 2). 2) WorldBank fallback loop overwrote payload each iteration \u2014 only last country survived. 3) UnboundLocalError in batch null-data path.",
+      "fix_description": "3 commits: (a) Dynamic per_page scaling (max(1000, N\u00d7100)) for batch requests. (b) Fallback loop now accumulates all country records into combined payload. (c) Fixed variable reference in null-data logging. All found by mandatory parallel review agents.",
+      "production_tests": [
+        "G20 GDP/cap 19/19 PASS",
+        "G7 GDP/cap 7/7 PASS",
+        "BRICS inflation 5/5 PASS"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 23,
       "benchmark_pass_rate": "All group queries now return complete country sets",
@@ -186,15 +433,64 @@
     {
       "cycle": 77,
       "timestamp": "2026-03-26T02:45:00Z",
-      "dimension_scores": {"accuracy": 100, "multi_country": 100, "coverage": 100, "reliability": 100, "session": 100},
+      "dimension_scores": {
+        "accuracy": 100,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100
+      },
       "focus_area": "Fix US GDP growth returning FOMC projections + Greece missing from Eurostat",
       "root_cause": "1) Indicator resolver scored FOMC projection series (GDPC1CTMLR) higher than actual GDP growth (A191RL1Q225SBEA) because 'Growth Rate of Real Gross Domestic Product' matched query terms well. 2) Eurostat COUNTRY_CODES mapped Greece to 'GR' (ISO) but Eurostat API uses 'EL'.",
-      "fix_description": "1) Added -0.55 confidence penalty for candidates containing projection/forecast terms (FOMC, projection, forecast, outlook, central tendency, etc.) unless user explicitly asks for projections. Framework-level: applies to ALL providers. 2) Changed Greece code from GR→EL in Eurostat provider.",
-      "production_tests": ["US GDP growth → A191RL1Q225SBEA (correct)", "Greece Eurostat → 1 series (was 0)", "G20 19/19"],
+      "fix_description": "1) Added -0.55 confidence penalty for candidates containing projection/forecast terms (FOMC, projection, forecast, outlook, central tendency, etc.) unless user explicitly asks for projections. Framework-level: applies to ALL providers. 2) Changed Greece code from GR\u2192EL in Eurostat provider.",
+      "production_tests": [
+        "US GDP growth \u2192 A191RL1Q225SBEA (correct)",
+        "Greece Eurostat \u2192 1 series (was 0)",
+        "G20 19/19"
+      ],
       "tests_total": 483,
       "benchmark_queries_total": 18,
       "benchmark_pass_rate": "18/18 + critical accuracy verified",
       "commit_sha": "452471b"
+    },
+    {
+      "cycle": 97,
+      "timestamp": "2026-03-27T20:40:00Z",
+      "dimension_scores": {
+        "accuracy": 83,
+        "multi_country": 100,
+        "coverage": 90,
+        "reliability": 63,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 85.4,
+      "focus_area": "Catalog routing elevation + not_available handling + cross-domain penalties + stale code fixes",
+      "root_cause": "Catalog concept matching ran at Priority 7 (too late), causing jobless claims/gold price/electricity/sanitation to fail. 17 stale indicator codes in catalog. Cross-domain mismatches (pension\u2192R&D, cocoa\u2192electricity) not penalized.",
+      "fix_description": "1) Elevated catalog routing to Priority 3.5 (after special-case, before keyword matching). 2) Added not_available concept handling with user-friendly messages. 3) Created __catalog_resolved trust pipeline to prevent semantic override of hand-verified codes. 4) Fixed all 17 stale catalog codes (5 StatsCan, 8 OECD, 2 IMF, 1 Eurostat, 1 FRED). 5) Added 10 new catalog concepts (electricity, sanitation, water, bank lending, oil production, population growth, birth rate, fertility, CO2, urbanization). 6) Extended cross-domain penalties (pension/elderly/cocoa/mining/crime). 7) Word boundary matching for domain penalties.",
+      "queries_improved": [
+        "US jobless claims",
+        "gold price",
+        "Nigeria access to electricity",
+        "India sanitation access",
+        "Indonesia clean water access",
+        "US bank lending rate",
+        "South Korea youth unemployment",
+        "India population growth",
+        "China urbanization rate",
+        "Russia CO2 per capita",
+        "India birth rate",
+        "Nigeria fertility rate"
+      ],
+      "production_tests": [
+        "Production reachable via heartbeat"
+      ],
+      "tests_total": 483,
+      "benchmark_queries_total": 110,
+      "benchmark_pass_rate": "17/24 (71%) raw, 85% weighted",
+      "catalog_concepts": 67,
+      "stale_codes": 0,
+      "commit_sha": "pending"
     }
   ]
 }

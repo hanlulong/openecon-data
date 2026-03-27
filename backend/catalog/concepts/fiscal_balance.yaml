@@ -36,9 +36,11 @@ providers:
       frequency: annual
 
   OECD:
+    # OECD uses dynamic SDMX DSD codes; GNFLQ is a legacy code no longer in the DB.
+    # DSD_NASEC10@DF_TABLE12_BAL covers government non-financial accounts (balancing items).
     primary:
-      code: GNFLQ
-      name: "General government net financial liabilities"
+      code: DSD_NASEC10@DF_TABLE12_BAL
+      name: "Annual government non-financial accounts and key indicators (Balancing items)"
       confidence: 0.90
       coverage: oecd_members
       frequency: annual

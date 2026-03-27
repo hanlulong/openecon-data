@@ -58,8 +58,8 @@ providers:
 
   StatsCan:
     primary:
-      code: "65201210"
-      name: "GDP at basic prices, all industries"
+      code: "36100434"
+      name: "Gross domestic product (GDP) at basic prices, by industry, monthly"
       confidence: 0.95
       coverage: [CA]
       frequency: monthly

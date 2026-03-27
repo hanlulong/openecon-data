@@ -29,10 +29,11 @@ class ConversationContext:
 
 class ConversationManager:
     MAX_AGE = timedelta(hours=1)
+    MAX_MESSAGES = 200  # Cap messages per conversation to prevent memory leaks
 
     def __init__(self) -> None:
         self._conversations: Dict[str, ConversationContext] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Reentrant lock for future-proofing
 
     @staticmethod
     def _now() -> datetime:
@@ -72,6 +73,9 @@ class ConversationManager:
             conversation.messages.append(
                 ConversationMessage(role=role, content=content, timestamp=now)
             )
+            # Trim oldest messages if over cap (keep last MAX_MESSAGES)
+            if len(conversation.messages) > self.MAX_MESSAGES:
+                conversation.messages = conversation.messages[-self.MAX_MESSAGES:]
             if intent:
                 conversation.last_intent = intent
             conversation.updated_at = now

@@ -1705,18 +1705,33 @@ class IndicatorResolver:
             "solar": ("trade", "education", "health"),
             "nuclear": ("trade", "education", "health"),
             "hydroelectric": ("trade", "education", "health"),
-            # Agriculture production should not match industry
-            "corn": ("industry", "manufacturing", "services", "education"),
-            "wheat": ("industry", "manufacturing", "services"),
-            "rice": ("industry", "manufacturing", "services"),
-            "coffee": ("industry", "manufacturing", "education"),
+            # Agriculture production should not match industry or electricity
+            "corn": ("industry", "manufacturing", "services", "education", "electricity"),
+            "wheat": ("industry", "manufacturing", "services", "electricity"),
+            "rice": ("industry", "manufacturing", "services", "electricity"),
+            "coffee": ("industry", "manufacturing", "education", "electricity"),
+            "cocoa": ("industry", "manufacturing", "electricity", "renewable"),
+            "soybean": ("industry", "manufacturing", "electricity"),
+            # Social spending should not match R&D
+            "pension": ("research and development", "r&d expenditure", "trade", "electricity"),
+            "elderly": ("research and development", "r&d expenditure", "trade", "electricity"),
+            "child poverty": ("research and development", "trade", "electricity"),
+            "crime": ("research and development", "education", "electricity"),
+            "suicide": ("research and development", "trade", "education"),
+            # Mining should not match renewable energy
+            "mining": ("renewable", "education", "health"),
             # Industrial (existing)
             "industrial": ("fisheries", "aquaculture", "fish catch", "forestry"),
             "manufacturing": ("fisheries", "aquaculture", "fish catch"),
             "factory": ("fisheries", "aquaculture", "fish catch"),
         }
+        import re as _re
         for domain_key, wrong_terms in _domain_penalties.items():
-            if domain_key in query_text and any(t in candidate_text_lower for t in wrong_terms):
+            # Use word boundary matching to prevent substring false positives
+            # (e.g., "corn" should not match inside "corner")
+            if _re.search(rf'\b{_re.escape(domain_key)}\b', query_text) and any(
+                _re.search(rf'\b{_re.escape(t)}\b', candidate_text_lower) for t in wrong_terms
+            ):
                 confidence -= 0.50
 
         confidence -= self._specialization_penalty(query_text, candidate_text_lower)

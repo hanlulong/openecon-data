@@ -26,10 +26,13 @@ explicit_exclusions:
 
 providers:
   FRED:
+    # NAPM (ISM Manufacturing: PMI Composite Index) was discontinued from FRED.
+    # ISM PMI is proprietary; no direct FRED replacement exists.
+    # AMTMNO (Manufacturers' New Orders: Total Manufacturing) is a related proxy.
     primary:
-      code: NAPM
-      name: "ISM Manufacturing: PMI Composite Index"
-      confidence: 0.95
+      code: AMTMNO
+      name: "Manufacturers' New Orders: Total Manufacturing"
+      confidence: 0.60
       coverage: [US]
       frequency: monthly
 

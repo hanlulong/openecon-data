@@ -1,0 +1,59 @@
+# Crude Oil Production Indicator Catalog
+concept: crude_oil_production
+category: energy
+domain: commodities
+
+description: |
+  The volume of crude oil and petroleum produced by a country.
+  FRED tracks US industrial production in mining (IPMINE) as a
+  proxy for oil production activity. The World Bank tracks total
+  energy production in kilotons of oil equivalent.
+
+synonyms:
+  primary:
+    - crude oil production
+    - oil production
+    - petroleum production
+    - oil output
+    - crude output
+  secondary:
+    - energy production
+    - oil extraction
+    - oil supply
+
+explicit_exclusions:
+  - oil price
+  - crude oil price
+  - oil consumption
+  - oil imports
+  - oil exports
+  - natural gas production
+  - oil rents
+
+providers:
+  FRED:
+    primary:
+      code: IPMINE
+      name: "Industrial Production: Mining: Mining (NAICS = 21)"
+      confidence: 0.80
+      coverage: [US]
+      frequency: monthly
+      notes: "Mining industrial production index; proxy for oil extraction activity"
+
+  WorldBank:
+    primary:
+      code: EG.EGY.PROD.KT.OE
+      name: "Energy production (kt of oil equivalent)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+      notes: "Total energy production, not exclusively crude oil"
+
+not_available:
+  - IMF
+  - BIS
+  - Eurostat
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

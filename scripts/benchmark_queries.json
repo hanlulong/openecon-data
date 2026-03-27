@@ -869,6 +869,54 @@
       "notes": "Multi-turn: filter down from group query",
       "expected_min_series_turn2": 1,
       "timeout_s": 15
+    },
+    {
+      "id": "acc-56",
+      "dimension": "accuracy",
+      "query": "US jobless claims",
+      "expected_provider": "FRED",
+      "expected_indicator_contains": "Initial Claims",
+      "expected_min_points": 100,
+      "timeout_s": 30,
+      "notes": "Catalog concept: jobless_claims → FRED/ICSA"
+    },
+    {
+      "id": "acc-57",
+      "dimension": "accuracy",
+      "query": "Nigeria access to electricity",
+      "expected_provider": "WORLDBANK",
+      "expected_indicator_contains": "electricity",
+      "expected_min_points": 3,
+      "timeout_s": 30,
+      "notes": "Catalog concept: electricity_access → WorldBank/EG.ELC.ACCS.ZS"
+    },
+    {
+      "id": "acc-58",
+      "dimension": "accuracy",
+      "query": "India sanitation access",
+      "expected_provider": "WORLDBANK",
+      "expected_indicator_contains": "sanitation",
+      "expected_min_points": 3,
+      "timeout_s": 30,
+      "notes": "Catalog concept: sanitation_access → WorldBank/SH.STA.BASS.ZS"
+    },
+    {
+      "id": "acc-59",
+      "dimension": "accuracy",
+      "query": "US bank lending rate",
+      "expected_provider": "FRED",
+      "expected_indicator_contains": "Prime",
+      "expected_min_points": 100,
+      "timeout_s": 30,
+      "notes": "Catalog concept: bank_lending_rate → FRED/DPRIME"
+    },
+    {
+      "id": "rel-06",
+      "dimension": "reliability",
+      "query": "gold price",
+      "expected_message_contains": "not currently available",
+      "timeout_s": 30,
+      "notes": "Catalog not_available handling: gold spot prices discontinued"
     }
   ]
 }

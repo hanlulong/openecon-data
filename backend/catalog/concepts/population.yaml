@@ -39,8 +39,8 @@ providers:
 
   StatsCan:
     primary:
-      code: "1"
-      name: "Population estimates"
+      code: "17100009"
+      name: "Population estimates, quarterly"
       confidence: 0.95
       coverage: [CA]
       frequency: quarterly
