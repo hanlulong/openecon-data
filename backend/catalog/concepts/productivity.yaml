@@ -86,7 +86,7 @@ providers:
 
   Eurostat:
     primary:
-      code: nama_10_lp_ulc
+      code: NAMA_10_LP_ULC
       name: "Labour productivity and unit labour costs"
       frequency: annual
       coverage: eu_members

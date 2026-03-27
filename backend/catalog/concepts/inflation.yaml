@@ -61,7 +61,7 @@ providers:
 
   Eurostat:
     primary:
-      code: prc_hicp_aind
+      code: PRC_HICP_AIND
       name: "HICP - annual data (index)"
       confidence: 0.90
       coverage: eu_members

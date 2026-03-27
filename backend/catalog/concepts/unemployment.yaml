@@ -50,7 +50,7 @@ providers:
 
   Eurostat:
     primary:
-      code: une_rt_a
+      code: UNE_RT_A
       name: "Unemployment rate - annual average"
       confidence: 0.95
       coverage: eu_members

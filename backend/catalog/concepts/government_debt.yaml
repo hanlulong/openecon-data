@@ -48,7 +48,7 @@ providers:
 
   Eurostat:
     primary:
-      code: gov_10q_ggdebt
+      code: GOV_10Q_GGDEBT
       name: "Government debt"
       confidence: 0.90
       coverage: eu_members

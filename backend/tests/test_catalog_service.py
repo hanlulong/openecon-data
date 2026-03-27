@@ -98,7 +98,7 @@ def test_get_best_provider_prefers_eurostat_for_hicp_inflation():
     reload_catalog()
     provider, code, _ = get_best_provider("hicp_inflation", countries=["DE"])
     assert provider == "Eurostat"
-    assert code == "prc_hicp_aind"
+    assert code == "PRC_HICP_AIND"
 
 
 def test_get_best_provider_prefers_imf_for_real_effective_exchange_rate():

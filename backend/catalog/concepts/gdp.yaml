@@ -50,7 +50,7 @@ providers:
 
   Eurostat:
     primary:
-      code: nama_10_gdp
+      code: NAMA_10_GDP
       name: "GDP and main components"
       confidence: 0.90
       coverage: eu_members

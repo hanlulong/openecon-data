@@ -34,7 +34,7 @@ providers:
 
   Eurostat:
     primary:
-      code: prc_hpi_a
+      code: PRC_HPI_A
       name: "House price index"
       confidence: 0.90
       coverage: eu_members

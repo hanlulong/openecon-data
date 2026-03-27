@@ -30,7 +30,7 @@ explicit_exclusions:
 providers:
   Eurostat:
     primary:
-      code: prc_hicp_aind
+      code: PRC_HICP_AIND
       name: "HICP - annual data (average index and rate of change)"
       confidence: 0.96
       coverage: eu_members
