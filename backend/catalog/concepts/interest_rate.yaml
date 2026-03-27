@@ -39,8 +39,8 @@ providers:
 
   IMF:
     primary:
-      code: FPOLM
-      name: "Monetary policy rate"
+      code: FPOLM_6M_PA
+      name: "Central bank policy rate (discount rate < 6 mo.)"
       confidence: 0.90
       coverage: global
       frequency: monthly

@@ -34,9 +34,9 @@ providers:
 
   IMF:
     primary:
-      code: NGDP
-      name: "GDP, current prices"
-      confidence: 0.95
+      code: NGDPD
+      name: "GDP, current prices (Billions of U.S. dollars)"
+      confidence: 0.90
       coverage: global
       frequency: annual
 
