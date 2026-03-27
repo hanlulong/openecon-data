@@ -1,0 +1,36 @@
+concept: vaccination_rate
+category: health
+domain: social_development
+
+description: |
+  Immunization/vaccination coverage rates for children.
+
+synonyms:
+  primary:
+    - vaccination rate
+    - immunization rate
+    - vaccine coverage
+    - vaccination coverage
+  secondary:
+    - immunization
+    - vaccine rate
+    - childhood vaccination
+    - immunization coverage
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+  - OECD
+
+providers:
+  WorldBank:
+    primary:
+      code: SH.IMM.MEAS
+      name: "Immunization, measles (% of children ages 12-23 months)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual

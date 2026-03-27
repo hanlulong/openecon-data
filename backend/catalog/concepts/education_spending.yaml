@@ -1,0 +1,34 @@
+concept: education_spending
+category: education
+domain: social_development
+
+description: |
+  Government expenditure on education as a percentage of GDP.
+
+synonyms:
+  primary:
+    - education spending
+    - education expenditure
+    - education budget
+    - spending on education
+  secondary:
+    - government education spending
+    - public education expenditure
+    - education spending gdp
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: SE.XPD.TOTL.GD.ZS
+      name: "Government expenditure on education, total (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

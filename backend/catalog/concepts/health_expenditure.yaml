@@ -1,0 +1,37 @@
+concept: health_expenditure
+category: health
+domain: social_development
+
+description: |
+  Current health expenditure as a percentage of GDP, including both
+  public and private health spending.
+
+synonyms:
+  primary:
+    - healthcare spending
+    - health spending
+    - health expenditure
+    - healthcare expenditure
+    - medical spending
+  secondary:
+    - health spending gdp
+    - healthcare cost
+    - medical expenditure
+    - health budget
+
+not_available:
+  - FRED
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: SH.XPD.CHEX.GD.ZS
+      name: "Current health expenditure (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual

@@ -426,11 +426,22 @@ class IndicatorLookup:
             if not query_wants_proj and any(t in name_lower for t in _proj_terms):
                 score -= 15 if "fomc" in name_lower else 10
 
-            # Penalize cross-domain mismatches (e.g., fisheries for industrial queries).
+            # Penalize cross-domain mismatches.
             _domain_mismatches = {
                 "industrial": ("fisheries", "aquaculture", "fish", "forestry"),
                 "manufacturing": ("fisheries", "aquaculture", "fish"),
                 "factory": ("fisheries", "aquaculture", "fish"),
+                "health": ("research and development", "r&d", "education"),
+                "healthcare": ("research and development", "r&d"),
+                "hospital": ("research and development", "education"),
+                "vaccination": ("inflation", "consumer price", "research"),
+                "education": ("research and development", "r&d", "health"),
+                "school": ("research and development", "health"),
+                "electricity": ("agriculture", "education"),
+                "solar": ("trade", "education"),
+                "corn": ("industry", "manufacturing"),
+                "wheat": ("industry", "manufacturing"),
+                "rice": ("industry", "manufacturing"),
             }
             for query_domain, wrong_domains in _domain_mismatches.items():
                 if query_domain in query_lower and any(w in name_lower for w in wrong_domains):

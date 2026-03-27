@@ -1681,8 +1681,36 @@ class IndicatorResolver:
         if candidate.get("_translator_candidate"):
             confidence += 0.25
 
-        # Penalize cross-domain mismatches (e.g., fisheries for industrial production).
+        # Penalize cross-domain mismatches.
+        # When a query is clearly about one domain (health, education, energy),
+        # penalize candidates from a different domain. This prevents:
+        # - "healthcare spending" → R&D expenditure
+        # - "vaccination rate" → inflation rate
+        # - "education spending" → R&D expenditure (unless query says "research")
         _domain_penalties = {
+            # Health queries should not match R&D, education, or inflation
+            "health": ("research and development", "r&d expenditure", "education", "enrollment"),
+            "healthcare": ("research and development", "r&d expenditure", "education"),
+            "hospital": ("research and development", "education", "trade"),
+            "vaccination": ("inflation", "consumer price", "trade balance", "research"),
+            "vaccine": ("inflation", "consumer price", "research"),
+            "mortality": ("trade", "education", "energy", "industry"),
+            # Education queries should not match health or R&D (unless "research" is in query)
+            "education": ("research and development", "r&d expenditure", "health", "hospital"),
+            "school": ("research and development", "health", "trade"),
+            "university": ("research and development", "health", "trade"),
+            "enrollment": ("research and development", "inflation", "trade"),
+            # Energy queries should not match agriculture or trade
+            "electricity": ("agriculture", "education", "health"),
+            "solar": ("trade", "education", "health"),
+            "nuclear": ("trade", "education", "health"),
+            "hydroelectric": ("trade", "education", "health"),
+            # Agriculture production should not match industry
+            "corn": ("industry", "manufacturing", "services", "education"),
+            "wheat": ("industry", "manufacturing", "services"),
+            "rice": ("industry", "manufacturing", "services"),
+            "coffee": ("industry", "manufacturing", "education"),
+            # Industrial (existing)
             "industrial": ("fisheries", "aquaculture", "fish catch", "forestry"),
             "manufacturing": ("fisheries", "aquaculture", "fish catch"),
             "factory": ("fisheries", "aquaculture", "fish catch"),
