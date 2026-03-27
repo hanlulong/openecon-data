@@ -242,6 +242,22 @@ class ParameterValidator:
         countries = params.get('countries')
 
         if not country and not countries:
+            # Allow global/commodity indicators that don't need a country.
+            # WorldBank has global aggregates using country code "1W" (World).
+            # Indicators like PE.USG.LNDN (gold price) are global by nature.
+            indicator = params.get('indicator', '')
+            is_global_indicator = (
+                indicator.startswith('PE.')  # Commodity prices (PE.USG.LNDN, etc.)
+                or indicator.startswith('CM.')  # Commodity market codes
+                or 'commodity' in str(intent.originalQuery or '').lower()
+                or 'price' in str(intent.originalQuery or '').lower()
+            )
+            if is_global_indicator:
+                # Default to World aggregate
+                params['country'] = '1W'
+                intent.parameters = params
+                return True, None, None
+
             return False, "World Bank query requires a country or list of countries", {
                 'suggestion': 'Specify which country/countries you want data for',
                 'example': 'Try: "China GDP" or "Compare GDP between US and UK"'

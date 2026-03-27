@@ -3,7 +3,9 @@ category: commodities
 domain: financial_markets
 
 description: |
-  Spot price of gold per troy ounce in US dollars, based on London market.
+  Gold commodity spot prices are not available through our current providers.
+  FRED discontinued gold spot price series, and WorldBank archived PE.USG.LNDN.
+  This concept exists to provide a helpful error message rather than silent failure.
 
 synonyms:
   primary:
@@ -21,15 +23,14 @@ synonyms:
 
 not_available:
   - FRED
+  - WorldBank
   - StatsCan
   - Comtrade
+  - BIS
+  - IMF
+  - Eurostat
+  - OECD
   - CoinGecko
+  - ExchangeRate
 
-providers:
-  WorldBank:
-    primary:
-      code: PE.USG.LNDN
-      name: "London gold price (US$ per ounce)"
-      confidence: 0.95
-      coverage: global
-      frequency: annual
+providers: {}
