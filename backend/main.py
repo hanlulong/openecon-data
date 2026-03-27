@@ -147,6 +147,13 @@ async def lifespan(app: FastAPI):
         app.state.cleanup_task = None
         app.state.file_cleanup_task = None
 
+    # Validate catalog codes against indicator database (non-blocking)
+    try:
+        from .services.catalog_validator import run_validation
+        run_validation()
+    except Exception as e:
+        logger.warning(f"Catalog validation skipped: {e}")
+
     logger.info("🚀 OpenEcon Data Python backend ready (startup time optimized)")
 
     yield  # Application runs here
