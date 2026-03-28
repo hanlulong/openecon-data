@@ -673,6 +673,24 @@
       "variables_tested": 762,
       "tests_total": 483,
       "commit_sha": "f508667"
+    },
+    {
+      "cycle": 106,
+      "timestamp": "2026-03-28T15:00:00Z",
+      "dimension_scores": {
+        "accuracy": 90,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 94.5,
+      "focus_area": "Batches 15-16 combined (100 queries) \u2014 financial markets, country deep dives, global themes",
+      "fix_description": "Batch 15-16 partial results: US 8/10, Japan 8/10, India 8/10, China 7/10, DE/UK 5/10, Global 5/10, EU 2/10, Small 4/10, Info 8/10 (actual). EU aggregates and microstates are main gaps. Production check: data.openecon.ai healthy.",
+      "variables_tested": 862,
+      "tests_total": 483,
+      "commit_sha": "e175d5a"
     }
   ]
 }
