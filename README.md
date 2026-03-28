@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://data.openecon.io/chat"><img src="https://img.shields.io/badge/Try_it-Live_Demo-blue?style=flat-square" alt="Live Demo" /></a>
+  <a href="https://data.openecon.ai/chat"><img src="https://img.shields.io/badge/Try_it-Live_Demo-blue?style=flat-square" alt="Live Demo" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" /></a>
   <a href="https://github.com/hanlulong/openecon-data/stargazers"><img src="https://img.shields.io/github/stars/hanlulong/openecon-data?style=flat-square" alt="Stars" /></a>
   <a href="https://github.com/hanlulong/openecon-data/issues"><img src="https://img.shields.io/github/issues/hanlulong/openecon-data?style=flat-square" alt="Issues" /></a>
@@ -21,7 +21,7 @@
 
 <p align="center">
   <a href="https://openecon.ai">Website</a> &middot;
-  <a href="https://data.openecon.io/chat">Live App</a> &middot;
+  <a href="https://data.openecon.ai/chat">Live App</a> &middot;
   <a href="docs/README.md">Docs</a> &middot;
   <a href="docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md">Contributing</a>
 </p>
@@ -61,18 +61,18 @@ Economists, researchers, and analysts waste hours wrangling APIs, deciphering co
 
 ### Use the hosted app (no setup)
 
-Try it now at **[data.openecon.io/chat](https://data.openecon.io/chat)** — no account required.
+Try it now at **[data.openecon.ai/chat](https://data.openecon.ai/chat)** — no account required.
 
 ### Add to your AI agent (one command)
 
 **Claude Code:**
 ```bash
-claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
+claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
 ```
 
 **Codex:**
 ```bash
-codex mcp add openecon-data --url https://data.openecon.io/mcp
+codex mcp add openecon-data --url https://data.openecon.ai/mcp
 ```
 
 Then ask your agent:
@@ -206,7 +206,7 @@ You: "show only 2020-2023"           → narrows time range
 
 | Project | Description |
 |---------|-------------|
-| **[OpenEcon Data](https://data.openecon.io/chat)** | Query economic data in plain English, chart results, export CSV/JSON *(this repo)* |
+| **[OpenEcon Data](https://data.openecon.ai/chat)** | Query economic data in plain English, chart results, export CSV/JSON *(this repo)* |
 | **[Econ Writing Skill](https://github.com/hanlulong/econ-writing-skill)** | Reusable writing workflows for economists — prompt patterns, structure templates, analysis guardrails |
 | **[Awesome AI for Economists](https://github.com/hanlulong/awesome-ai-for-economists)** | Curated tools, papers, and references for applying AI in economic research |
 

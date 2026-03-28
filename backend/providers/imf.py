@@ -682,15 +682,33 @@ class IMFProvider(BaseProvider):
 
         CENTRALIZED: Uses CountryResolver as primary source, with fallback
         to IMF-specific COUNTRY_MAPPINGS for edge cases.
+
+        Resolution order:
+        1. Normalize country name → ISO2 via CountryResolver.normalize()
+        2. Convert ISO2 → ISO3 via CountryResolver.to_iso3()
+        3. Try direct ISO3 lookup (input may already be ISO3)
+        4. Fallback to local COUNTRY_MAPPINGS
         """
         from ..routing.country_resolver import CountryResolver
 
-        # Try CountryResolver first (returns ISO3 for IMF compatibility)
+        # Step 1: Normalize country name/alias to ISO2, then convert to ISO3
+        iso2 = CountryResolver.normalize(country)
+        if iso2:
+            iso3 = CountryResolver.to_iso3(iso2)
+            if iso3:
+                return iso3
+
+        # Step 2: Input might already be an ISO2 code (e.g. "JM")
         iso3 = CountryResolver.to_iso3(country)
         if iso3:
             return iso3
 
-        # Fallback to local mappings
+        # Step 3: Input might already be a valid ISO3 code (e.g. "JAM")
+        iso2_check = CountryResolver.to_iso2(country)
+        if iso2_check:
+            return country.upper()
+
+        # Step 4: Fallback to local mappings for edge cases
         key = country.upper().replace(" ", "_")
         return self.COUNTRY_MAPPINGS.get(key, country.upper())
 

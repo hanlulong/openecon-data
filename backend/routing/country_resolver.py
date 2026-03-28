@@ -1214,6 +1214,17 @@ class CountryResolver:
         "NP": "NPL", "LK": "LKA", "AF": "AFG", "MN": "MNG",
         # Timor-Leste
         "TL": "TLS",
+        # Balkans
+        "AL": "ALB", "BA": "BIH", "ME": "MNE", "MK": "MKD", "RS": "SRB",
+        "XK": "XKX",  # Kosovo (unofficial but widely used)
+        # West Africa (ECOWAS and others)
+        "BJ": "BEN", "BF": "BFA", "CV": "CPV", "GM": "GMB", "GN": "GIN",
+        "GW": "GNB", "LR": "LBR", "ML": "MLI", "NE": "NER", "SL": "SLE",
+        "TG": "TGO", "GA": "GAB", "GQ": "GNQ", "LY": "LBY",
+        # Pacific Islands
+        "FJ": "FJI", "PG": "PNG", "WS": "WSM", "SB": "SLB", "VU": "VUT",
+        "TO": "TON", "KI": "KIR", "MH": "MHL", "FM": "FSM", "NR": "NRU",
+        "PW": "PLW", "TV": "TUV",
     }
 
     # Reverse mapping (ISO3 to ISO2)
