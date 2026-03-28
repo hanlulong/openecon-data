@@ -547,6 +547,33 @@
       "benchmark_queries_total": 110,
       "benchmark_pass_rate": "Core queries 96%+, harder stress tests 83%",
       "commit_sha": "69a79af"
+    },
+    {
+      "cycle": 100,
+      "timestamp": "2026-03-28T02:35:00Z",
+      "dimension_scores": {
+        "accuracy": 96,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 96.1,
+      "focus_area": "Informational query support \u2014 biggest gap from batch 9 (0/10)",
+      "root_cause": "LLM heuristic _looks_informational() too narrow (missed 'data', 'sources', 'have', 'offer'). Local LLM sometimes classifies informational queries as data_fetch, bypassing the handler.",
+      "fix_description": "1) Expanded heuristic vocabulary (question_words +3, metadata_words +4). 2) Added fetch_signal filter to prevent false positives. 3) Added LLM fallback: heuristic overrides data_fetch when informational patterns detected. Result: 'What employment data does World Bank have?' and similar now return indicator discovery text.",
+      "queries_improved": [
+        "What employment data does World Bank have?",
+        "What data sources cover Brazil?",
+        "What energy data do you have?",
+        "Which providers have data for South Korea?",
+        "List available FRED series for housing",
+        "all informational/metadata discovery queries"
+      ],
+      "tests_total": 483,
+      "benchmark_queries_total": 110,
+      "commit_sha": "a38d592"
     }
   ]
 }
