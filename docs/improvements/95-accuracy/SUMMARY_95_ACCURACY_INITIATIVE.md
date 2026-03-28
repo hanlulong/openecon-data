@@ -396,7 +396,7 @@ python3 scripts/test_all_providers_95.py
 
 ## Contact & Support
 
-**Project Lead**: econ-data-mcp Development Team
+**Project Lead**: openecon-data Development Team
 **Status Updates**: MASTER.md
 **Issue Tracking**: docs/PROVIDER_95_TRACKING.md
 

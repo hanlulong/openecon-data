@@ -260,6 +260,6 @@ After implementing fixes, retest with these specific queries:
 
 ## Files
 
-- Main Report: `/home/hanlulong/econ-data-mcp/EUROSTAT_PRODUCTION_TEST_REPORT.md`
-- Test Results: `/home/hanlulong/econ-data-mcp/scripts/eurostat_test_results_20251122_233021.json`
-- Test Script: `/home/hanlulong/econ-data-mcp/scripts/test_eurostat_production.py`
+- Main Report: `/home/hanlulong/openecon-data/EUROSTAT_PRODUCTION_TEST_REPORT.md`
+- Test Results: `/home/hanlulong/openecon-data/scripts/eurostat_test_results_20251122_233021.json`
+- Test Script: `/home/hanlulong/openecon-data/scripts/test_eurostat_production.py`

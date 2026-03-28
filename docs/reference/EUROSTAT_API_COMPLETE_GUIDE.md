@@ -9,7 +9,7 @@ Eurostat provides two main APIs for accessing EU economic and social statistics:
 1. **Statistics API** (JSON-stat 2.0) - **RECOMMENDED** - Simpler, more reliable
 2. **SDMX 2.1 API** - More powerful but complex, has known issues (406 errors)
 
-**Current econ-data-mcp Implementation**: Uses Statistics API (JSON-stat 2.0) for maximum reliability.
+**Current openecon-data Implementation**: Uses Statistics API (JSON-stat 2.0) for maximum reliability.
 
 ---
 
@@ -328,7 +328,7 @@ https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/lfsi_emp_a?g
 position = time_idx + (unit_idx * 6) + (sex_idx * 18) + ...
 ```
 
-**econ-data-mcp Implementation** (backend/providers/eurostat.py:516-579):
+**openecon-data Implementation** (backend/providers/eurostat.py:516-579):
 - Uses `id` and `size` arrays to calculate flattened positions
 - Handles unemployment rate special case (selects `PC_ACT` unit)
 - Falls back to simple time-based indexing for basic queries
@@ -386,7 +386,7 @@ For datasets with multiple units (e.g., unemployment can be % or thousands):
 
 ### 4. Frequency Auto-Detection
 
-**econ-data-mcp logic** (backend/providers/eurostat.py:173-180):
+**openecon-data logic** (backend/providers/eurostat.py:173-180):
 ```python
 if "_10q_" in dataset_code or dataset_code.endswith("_q"):
     freq = "Q"  # Quarterly
@@ -488,7 +488,7 @@ https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nama_10_gdp?
 
 ---
 
-## Implementation Notes (econ-data-mcp)
+## Implementation Notes (openecon-data)
 
 ### Current Approach
 

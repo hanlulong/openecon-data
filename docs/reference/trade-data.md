@@ -146,7 +146,7 @@ Copying the link from the UI allows analysts to reproduce the request directly.
 
 ## ✅ Integration Status
 
-The UN Comtrade API has been successfully integrated into your econ-data-mcp application!
+The UN Comtrade API has been successfully integrated into your openecon-data application!
 
 ### What's Working
 
@@ -277,7 +277,7 @@ Three test files have been created for you:
 
 ### 1. Comprehensive General Tests
 ```bash
-cd /Users/hanlulong/Library/CloudStorage/Dropbox/Programs/econ-data-mcp/packages/backend
+cd /Users/hanlulong/Library/CloudStorage/Dropbox/Programs/openecon-data/packages/backend
 npx ts-node src/test-comtrade.ts
 ```
 
@@ -406,7 +406,7 @@ XX      XXXX      XXXXXX
 - `6401` = Heading: Waterproof footwear
 - `640110` = Subheading: Waterproof footwear with outer soles and uppers of rubber or plastics
 
-## How to Use in econ-data-mcp
+## How to Use in openecon-data
 
 You can query trade data using:
 

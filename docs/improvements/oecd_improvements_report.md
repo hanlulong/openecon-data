@@ -291,7 +291,7 @@ The improvements are production-ready and provide a solid foundation for OECD da
 
 ## Files Modified
 
-- `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py` - Main provider improvements
-- `/home/hanlulong/econ-data-mcp/scripts/test_oecd_improvements.py` - Core test suite
-- `/home/hanlulong/econ-data-mcp/scripts/test_oecd_comprehensive.py` - Extended test suite
-- `/home/hanlulong/econ-data-mcp/docs/oecd_improvements_report.md` - This report
+- `/home/hanlulong/openecon-data/backend/providers/oecd.py` - Main provider improvements
+- `/home/hanlulong/openecon-data/scripts/test_oecd_improvements.py` - Core test suite
+- `/home/hanlulong/openecon-data/scripts/test_oecd_comprehensive.py` - Extended test suite
+- `/home/hanlulong/openecon-data/docs/oecd_improvements_report.md` - This report

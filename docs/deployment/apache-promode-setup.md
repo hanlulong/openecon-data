@@ -12,7 +12,7 @@ Pro Mode generates files (charts, data exports) that need to be accessible via t
 ## Directory Structure
 
 ```
-/home/hanlulong/econ-data-mcp/
+/home/hanlulong/openecon-data/
 ├── backend/                           # FastAPI application
 ├── packages/frontend/dist/            # Built frontend (served by Apache)
 └── public_media/
@@ -32,7 +32,7 @@ Add these to your production `.env` file:
 
 ```bash
 # Pro Mode Configuration
-PROMODE_PUBLIC_DIR=/home/hanlulong/econ-data-mcp/public_media/promode
+PROMODE_PUBLIC_DIR=/home/hanlulong/openecon-data/public_media/promode
 PROMODE_SESSION_DIR=/tmp/promode_sessions
 ```
 
@@ -49,11 +49,11 @@ Add this to your Apache virtual host configuration (e.g., `/etc/apache2/sites-av
     ServerName openecon.ai
 
     # Serve built frontend
-    DocumentRoot /home/hanlulong/econ-data-mcp/packages/frontend/dist
+    DocumentRoot /home/hanlulong/openecon-data/packages/frontend/dist
 
     # Serve Pro Mode generated files at /static/promode/
-    Alias /static/promode /home/hanlulong/econ-data-mcp/public_media/promode
-    <Directory /home/hanlulong/econ-data-mcp/public_media/promode>
+    Alias /static/promode /home/hanlulong/openecon-data/public_media/promode
+    <Directory /home/hanlulong/openecon-data/public_media/promode>
         Require all granted
         Options -Indexes +FollowSymLinks
         AllowOverride None
@@ -71,7 +71,7 @@ Add this to your Apache virtual host configuration (e.g., `/etc/apache2/sites-av
     ProxyPassReverse /api http://localhost:3001/api
 
     # Frontend fallback (SPA routing)
-    <Directory /home/hanlulong/econ-data-mcp/packages/frontend/dist>
+    <Directory /home/hanlulong/openecon-data/packages/frontend/dist>
         Require all granted
         Options -Indexes +FollowSymLinks
         AllowOverride None
@@ -97,9 +97,9 @@ Add this to your Apache virtual host configuration (e.g., `/etc/apache2/sites-av
 ### 1. Create the directories
 
 ```bash
-mkdir -p /home/hanlulong/econ-data-mcp/public_media/promode
-chmod 755 /home/hanlulong/econ-data-mcp/public_media
-chmod 755 /home/hanlulong/econ-data-mcp/public_media/promode
+mkdir -p /home/hanlulong/openecon-data/public_media/promode
+chmod 755 /home/hanlulong/openecon-data/public_media
+chmod 755 /home/hanlulong/openecon-data/public_media/promode
 ```
 
 ### 2. Test Apache configuration
@@ -116,7 +116,7 @@ sudo systemctl reload apache2
 
 Create a test file:
 ```bash
-echo "Test file" > /home/hanlulong/econ-data-mcp/public_media/promode/test.txt
+echo "Test file" > /home/hanlulong/openecon-data/public_media/promode/test.txt
 ```
 
 Access it in browser:
@@ -128,7 +128,7 @@ You should see "Test file" displayed.
 
 ### 4. Test Pro Mode
 
-1. Log in to econ-data-mcp
+1. Log in to openecon-data
 2. Enable Pro Mode
 3. Run code that generates a chart:
 ```python
@@ -175,10 +175,10 @@ sudo systemctl reload apache2
 **Fix:**
 ```bash
 # Fix permissions
-chmod 755 /home/hanlulong/econ-data-mcp/public_media
-chmod 755 /home/hanlulong/econ-data-mcp/public_media/promode
-chmod 644 /home/hanlulong/econ-data-mcp/public_media/promode/*.png
-chmod 644 /home/hanlulong/econ-data-mcp/public_media/promode/*.csv
+chmod 755 /home/hanlulong/openecon-data/public_media
+chmod 755 /home/hanlulong/openecon-data/public_media/promode
+chmod 644 /home/hanlulong/openecon-data/public_media/promode/*.png
+chmod 644 /home/hanlulong/openecon-data/public_media/promode/*.csv
 
 # Check Apache error log
 sudo tail -50 /var/log/apache2/openecon-error.log
@@ -194,11 +194,11 @@ sudo tail -50 /var/log/apache2/openecon-error.log
 tail -50 /tmp/backend-production.log | grep -i promode
 
 # Verify environment variable is set
-cd /home/hanlulong/econ-data-mcp
+cd /home/hanlulong/openecon-data
 source backend/.venv/bin/activate
 python3 -c "from backend.config import get_settings; print(f'PROMODE_PUBLIC_DIR: {get_settings().promode_public_dir}')"
 
-# Restart backend
+# Restart backend (recommended: python3 scripts/restart_dev.py --backend)
 killall -9 uvicorn
 nohup uvicorn backend.main:app --host 0.0.0.0 --port 3001 --reload > /tmp/backend-production.log 2>&1 &
 ```
@@ -210,7 +210,7 @@ nohup uvicorn backend.main:app --host 0.0.0.0 --port 3001 --reload > /tmp/backen
 **Fix:** Files older than 24 hours are automatically cleaned up by the backend. To manually clean:
 ```bash
 # Remove old files
-find /home/hanlulong/econ-data-mcp/public_media/promode -type f -mtime +1 -delete
+find /home/hanlulong/openecon-data/public_media/promode -type f -mtime +1 -delete
 find /tmp/promode_sessions -type d -mtime +1 -exec rm -rf {} +
 ```
 
@@ -238,7 +238,7 @@ Use the Apache configuration shown above.
       <rules>
         <rule name="Pro Mode Static Files">
           <match url="^static/promode/(.*)" />
-          <action type="Rewrite" url="C:\econ-data-mcp\public_media\promode\{R:1}" />
+          <action type="Rewrite" url="C:\openecon-data\public_media\promode\{R:1}" />
         </rule>
       </rules>
     </rewrite>
@@ -254,11 +254,11 @@ server {
     server_name openecon.ai;
 
     # Serve frontend
-    root /home/hanlulong/econ-data-mcp/packages/frontend/dist;
+    root /home/hanlulong/openecon-data/packages/frontend/dist;
 
     # Serve Pro Mode files
     location /static/promode/ {
-        alias /home/hanlulong/econ-data-mcp/public_media/promode/;
+        alias /home/hanlulong/openecon-data/public_media/promode/;
         add_header Access-Control-Allow-Origin *;
         add_header Access-Control-Allow-Methods "GET, OPTIONS";
     }

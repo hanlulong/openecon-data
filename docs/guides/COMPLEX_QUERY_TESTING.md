@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide describes the comprehensive test suite for econ-data-mcp's complex multi-provider queries, Pro Mode execution, and edge case handling.
+This guide describes the comprehensive test suite for openecon-data's complex multi-provider queries, Pro Mode execution, and edge case handling.
 
 **Target**: 85%+ accuracy on complex queries across all categories
 
@@ -470,7 +470,7 @@ Cross-reference units with authoritative sources:
 
 ```bash
 # Add to crontab for nightly testing
-0 2 * * * cd /home/hanlulong/econ-data-mcp && bash scripts/run_all_complex_tests.sh
+0 2 * * * cd /home/hanlulong/openecon-data && bash scripts/run_all_complex_tests.sh
 ```
 
 ### Trend Tracking
@@ -551,7 +551,7 @@ print(f"Query took {time.time() - start:.2f}s")
 
 ## Conclusion
 
-The complex query test suite provides comprehensive validation of econ-data-mcp's:
+The complex query test suite provides comprehensive validation of openecon-data's:
 - Multi-provider integration
 - Data normalization and combination
 - Calculated metrics and aggregations

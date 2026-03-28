@@ -1,10 +1,14 @@
 # Testing Checklist
 
-Use this checklist to verify that econ-data-mcp is healthy after installation or before deployment.
+Use this checklist to verify that openecon-data is healthy after installation or before deployment.
 
 ## 1. Backend quick checks
 
 ```bash
+# Recommended: use the restart script
+python3 scripts/restart_dev.py --backend
+
+# Or manually:
 source backend/.venv/bin/activate              # Windows: .venv\Scripts\activate
 uvicorn backend.main:app --reload --port 3001
 ```
@@ -102,7 +106,7 @@ You should see the registered user profile and an empty history array (fill by i
 
 ## 5. Troubleshooting tips
 
-- **401 from /api/query**: ensure `OPENROUTER_API_KEY` is present and uvicorn was restarted after editing `.env`.
+- **401 from /api/query**: ensure `OPENROUTER_API_KEY` is present and the backend was restarted after editing `.env` (`python3 scripts/restart_dev.py --backend`).
 - **FRED data missing**: add `FRED_API_KEY` and restart the backend; the health endpoint will confirm the flag.
 - **Clipboard errors in the browser**: browsers block clipboard access on non-secure contexts when not triggered by a user gesture; the copy buttons must be clicked directly.
 

@@ -43,7 +43,7 @@ Fixed critical issues with World Bank and Exchange Rate API providers that were 
 
 ## Fixes Implemented
 
-### File: `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
+### File: `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
 
 #### 1. Increased Timeout (Line 143)
 ```python
@@ -83,7 +83,7 @@ if isinstance(payload, list) and len(payload) > 0:
 ## Test Results
 
 ### Direct Provider Tests
-**Script**: `/home/hanlulong/econ-data-mcp/scripts/test_worldbank_exchangerate.py`
+**Script**: `/home/hanlulong/openecon-data/scripts/test_worldbank_exchangerate.py`
 
 #### World Bank: 5/5 tests passing (100%)
 ✅ Population of India 2020-2022 - 3 data points
@@ -105,7 +105,7 @@ if isinstance(payload, list) and len(payload) > 0:
 ✅ USD to INR
 
 ### Query Service Integration Tests
-**Script**: `/home/hanlulong/econ-data-mcp/scripts/test_providers_via_api.py`
+**Script**: `/home/hanlulong/openecon-data/scripts/test_providers_via_api.py`
 
 #### World Bank: 5/5 natural language queries passing
 ✅ "Show me the population of India from 2020 to 2022"
@@ -192,15 +192,15 @@ The World Bank replaced 37 old greenhouse gas indicators with 43 new indicators:
 
 ## Files Changed
 
-1. `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
+1. `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
    - Line 143: Increased timeout from 15s to 30s
    - Lines 45-46: Updated CO2 indicator code
    - Lines 161-169: Added error message parsing
 
-2. `/home/hanlulong/econ-data-mcp/scripts/test_worldbank_exchangerate.py` (new)
+2. `/home/hanlulong/openecon-data/scripts/test_worldbank_exchangerate.py` (new)
    - Direct provider testing script
 
-3. `/home/hanlulong/econ-data-mcp/scripts/test_providers_via_api.py` (new)
+3. `/home/hanlulong/openecon-data/scripts/test_providers_via_api.py` (new)
    - Query service integration testing script
 
 ## Deployment Status

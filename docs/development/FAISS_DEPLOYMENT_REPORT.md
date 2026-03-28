@@ -24,7 +24,7 @@ METADATA_LOADING_TIMEOUT=60
 ```
 
 ### Configuration Location
-- File: `/home/hanlulong/econ-data-mcp/.env`
+- File: `/home/hanlulong/openecon-data/.env`
 - Applied to: Production backend on port 3001
 - Restart required: ✅ Completed
 
@@ -96,10 +96,11 @@ EOF
 ### 3. Backend Restart
 
 ```bash
-# Kill existing backend
-fuser -k 3001/tcp
+# Recommended: use the restart script
+python3 scripts/restart_dev.py --backend
 
-# Start with new configuration
+# Or manually:
+fuser -k 3001/tcp
 source backend/.venv/bin/activate
 nohup uvicorn backend.main:app --host 0.0.0.0 --port 3001 --reload > /tmp/backend-production.log 2>&1 &
 ```
@@ -149,7 +150,7 @@ INFO: ✅ Index loaded in 0.16s
 INFO:    - Index size: 41757 vectors
 INFO:    - Metadata entries: 41757
 INFO: ✅ FAISS backend initialized
-INFO: 🚀 econ-data-mcp Python backend ready (startup time optimized)
+INFO: 🚀 openecon-data Python backend ready (startup time optimized)
 ```
 
 ### Phase 3: Metadata Re-indexing (Background, ~2-3 minutes)
@@ -322,6 +323,10 @@ ps aux | grep uvicorn | grep -v grep
 
 **Solution:**
 ```bash
+# Recommended: restart script handles cleanup automatically
+python3 scripts/restart_dev.py --backend
+
+# Or manually:
 fuser -k 3001/tcp
 source backend/.venv/bin/activate
 nohup uvicorn backend.main:app --host 0.0.0.0 --port 3001 --reload > /tmp/backend-production.log 2>&1 &

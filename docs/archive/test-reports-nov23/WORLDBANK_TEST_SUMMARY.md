@@ -245,9 +245,9 @@ Range: 4-30 points
 
 ## 📎 Files Generated
 
-- **Full Report:** `/home/hanlulong/econ-data-mcp/WORLDBANK_TEST_REPORT.md`
-- **Test Results (JSON):** `/home/hanlulong/econ-data-mcp/scripts/worldbank_test_results_20251122_232130.json`
-- **Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_worldbank_production.py`
+- **Full Report:** `/home/hanlulong/openecon-data/WORLDBANK_TEST_REPORT.md`
+- **Test Results (JSON):** `/home/hanlulong/openecon-data/scripts/worldbank_test_results_20251122_232130.json`
+- **Test Script:** `/home/hanlulong/openecon-data/scripts/test_worldbank_production.py`
 
 ---
 

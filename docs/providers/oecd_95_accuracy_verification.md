@@ -32,7 +32,7 @@ The implementation is comprehensive with:
 - **Multi-dimension filtering** (frequency, measure, transformation)
 - **Enhanced error messages** (specific, actionable guidance)
 
-**File**: `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py`
+**File**: `/home/hanlulong/openecon-data/backend/providers/oecd.py`
 **Lines**: ~500 lines of production code with comprehensive comments
 
 #### Task 2: Verify SDMX Endpoints ✅

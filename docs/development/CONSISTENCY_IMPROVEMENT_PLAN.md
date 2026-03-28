@@ -1,4 +1,4 @@
-# econ-data-mcp Codebase Consistency Improvement Plan
+# openecon-data Codebase Consistency Improvement Plan
 
 **Generated:** 2025-12-24
 **Status:** In Progress
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Comprehensive analysis of the econ-data-mcp codebase revealed inconsistencies across 6 major areas:
+Comprehensive analysis of the openecon-data codebase revealed inconsistencies across 6 major areas:
 1. **Backend Agents** (8 files) - 15 inconsistencies
 2. **Backend Providers** (11 files) - 18 inconsistencies
 3. **Backend Core Services** (9 files) - 14 inconsistencies

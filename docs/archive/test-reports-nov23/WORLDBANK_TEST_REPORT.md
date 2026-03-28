@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This comprehensive test suite evaluated the World Bank provider on the production econ-data-mcp site against 30 diverse queries covering GDP, population, poverty, education, health, employment, trade, infrastructure, environment, and financial indicators across multiple countries and regions.
+This comprehensive test suite evaluated the World Bank provider on the production openecon-data site against 30 diverse queries covering GDP, population, poverty, education, health, employment, trade, infrastructure, environment, and financial indicators across multiple countries and regions.
 
 ### Key Findings
 
@@ -466,7 +466,7 @@ The World Bank provider demonstrates **moderate reliability** with a 36.7% succe
 
 ## Appendix: Full Test Results
 
-See JSON file: `/home/hanlulong/econ-data-mcp/scripts/worldbank_test_results_20251122_232130.json`
+See JSON file: `/home/hanlulong/openecon-data/scripts/worldbank_test_results_20251122_232130.json`
 
 **Test Execution:**
 - Start time: 2025-11-22 23:14:35

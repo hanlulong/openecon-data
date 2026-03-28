@@ -24,8 +24,8 @@
 
 ### 1. OECD Provider (0% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py`
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/services/query.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/oecd.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/services/query.py`
 
 **Issue Fixed:**
 - Removed overly aggressive pre-emptive circuit breaker checks that were blocking ALL OECD queries
@@ -33,7 +33,7 @@
 
 ### 2. BIS Provider (80% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/services/simplified_prompt.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/services/simplified_prompt.py`
 
 **Issue Fixed:**
 - Fixed query routing for Canada property prices (was going to StatsCan instead of BIS)
@@ -41,8 +41,8 @@
 
 ### 3. COMTRADE Provider (80% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/comtrade.py`
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/comtrade_metadata.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/comtrade.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/comtrade_metadata.py`
 
 **Issues Fixed:**
 - Added EU27 partner code expansion (queries all 27 EU countries in parallel)
@@ -51,7 +51,7 @@
 
 ### 4. EUROSTAT Provider (80% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/eurostat.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/eurostat.py`
 
 **Issue Fixed:**
 - Added energy dataset default filters (`nrg_bal_c` with `GIC` indicator)
@@ -59,8 +59,8 @@
 
 ### 5. IMF Provider (70% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/imf.py`
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/imf.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
 
 **Issues Fixed:**
 - Added developing economies country group expansion (58 countries)
@@ -70,8 +70,8 @@
 
 ### 6. WORLDBANK Provider (40% → 100%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/services/simplified_prompt.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/services/simplified_prompt.py`
 
 **Issues Fixed:**
 - Added country group expansions (G7, G20, BRICS, developing countries, etc.)
@@ -80,7 +80,7 @@
 
 ### 7. STATSCAN Provider (30% → 70-80%)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/statscan.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/statscan.py`
 
 **Improvements Made:**
 - Updated vector mappings with correct product IDs
@@ -89,7 +89,7 @@
 
 ### 8. Query Routing Rules (Simplified)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/services/simplified_prompt.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/services/simplified_prompt.py`
 
 **Changes:**
 - Removed mandatory routing rules
@@ -99,13 +99,13 @@
 
 ### 9. Additional Fixes (Comprehensive Testing)
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
 
 **Issues Fixed:**
 - Added electricity access indicator mappings (`EG.ELC.ACCS.ZS`, etc.)
 - Queries like "Access to electricity for Sub-Saharan Africa" now work correctly
 
-**File Modified:** `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+**File Modified:** `/home/hanlulong/openecon-data/backend/providers/bis.py`
 
 **Issues Fixed:**
 - Fixed JSON parsing error when BIS API returns empty response
@@ -125,15 +125,15 @@
 
 ## Files Modified Summary
 
-1. `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py` - Circuit breaker fix
-2. `/home/hanlulong/econ-data-mcp/backend/services/query.py` - Circuit breaker fix
-3. `/home/hanlulong/econ-data-mcp/backend/providers/comtrade.py` - EU27, Taiwan, oil fixes
-4. `/home/hanlulong/econ-data-mcp/backend/providers/comtrade_metadata.py` - Country codes
-5. `/home/hanlulong/econ-data-mcp/backend/providers/eurostat.py` - Energy dataset filters
-6. `/home/hanlulong/econ-data-mcp/backend/providers/imf.py` - Developing economies
-7. `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py` - Country groups
-8. `/home/hanlulong/econ-data-mcp/backend/providers/statscan.py` - Vector mappings
-9. `/home/hanlulong/econ-data-mcp/backend/services/simplified_prompt.py` - Routing rules
+1. `/home/hanlulong/openecon-data/backend/providers/oecd.py` - Circuit breaker fix
+2. `/home/hanlulong/openecon-data/backend/services/query.py` - Circuit breaker fix
+3. `/home/hanlulong/openecon-data/backend/providers/comtrade.py` - EU27, Taiwan, oil fixes
+4. `/home/hanlulong/openecon-data/backend/providers/comtrade_metadata.py` - Country codes
+5. `/home/hanlulong/openecon-data/backend/providers/eurostat.py` - Energy dataset filters
+6. `/home/hanlulong/openecon-data/backend/providers/imf.py` - Developing economies
+7. `/home/hanlulong/openecon-data/backend/providers/worldbank.py` - Country groups
+8. `/home/hanlulong/openecon-data/backend/providers/statscan.py` - Vector mappings
+9. `/home/hanlulong/openecon-data/backend/services/simplified_prompt.py` - Routing rules
 
 ## Test Commands
 

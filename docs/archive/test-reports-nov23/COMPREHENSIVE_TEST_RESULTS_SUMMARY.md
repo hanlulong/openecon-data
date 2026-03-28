@@ -225,9 +225,9 @@
 ## Test Artifacts
 
 All test scripts, results, and detailed reports are located in:
-- `/home/hanlulong/econ-data-mcp/scripts/test_*_production.py` - Test scripts
-- `/home/hanlulong/econ-data-mcp/*_PRODUCTION_TEST_REPORT.md` - Detailed reports
-- `/home/hanlulong/econ-data-mcp/scripts/*_test_results_*.json` - Raw JSON data
+- `/home/hanlulong/openecon-data/scripts/test_*_production.py` - Test scripts
+- `/home/hanlulong/openecon-data/*_PRODUCTION_TEST_REPORT.md` - Detailed reports
+- `/home/hanlulong/openecon-data/scripts/*_test_results_*.json` - Raw JSON data
 
 ---
 

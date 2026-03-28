@@ -115,7 +115,7 @@ Run the test suite:
 ```bash
 python3 << 'EOF'
 import sys
-sys.path.insert(0, '/home/hanlulong/econ-data-mcp')
+sys.path.insert(0, '/home/hanlulong/openecon-data')
 
 from backend.models import ParsedIntent
 from backend.services.parameter_validator import ParameterValidator

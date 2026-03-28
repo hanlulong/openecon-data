@@ -1,6 +1,6 @@
 # Developer & Contributor Guide
 
-This guide is for developers who want to run, extend, or contribute to `econ-data-mcp`.
+This guide is for developers who want to run, extend, or contribute to `openecon-data`.
 
 ## Scope
 
@@ -29,22 +29,22 @@ Clone and run setup script:
 
 Linux/macOS:
 ```bash
-git clone https://github.com/hanlulong/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 ./scripts/setup.sh
 ```
 
 Windows PowerShell:
 ```powershell
-git clone https://github.com/hanlulong/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 .\scripts\setup.ps1
 ```
 
 Windows CMD:
 ```cmd
-git clone https://github.com/hanlulong/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 scripts\setup.bat
 ```
 
@@ -107,14 +107,14 @@ Local endpoint:
 
 Codex:
 ```bash
-codex mcp add econ-data-mcp-local --url http://localhost:3001/mcp
-codex mcp get econ-data-mcp-local
+codex mcp add openecon-data-local --url http://localhost:3001/mcp
+codex mcp get openecon-data-local
 ```
 
 Claude Code:
 ```bash
-claude mcp add --transport sse econ-data-mcp-local http://localhost:3001/mcp --scope user
-claude mcp get econ-data-mcp-local
+claude mcp add --transport sse openecon-data-local http://localhost:3001/mcp --scope user
+claude mcp get openecon-data-local
 ```
 
 ## Testing
@@ -137,7 +137,7 @@ Additional references:
 
 ## Architecture At A Glance
 
-`econ-data-mcp` has:
+`openecon-data` has:
 - FastAPI backend in `backend/`
 - React + TypeScript frontend in `packages/frontend/`
 - Provider integrations in `backend/providers/`

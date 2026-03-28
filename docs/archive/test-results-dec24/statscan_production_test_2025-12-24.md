@@ -399,7 +399,7 @@ if not dimensions:
 
 ### 🔥 Priority 1: Provider Routing (Fixes 60% of issues)
 **Implement geographic provider preference in LLM parsing prompt**
-- Location: `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py`
+- Location: `/home/hanlulong/openecon-data/backend/services/openrouter.py`
 - Add country-specific provider hints to system prompt
 - Expected improvement: 6 additional queries route to StatsCan
 - Effort: Low (prompt engineering only)
@@ -407,7 +407,7 @@ if not dimensions:
 
 ### 🔥 Priority 2: Deprecated Data Detection (Fixes 10% of issues)
 **Implement vector validation and auto-upgrade system**
-- Location: `/home/hanlulong/econ-data-mcp/backend/providers/statscan.py`
+- Location: `/home/hanlulong/openecon-data/backend/providers/statscan.py`
 - Add `validate_and_upgrade_vector()` function
 - Check `lastUpdated` timestamp and warn if >1 year old
 - Attempt auto-discovery of replacement vectors
@@ -417,7 +417,7 @@ if not dimensions:
 
 ### 🔧 Priority 3: Pro Mode Robustness (Fixes 10% of issues)
 **Improve Pro Mode code generation for StatsCan metadata queries**
-- Location: `/home/hanlulong/econ-data-mcp/backend/services/grok.py`
+- Location: `/home/hanlulong/openecon-data/backend/services/grok.py`
 - Add robust error handling templates to Pro Mode prompts
 - Provide StatsCan API best practices in code generation context
 - Expected improvement: Provincial/dimensional queries more reliable

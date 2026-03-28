@@ -2,7 +2,7 @@
 
 ## Overview
 
-econ-data-mcp now supports UK property price queries using the Bank for International Settlements (BIS) residential property price index. This feature allows users to query house prices for the UK and compare them with other countries.
+openecon-data now supports UK property price queries using the Bank for International Settlements (BIS) residential property price index. This feature allows users to query house prices for the UK and compare them with other countries.
 
 ## Data Source
 
@@ -45,7 +45,7 @@ Both of these work:
 
 ### 1. Provider Implementation
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+**File:** `/home/hanlulong/openecon-data/backend/providers/bis.py`
 
 The BIS provider includes built-in support for property prices:
 
@@ -73,7 +73,7 @@ The provider automatically:
 
 ### 2. LLM Prompt Routing
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py`
+**File:** `/home/hanlulong/openecon-data/backend/services/openrouter.py`
 
 Added new routing section for property price queries:
 
@@ -93,7 +93,7 @@ Key routing rules:
 
 ### 3. Test Suite
 
-**File:** `/home/hanlulong/econ-data-mcp/scripts/test_uk_property.py`
+**File:** `/home/hanlulong/openecon-data/scripts/test_uk_property.py`
 
 Comprehensive test suite covering:
 
@@ -263,6 +263,6 @@ All tests should show green checkmarks and reasonable data values.
 ## Contact
 
 For issues or enhancements related to UK property data support, check:
-- econ-data-mcp GitHub issues
+- openecon-data GitHub issues
 - BIS API documentation
 - Provider-specific error handling in logs

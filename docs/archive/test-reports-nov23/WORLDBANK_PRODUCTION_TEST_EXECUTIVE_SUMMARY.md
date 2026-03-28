@@ -298,10 +298,10 @@ POOR (<40% success):
 
 ## 📎 Deliverables
 
-✅ **Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_worldbank_production.py`
-✅ **Test Results (JSON):** `/home/hanlulong/econ-data-mcp/scripts/worldbank_test_results_20251122_232130.json`
-✅ **Full Report:** `/home/hanlulong/econ-data-mcp/WORLDBANK_TEST_REPORT.md`
-✅ **Summary Report:** `/home/hanlulong/econ-data-mcp/WORLDBANK_TEST_SUMMARY.md`
+✅ **Test Script:** `/home/hanlulong/openecon-data/scripts/test_worldbank_production.py`
+✅ **Test Results (JSON):** `/home/hanlulong/openecon-data/scripts/worldbank_test_results_20251122_232130.json`
+✅ **Full Report:** `/home/hanlulong/openecon-data/WORLDBANK_TEST_REPORT.md`
+✅ **Summary Report:** `/home/hanlulong/openecon-data/WORLDBANK_TEST_SUMMARY.md`
 ✅ **Executive Summary:** This document
 
 ---

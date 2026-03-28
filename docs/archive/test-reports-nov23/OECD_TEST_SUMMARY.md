@@ -19,7 +19,7 @@ Despite having a functional OECD provider implementation (`backend/providers/oec
 
 ### Issue 1: Negative Instruction in System Prompt
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py` (line 75)
+**File:** `/home/hanlulong/openecon-data/backend/services/openrouter.py` (line 75)
 
 ```python
 OECD: OECD member countries economic data (38 members) - Use only when World Bank or IMF don't have the data, as OECD has rate limiting issues
@@ -161,12 +161,12 @@ After implementing fixes:
 
 ## Files to Modify
 
-1. `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py`
+1. `/home/hanlulong/openecon-data/backend/services/openrouter.py`
    - Update OECD description (line 75)
    - Strengthen explicit source override rules (lines 102-110)
    - Add OECD specialization section
 
-2. `/home/hanlulong/econ-data-mcp/backend/services/metadata_search.py` (if exists)
+2. `/home/hanlulong/openecon-data/backend/services/metadata_search.py` (if exists)
    - Add OECD metadata indexing
 
 ---
@@ -174,8 +174,8 @@ After implementing fixes:
 ## Detailed Test Results
 
 Full results saved to:
-- `/home/hanlulong/econ-data-mcp/scripts/oecd_test_results_20251122_231929.json`
-- `/home/hanlulong/econ-data-mcp/OECD_PRODUCTION_TEST_REPORT.md`
+- `/home/hanlulong/openecon-data/scripts/oecd_test_results_20251122_231929.json`
+- `/home/hanlulong/openecon-data/OECD_PRODUCTION_TEST_REPORT.md`
 
 ---
 

@@ -2,13 +2,13 @@
 
 **Date:** 2025-11-21
 **Status:** ✅ DECISION: Use FAISS as default vector search backend
-**Author:** econ-data-mcp Development Team
+**Author:** openecon-data Development Team
 
 ---
 
 ## Executive Summary
 
-After comprehensive benchmarking, **FAISS is confirmed as the superior choice** for econ-data-mcp's vector search needs:
+After comprehensive benchmarking, **FAISS is confirmed as the superior choice** for openecon-data's vector search needs:
 
 - **87x faster index loading** (1.77s vs 5+ minutes for ChromaDB)
 - **FAISS search is fast** (<20ms pure FAISS search time)

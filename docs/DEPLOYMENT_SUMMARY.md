@@ -138,7 +138,7 @@ If issues arise, rollback is simple:
 
 ### Option 1: Quick Rollback (git revert)
 ```bash
-cd /home/hanlulong/econ-data-mcp
+cd /home/hanlulong/openecon-data
 git diff backend/services/query.py  # See changes
 git checkout backend/services/query.py  # Restore old version
 ```

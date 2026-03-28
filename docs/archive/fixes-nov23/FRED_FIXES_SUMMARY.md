@@ -334,7 +334,7 @@ New mappings for housing queries that were routed to wrong providers:
 
 ## Files Modified
 
-1. **`/home/hanlulong/econ-data-mcp/backend/services/openrouter.py`**
+1. **`/home/hanlulong/openecon-data/backend/services/openrouter.py`**
    - Added US-only indicator knowledge (lines 305-355)
    - Added default US routing for ambiguous queries (lines 334-354)
    - Updated provider routing hierarchy (lines 357-382)
@@ -342,7 +342,7 @@ New mappings for housing queries that were routed to wrong providers:
    - Updated property/housing routing (lines 468-492)
    - Enhanced multi-indicator handling (lines 245-257)
 
-2. **`/home/hanlulong/econ-data-mcp/backend/providers/fred.py`**
+2. **`/home/hanlulong/openecon-data/backend/providers/fred.py`**
    - Fixed GDP growth rate mapping (lines 16-22)
    - Added core CPI mappings (lines 40-46)
    - Added Treasury yield mappings (lines 57-65)

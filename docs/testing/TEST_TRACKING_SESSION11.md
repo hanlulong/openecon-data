@@ -1,4 +1,4 @@
-# econ-data-mcp Test Tracking - Session 11
+# openecon-data Test Tracking - Session 11
 
 **Date:** 2025-12-29
 **Final Pass Rate:** 92% (92/100 queries)

@@ -1,10 +1,10 @@
-# Public Release Checklist (`econ-data-mcp`)
+# Public Release Checklist (`openecon-data`)
 
 Last updated: 2026-02-21
 
 ## Current Status
 
-- `origin` URL updated to `https://github.com/hanlulong/econ-data-mcp.git`.
+- `origin` URL updated to `https://github.com/hanlulong/openecon-data.git`.
 - Current tracked files scan does not show live API keys.
 - `.gitignore` now excludes `.claude/` and `packages/frontend/dist-data/`.
 - Critical blocker: a historical OpenRouter key appears in git history (commit `cc9872c`, legacy docs path), even though it is not present in current files.

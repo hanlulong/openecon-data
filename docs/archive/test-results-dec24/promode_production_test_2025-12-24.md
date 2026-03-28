@@ -171,10 +171,10 @@ Demo API keys typically have severe rate limits or return sample data with diffe
 **Code Quality:** Good dual-axis visualization approach, proper error handling with informative messages, but reliance on demo/external API keys is problematic.
 
 **Suggested Fix (General Solution):**
-- **Use econ-data-mcp's own data providers** instead of external APIs:
+- **Use openecon-data's own data providers** instead of external APIs:
   - ExchangeRate-API provider for CAD/USD rates
   - FRED or other integrated providers for oil prices
-- **Code generator should prefer internal providers**: Update system prompt to prioritize using available econ-data-mcp data sources
+- **Code generator should prefer internal providers**: Update system prompt to prioritize using available openecon-data data sources
 - **If external APIs needed**, ensure API keys are available in environment
 
 ---
@@ -526,12 +526,12 @@ Code makes assumptions about data types when loading from session storage withou
 **Affected Queries:** 4
 
 **Problem:**
-Code uses external APIs (AlphaVantage) instead of econ-data-mcp's integrated data providers, leading to demo key limitations and inconsistent data formats.
+Code uses external APIs (AlphaVantage) instead of openecon-data's integrated data providers, leading to demo key limitations and inconsistent data formats.
 
 **General Solution:**
 1. **Update Code Generation Prompt**:
    ```
-   Available econ-data-mcp data providers (use these FIRST before external APIs):
+   Available openecon-data data providers (use these FIRST before external APIs):
    - FRED: US economic data (use FRED_API_KEY)
    - World Bank: Global development indicators (no API key needed)
    - ExchangeRate-API: Currency exchange rates (use EXCHANGERATE_API_KEY or free tier)
@@ -544,7 +544,7 @@ Code uses external APIs (AlphaVantage) instead of econ-data-mcp's integrated dat
 
 2. **Provide API usage examples** in the code generation context:
    ```python
-   # Example: Fetch exchange rates using econ-data-mcp's provider
+   # Example: Fetch exchange rates using openecon-data's provider
    # (Implementation would use the actual provider classes)
    ```
 
@@ -614,7 +614,7 @@ String matching for Statistics Canada dimension IDs is too rigid, failing when e
 
 **URL Pattern:** `https://openecon.ai/static/promode/<filename>`
 
-**Apache Configuration:** Working correctly, serving files from `/home/hanlulong/econ-data-mcp/public_media/promode`
+**Apache Configuration:** Working correctly, serving files from `/home/hanlulong/openecon-data/public_media/promode`
 
 ---
 
@@ -646,7 +646,7 @@ String matching for Statistics Canada dimension IDs is too rigid, failing when e
    - Consider adding static analysis for undefined variables
 
 3. **Prefer Internal Providers** (Issue 4)
-   - Update Grok prompt to prioritize econ-data-mcp's data providers
+   - Update Grok prompt to prioritize openecon-data's data providers
    - Provide API usage examples for each provider
    - Test with Query 4 to verify fix
 

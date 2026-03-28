@@ -123,13 +123,13 @@ curl -X POST http://localhost:3001/api/query \
 
 ## Files Modified
 
-1. `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+1. `/home/hanlulong/openecon-data/backend/providers/bis.py`
    - Added 15+ new indicator mappings
    - Created `_fetch_gli_data()` method
    - Updated `_select_best_series()` with GLI and DEBT_SEC preferences
    - Set quarterly frequency for GLI and DEBT_SEC dataflows
 
-2. `/home/hanlulong/econ-data-mcp/backend/services/provider_router.py`
+2. `/home/hanlulong/openecon-data/backend/services/provider_router.py`
    - Added 12 new BIS-specific keywords
    - Improved routing accuracy for financial stability indicators
 
@@ -161,7 +161,7 @@ curl -X POST http://localhost:3001/api/query \
 python3 << 'EOF'
 import asyncio
 import sys
-sys.path.insert(0, '/home/hanlulong/econ-data-mcp')
+sys.path.insert(0, '/home/hanlulong/openecon-data')
 from backend.providers.bis import BISProvider
 
 async def test():

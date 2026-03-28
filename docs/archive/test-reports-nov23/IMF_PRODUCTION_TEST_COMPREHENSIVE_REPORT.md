@@ -295,9 +295,9 @@ This is a **production-breaking issue** for IMF functionality. The provider exis
 
 ## Test Artifacts
 
-- **Full results JSON:** `/home/hanlulong/econ-data-mcp/scripts/imf_test_results_20251122_232142.json` (83KB)
-- **Markdown report:** `/home/hanlulong/econ-data-mcp/scripts/IMF_TEST_REPORT_20251122_232142.md` (8KB)
-- **Test script:** `/home/hanlulong/econ-data-mcp/scripts/test_imf_production.py`
+- **Full results JSON:** `/home/hanlulong/openecon-data/scripts/imf_test_results_20251122_232142.json` (83KB)
+- **Markdown report:** `/home/hanlulong/openecon-data/scripts/IMF_TEST_REPORT_20251122_232142.md` (8KB)
+- **Test script:** `/home/hanlulong/openecon-data/scripts/test_imf_production.py`
 
 ---
 

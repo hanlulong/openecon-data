@@ -1,6 +1,6 @@
 # Cross-Platform Setup Guide
 
-This guide provides platform-specific instructions for setting up econ-data-mcp on Ubuntu/Linux, macOS, and Windows.
+This guide provides platform-specific instructions for setting up openecon-data on Ubuntu/Linux, macOS, and Windows.
 
 ## Table of Contents
 
@@ -28,8 +28,8 @@ All platforms require:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 
 # Run setup script
 ./scripts/setup.sh
@@ -48,8 +48,8 @@ npm run dev
 
 ```powershell
 # Clone the repository
-git clone https://github.com/yourusername/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 
 # Allow script execution (run PowerShell as Administrator)
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
@@ -71,8 +71,8 @@ npm run dev
 
 ```cmd
 REM Clone the repository
-git clone https://github.com/yourusername/econ-data-mcp.git
-cd econ-data-mcp
+git clone https://github.com/hanlulong/openecon-data.git
+cd openecon-data
 
 REM Run setup script
 scripts\setup.bat

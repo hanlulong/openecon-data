@@ -150,12 +150,12 @@ Accuracy: 100.0%
 - More consistent behavior with default time periods
 
 ### Files Modified
-1. `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py` - Enhanced LLM prompt
-2. `/home/hanlulong/econ-data-mcp/backend/providers/eurostat.py` - Default time period and indicator mappings
+1. `/home/hanlulong/openecon-data/backend/services/openrouter.py` - Enhanced LLM prompt
+2. `/home/hanlulong/openecon-data/backend/providers/eurostat.py` - Default time period and indicator mappings
 
 ### Test Files Created
-1. `/home/hanlulong/econ-data-mcp/scripts/test_eurostat_fixes.py` - Tests for originally failing queries
-2. `/home/hanlulong/econ-data-mcp/scripts/test_eurostat_comprehensive.py` - Broader test coverage
+1. `/home/hanlulong/openecon-data/scripts/test_eurostat_fixes.py` - Tests for originally failing queries
+2. `/home/hanlulong/openecon-data/scripts/test_eurostat_comprehensive.py` - Broader test coverage
 
 ## Remaining Issues
 
@@ -174,6 +174,6 @@ These are data availability limitations of the Eurostat API itself, not bugs in 
 
 ## Related Documentation
 
-- **Provider Documentation**: `/home/hanlulong/econ-data-mcp/backend/providers/eurostat.py`
-- **LLM Prompt**: `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py`
+- **Provider Documentation**: `/home/hanlulong/openecon-data/backend/providers/eurostat.py`
+- **LLM Prompt**: `/home/hanlulong/openecon-data/backend/services/openrouter.py`
 - **CLAUDE.md**: Main guidance document with provider selection rules

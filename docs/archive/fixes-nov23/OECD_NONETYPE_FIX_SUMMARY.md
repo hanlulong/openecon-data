@@ -151,7 +151,7 @@ This ensures:
 
 ## Files Modified
 
-- `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py`
+- `/home/hanlulong/openecon-data/backend/providers/oecd.py`
 
 ## Commit Summary
 

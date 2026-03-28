@@ -381,7 +381,7 @@ The scale (100,000+) suggests USD millions, meaning ~$100-127 billion in interna
 
 ### 1. Fix Effective Exchange Rates (CRITICAL)
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+**File:** `/home/hanlulong/openecon-data/backend/providers/bis.py`
 
 **Change lines 80-83:**
 ```python
@@ -425,7 +425,7 @@ if indicator_code in ["WS_CBPOL", "WS_LONG_CPI", "WS_XRU", "WS_EER"]:
 
 ### 2. Add Cross-border Banking Mappings
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+**File:** `/home/hanlulong/openecon-data/backend/providers/bis.py`
 
 **Add to INDICATOR_MAPPINGS (around line 100):**
 ```python
@@ -446,7 +446,7 @@ if indicator_code in ["WS_CBPOL", "WS_LONG_CPI", "WS_XRU", "WS_EER"]:
 
 ### 3. Improve Unit Labels
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/providers/bis.py`
+**File:** `/home/hanlulong/openecon-data/backend/providers/bis.py`
 
 **Update `fetch_indicator()` around line 500-512:**
 ```python
@@ -473,7 +473,7 @@ else:
 
 ### 4. Handle Growth vs Levels Queries
 
-**File:** `/home/hanlulong/econ-data-mcp/backend/services/openrouter.py` or query parsing logic
+**File:** `/home/hanlulong/openecon-data/backend/services/openrouter.py` or query parsing logic
 
 **Add clarification logic:**
 When user asks for "growth" or "change" in an indicator:

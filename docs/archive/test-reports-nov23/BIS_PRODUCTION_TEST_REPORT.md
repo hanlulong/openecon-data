@@ -3,13 +3,13 @@
 **Test Date:** November 22, 2025
 **Test Environment:** https://openecon.ai (Production)
 **Total Test Queries:** 30
-**Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_bis_production.py`
+**Test Script:** `/home/hanlulong/openecon-data/scripts/test_bis_production.py`
 
 ---
 
 ## Executive Summary
 
-The BIS (Bank for International Settlements) provider was tested against the production econ-data-mcp API with 30 diverse queries covering policy rates, credit-to-GDP ratios, property prices, and exchange rates across multiple countries and time periods.
+The BIS (Bank for International Settlements) provider was tested against the production openecon-data API with 30 diverse queries covering policy rates, credit-to-GDP ratios, property prices, and exchange rates across multiple countries and time periods.
 
 ### Overall Results
 
@@ -388,10 +388,10 @@ With the recommended timeout increase, success rate would likely reach **90-95%*
 
 ## Test Artifacts
 
-- **Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_bis_production.py`
-- **Summary Results:** `/home/hanlulong/econ-data-mcp/scripts/bis_test_results_20251122_232546.json`
-- **Full Results:** `/home/hanlulong/econ-data-mcp/scripts/bis_test_results_20251122_232546_full.json`
-- **This Report:** `/home/hanlulong/econ-data-mcp/BIS_PRODUCTION_TEST_REPORT.md`
+- **Test Script:** `/home/hanlulong/openecon-data/scripts/test_bis_production.py`
+- **Summary Results:** `/home/hanlulong/openecon-data/scripts/bis_test_results_20251122_232546.json`
+- **Full Results:** `/home/hanlulong/openecon-data/scripts/bis_test_results_20251122_232546_full.json`
+- **This Report:** `/home/hanlulong/openecon-data/BIS_PRODUCTION_TEST_REPORT.md`
 
 ---
 

@@ -475,8 +475,8 @@ Manual spot-checks against known data:
 
 ## Test Script Information
 
-**Script Location:** `/home/hanlulong/econ-data-mcp/scripts/test_comtrade_production.py`
-**Results File:** `/home/hanlulong/econ-data-mcp/scripts/comtrade_test_results_20251122_233044.json`
+**Script Location:** `/home/hanlulong/openecon-data/scripts/test_comtrade_production.py`
+**Results File:** `/home/hanlulong/openecon-data/scripts/comtrade_test_results_20251122_233044.json`
 **Test Coverage:** 30 diverse queries across all major Comtrade use cases
 
 ### Query Categories:

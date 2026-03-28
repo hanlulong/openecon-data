@@ -1,4 +1,4 @@
-# econ-data-mcp Test Tracking
+# openecon-data Test Tracking
 
 ## Latest Test Results: December 28, 2025 - Session 10 (Country-Aware Fallbacks)
 

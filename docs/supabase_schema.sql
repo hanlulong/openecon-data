@@ -1,4 +1,4 @@
--- econ-data-mcp Supabase Database Schema
+-- openecon-data Supabase Database Schema
 -- Run this in Supabase SQL Editor after creating your project
 
 -- ============================================

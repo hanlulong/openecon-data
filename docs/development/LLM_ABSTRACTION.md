@@ -2,7 +2,7 @@
 
 ## Overview
 
-econ-data-mcp now supports **flexible LLM backends**, allowing you to switch between OpenRouter, local models (Ollama, LM Studio), and other LLM providers without changing code.
+openecon-data now supports **flexible LLM backends**, allowing you to switch between OpenRouter, local models (Ollama, LM Studio), and other LLM providers without changing code.
 
 ## Benefits
 
@@ -301,7 +301,7 @@ Planned features:
 
 ## Summary
 
-The LLM abstraction makes econ-data-mcp:
+The LLM abstraction makes openecon-data:
 - ✅ **Flexible**: Switch providers via config
 - ✅ **Cost-Effective**: Use free local models
 - ✅ **Private**: Keep data on-premises

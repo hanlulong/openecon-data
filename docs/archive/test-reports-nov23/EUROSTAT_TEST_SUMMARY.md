@@ -183,11 +183,11 @@ Response Time: 2.06s ✅
 
 ## Test Files
 
-- **Full Report:** `/home/hanlulong/econ-data-mcp/EUROSTAT_PRODUCTION_TEST_REPORT.md`
-- **Data Quality Issues:** `/home/hanlulong/econ-data-mcp/EUROSTAT_DATA_QUALITY_ISSUES.md`
-- **Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_eurostat_production.py`
-- **Test Results (JSON):** `/home/hanlulong/econ-data-mcp/scripts/eurostat_test_results_20251122_233021.json`
-- **Test Report (TXT):** `/home/hanlulong/econ-data-mcp/scripts/eurostat_test_report_20251122_233021.txt`
+- **Full Report:** `/home/hanlulong/openecon-data/EUROSTAT_PRODUCTION_TEST_REPORT.md`
+- **Data Quality Issues:** `/home/hanlulong/openecon-data/EUROSTAT_DATA_QUALITY_ISSUES.md`
+- **Test Script:** `/home/hanlulong/openecon-data/scripts/test_eurostat_production.py`
+- **Test Results (JSON):** `/home/hanlulong/openecon-data/scripts/eurostat_test_results_20251122_233021.json`
+- **Test Report (TXT):** `/home/hanlulong/openecon-data/scripts/eurostat_test_report_20251122_233021.txt`
 
 ---
 

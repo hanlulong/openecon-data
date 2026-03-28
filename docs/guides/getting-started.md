@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks through the minimum steps to run econ-data-mcp locally with the FastAPI backend and React frontend.
+This guide walks through the minimum steps to run openecon-data locally with the FastAPI backend and React frontend.
 
 ## 1. Prerequisites
 
@@ -43,7 +43,7 @@ COMTRADE_API_KEY=optional
 JWT_SECRET=generate_a_random_string
 ```
 
-Restart uvicorn after editing secrets.
+Restart the backend after editing secrets (use `python3 scripts/restart_dev.py --backend`).
 
 No manual database/index bootstrap is required for local setup:
 - `backend/data/indicators.db` is created if missing
@@ -52,20 +52,13 @@ No manual database/index bootstrap is required for local setup:
 
 ## 4. Run the stack
 
-In one terminal (with the virtualenv activated):
+Use the restart script (recommended):
 
 ```bash
-cd backend
-uvicorn backend.main:app --reload --port 3001
+python3 scripts/restart_dev.py
 ```
 
-In another terminal:
-
-```bash
-npm run dev
-```
-
-Vite proxies `/api/*` requests to `http://localhost:3001`, so no extra configuration is required.
+This starts both the backend (port 3001) and frontend (port 5173). Vite proxies `/api/*` requests to `http://localhost:3001`, so no extra configuration is required.
 
 ## 5. Smoke test
 

@@ -43,11 +43,11 @@ Analyzed 8 core service files for consistency across 14 categories:
 
 **Solution**: Create exception hierarchy in `backend/exceptions.py`:
 ```python
-class econ-data-mcpError(Exception): pass
-class ConfigurationError(econ-data-mcpError): pass  # Missing API keys, bad config
-class AuthenticationError(econ-data-mcpError): pass  # Auth failures
-class DataProviderError(econ-data-mcpError): pass   # API failures
-class ValidationError(econ-data-mcpError): pass     # Input validation
+class openecon-dataError(Exception): pass
+class ConfigurationError(openecon-dataError): pass  # Missing API keys, bad config
+class AuthenticationError(openecon-dataError): pass  # Auth failures
+class DataProviderError(openecon-dataError): pass   # API failures
+class ValidationError(openecon-dataError): pass     # Input validation
 ```
 
 **Files to update**: `openrouter.py` (lines 53, 220, 262, 293), `llm.py` (lines 133, 504, 552), `supabase_service.py` (lines 242-249, 378), `auth.py` (lines 130, 134)

@@ -1,4 +1,4 @@
-# Comprehensive Test Queries for econ-data-mcp
+# Comprehensive Test Queries for openecon-data
 
 **Generated**: 2025-12-24
 **Total Sequences**: 100 (10 per provider)

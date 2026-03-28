@@ -157,8 +157,8 @@ All returned data is accurate and matches external authoritative sources. The sy
 
 ## Files
 
-- 📊 Full Report: `/home/hanlulong/econ-data-mcp/BIS_PRODUCTION_TEST_REPORT.md`
-- 🧪 Test Script: `/home/hanlulong/econ-data-mcp/scripts/test_bis_production.py`
-- 📁 Test Results: `/home/hanlulong/econ-data-mcp/scripts/bis_test_results_20251122_232546.json`
+- 📊 Full Report: `/home/hanlulong/openecon-data/BIS_PRODUCTION_TEST_REPORT.md`
+- 🧪 Test Script: `/home/hanlulong/openecon-data/scripts/test_bis_production.py`
+- 📁 Test Results: `/home/hanlulong/openecon-data/scripts/bis_test_results_20251122_232546.json`
 
 **Next Steps:** Increase API timeout to 90-120 seconds and re-run tests.

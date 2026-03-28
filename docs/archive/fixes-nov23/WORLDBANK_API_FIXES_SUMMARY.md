@@ -60,7 +60,7 @@
 
 ## Changes Made
 
-### File: `/home/hanlulong/econ-data-mcp/backend/providers/worldbank.py`
+### File: `/home/hanlulong/openecon-data/backend/providers/worldbank.py`
 
 1. **Added VALID_REGIONS constant** (lines 19-33)
    - Documents all valid region and income level codes
@@ -82,7 +82,7 @@
    - Explains potential causes (invalid codes, missing data)
    - Continues gracefully with other countries on error
 
-### File: `/home/hanlulong/econ-data-mcp/backend/services/metadata_search.py`
+### File: `/home/hanlulong/openecon-data/backend/services/metadata_search.py`
 
 1. **Rewrote _fetch_worldbank_matches()** (lines 550-608)
    - Implements pagination (up to 5 pages)

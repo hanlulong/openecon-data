@@ -1,13 +1,13 @@
-# econ-data-mcp Documentation
+# OpenEcon Data Documentation
 
-`econ-data-mcp` is a one-stop MCP + API layer for economic data across 10+ providers. This index provides quick access to setup, MCP integration, and technical references.
+OpenEcon Data is a one-stop MCP + API layer for economic data across 10+ providers. This index provides quick access to setup, MCP integration, and technical references.
 
 ## Quick Links
 
 - **[Public Quick Start](../README.md)** - 2 simple ways to use OpenEcon data (website or MCP)
 - **[Getting Started](guides/getting-started.md)** - First-time setup and basic usage
 - **[Cross-Platform Setup](guides/cross-platform-setup.md)** - Setup for Ubuntu/Linux, macOS, and Windows
-- **[MCP Setup (Claude Code + Codex)](mcp/setup.md)** - Add `econ-data-mcp` as an MCP server
+- **[MCP Setup (Claude Code + Codex)](mcp/setup.md)** - Add `openecon-data` as an MCP server
 - **[Developer & Contributor Guide](development/DEVELOPER_CONTRIBUTOR_GUIDE.md)** - Technical setup, architecture, testing, deployment, contribution
 - **[API Quick Reference](providers/API_QUICK_REFERENCE.md)** - Quick reference for all supported APIs
 - **[Security Policy](../.github/SECURITY.md)** - Security features and best practices
@@ -30,7 +30,7 @@
 
 ## User Guides
 
-Guides to help you get started and use econ-data-mcp effectively.
+Guides to help you get started and use OpenEcon Data effectively.
 
 | Guide | Description |
 |-------|-------------|
@@ -43,7 +43,7 @@ Guides to help you get started and use econ-data-mcp effectively.
 
 ## Data Providers
 
-econ-data-mcp integrates with 10+ economic data providers. Each provider has specific capabilities and data coverage.
+OpenEcon Data integrates with 10+ economic data providers. Each provider has specific capabilities and data coverage.
 
 ### Provider Documentation
 
@@ -74,7 +74,7 @@ econ-data-mcp integrates with 10+ economic data providers. Each provider has spe
 
 ### Backend API Endpoints
 
-The econ-data-mcp backend exposes a REST API at `/api/*`. See [backend/README.md](../backend/README.md) for the full endpoint list.
+The OpenEcon Data backend exposes a REST API at `/api/*`. See [backend/README.md](../backend/README.md) for the full endpoint list.
 
 **Core Endpoints:**
 
@@ -90,7 +90,7 @@ The econ-data-mcp backend exposes a REST API at `/api/*`. See [backend/README.md
 
 ### MCP Server
 
-econ-data-mcp exposes a Model Context Protocol (MCP) server for AI assistants:
+OpenEcon Data exposes a Model Context Protocol (MCP) server for AI assistants:
 - **Endpoint:** `/mcp`
 - **Documentation:** [MCP Setup Guide](mcp/setup.md)
 
@@ -104,14 +104,14 @@ Use one of these endpoints:
 
 Add to Codex:
 ```bash
-codex mcp add econ-data-mcp --url https://data.openecon.io/mcp
-codex mcp get econ-data-mcp
+codex mcp add openecon-data --url https://data.openecon.io/mcp
+codex mcp get openecon-data
 ```
 
 Add to Claude Code:
 ```bash
-claude mcp add --transport sse econ-data-mcp https://data.openecon.io/mcp --scope user
-claude mcp get econ-data-mcp
+claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
+claude mcp get openecon-data
 ```
 
 Example prompt:
@@ -121,7 +121,7 @@ Example prompt:
 
 ## Development
 
-Guides for developers contributing to econ-data-mcp.
+Guides for developers contributing to OpenEcon Data.
 
 ### Architecture & Design
 
@@ -161,7 +161,7 @@ Guides for developers contributing to econ-data-mcp.
 
 ## Deployment
 
-Guides for deploying econ-data-mcp to production.
+Guides for deploying OpenEcon Data to production.
 
 | Document | Description |
 |----------|-------------|
@@ -182,7 +182,7 @@ See the main [CLAUDE.md](../CLAUDE.md) file for:
 
 ### System Overview
 
-econ-data-mcp consists of:
+OpenEcon Data consists of:
 1. **Backend** (Python/FastAPI) - API server, LLM integration, data providers
 2. **Frontend** (React/TypeScript) - Chat interface, data visualization
 3. **Supabase** - Authentication and query history storage
@@ -268,6 +268,6 @@ Historical documentation and development logs are available in the [archive/](ar
 
 ## Need Help?
 
-- **Issues:** [GitHub Issues](https://github.com/hanlulong/econ-data-mcp/issues)
+- **Issues:** [GitHub Issues](https://github.com/hanlulong/openecon-data/issues)
 - **Documentation:** This index
 - **Code Reference:** [CLAUDE.md](../CLAUDE.md)

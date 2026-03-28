@@ -1,4 +1,4 @@
-# econ-data-mcp Latest Improvements - November 22, 2025
+# openecon-data Latest Improvements - November 22, 2025
 
 ## Overview
 

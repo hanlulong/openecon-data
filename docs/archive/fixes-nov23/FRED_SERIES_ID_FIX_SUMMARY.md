@@ -25,7 +25,7 @@ The LLM query parser returns natural language indicator names in the `indicators
 
 ## Solution
 
-Enhanced `/home/hanlulong/econ-data-mcp/backend/providers/fred.py` with:
+Enhanced `/home/hanlulong/openecon-data/backend/providers/fred.py` with:
 
 ### 1. Expanded Indicator Mappings
 
@@ -68,7 +68,7 @@ The method now:
 
 ### Unit Tests Added
 
-Added comprehensive tests in `/home/hanlulong/econ-data-mcp/backend/tests/test_providers.py`:
+Added comprehensive tests in `/home/hanlulong/openecon-data/backend/tests/test_providers.py`:
 
 1. **`test_fred_series_id_mapping()`**: Tests 22 indicator variations including:
    - Natural language with spaces
@@ -116,11 +116,11 @@ See `backend/providers/fred.py` `SERIES_MAPPINGS` for complete list of 94 indica
 
 ## Files Modified
 
-1. `/home/hanlulong/econ-data-mcp/backend/providers/fred.py`
+1. `/home/hanlulong/openecon-data/backend/providers/fred.py`
    - Enhanced `_series_id()` method with smart normalization and fuzzy matching
    - Added missing mappings (`INFLATION_RATE`, `RETAIL_SALES_GROWTH`)
 
-2. `/home/hanlulong/econ-data-mcp/backend/tests/test_providers.py`
+2. `/home/hanlulong/openecon-data/backend/tests/test_providers.py`
    - Added `test_fred_series_id_mapping()` test
    - Added `test_fred_series_id_explicit_override()` test
 
@@ -145,5 +145,5 @@ Consider implementing:
 ## Related Documentation
 
 - FRED API Documentation: https://fred.stlouisfed.org/docs/api/fred/
-- econ-data-mcp Provider Architecture: `backend/providers/README.md`
+- openecon-data Provider Architecture: `backend/providers/README.md`
 - Testing Guide: `docs/guides/testing.md`

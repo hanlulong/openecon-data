@@ -1,7 +1,7 @@
 # Service Layer Consistency Audit Report
 
 **Date**: 2025-12-24
-**Scope**: `/home/hanlulong/econ-data-mcp/backend/services/`
+**Scope**: `/home/hanlulong/openecon-data/backend/services/`
 **Files Analyzed**: query.py, openrouter.py, llm.py, langchain_orchestrator.py, cache.py, conversation.py, auth.py, supabase_service.py
 
 ---
@@ -70,11 +70,11 @@ This audit analyzed 8 core service files for consistency across async patterns, 
 **Recommendation**: Define custom exception hierarchy:
 ```python
 # backend/exceptions.py
-class econ-data-mcpError(Exception): pass
-class ConfigurationError(econ-data-mcpError): pass  # for missing keys, bad config
-class AuthenticationError(econ-data-mcpError): pass  # for auth failures
-class DataProviderError(econ-data-mcpError): pass   # for API failures
-class ValidationError(econ-data-mcpError): pass     # for input validation
+class openecon-dataError(Exception): pass
+class ConfigurationError(openecon-dataError): pass  # for missing keys, bad config
+class AuthenticationError(openecon-dataError): pass  # for auth failures
+class DataProviderError(openecon-dataError): pass   # for API failures
+class ValidationError(openecon-dataError): pass     # for input validation
 ```
 
 ### 2.2 Exception Logging Inconsistency

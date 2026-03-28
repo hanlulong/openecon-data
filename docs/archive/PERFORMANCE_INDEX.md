@@ -1,4 +1,4 @@
-# econ-data-mcp Performance Optimization Index
+# openecon-data Performance Optimization Index
 
 **Quick Navigation Guide for All Performance-Related Documentation**
 

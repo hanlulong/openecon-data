@@ -135,7 +135,7 @@ The Pro Mode code execution sandbox has limitations:
 If you discover a security vulnerability, please report it by:
 
 1. **DO NOT** create a public GitHub issue
-2. Email the maintainers directly at: [your-security-email@domain.com]
+2. Email the maintainers directly at: security@openecon.ai
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce

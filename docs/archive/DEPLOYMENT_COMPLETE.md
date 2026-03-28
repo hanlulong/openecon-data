@@ -1,4 +1,4 @@
-# econ-data-mcp Production Deployment - Complete ✅
+# openecon-data Production Deployment - Complete ✅
 
 **Date:** November 21, 2025
 **Status:** ✅ DEPLOYMENT COMPLETE AND VERIFIED
@@ -9,7 +9,7 @@
 
 ## Summary
 
-All fixes have been successfully deployed to production with comprehensive testing and verification. econ-data-mcp is now fully operational across all 11+ data providers with 92.9-93.3% accuracy on validation tests (100% actual data correctness).
+All fixes have been successfully deployed to production with comprehensive testing and verification. openecon-data is now fully operational across all 11+ data providers with 92.9-93.3% accuracy on validation tests (100% actual data correctness).
 
 ---
 

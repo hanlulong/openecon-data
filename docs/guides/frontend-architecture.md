@@ -1,6 +1,6 @@
 # Frontend Architecture Guide
 
-This document describes the architecture of the econ-data-mcp React frontend.
+This document describes the architecture of the openecon-data React frontend.
 
 ## Overview
 

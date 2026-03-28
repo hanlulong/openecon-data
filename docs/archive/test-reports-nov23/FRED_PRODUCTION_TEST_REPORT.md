@@ -323,6 +323,6 @@ If these issues are fixed, the **theoretical success rate would be 93%** (28/30 
 
 ## Test Artifacts
 
-- **Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_fred_production.py`
-- **JSON Results:** `/home/hanlulong/econ-data-mcp/scripts/fred_test_results_20251122_233233.json`
+- **Test Script:** `/home/hanlulong/openecon-data/scripts/test_fred_production.py`
+- **JSON Results:** `/home/hanlulong/openecon-data/scripts/fred_test_results_20251122_233233.json`
 - **Test Date:** November 22, 2025, 11:32 PM UTC

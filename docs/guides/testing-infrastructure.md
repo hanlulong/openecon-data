@@ -1,10 +1,10 @@
 # Testing Infrastructure Guide
 
-This guide covers the testing infrastructure and best practices for the econ-data-mcp codebase.
+This guide covers the testing infrastructure and best practices for the openecon-data codebase.
 
 ## Overview
 
-econ-data-mcp uses a comprehensive testing setup:
+openecon-data uses a comprehensive testing setup:
 
 | Component | Framework | Coverage Target |
 |-----------|-----------|-----------------|

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A comprehensive test framework for validating econ-data-mcp's ability to handle advanced multi-provider queries, calculated metrics, regional aggregations, and edge cases.
+A comprehensive test framework for validating openecon-data's ability to handle advanced multi-provider queries, calculated metrics, regional aggregations, and edge cases.
 
 **Target**: 85%+ overall pass rate across all test categories
 
@@ -183,7 +183,7 @@ Tests appropriate error handling for:
 ## File Structure
 
 ```
-/home/hanlulong/econ-data-mcp/
+/home/hanlulong/openecon-data/
 ├── scripts/
 │   ├── complex_queries.json                 # 50 test cases
 │   ├── test_complex_queries.py             # Main test runner (50 tests)
@@ -424,7 +424,7 @@ python3 scripts/analyze_test_results.py \
 ### Automated Testing
 ```bash
 # Add to crontab (run daily at 2 AM)
-0 2 * * * cd /home/hanlulong/econ-data-mcp && bash scripts/run_all_complex_tests.sh
+0 2 * * * cd /home/hanlulong/openecon-data && bash scripts/run_all_complex_tests.sh
 ```
 
 ### Trend Tracking
@@ -541,7 +541,7 @@ This test suite provides:
 - ✅ Performance benchmarking
 - ✅ Data validation
 
-**Goal**: Achieve 85%+ pass rate ensuring econ-data-mcp reliably handles advanced queries across all providers and edge cases.
+**Goal**: Achieve 85%+ pass rate ensuring openecon-data reliably handles advanced queries across all providers and edge cases.
 
 ---
 

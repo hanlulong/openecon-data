@@ -193,7 +193,7 @@ Testing 100 complex queries across all providers:
 | | | | |
 
 ## Detailed Test Reports Generated
-- World Bank: `/home/hanlulong/econ-data-mcp/docs/testing/worldbank_production_test_2025-12-24.md`
+- World Bank: `/home/hanlulong/openecon-data/docs/testing/worldbank_production_test_2025-12-24.md`
 - Eurostat: `/tmp/eurostat_test_results.md`
 
 ## General Solutions Implemented

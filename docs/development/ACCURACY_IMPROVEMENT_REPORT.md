@@ -1,4 +1,4 @@
-# econ-data-mcp Accuracy Improvement Report
+# openecon-data Accuracy Improvement Report
 
 ## Executive Summary
 
@@ -147,12 +147,12 @@ Continue testing with:
 
 ## Files Modified
 
-1. `/home/hanlulong/econ-data-mcp/backend/services/parameter_validator.py`
+1. `/home/hanlulong/openecon-data/backend/services/parameter_validator.py`
    - Relaxed validation logic
    - Lowered confidence thresholds
    - Added flexibility for provider discovery
 
-2. `/home/hanlulong/econ-data-mcp/backend/services/query.py`
+2. `/home/hanlulong/openecon-data/backend/services/query.py`
    - Added indicator parameter passing logic
    - Fixed FRED/IMF indicator handling
 

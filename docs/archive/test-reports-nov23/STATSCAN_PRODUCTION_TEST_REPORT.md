@@ -2,14 +2,14 @@
 
 **Test Date:** November 22, 2025
 **Production Site:** https://openecon.ai
-**Test Script:** `/home/hanlulong/econ-data-mcp/scripts/test_statscan_production.py`
+**Test Script:** `/home/hanlulong/openecon-data/scripts/test_statscan_production.py`
 **Results File:** `statscan_test_results_20251122_233213.json`
 
 ---
 
 ## Executive Summary
 
-Comprehensive testing of the Statistics Canada data provider against the production econ-data-mcp site revealed **strong overall performance** with room for targeted improvements.
+Comprehensive testing of the Statistics Canada data provider against the production openecon-data site revealed **strong overall performance** with room for targeted improvements.
 
 ### Key Metrics
 

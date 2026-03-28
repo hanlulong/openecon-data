@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the comprehensive improvements made to econ-data-mcp's metadata discovery system to enable better indicator search and data retrieval.
+This document describes the comprehensive improvements made to openecon-data's metadata discovery system to enable better indicator search and data retrieval.
 
 **Date:** 2025-11-20
 **Status:** ✅ Complete

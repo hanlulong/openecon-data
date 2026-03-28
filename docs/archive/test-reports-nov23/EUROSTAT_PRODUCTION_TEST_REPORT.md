@@ -322,6 +322,6 @@ The Eurostat provider is functional for a subset of queries but has critical iss
 ---
 
 **Files Generated:**
-- Test Results: `/home/hanlulong/econ-data-mcp/scripts/eurostat_test_results_20251122_233021.json`
-- Test Report: `/home/hanlulong/econ-data-mcp/scripts/eurostat_test_report_20251122_233021.txt`
-- This Report: `/home/hanlulong/econ-data-mcp/EUROSTAT_PRODUCTION_TEST_REPORT.md`
+- Test Results: `/home/hanlulong/openecon-data/scripts/eurostat_test_results_20251122_233021.json`
+- Test Report: `/home/hanlulong/openecon-data/scripts/eurostat_test_report_20251122_233021.txt`
+- This Report: `/home/hanlulong/openecon-data/EUROSTAT_PRODUCTION_TEST_REPORT.md`

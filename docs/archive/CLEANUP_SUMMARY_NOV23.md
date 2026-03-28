@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cleaned up the econ-data-mcp root directory to maintain a clean, professional repository structure.
+Cleaned up the openecon-data root directory to maintain a clean, professional repository structure.
 
 ## Actions Taken
 

@@ -1,7 +1,7 @@
 # OECD API Research Report
 
 **Date:** 2025-11-23
-**Task:** Research OECD API structure and identify improvements for econ-data-mcp
+**Task:** Research OECD API structure and identify improvements for openecon-data
 **Sources:** OECD official documentation, Stack Overflow, .Stat Suite documentation, web research
 
 ---
@@ -76,7 +76,7 @@ https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI/USA.M.LI...
 
 ### Our Implementation Review
 
-**File**: `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py`
+**File**: `/home/hanlulong/openecon-data/backend/providers/oecd.py`
 
 **Strengths:**
 - ✅ Line 593-595: We wait for rate limiter BEFORE making requests
@@ -273,7 +273,7 @@ OECD uses **ISO 3166-1 alpha-3** codes:
 
 ## Our Current Implementation Analysis
 
-### File: `/home/hanlulong/econ-data-mcp/backend/providers/oecd.py`
+### File: `/home/hanlulong/openecon-data/backend/providers/oecd.py`
 
 #### Strengths
 

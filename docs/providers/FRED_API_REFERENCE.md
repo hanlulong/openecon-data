@@ -177,7 +177,7 @@ For multiple series:
 - **No daily limit** on request count
 - Implement exponential backoff for rate limit errors
 
-## econ-data-mcp Implementation
+## openecon-data Implementation
 
 ### Current Implementation
 
@@ -294,4 +294,4 @@ test_cases = [
 
 **Last Updated**: 2024-11-02
 **API Version**: V1 (current)
-**econ-data-mcp Implementation**: `backend/providers/fred.py`
+**openecon-data Implementation**: `backend/providers/fred.py`

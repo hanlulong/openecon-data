@@ -1,4 +1,4 @@
-# econ-data-mcp Routing System Consolidation Analysis
+# openecon-data Routing System Consolidation Analysis
 
 **Document Version:** 1.1
 **Date:** 2025-12-25
@@ -51,7 +51,7 @@
 
 ## Executive Summary
 
-The econ-data-mcp backend currently has **3+ overlapping routing systems** that make provider selection decisions. This analysis evaluates the benefits and risks of consolidating these systems, followed by a detailed 100-step implementation plan.
+The openecon-data backend currently has **3+ overlapping routing systems** that make provider selection decisions. This analysis evaluates the benefits and risks of consolidating these systems, followed by a detailed 100-step implementation plan.
 
 **Current State:**
 - 3 routing decision points

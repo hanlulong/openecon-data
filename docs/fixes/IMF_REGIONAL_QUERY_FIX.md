@@ -174,13 +174,13 @@ Run comprehensive tests:
 
 ```bash
 # Test regional resolution
-PYTHONPATH=/home/hanlulong/econ-data-mcp python3 tests/test_imf_regional_queries.py
+PYTHONPATH=/home/hanlulong/openecon-data python3 tests/test_imf_regional_queries.py
 
 # Test failing queries
-PYTHONPATH=/home/hanlulong/econ-data-mcp python3 tests/test_imf_failing_queries.py
+PYTHONPATH=/home/hanlulong/openecon-data python3 tests/test_imf_failing_queries.py
 
 # View summary
-PYTHONPATH=/home/hanlulong/econ-data-mcp python3 tests/test_imf_regional_fix_summary.py
+PYTHONPATH=/home/hanlulong/openecon-data python3 tests/test_imf_regional_fix_summary.py
 ```
 
 ## Files Modified

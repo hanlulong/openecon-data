@@ -1,6 +1,6 @@
 # MCP Client Setup (Claude Code + Codex)
 
-`econ-data-mcp` is a one-stop economic data layer exposed as a single MCP tool: `query_data`.
+`openecon-data` is a one-stop economic data layer exposed as a single MCP tool: `query_data`.
 
 ## Endpoints
 
@@ -16,27 +16,27 @@
 
 ```bash
 # Hosted
-codex mcp add econ-data-mcp --url https://data.openecon.io/mcp
+codex mcp add openecon-data --url https://data.openecon.io/mcp
 
 # Or local
-codex mcp add econ-data-mcp-local --url http://localhost:3001/mcp
+codex mcp add openecon-data-local --url http://localhost:3001/mcp
 
 # Verify
 codex mcp list
-codex mcp get econ-data-mcp
+codex mcp get openecon-data
 ```
 
 ## Add to Claude Code
 
 ```bash
 # Hosted
-claude mcp add --transport sse econ-data-mcp https://data.openecon.io/mcp --scope user
+claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
 
 # Or local
-claude mcp add --transport sse econ-data-mcp-local http://localhost:3001/mcp --scope user
+claude mcp add --transport sse openecon-data-local http://localhost:3001/mcp --scope user
 
 # Verify
-claude mcp get econ-data-mcp
+claude mcp get openecon-data
 ```
 
 ## Example Prompts (Claude Code / Codex)

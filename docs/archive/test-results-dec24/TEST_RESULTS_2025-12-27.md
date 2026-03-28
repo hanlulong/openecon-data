@@ -1,4 +1,4 @@
-# econ-data-mcp Test Results - December 27, 2025
+# openecon-data Test Results - December 27, 2025
 
 ## Summary
 

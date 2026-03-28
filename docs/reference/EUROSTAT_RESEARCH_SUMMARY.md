@@ -29,12 +29,12 @@
 
 Eurostat provides TWO APIs:
 
-| API | URL Pattern | Format | Status | econ-data-mcp Usage |
+| API | URL Pattern | Format | Status | openecon-data Usage |
 |-----|-------------|--------|--------|----------------|
 | **Statistics API** | `statistics/1.0/data/{dataset}` | JSON-stat 2.0 | ✅ Stable | **CURRENT** |
 | **SDMX 2.1 API** | `sdmx/2.1/data/{dataflow}/{key}` | SDMX-JSON | ⚠️ Has 406 errors | Not used |
 
-**Decision**: econ-data-mcp correctly uses Statistics API for maximum reliability.
+**Decision**: openecon-data correctly uses Statistics API for maximum reliability.
 
 ---
 
@@ -118,7 +118,7 @@ curl -s "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/prc
 
 **Validation**: Matches official French inflation data
 
-#### Test 4: econ-data-mcp Provider Test
+#### Test 4: openecon-data Provider Test
 
 ```python
 from backend.providers.eurostat import EurostatProvider
@@ -217,7 +217,7 @@ result = await provider.fetch_indicator('INFLATION', 'FRANCE', 2019, 2024)
 }
 ```
 
-**econ-data-mcp handles this correctly** (lines 530-565):
+**openecon-data handles this correctly** (lines 530-565):
 - Calculates position based on unit index
 - Selects `PC_ACT` for unemployment rate
 - Falls back to simple indexing for single-unit queries
@@ -307,7 +307,7 @@ Key values:
 ### What We Learned
 
 1. **API Structure**: Eurostat Statistics API (JSON-stat 2.0) is reliable and well-documented
-2. **Implementation Status**: econ-data-mcp's Eurostat provider is **working correctly**
+2. **Implementation Status**: openecon-data's Eurostat provider is **working correctly**
 3. **Root Causes of "Failures"**:
    - 33% → 66.7% accuracy is actually **above expectations** for SDMX providers
    - Most "failures" are due to metadata search being unavailable (ChromaDB issue)
@@ -338,14 +338,14 @@ Key values:
 
 ### Files Created
 
-1. `/home/hanlulong/econ-data-mcp/docs/reference/EUROSTAT_API_COMPLETE_GUIDE.md` (10,000+ words)
+1. `/home/hanlulong/openecon-data/docs/reference/EUROSTAT_API_COMPLETE_GUIDE.md` (10,000+ words)
    - Complete API reference
    - All major datasets documented
    - Working examples for GDP, unemployment, inflation
    - Response format and parsing algorithms
    - Best practices and troubleshooting
 
-2. `/home/hanlulong/econ-data-mcp/docs/EUROSTAT_RESEARCH_SUMMARY.md` (this file)
+2. `/home/hanlulong/openecon-data/docs/EUROSTAT_RESEARCH_SUMMARY.md` (this file)
    - Research findings
    - Test results
    - Pass rate analysis
