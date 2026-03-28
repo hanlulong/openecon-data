@@ -1,33 +1,29 @@
 # OpenEcon Data — Skills & Plugins
 
-Give your AI coding agent access to verified economic data from official sources. One command, 330K+ indicators, 10 providers.
+Give your AI coding agent verified economic data. One line, then just talk.
 
-## Quick Install
+## Fastest Install
 
-### Claude Code — MCP Server (recommended)
+```bash
+curl -sL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
+```
+
+Auto-detects Claude Code and Codex. After install, just ask your agent naturally:
+```
+"What's the US GDP growth rate?"
+"Compare inflation across G7 countries"
+"Show me Japan's trade balance with China"
+```
+
+No special commands needed — your agent calls OpenEcon automatically.
+
+## Manual Install Options
+
+### Claude Code — MCP Server
 
 ```bash
 claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
 ```
-
-Your agent will automatically use OpenEcon when you ask about economic data:
-```
-> What's the US GDP growth rate?
-> Compare inflation across G7 countries
-> Show me Japan's trade balance with China
-```
-
-### Claude Code — Slash Command
-
-```bash
-cp skills/claude-code/econ-data.md ~/.claude/commands/econ-data.md
-```
-
-Then use explicitly: `/econ-data US unemployment last 5 years`
-
-### Claude Code — Auto-Trigger via CLAUDE.md
-
-Add the snippet from [CLAUDE.md.example](CLAUDE.md.example) to your project's `CLAUDE.md`. Your agent will automatically call OpenEcon whenever economic data is discussed — no explicit command needed.
 
 ### Codex (OpenAI)
 
@@ -42,6 +38,18 @@ Endpoint: https://data.openecon.ai/mcp
 Transport: SSE (Server-Sent Events)
 Tool: query_data
 ```
+
+## Optional: Slash Command
+
+```bash
+cp skills/claude-code/econ-data.md ~/.claude/commands/econ-data.md
+```
+
+Then use: `/econ-data US unemployment last 5 years`
+
+## Optional: Auto-Trigger via CLAUDE.md
+
+Add the snippet from [CLAUDE.md.example](CLAUDE.md.example) to your project's `CLAUDE.md` — your agent will automatically use OpenEcon for any economic data question without being asked.
 
 ## Verify It Works
 

@@ -28,7 +28,24 @@
 
 ---
 
-## Add to Your AI Agent (One Command)
+## Install (One Line, Then Just Talk)
+
+```bash
+curl -sL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
+```
+
+That's it. The script auto-detects Claude Code and Codex, configures everything. Then just ask:
+
+```
+You: "What's the US GDP growth rate?"         → your agent fetches real data from FRED
+You: "Compare inflation across G7 countries"   → World Bank data for 7 countries
+You: "Bitcoin price last 30 days"              → CoinGecko live data
+```
+
+No special syntax. No "use query_data". Just ask naturally — your agent handles the rest.
+
+<details>
+<summary><b>Manual install (if you prefer)</b></summary>
 
 **Claude Code:**
 ```bash
@@ -40,20 +57,10 @@ claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scop
 codex mcp add openecon-data --url https://data.openecon.ai/mcp
 ```
 
-Then ask your agent:
-```
-Use query_data to compare US, UK, and Japan inflation from 2015 to 2025.
-```
+**Any MCP agent:** Endpoint `https://data.openecon.ai/mcp` (SSE transport)
 
-Your agent gets real data from official sources — no hallucinated numbers.
-
-**Custom slash command** (Claude Code):
-```bash
-cp skills/claude-code/econ-data.md ~/.claude/commands/econ-data.md
-```
-Then use: `/econ-data US GDP growth last 10 years`
-
-See [skills/README.md](skills/README.md) for all installation options.
+See [skills/README.md](skills/README.md) for slash commands and auto-trigger options.
+</details>
 
 ---
 
