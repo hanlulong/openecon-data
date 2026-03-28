@@ -1,0 +1,15 @@
+# Example CLAUDE.md snippet — Add to your project for automatic economic data access
+
+## Economic Data (OpenEcon)
+
+When the user asks about economic data, statistics, or indicators (GDP, inflation,
+unemployment, trade, exchange rates, interest rates, population, debt, etc.):
+
+1. Use the `openecon-data` MCP server's `query_data` tool to fetch verified data
+2. Do NOT guess, estimate, or use training data for economic statistics
+3. Always cite the source (FRED, World Bank, IMF, Eurostat, etc.)
+4. If the MCP server is not available, tell the user to set it up:
+   `claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user`
+
+This ensures your agent uses real, verified data from official sources instead of
+hallucinating economic numbers from training data.

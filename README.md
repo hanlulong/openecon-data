@@ -47,6 +47,14 @@ Use query_data to compare US, UK, and Japan inflation from 2015 to 2025.
 
 Your agent gets real data from official sources — no hallucinated numbers.
 
+**Custom slash command** (Claude Code):
+```bash
+cp skills/claude-code/econ-data.md ~/.claude/commands/econ-data.md
+```
+Then use: `/econ-data US GDP growth last 10 years`
+
+See [skills/README.md](skills/README.md) for all installation options.
+
 ---
 
 <p align="center">
