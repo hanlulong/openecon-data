@@ -519,6 +519,34 @@
       "catalog_concepts": 67,
       "stale_codes": 0,
       "commit_sha": "1bd858f"
+    },
+    {
+      "cycle": 99,
+      "timestamp": "2026-03-28T00:40:00Z",
+      "dimension_scores": {
+        "accuracy": 96,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 96.1,
+      "focus_area": "Country-specific provider preference in catalog routing",
+      "root_cause": "_coverage_preference_bonus returned 0.0 when country context was provided, causing global providers (WorldBank) to win over country-specific ones (StatsCan, FRED, Eurostat) at equal confidence. Canada unemployment routed to WorldBank instead of StatsCan.",
+      "fix_description": "Added coverage specificity bonus: +0.10 for exact country match (StatsCan\u2192CA, FRED\u2192US), +0.06 for regional match (Eurostat\u2192EU). Framework fix applies to all 67 catalog concepts. Now: Canada\u2192StatsCan, US\u2192FRED, Germany\u2192Eurostat, Japan\u2192WorldBank (correct).",
+      "queries_improved": [
+        "Canada unemployment \u2192 StatsCan",
+        "Germany unemployment \u2192 Eurostat",
+        "all catalog concepts with country-specific providers"
+      ],
+      "production_tests": [
+        "Localhost healthy, production heartbeat OK"
+      ],
+      "tests_total": 483,
+      "benchmark_queries_total": 110,
+      "benchmark_pass_rate": "Core queries 96%+, harder stress tests 83%",
+      "commit_sha": "69a79af"
     }
   ]
 }
