@@ -182,6 +182,8 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **67 Curated Concepts** — Hand-verified mappings ensure "US jobless claims" routes to FRED/ICSA, not a generic unemployment rate.
 
+**Cross-Encoder Reranking** — FlashRank reranks search results so "GDP growth rate" matches the growth series, not raw GDP levels. Retrieve broadly, rerank precisely.
+
 **Multi-Format Export** — CSV, JSON, DTA (Stata), and Python code. Every export includes source attribution.
 
 **Streaming** — Real-time progress via Server-Sent Events.
