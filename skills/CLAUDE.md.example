@@ -1,15 +1,26 @@
-# Example CLAUDE.md snippet — Add to your project for automatic economic data access
+# Add this to your project's CLAUDE.md for automatic economic data access
 
 ## Economic Data (OpenEcon)
 
-When the user asks about economic data, statistics, or indicators (GDP, inflation,
-unemployment, trade, exchange rates, interest rates, population, debt, etc.):
+When the user asks about economic data, statistics, or indicators — including but not limited to:
+- GDP, inflation, unemployment, trade balance, interest rates
+- Government debt, fiscal balance, tax revenue, spending
+- Population, poverty, education, health, life expectancy
+- Exchange rates, cryptocurrency prices, commodity prices
+- Country comparisons, G7/G20/BRICS/EU group queries
+- "What data is available for X?" or "What indicators does Y have?"
 
-1. Use the `openecon-data` MCP server's `query_data` tool to fetch verified data
-2. Do NOT guess, estimate, or use training data for economic statistics
-3. Always cite the source (FRED, World Bank, IMF, Eurostat, etc.)
-4. If the MCP server is not available, tell the user to set it up:
-   `claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user`
+**Always use the `openecon-data` MCP server** to fetch verified data:
 
-This ensures your agent uses real, verified data from official sources instead of
-hallucinating economic numbers from training data.
+1. Call the `query_data` tool with the user's question as the `query` parameter
+2. Present the results with source attribution
+3. Do NOT guess, estimate, or use training data for economic statistics
+4. If the query returns clarification options, present them to the user
+5. For informational queries ("What indicators exist?"), present the text response
+
+If the MCP server is not connected, tell the user:
+```
+claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
+```
+
+**Why:** LLMs hallucinate economic data. OpenEcon fetches verified numbers from official sources (FRED, World Bank, IMF, Eurostat, etc.) with source URLs for verification. 330K+ indicators across 200+ countries.

@@ -1,55 +1,41 @@
 # OpenEcon Data — Skills & Plugins
 
-Install OpenEcon as a skill for your AI coding agent. One command gives your agent access to 330K+ economic indicators from FRED, World Bank, IMF, Eurostat, and 6 more sources.
+Give your AI coding agent access to verified economic data from official sources. One command, 330K+ indicators, 10 providers.
 
-## Claude Code
+## Quick Install
 
-### Option 1: Add MCP Server (recommended)
+### Claude Code — MCP Server (recommended)
 
 ```bash
 claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
 ```
 
-Your agent can now use `query_data` automatically when you ask about economic data.
+Your agent will automatically use OpenEcon when you ask about economic data:
+```
+> What's the US GDP growth rate?
+> Compare inflation across G7 countries
+> Show me Japan's trade balance with China
+```
 
-### Option 2: Add as Custom Slash Command
-
-Copy the skill file into your Claude Code config:
+### Claude Code — Slash Command
 
 ```bash
-# Global (all projects)
 cp skills/claude-code/econ-data.md ~/.claude/commands/econ-data.md
-
-# Or project-level
-mkdir -p .claude/commands
-cp skills/claude-code/econ-data.md .claude/commands/econ-data.md
 ```
 
-Then use: `/econ-data US GDP growth last 10 years`
+Then use explicitly: `/econ-data US unemployment last 5 years`
 
-### Option 3: Add CLAUDE.md instructions
+### Claude Code — Auto-Trigger via CLAUDE.md
 
-Add this to your project's `CLAUDE.md` to make your agent automatically use OpenEcon for economic data questions:
+Add the snippet from [CLAUDE.md.example](CLAUDE.md.example) to your project's `CLAUDE.md`. Your agent will automatically call OpenEcon whenever economic data is discussed — no explicit command needed.
 
-```markdown
-## Economic Data
-
-When asked about economic data (GDP, inflation, unemployment, trade, etc.),
-use the openecon-data MCP server to fetch verified data from official sources.
-Do NOT guess or use training data for economic statistics — always query the API.
-```
-
-## Codex (OpenAI)
+### Codex (OpenAI)
 
 ```bash
 codex mcp add openecon-data --url https://data.openecon.ai/mcp
 ```
 
-Then ask: `Use query_data to get US inflation rate 2020-2024`
-
-## Any MCP-Compatible Agent
-
-The MCP endpoint works with any agent that supports SSE transport:
+### Any MCP-Compatible Agent
 
 ```
 Endpoint: https://data.openecon.ai/mcp
@@ -57,16 +43,34 @@ Transport: SSE (Server-Sent Events)
 Tool: query_data
 ```
 
-## Example Queries
+## Verify It Works
 
-Once installed, just ask your agent naturally:
-
+After installing, test with:
 ```
-"What's US GDP growth?"
-"Compare inflation across G7 countries"
-"Show me China's trade balance with the US"
-"What unemployment data does FRED have?"
-"Bitcoin price last 30 days"
+Use query_data to get US GDP growth for the last 5 years.
 ```
 
-The agent will automatically call OpenEcon and return verified data from official sources.
+Expected: Your agent returns real GDP data from FRED with source attribution.
+
+## What Your Agent Can Do
+
+| Query Type | Example | Source |
+|-----------|---------|--------|
+| Single indicator | "US inflation 2020-2024" | FRED |
+| Country comparison | "GDP per capita G7 countries" | World Bank |
+| Multi-indicator | "US GDP and unemployment together" | FRED |
+| Trade flows | "China exports to US" | UN Comtrade |
+| Exchange rates | "EUR/USD last year" | ExchangeRate-API |
+| Crypto | "Bitcoin price last 30 days" | CoinGecko |
+| Discovery | "What trade data does IMF have?" | IMF (text response) |
+| Follow-ups | "add Germany" / "show per capita" | Contextual |
+
+## Why Not Just Ask the LLM?
+
+LLMs hallucinate economic data. When asked "What is US GDP?", they return plausible but often wrong numbers from stale training data. OpenEcon:
+
+- Fetches from **official APIs** (FRED, World Bank, IMF, Eurostat)
+- Returns **verified data** with source attribution
+- Covers **330K+ indicators** across **200+ countries**
+- Provides **source URLs** for every data point
+- Includes **up-to-date data** (not training-data cutoff)
