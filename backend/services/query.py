@@ -3868,6 +3868,30 @@ class QueryService:
         if not plan:
             return None
 
+        # Skip semantic ambiguity when query uses a specific metric phrase
+        # (not a broad concept).  "unemployment rate" is specific;
+        # "employment" is broad.  "trade deficit" is specific; "trade" is broad.
+        _specific_metric_patterns = [
+            r"\bunemployment\s+rate\b", r"\bemployment\s+rate\b",
+            r"\btrade\s+balance\b", r"\btrade\s+deficit\b", r"\btrade\s+surplus\b",
+            r"\btrade\s+openness\b", r"\bcurrent\s+account\b",
+            r"\bbond\s+yield\b", r"\bpolicy\s+rate\b", r"\blending\s+rate\b",
+            r"\binflation\s+rate\b", r"\bgdp\s+growth\b", r"\bgdp\s+per\s+capita\b",
+            r"\binterest\s+rate\b", r"\bexchange\s+rate\b",
+            r"\bdebt\s+to\s+gdp\b", r"\bdebt.to.gdp\b",
+            r"\blabor\s+force\s+participation\b", r"\bpoverty\s+rate\b",
+            r"\bmortality\s+rate\b", r"\bliteracy\s+rate\b",
+            r"\bfertility\s+rate\b", r"\bbirth\s+rate\b",
+            r"\blife\s+expectancy\b", r"\bgini\s+coefficient\b",
+        ]
+        query_lower_check = str(query or "").lower()
+        if any(re.search(p, query_lower_check) for p in _specific_metric_patterns):
+            logger.info(
+                "⏭️ Skipping semantic ambiguity — query has specific metric: '%s'",
+                query[:60],
+            )
+            return None
+
         # For multi-country region queries, auto-select the default metric
         # instead of asking.  The user's primary intent is clear (compare
         # countries) so we pick the most common interpretation of the broad
@@ -4389,7 +4413,7 @@ class QueryService:
                 metadata=getattr(resolved, "metadata", None),
             )
             current_label = f"{current_name} from {provider or getattr(resolved, 'provider', 'unknown provider')}"
-            if primary_accepted and primary_relevance >= 0.8:
+            if primary_accepted and primary_relevance >= 0.65:
                 return None
 
         options = self._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
@@ -4501,7 +4525,7 @@ class QueryService:
         if primary_accepted and top_matches_primary:
             return None
 
-        if primary_accepted and not top_matches_primary and primary_relevance >= 0.8:
+        if primary_accepted and not top_matches_primary and primary_relevance >= 0.65:
             return None
 
         clarification_questions = [
