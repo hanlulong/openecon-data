@@ -655,6 +655,24 @@
       "variables_tested": 730,
       "tests_total": 483,
       "commit_sha": "dea9318"
+    },
+    {
+      "cycle": 105,
+      "timestamp": "2026-03-28T14:00:00Z",
+      "dimension_scores": {
+        "accuracy": 90,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 94.5,
+      "focus_area": "Batch 14 (FRED specifics, WorldBank development, Eurostat/IMF, multi-turn, complex NL)",
+      "fix_description": "Batch 14: 32/50 (64%). FRED 90%, Eurostat/IMF 90%, WorldBank 70%, Multi-turn 60%, Complex NL 40%. Main issue: clarification over-triggering (10/18 failures). Infrastructure patterns identified for next fix cycle.",
+      "variables_tested": 762,
+      "tests_total": 483,
+      "commit_sha": "f508667"
     }
   ]
 }
