@@ -215,14 +215,6 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Stack:** Python · FastAPI · React · TypeScript · Vite · Recharts · FAISS · OpenRouter
 
-## OpenEcon Ecosystem
-
-| Project | Description |
-|---------|-------------|
-| **[OpenEcon Data](https://data.openecon.ai/chat)** | Query economic data in plain English, chart results, export CSV/JSON *(this repo)* |
-| **[Econ Writing Skill](https://github.com/hanlulong/econ-writing-skill)** | Reusable writing workflows for economists — prompt patterns, structure templates |
-| **[Awesome AI for Economists](https://github.com/hanlulong/awesome-ai-for-economists)** | Curated tools, papers, and references for applying AI in economic research |
-
 ## Contributing
 
 Contributions welcome! See the [Developer & Contributor Guide](docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md).
