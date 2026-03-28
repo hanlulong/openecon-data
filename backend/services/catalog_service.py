@@ -494,13 +494,37 @@ def _check_coverage(coverage: Any, countries: Optional[List[str]]) -> bool:
 
 def _coverage_preference_bonus(coverage: Any, countries: Optional[List[str]]) -> float:
     """
-    Apply a small ranking bonus for broader coverage when no country context is provided.
+    Apply a ranking bonus based on coverage specificity.
 
-    Without geography, global providers are safer defaults than region-limited or
-    single-country sources, even if the narrower source has slightly higher catalog
-    confidence.
+    When country context IS provided, prefer country-specific providers
+    (e.g., StatsCan for Canada, FRED for US, Eurostat for EU members)
+    over global providers. Country-specific sources typically offer
+    higher frequency, more timely data, and better coverage.
+
+    Without geography, prefer global providers as safer defaults.
     """
     if countries:
+        # When we know the target country, prefer specific providers
+        if isinstance(coverage, list):
+            normalized_coverage = {
+                (CountryResolver.normalize(c) or str(c).upper())
+                for c in coverage if c
+            }
+            normalized_countries = {
+                (CountryResolver.normalize(c) or str(c).upper())
+                for c in countries if c
+            }
+            # Exact country match: provider is specialized for this country
+            if normalized_coverage and normalized_countries <= normalized_coverage:
+                return 0.10  # Strong bonus for country-specific providers
+        elif isinstance(coverage, str):
+            cov_lower = coverage.split("#", 1)[0].strip().lower()
+            if cov_lower in {"global", "partial_global"}:
+                return 0.0  # No bonus for global when country is known
+            if cov_lower in {"eu_members", "eurozone"} and countries:
+                from ..routing.country_resolver import CountryResolver as CR
+                if all(CR.is_eu_member(c) for c in countries if c):
+                    return 0.06  # Bonus for EU-specific when querying EU countries
         return 0.0
 
     if isinstance(coverage, list):
