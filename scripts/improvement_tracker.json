@@ -711,6 +711,25 @@
       "benchmark_queries_total": 110,
       "commit_sha": "6ce698e",
       "milestone": "1000_variables_tested"
+    },
+    {
+      "cycle": 113,
+      "timestamp": "2026-03-29T00:30:00Z",
+      "dimension_scores": {
+        "accuracy": 92,
+        "multi_country": 100,
+        "coverage": 100,
+        "reliability": 100,
+        "session": 100,
+        "ui": 75
+      },
+      "weighted_score": 96.1,
+      "focus_area": "1000-variable retest + 100 new queries (1100 total) \u2014 measuring FlashRank impact",
+      "root_cause": "FlashRank reranking + clarification fixes: 76% \u2192 92% across 350 retested queries. 2 batches hit perfect 100%. New batches 18-19: 89/100. Quality note: some passes return wrong indicator (data exists but wrong series).",
+      "fix_description": "Retest results: B8 42\u219280%, B9 70\u219296%, B10 92\u219296%, B11 70\u219282%, B12 98\u2192100%, B13 82\u219288%, B14 64\u2192100%. New B18: 44/50, B19: 45/50. Total: 410/450 (91%). Remaining failures: data gaps (15), wrong indicator variants (5), provider limitations (5), ambiguity (4).",
+      "variables_tested": 1100,
+      "tests_total": 483,
+      "commit_sha": "e3494e6"
     }
   ]
 }
