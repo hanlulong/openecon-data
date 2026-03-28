@@ -3629,19 +3629,35 @@ class QueryService:
         """
         Lightweight pre-LLM check for probable informational queries.
 
-        This is NOT the authoritative classifier — the LLM's queryType field
-        is.  This just ensures informational queries bypass the orchestrator
-        so they reach the LLM parse step.  Uses word co-occurrence rather
-        than exact phrases to handle varied word orders.
+        Detects questions about data availability, provider coverage, or
+        indicator discovery — as opposed to actual data fetch requests.
+        Uses word co-occurrence rather than exact phrases to handle varied
+        word orders.
         """
         q = str(query or "").lower()
         # Must contain at least one "question" word AND one "metadata" word
-        question_words = {"what", "which", "list", "does", "browse", "search", "available", "show"}
-        metadata_words = {"series", "indicators", "indicator", "datasets", "metrics", "providers"}
+        question_words = {
+            "what", "which", "list", "does", "browse", "search",
+            "available", "show me", "have", "offer", "cover",
+        }
+        metadata_words = {
+            "series", "indicators", "indicator", "datasets", "metrics",
+            "providers", "data", "sources", "variables", "measures",
+        }
         words = set(q.split())
         has_question = bool(words & question_words)
         has_metadata = bool(words & metadata_words)
-        return has_question and has_metadata
+        if not (has_question and has_metadata):
+            return False
+        # Exclude queries that are clearly data fetches despite containing
+        # "data" — e.g., "show me GDP data for Japan" is a fetch, not info.
+        fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
+        # If query has "data" as the only metadata word AND has fetch signals,
+        # it's probably a data fetch, not informational.
+        pure_metadata = words & metadata_words
+        if pure_metadata == {"data"} and (words & fetch_signals):
+            return False
+        return True
 
     def _handle_informational_intent(
         self,
@@ -8026,7 +8042,16 @@ class QueryService:
 
             # Route informational queries — the LLM classified queryType as
             # part of intent extraction (same API call, zero cost).
-            if str(intent.queryType or "").strip().lower() == "informational":
+            _qt = str(intent.queryType or "").strip().lower()
+            # Fallback: if the heuristic detected informational but the LLM
+            # didn't classify it as such, override.  The heuristic has high
+            # precision (question word + metadata word) so false positives
+            # are rare, while local LLMs sometimes miss the queryType field.
+            if _qt != "informational" and self._looks_informational(query):
+                logger.info("📖 Heuristic override: queryType %r → informational for: %s", _qt, query[:60])
+                _qt = "informational"
+                intent.queryType = "informational"
+            if _qt == "informational":
                 logger.info("📖 LLM classified query as informational: %s", query)
                 informational_response = self._handle_informational_intent(
                     query=query,
