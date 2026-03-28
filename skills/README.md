@@ -5,7 +5,7 @@ Give your AI coding agent verified economic data. One line, then just talk.
 ## Fastest Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
 ```
 
 Auto-detects Claude Code and Codex. After install, just ask your agent naturally:

@@ -31,7 +31,7 @@
 ## Install (One Line, Then Just Talk)
 
 ```bash
-curl -sL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
 ```
 
 That's it. The script auto-detects Claude Code and Codex, configures everything. Then just ask:
