@@ -390,7 +390,7 @@ class IndicatorResolver:
 
         # 4. Try FTS5 search in database (fallback for terms not in translator/catalog)
         if not result:
-            search_results = self.lookup.search(query, provider=provider, limit=10)
+            search_results = self.lookup.search(query, provider=provider, limit=20)
             search_results = self._fuse_semantic_candidates(
                 query=query,
                 provider=provider,
@@ -401,6 +401,18 @@ class IndicatorResolver:
                     search_results,
                     provider_translator_candidate,
                 )
+            # Cross-encoder reranking: retrieve broadly, then rerank with
+            # FlashRank to find the most relevant candidate.  The cross-encoder
+            # attends to both query and candidate simultaneously, catching
+            # mismatches that independent scoring misses.
+            if search_results and len(search_results) > 1:
+                try:
+                    from .reranker import rerank_candidates
+                    reranked = rerank_candidates(query, search_results, top_k=10)
+                    if reranked and reranked[0][1] > 0:
+                        search_results = [r[0] for r in reranked]
+                except Exception as e:
+                    logger.debug("Reranker unavailable: %s", e)
             if search_results:
                 best, best_confidence = self._pick_best_search_result(
                     query,
