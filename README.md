@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://data.openecon.ai/chat"><img src="https://img.shields.io/badge/Try_it-Live_Demo-blue?style=flat-square" alt="Live Demo" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square" alt="MIT License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 License" /></a>
   <a href="https://github.com/hanlulong/openecon-data/stargazers"><img src="https://img.shields.io/github/stars/hanlulong/openecon-data?style=flat-square" alt="Stars" /></a>
   <a href="https://github.com/hanlulong/openecon-data/issues"><img src="https://img.shields.io/github/issues/hanlulong/openecon-data?style=flat-square" alt="Issues" /></a>
   <img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white" alt="Python" />
@@ -179,7 +179,7 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Streaming** — Real-time progress via Server-Sent Events.
 
-**Self-Hostable** — MIT-licensed. Add new providers by implementing a single base class.
+**Self-Hostable** — AGPL-3.0 licensed. Add new providers by implementing a single base class.
 
 ## Data Sources
 
