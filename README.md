@@ -5,8 +5,8 @@
 <h1 align="center">OpenEcon Data</h1>
 
 <p align="center">
-  <strong>The open-source ChatGPT for economic data.</strong><br/>
-  Ask in plain English. Get charts from FRED, World Bank, IMF, Eurostat, and 6 more sources — instantly.
+  <strong>Give your AI agent accurate economic data.</strong><br/>
+  330K indicators from FRED, World Bank, IMF, Eurostat, and 6 more sources — one MCP command away.
 </p>
 
 <p align="center">
@@ -15,8 +15,8 @@
   <a href="https://github.com/hanlulong/openecon-data/stargazers"><img src="https://img.shields.io/github/stars/hanlulong/openecon-data?style=flat-square" alt="Stars" /></a>
   <a href="https://github.com/hanlulong/openecon-data/issues"><img src="https://img.shields.io/github/issues/hanlulong/openecon-data?style=flat-square" alt="Issues" /></a>
   <img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/React-18+-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React" />
-  <img src="https://img.shields.io/badge/MCP-Compatible-purple?style=flat-square" alt="MCP Compatible" />
+  <img src="https://img.shields.io/badge/MCP-Server-purple?style=flat-square" alt="MCP Server" />
+  <img src="https://img.shields.io/github/last-commit/hanlulong/openecon-data?style=flat-square" alt="Last Commit" />
 </p>
 
 <p align="center">
@@ -28,42 +28,7 @@
 
 ---
 
-<p align="center">
-  <img src="docs/assets/demo.gif" width="800" alt="OpenEcon Data — type a query in plain English, get a chart with data from FRED, World Bank, and more" />
-</p>
-
-## Why OpenEcon Data?
-
-Economists, researchers, and analysts waste hours wrangling APIs, deciphering country codes, and normalizing data from different sources. OpenEcon Data eliminates that friction:
-
-- **Ask in English** — "Compare US and Japan inflation since 2015" just works
-- **10+ sources, one interface** — FRED, World Bank, IMF, Eurostat, BIS, UN Comtrade, StatsCan, OECD, ExchangeRate-API, CoinGecko
-- **Conversational** — follow up naturally: "now add Germany", "what about 2010?", "show only G7"
-- **MCP-native** — plug into Claude, Codex, or any MCP-compatible AI agent with one command
-- **Self-hostable** — MIT-licensed, run locally or deploy your own instance
-- **330,000+ indicators** — full-text search across the world's major economic databases
-
-<p align="center">
-  <b>330K+</b> indicators &nbsp;&middot;&nbsp; <b>10</b> data providers &nbsp;&middot;&nbsp; <b>200+</b> countries &nbsp;&middot;&nbsp; <b>67</b> curated concepts &nbsp;&middot;&nbsp; <b>< 5s</b> avg. query time
-</p>
-
-## Who Is This For?
-
-| Role | How they use it |
-|------|----------------|
-| **Economists & Researchers** | Quick data pulls for papers — GDP, inflation, trade, debt — without writing API code |
-| **Policy Analysts** | Cross-country comparisons (G7, BRICS, EU) with one query |
-| **Students** | Learn by exploring — ask questions, see data, export for assignments |
-| **Journalists** | Fact-check claims against official sources in seconds |
-| **AI Agent Builders** | Add economic data capabilities to any MCP-compatible agent |
-
-## Quick Start
-
-### Use the hosted app (no setup)
-
-Try it now at **[data.openecon.ai/chat](https://data.openecon.ai/chat)** — no account required.
-
-### Add to your AI agent (one command)
+## Add to Your AI Agent (One Command)
 
 **Claude Code:**
 ```bash
@@ -79,6 +44,67 @@ Then ask your agent:
 ```
 Use query_data to compare US, UK, and Japan inflation from 2015 to 2025.
 ```
+
+Your agent gets real data from official sources — no hallucinated numbers.
+
+---
+
+<p align="center">
+  <img src="docs/assets/demo.gif" width="800" alt="OpenEcon Data — type a query in plain English, get a chart with data from FRED, World Bank, and more" />
+</p>
+
+## Why Your Agent Needs This
+
+AI agents hallucinate economic data. When you ask an LLM "What is US GDP?", you get a plausible-sounding number that may be outdated or wrong. OpenEcon solves this:
+
+| | Without OpenEcon | With OpenEcon |
+|---|---|---|
+| **Data source** | LLM's training data (stale) | Official APIs (FRED, World Bank, IMF) |
+| **Accuracy** | Approximate, often wrong | Verified, with source attribution |
+| **Coverage** | Whatever the LLM remembers | 330K+ indicators, 200+ countries |
+| **Recency** | Months or years behind | Up to real-time (FRED, ExchangeRate) |
+| **Verifiable** | No source link | Every result includes source URL |
+
+## How It Compares
+
+| Feature | OpenEcon | fredapi | pandas-datareader | fred-mcp-server |
+|---------|----------|---------|-------------------|-----------------|
+| Natural language queries | Yes | No | No | No |
+| Data sources | 10+ | 1 (FRED) | 5 | 1 (FRED) |
+| MCP server for AI agents | Yes | No | No | Yes |
+| Web UI with charts | Yes | No | No | No |
+| Conversational follow-ups | Yes | No | No | No |
+| Smart indicator discovery | 330K indexed | Manual codes | Manual codes | Manual codes |
+| Self-hostable | Yes | N/A | N/A | Yes |
+| No code required | Yes | No | No | No |
+
+## What You Can Ask
+
+```
+"US GDP growth last 10 years"                    → FRED, quarterly chart
+"Compare China, India, Brazil GDP 2018-2024"     → World Bank, multi-country comparison
+"Inflation rate BRICS countries 2019-2023"        → World Bank, 5 countries auto-expanded
+"EUR/USD exchange rate last 24 months"            → ExchangeRate-API, currency pair chart
+"US unemployment and CPI together since 2010"     → FRED, dual-axis overlay
+"China exports to the US 2020-2024"               → UN Comtrade, bilateral trade flow
+"Credit to GDP ratio US, UK, Japan from BIS"      → BIS, financial stability data
+"Bitcoin price last year"                         → CoinGecko, crypto chart
+"What inflation indicators does FRED have?"       → Indicator discovery, text response
+```
+
+**Conversational follow-ups work naturally:**
+```
+You: "US GDP last 5 years"          → chart with US GDP
+You: "add Germany and Japan"         → updates to 3 countries
+You: "what about per capita?"        → switches to GDP per capita
+You: "show only 2020-2023"           → narrows time range
+```
+
+## Quick Start
+
+### Use the web app (no setup)
+
+**[data.openecon.ai/chat](https://data.openecon.ai/chat)** — no signup, no install.
 
 ### Self-host
 
@@ -104,29 +130,6 @@ python3 scripts/restart_dev.py
 See [Getting Started Guide](docs/guides/getting-started.md) for full setup instructions.
 </details>
 
-## Example Queries
-
-| Query | Source | What you get |
-|-------|--------|-------------|
-| "US GDP growth for the last 10 years" | FRED | Quarterly GDP growth chart |
-| "Compare China, India, and Brazil GDP 2018-2024" | World Bank | Multi-country comparison |
-| "Inflation rate BRICS countries 2019-2023" | World Bank | 5-country chart (BR, RU, IN, CN, ZA) |
-| "EUR/USD exchange rate last 24 months" | ExchangeRate-API | Currency pair line chart |
-| "US unemployment rate and CPI together since 2010" | FRED | Dual-axis overlay chart |
-| "China exports to the United States 2020-2024" | UN Comtrade | Bilateral trade flow |
-| "EU debt-to-GDP ratios across member states" | Eurostat | 27-country comparison |
-| "Credit to GDP ratio US, UK, Japan from BIS" | BIS | Financial stability data |
-| "Bitcoin price history for the last year" | CoinGecko | Crypto price chart |
-| "What inflation indicators does FRED have?" | FRED | Indicator discovery (text) |
-
-**Conversational follow-ups:**
-```
-You: "US GDP last 5 years"          → chart with US GDP
-You: "add Germany and Japan"         → chart updates to 3 countries
-You: "what about per capita?"        → switches to GDP per capita
-You: "show only 2020-2023"           → narrows time range
-```
-
 ## How It Works
 
 ```
@@ -146,29 +149,29 @@ You: "show only 2020-2023"           → narrows time range
 ```
 
 1. **Parse** — An LLM extracts intent, countries, indicators, and date range from plain English
-2. **Route** — A curated catalog of 67 economic concepts + 330K indicator index picks the best provider
-3. **Fetch** — Data is retrieved, normalized, and aligned across sources
-4. **Visualize** — Interactive chart with CSV, JSON, DTA (Stata), and Python export
+2. **Route** — 67 curated economic concepts + 330K indicator index picks the best provider
+3. **Fetch** — Data retrieved from official APIs, normalized and aligned
+4. **Return** — Interactive chart, or structured data via MCP for your agent
 
 ## Features
 
-**Natural Language Interface** — No API docs, no country codes, no series IDs. Just describe what you want.
+**MCP Server** — First-class [Model Context Protocol](https://modelcontextprotocol.io) support. Give Claude Code, Codex, or any MCP-compatible agent access to verified economic data.
 
-**Smart Indicator Discovery** — 330K+ indicators indexed with full-text search. Ask "What trade data does Comtrade have?" and get a browsable list.
+**Natural Language** — No API docs, no country codes, no series IDs. Just describe what you want.
 
-**Conversational Follow-ups** — Refine results naturally: add countries, change time ranges, switch indicators — the system remembers context.
+**330K Indicator Discovery** — Full-text search across FRED, World Bank, IMF, Eurostat, BIS, and more. Ask "What trade data does Comtrade have?" and get a browsable list.
 
-**Multi-Country Comparisons** — Say "G7", "BRICS", "EU", "ASEAN", "Nordic", or list specific countries. Auto-expands to all members.
+**Conversational** — Follow up naturally: add countries, change time ranges, switch indicators. The system remembers context.
 
-**Curated Concept Catalog** — 67 hand-verified economic concepts map natural language to the right indicator at the right provider. "US jobless claims" routes to FRED/ICSA, not a generic unemployment rate.
+**Multi-Country Comparisons** — Say "G7", "BRICS", "EU", "ASEAN", "Nordic" or list specific countries. Auto-expands to all members.
 
-**Streaming Results** — Real-time progress via Server-Sent Events. See each step as it happens.
+**67 Curated Concepts** — Hand-verified mappings ensure "US jobless claims" routes to FRED/ICSA, not a generic unemployment rate.
 
-**MCP Server** — First-class [Model Context Protocol](https://modelcontextprotocol.io) support. Any MCP-compatible AI agent can query economic data through the hosted endpoint.
+**Multi-Format Export** — CSV, JSON, DTA (Stata), and Python code. Every export includes source attribution.
 
-**Multi-Format Export** — Download as CSV, JSON, DTA (Stata), or Python code. Every export includes source attribution.
+**Streaming** — Real-time progress via Server-Sent Events.
 
-**Self-Hostable & Extensible** — MIT-licensed. Add new providers by implementing a single base class.
+**Self-Hostable** — MIT-licensed. Add new providers by implementing a single base class.
 
 ## Data Sources
 
@@ -184,6 +187,16 @@ You: "show only 2020-2023"           → narrows time range
 | **OECD** | OECD member countries | Extensive | None |
 | **ExchangeRate-API** | 160+ currencies | Live & historical | Free |
 | **CoinGecko** | Cryptocurrencies | 10,000+ coins | Free |
+
+## Who Is This For?
+
+| Role | How they use it |
+|------|----------------|
+| **AI Agent Builders** | Add economic data capabilities to any MCP-compatible agent — verified data, not hallucinations |
+| **Economists & Researchers** | Quick data pulls for papers without writing API code |
+| **Policy Analysts** | Cross-country comparisons (G7, BRICS, EU) with one query |
+| **Students** | Learn by exploring — ask questions, see data, export for assignments |
+| **Journalists** | Fact-check economic claims against official sources in seconds |
 
 ## Architecture
 
@@ -207,18 +220,18 @@ You: "show only 2020-2023"           → narrows time range
 | Project | Description |
 |---------|-------------|
 | **[OpenEcon Data](https://data.openecon.ai/chat)** | Query economic data in plain English, chart results, export CSV/JSON *(this repo)* |
-| **[Econ Writing Skill](https://github.com/hanlulong/econ-writing-skill)** | Reusable writing workflows for economists — prompt patterns, structure templates, analysis guardrails |
+| **[Econ Writing Skill](https://github.com/hanlulong/econ-writing-skill)** | Reusable writing workflows for economists — prompt patterns, structure templates |
 | **[Awesome AI for Economists](https://github.com/hanlulong/awesome-ai-for-economists)** | Curated tools, papers, and references for applying AI in economic research |
 
 ## Contributing
 
-Contributions are welcome! See the [Developer & Contributor Guide](docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md) for setup instructions, architecture overview, and code standards.
+Contributions welcome! See the [Developer & Contributor Guide](docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md).
 
 - [Open issues](https://github.com/hanlulong/openecon-data/issues) — bug reports and feature requests
 - [Documentation](docs/README.md) — full docs index
 - [Security policy](.github/SECURITY.md) — responsible disclosure
 
-If you find this useful, consider giving it a star — it helps others discover the project.
+If you find this useful, a star helps others discover the project.
 
 ## License
 
