@@ -581,10 +581,7 @@ class UnifiedRouter:
     def _is_us_trade_balance_no_partner(self, query: str, country: Optional[str]) -> bool:
         """Check if query is US trade balance without partner country."""
         query_lower = query.lower()
-        is_us = (
-            (country and country.upper() in ["US", "USA", "UNITED STATES"]) or
-            any(term in query_lower for term in ["us ", "u.s.", "united states", "america"])
-        )
+        is_us = self._is_us_context(country, query_lower)
         is_trade_balance = any(term in query_lower for term in [
             "trade balance", "trade deficit", "trade surplus"
         ])
@@ -603,11 +600,7 @@ class UnifiedRouter:
         indicators_str = " ".join(indicators).lower()
         combined = f"{query_lower} {indicators_str}"
 
-        is_us = (
-            (country and country.upper() in ["US", "USA", "UNITED STATES"])
-            or any(term in query_lower for term in ["us ", "u.s.", "united states", "america"])
-        )
-        if not is_us:
+        if not self._is_us_context(country, query_lower):
             return False
 
         return any(term in combined for term in [

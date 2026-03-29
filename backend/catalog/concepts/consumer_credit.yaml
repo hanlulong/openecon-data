@@ -1,0 +1,59 @@
+# Consumer Credit Indicator Catalog
+concept: consumer_credit
+category: financial
+domain: macroeconomics
+
+description: |
+  Consumer credit measures the total amount of outstanding credit
+  extended to individuals for personal expenditures. This includes
+  revolving credit (credit cards) and non-revolving credit (auto loans,
+  student loans, personal loans), but excludes mortgage debt.
+
+synonyms:
+  primary:
+    - consumer credit
+    - consumer lending
+    - consumer loans
+  secondary:
+    - household credit
+    - personal loans
+    - consumer credit outstanding
+    - total consumer credit
+    - credit card debt
+    - revolving credit
+    - consumer debt
+
+explicit_exclusions:
+  - mortgage debt
+  - household debt
+  - corporate credit
+  - corporate debt
+  - business credit
+  - total credit
+  - credit to gdp
+
+providers:
+  FRED:
+    primary:
+      code: TOTALSL
+      name: "Total Consumer Credit Outstanding"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    secondary:
+      code: REVOLSL
+      name: "Revolving Consumer Credit Outstanding"
+      confidence: 0.90
+      coverage: [US]
+      frequency: monthly
+
+not_available:
+  - WorldBank
+  - IMF
+  - Eurostat
+  - OECD
+  - BIS
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

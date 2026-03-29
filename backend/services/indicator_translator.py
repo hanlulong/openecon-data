@@ -855,28 +855,6 @@ class IndicatorTranslator:
 
         return best_match
 
-    def get_all_aliases_for_provider(self, provider: str) -> Dict[str, str]:
-        """
-        Get all indicator aliases that can be translated to this provider.
-
-        Returns:
-            Dict mapping alias -> provider code
-        """
-        result = {}
-        provider_upper = provider.upper()
-
-        for concept_name, concept_data in self.UNIVERSAL_CONCEPTS.items():
-            provider_codes = concept_data.get("providers", {}).get(provider_upper, [])
-            if provider_codes:
-                primary_code = provider_codes[0]
-                # Add all aliases
-                for alias in concept_data.get("aliases", []):
-                    result[alias.lower()] = primary_code
-                # Add IMF codes
-                for imf_code in concept_data.get("imf_codes", []):
-                    result[imf_code.upper()] = primary_code
-
-        return result
 
 
 # Singleton instance

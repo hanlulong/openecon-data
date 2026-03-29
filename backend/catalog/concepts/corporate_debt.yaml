@@ -1,0 +1,58 @@
+# Corporate Debt Indicator Catalog
+concept: corporate_debt
+category: financial
+domain: macroeconomics
+
+description: |
+  Corporate debt measures the total outstanding debt obligations of
+  non-financial corporations, including bonds, loans, and other
+  borrowing instruments used to finance business operations and
+  investment.
+
+synonyms:
+  primary:
+    - corporate debt
+    - business debt
+    - corporate credit
+  secondary:
+    - corporate bonds
+    - corporate borrowing
+    - nonfinancial corporate debt
+    - business credit
+    - corporate liabilities
+    - business borrowing
+
+explicit_exclusions:
+  - household debt
+  - consumer credit
+  - consumer debt
+  - government debt
+  - sovereign debt
+  - total credit
+
+providers:
+  FRED:
+    primary:
+      code: BCNSDODNS
+      name: "Nonfinancial Corporate Business; Debt Securities and Loans; Liability"
+      confidence: 0.95
+      coverage: [US]
+      frequency: quarterly
+
+  BIS:
+    primary:
+      code: WS_TC
+      name: "BIS Total Credit - Corporate Sector"
+      confidence: 0.85
+      coverage: global
+      frequency: quarterly
+
+not_available:
+  - WorldBank
+  - IMF
+  - Eurostat
+  - OECD
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
