@@ -1,0 +1,41 @@
+concept: deflation
+category: prices
+domain: macroeconomics
+
+description: |
+  Deflation — sustained decrease in the general price level.
+  Measured via the consumer price index (CPI) or GDP deflator.
+
+synonyms:
+  primary:
+    - deflation
+    - price deflation
+    - falling prices
+    - negative inflation
+  secondary:
+    - deflationary
+    - price decline
+    - CPI decline
+    - disinflation
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  WorldBank:
+    primary:
+      code: FP.CPI.TOTL.ZG
+      name: "Inflation, consumer prices (annual %)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+  FRED:
+    primary:
+      code: CPIAUCSL
+      name: "Consumer Price Index for All Urban Consumers"
+      confidence: 0.90
+      coverage: [US]
+      frequency: monthly

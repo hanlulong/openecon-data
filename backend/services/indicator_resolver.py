@@ -1712,6 +1712,14 @@ class IndicatorResolver:
             "school": ("research and development", "health", "trade"),
             "university": ("research and development", "health", "trade"),
             "enrollment": ("research and development", "inflation", "trade"),
+            # Price/deflation queries should not match stock market or financial depth
+            "deflation": ("stock market", "value traded", "capitalization", "bank deposits"),
+            "disinflation": ("stock market", "value traded", "capitalization"),
+            # Consumption queries should not match R&D or research
+            "consumption": ("research and development", "r&d expenditure"),
+            "consumer spending": ("research and development", "r&d"),
+            # Productivity queries — prefer labor/TFP, not water/agriculture
+            "factor productivity": ("water productivity", "cereal yield", "agriculture"),
             # Energy queries should not match agriculture or trade
             "electricity": ("agriculture", "education", "health"),
             "solar": ("trade", "education", "health"),

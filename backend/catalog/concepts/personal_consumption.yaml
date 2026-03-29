@@ -1,0 +1,41 @@
+concept: personal_consumption
+category: national_accounts
+domain: macroeconomics
+
+description: |
+  Personal consumption expenditures (PCE) — total spending by consumers
+  on goods and services.
+
+synonyms:
+  primary:
+    - personal consumption expenditures
+    - personal consumption
+    - consumer spending
+    - PCE
+  secondary:
+    - household consumption
+    - consumer expenditure
+    - private consumption
+    - consumption spending
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS
+
+providers:
+  FRED:
+    primary:
+      code: PCECA
+      name: "Personal Consumption Expenditures"
+      confidence: 0.95
+      coverage: [US]
+      frequency: annual
+  WorldBank:
+    primary:
+      code: NE.CON.PRVT.CD
+      name: "Household final consumption expenditure (current US$)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
