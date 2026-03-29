@@ -34,87 +34,6 @@ class IMFProvider(BaseProvider):
     API Documentation: https://www.imf.org/external/datamapper/api/help
     """
 
-    # Common economic indicators mapped to IMF DataMapper codes
-    INDICATOR_MAPPINGS: Dict[str, str] = {
-        # GDP and Growth
-        "GDP": "NGDP_RPCH",  # Real GDP growth (annual percent change)
-        "GDP_GROWTH": "NGDP_RPCH",
-        "REAL_GDP_GROWTH": "NGDP_RPCH",
-
-        # Unemployment
-        "UNEMPLOYMENT": "LUR",  # Unemployment rate (percent of total labor force)
-        "UNEMPLOYMENT_RATE": "LUR",
-        "UNEMPLOYMENT_FORECAST": "LUR",  # Note: DataMapper only has historical, no forecasts
-        "UNEMPLOYMENT_PROJECTION": "LUR",
-
-        # Inflation
-        "INFLATION": "PCPIPCH",  # Inflation, average consumer prices (annual percent change)
-        "CPI": "PCPIPCH",
-        "INFLATION_FORECAST": "PCPIPCH",  # Note: DataMapper only has historical, no forecasts
-        "INFLATION_PROJECTION": "PCPIPCH",
-        "FUTURE_INFLATION": "PCPIPCH",
-
-        # Current Account and Trade
-        "CURRENT_ACCOUNT": "BCA_NGDPD",  # Current account balance (percent of GDP)
-        "BALANCE_OF_PAYMENTS": "BCA_NGDPD",  # Balance of payments (same as current account)
-        "BOP": "BCA_NGDPD",  # Balance of payments abbreviation
-        "BoP": "BCA_NGDPD",  # Balance of payments alternative
-
-        # Government Debt
-        "DEBT": "GGXWDG_NGDP",  # Fixed: was missing, causing data_not_available for "debt" queries
-        "GOVT_DEBT": "GGXWDG_NGDP",  # General government gross debt (percent of GDP)
-        "GOVERNMENT_DEBT": "GGXWDG_NGDP",
-        "GOVERNMENT_DEBT_TO_GDP": "GGXWDG_NGDP",
-        "GOV_DEBT": "GGXWDG_NGDP",
-        "PUBLIC_DEBT": "GGXWDG_NGDP",
-        "PUBLIC_DEBT_TO_GDP": "GGXWDG_NGDP",
-        "DEBT_TO_GDP": "GGXWDG_NGDP",
-        "DEBT_TO_GDP_RATIO": "GGXWDG_NGDP",
-        "DEBT_RATIO": "GGXWDG_NGDP",
-        "NATIONAL_DEBT": "GGXWDG_NGDP",
-        "SOVEREIGN_DEBT": "GGXWDG_NGDP",
-        "GLOBAL_DEBT": "GGXWDG_NGDP",  # Note: For multi-country queries
-        "WORLD_DEBT": "GGXWDG_NGDP",
-
-        # Fiscal Balance / Deficit
-        "FISCAL_DEFICIT": "GGXCNL_NGDP",  # General government net lending/borrowing
-        "BUDGET_DEFICIT": "GGXCNL_NGDP",
-        "FISCAL_BALANCE": "GGXCNL_NGDP",
-
-        # Government Revenue and Expenditure
-        "GOVERNMENT_REVENUE": "rev",  # Government revenue (percent of GDP)
-        "GOV_REVENUE": "rev",
-        "FISCAL_REVENUE": "rev",
-        "REVENUE": "rev",
-        "GOVERNMENT_EXPENDITURE": "exp",  # Government expenditure (percent of GDP)
-        "GOV_EXPENDITURE": "exp",
-        "FISCAL_EXPENDITURE": "exp",
-        "EXPENDITURE": "exp",
-        "PRIMARY_EXPENDITURE": "prim_exp",  # Primary expenditure (percent of GDP)
-        "PRIMARY_BALANCE": "pb",  # Primary balance (percent of GDP)
-
-        # Household Debt
-        "HOUSEHOLD_DEBT": "HH_ALL",  # Household debt, all instruments
-        "CONSUMER_DEBT": "HH_ALL",
-
-        # Corporate Debt
-        "CORPORATE_DEBT": "NFC_ALL",  # Nonfinancial corporate debt, all instruments
-        "BUSINESS_DEBT": "NFC_ALL",
-        "NONFINANCIAL_CORPORATE": "NFC_ALL",
-
-        # Exchange Rates
-        "REER": "EREER",  # Real Effective Exchange Rates (2010=100)
-        "REAL_EFFECTIVE_EXCHANGE_RATE": "EREER",
-        "EXCHANGE_RATE_INDEX": "EREER",
-
-        # Note: Savings and Investment indicators are NOT available in IMF DataMapper API
-        # These would need to be retrieved via IMF WEO database or SDMX API
-        # Queries for savings/investment will trigger metadata search
-
-        # Demographics
-        "POPULATION": "LP",  # Population (millions)
-    }
-
     # Indicators NOT available in DataMapper API
     # These will trigger clarification responses
     UNSUPPORTED_INDICATORS = {
@@ -588,19 +507,14 @@ class IMFProvider(BaseProvider):
         raise last_error
 
     def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Get IMF indicator code from common indicator name or validate raw code."""
-        key = indicator.upper().replace(" ", "_")
+        """Validate raw IMF code via indicator translator/database lookup.
 
-        # First, check if it's a mapped indicator name (e.g., "GDP" -> "NGDP_RPCH")
-        if key in self.INDICATOR_MAPPINGS:
-            return self.INDICATOR_MAPPINGS[key]
-
-        # Second, check if the input is already a valid IMF code (e.g., "NGDP_RPCH")
-        # This handles cases where the LLM returns the raw IMF code
-        valid_codes = set(self.INDICATOR_MAPPINGS.values())
-        if key in valid_codes:
-            return key  # It's already a valid IMF code
-
+        Static INDICATOR_MAPPINGS have been removed in favour of the indicator
+        database (330K+ entries) and the cross-provider IndicatorTranslator.
+        This method now only returns a code when the translator can confirm it.
+        """
+        # Delegate entirely to the translator — it knows every valid IMF code
+        # via the universal concept table and the indicators.db FTS5 index.
         return None
 
     @staticmethod
@@ -1154,8 +1068,6 @@ class IMFProvider(BaseProvider):
 
         if discovery and discovery.get("code"):
             code = discovery["code"]
-            key = indicator.upper().replace(" ", "_")
-            self.INDICATOR_MAPPINGS[key] = code
             return code, discovery.get("name")
 
         raise DataNotAvailableError(

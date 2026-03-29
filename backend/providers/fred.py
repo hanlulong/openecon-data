@@ -23,284 +23,6 @@ class FREDProvider(BaseProvider):
     - Standardized HTTP retry logic
     - Common error handling patterns
     """
-    SERIES_MAPPINGS: Dict[str, str] = {
-        # GDP and Growth
-        "GDP": "GDP",
-        "GDP_GROWTH": "A191RL1Q225SBEA",  # Real GDP growth rate (percentage)
-        "GDP_GROWTH_RATE": "A191RL1Q225SBEA",  # Real GDP growth rate (percentage)
-        "REAL_GDP_GROWTH": "A191RL1Q225SBEA",  # Real GDP growth rate (percentage)
-        "REAL_GDP_GROWTH_RATE": "A191RL1Q225SBEA",  # Real GDP growth rate (percentage)
-        "GDP_PER_CAPITA": "A939RX0Q048SBEA",  # Real GDP per capita
-        "REAL_GDP_PER_CAPITA": "A939RX0Q048SBEA",  # Real GDP per capita
-        "REAL_GDP": "GDPC1",  # Real Gross Domestic Product
-        "NOMINAL_GDP": "GDP",  # Nominal GDP
-
-        # Labor Market
-        "UNEMPLOYMENT": "UNRATE",
-        "UNEMPLOYMENT_RATE": "UNRATE",
-        "NONFARM_PAYROLL": "PAYEMS",
-        "NONFARM_PAYROLLS": "PAYEMS",
-        "TOTAL_NONFARM_PAYROLLS": "PAYEMS",
-        "TOTAL_NONFARM_PAYROLL": "PAYEMS",
-        "US_NONFARM_PAYROLLS": "PAYEMS",
-        "PAYROLLS": "PAYEMS",
-        "LABOR_FORCE_PARTICIPATION": "CIVPART",
-        "LABOR_FORCE_PARTICIPATION_RATE": "CIVPART",
-        "LABOR_FORCE_PARTICIPATION_MEN": "LNS11300001",  # Men, 20 years and over
-        "LABOR_FORCE_PARTICIPATION_MALE": "LNS11300001",
-        "LABOR_FORCE_PARTICIPATION_WOMEN": "LNS11300002",  # Women, 20 years and over
-        "LABOR_FORCE_PARTICIPATION_FEMALE": "LNS11300002",
-        "LABOR_FORCE_PARTICIPATION_BY_GENDER": "LNS11300001",  # Default to men, suggest comparison
-        "LABOR_FORCE": "CLF16OV",
-        "JOBLESS_CLAIMS": "ICSA",  # Initial Claims, Seasonally Adjusted
-        "INITIAL_CLAIMS": "ICSA",  # Unemployment insurance initial claims
-        "INITIAL_JOBLESS_CLAIMS": "ICSA",  # Initial jobless claims (alternative phrasing)
-        "UNEMPLOYMENT_CLAIMS": "ICSA",  # Alternative phrasing for initial claims
-        "WEEKLY_JOBLESS_CLAIMS": "ICSA",  # Weekly initial jobless claims
-        "WEEKLY_INITIAL_CLAIMS": "ICSA",  # Weekly initial claims
-
-        # Prices and Inflation
-        # Note: INFLATION uses CPIAUCSL with pc1 transformation (percent change from year ago)
-        "INFLATION": "CPIAUCSL:pc1",  # Use pc1 transformation for inflation rate
-        "INFLATION_RATE": "CPIAUCSL:pc1",  # Use pc1 transformation for inflation rate
-        "CPI": "CPIAUCSL",  # Raw CPI index
-        "CPI_ALL_ITEMS": "CPIAUCSL",
-        "CONSUMER_PRICE_INDEX": "CPIAUCSL",
-        "CPI_INFLATION": "CPIAUCSL:pc1",  # CPI-based inflation rate
-        "CORE_CPI": "CPILFESL",  # CPI for All Urban Consumers: All Items Less Food and Energy
-        "CPI_CORE": "CPILFESL",
-        "CPI_EXCLUDING_FOOD_AND_ENERGY": "CPILFESL",
-        "PPI": "PPIACO",  # Producer Price Index: All Commodities
-        "PRODUCER_PRICE_INDEX": "PPIACO",
-        # Commodity Price Indices - NOTE: FRED does NOT have gold/silver SPOT prices
-        # These are producer price indices, not spot commodity prices
-        "COMMODITY_PRICE_INDEX": "PPIACO",  # PPI All Commodities
-        "COMMODITY_PRICES": "PPIACO",
-        "COMMODITY_INDEX": "PPIACO",
-        "ALL_COMMODITIES": "PPIACO",
-        "PPI_ALL_COMMODITIES": "PPIACO",
-        "PPI_COMMODITIES": "PPIACO",
-        "PCE_INFLATION": "PCEPI",  # Personal Consumption Expenditures: Chain-type Price Index
-        "PCE_PRICE_INDEX": "PCEPI",
-        "CORE_PCE": "PCEPILFE",  # Personal Consumption Expenditures Excluding Food and Energy
-        "CORE_PCE_INFLATION": "PCEPILFE",
-        "CORE_PCE_INFLATION_RATE": "PCEPILFE",
-        "PCE_CORE": "PCEPILFE",
-        "PCE_CORE_INFLATION": "PCEPILFE",
-        "PCE_EXCLUDING_FOOD_AND_ENERGY": "PCEPILFE",
-
-        # Interest Rates
-        "INTEREST_RATE": "FEDFUNDS",
-        "FED_FUNDS": "FEDFUNDS",
-        "FEDERAL_FUNDS_RATE": "FEDFUNDS",
-        "MORTGAGE_RATE": "MORTGAGE30US",  # 30-Year Fixed Rate Mortgage Average
-        "MORTGAGE30": "MORTGAGE30US",
-        "PRIME_RATE": "DPRIME",  # Bank Prime Loan Rate
-        "PRIME_BANK_LOAN_RATE": "DPRIME",
-        "PRIME_LENDING_RATE": "DPRIME",
-        "TREASURY_YIELD_2_YEAR": "DGS2",  # 2-Year Treasury Constant Maturity Rate
-        "2_YEAR_TREASURY": "DGS2",
-        "2_YEAR_TREASURY_YIELD": "DGS2",  # Alternative format
-        "2YR_TREASURY": "DGS2",
-        "2YR_TREASURY_YIELD": "DGS2",
-        "TREASURY_YIELD_10_YEAR": "DGS10",  # 10-Year Treasury Constant Maturity Rate
-        "10_YEAR_TREASURY": "DGS10",
-        "10_YEAR_TREASURY_YIELD": "DGS10",  # Alternative format
-        "10YR_TREASURY": "DGS10",
-        "10YR_TREASURY_YIELD": "DGS10",
-        "10-YEAR_TREASURY_YIELD": "DGS10",
-        "TREASURY_YIELD": "DGS10",  # Default to 10-year
-        "TREASURY_YIELDS": "DGS10",
-        "T-BOND_YIELD": "DGS10",
-        "T_BOND_YIELD": "DGS10",
-        "TREASURY_YIELD_30_YEAR": "DGS30",  # 30-Year Treasury Constant Maturity Rate
-        "30_YEAR_TREASURY": "DGS30",
-        "30_YEAR_TREASURY_YIELD": "DGS30",  # Alternative format
-        "30YR_TREASURY": "DGS30",
-        "30YR_TREASURY_YIELD": "DGS30",
-        "CORPORATE_BOND_YIELDS": "BAMLC0A4CBBB",  # BBB Corporate Bond Yield
-        "CORPORATE_BOND_YIELDS_BBB": "BAMLC0A4CBBB",
-        "BBB_RATED_CORPORATE_BONDS": "BAMLC0A4CBBB",
-        "BBB_CORPORATE_BONDS": "BAMLC0A4CBBB",
-        "BBB_CORPORATE_BOND_YIELD": "BAMLC0A4CBBB",
-        "BBB_BOND_YIELD": "BAMLC0A4CBBB",
-        "CORPORATE_BONDS": "BAMLC0A4CBBB",
-        "CORPORATE_BOND_YIELD": "BAMLC0A4CBBB",
-        "BBB_RATED": "BAMLC0A4CBBB",
-
-        # Housing
-        "HOUSING_STARTS": "HOUST",
-        "HOUSING_PRICES": "CSUSHPINSA",  # S&P/Case-Shiller U.S. National Home Price Index
-        "HOUSING_PRICE_INDEX": "CSUSHPINSA",  # Alternative phrasing for housing prices
-        "HOME_PRICES": "CSUSHPINSA",
-        "HOME_PRICE_INDEX": "CSUSHPINSA",
-        "HOUSE_PRICE_INDEX": "CSUSHPINSA",
-        "CASE_SHILLER": "CSUSHPINSA",  # Case-Shiller Home Price Index
-        "CASE-SHILLER": "CSUSHPINSA",  # Case-Shiller (alternative formatting)
-        "BUILDING_PERMITS": "PERMIT",
-        "MEDIAN_HOME_SALES_PRICE": "MSPUS",  # Median Sales Price of Houses Sold for the United States
-        "MEDIAN_HOME_PRICE": "MSPUS",
-        "MEDIAN_SALES_PRICE": "MSPUS",
-        "HOME_SALES": "HSN1F",  # New One Family Houses Sold: United States
-        "EXISTING_HOME_SALES": "EXHOSLUSM495S",  # Existing Home Sales
-
-        # Consumption and Retail
-        "RETAIL_SALES": "RSXFS",  # Advance Retail Sales: Retail Trade and Food Services
-        "RETAIL_SALES_GROWTH": "RSXFS",  # Same series, growth can be calculated from data
-        "CONSUMER_SPENDING": "PCE",  # Personal Consumption Expenditures
-        "CONSUMER_EXPENDITURES": "PCE",
-        "PERSONAL_CONSUMPTION": "PCE",
-        "PERSONAL_CONSUMPTION_EXPENDITURES": "PCE",
-
-        # Consumer Sentiment
-        "CONSUMER_CONFIDENCE": "UMCSENT",  # University of Michigan: Consumer Sentiment
-        "CONSUMER_SENTIMENT": "UMCSENT",
-        "CONSUMER_CONFIDENCE_INDEX": "UMCSENT",
-
-        # Savings and Income
-        "SAVINGS_RATE": "PSAVERT",  # Personal Saving Rate
-        "PERSONAL_SAVINGS_RATE": "PSAVERT",
-        "DISPOSABLE_INCOME": "DPI",  # Disposable Personal Income
-        "DISPOSABLE_PERSONAL_INCOME": "DPI",
-        "REAL_DISPOSABLE_PERSONAL_INCOME": "DSPIC96",  # Real Disposable Personal Income
-        "REAL_DISPOSABLE_INCOME": "DSPIC96",
-        "REAL_DISPOSABLE_PERSONAL_INCOME_PER_CAPITA": "A229RX0",  # Real DPI per capita
-        "REAL_DISPOSABLE_INCOME_PER_CAPITA": "A229RX0",
-
-        # Industrial Production
-        "INDUSTRIAL_PRODUCTION": "INDPRO",
-        "CAPACITY_UTILIZATION": "TCU",  # Capacity Utilization: Total Industry
-        "CAPACITY_UTILIZATION_RATE": "TCU",
-
-        # Trade
-        "IMPORTS": "IMPGS",  # Imports of Goods and Services
-        "EXPORTS": "EXPGS",  # Exports of Goods and Services
-        "TRADE_DEFICIT": "BOPGSTB",  # Trade Balance: Goods and Services
-        "TRADE_BALANCE": "BOPGSTB",  # Trade Balance: Goods and Services (alias)
-        "TRADE_BALANCE_DEFICIT": "BOPGSTB",  # Trade Balance (alias)
-
-        # Corporate and Business
-        "CORPORATE_PROFITS": "CP",
-        "BUSINESS_INVENTORIES": "BUSINV",  # Total Business Inventories
-        "MANUFACTURING_OUTPUT": "IPB50001N",  # Industrial Production: Manufacturing
-
-        # Construction
-        "CONSTRUCTION_SPENDING": "TTLCONS",  # Total Construction Spending
-        "CONSTRUCTION_SPENDING_TOTAL": "TTLCONS",
-
-        # Productivity and Wages
-        "PRODUCTIVITY": "OPHNFB",  # Nonfarm Business Sector: Labor Productivity
-        "LABOR_PRODUCTIVITY": "OPHNFB",
-        "LABOUR_PRODUCTIVITY": "OPHNFB",  # UK spelling
-        "OUTPUT_PER_HOUR": "OPHNFB",
-        "GDP_PER_HOUR": "OPHNFB",
-        "WORKER_PRODUCTIVITY": "OPHNFB",
-        "NONFARM_PRODUCTIVITY": "OPHNFB",
-        "NONFARM_LABOR_PRODUCTIVITY": "OPHNFB",
-        "PRODUCTIVITY_GROWTH": "OPHNFB",  # Growth can be derived from the data
-        "LABOR_PRODUCTIVITY_GROWTH": "OPHNFB",
-        "MANUFACTURING_PRODUCTIVITY": "MPU4900063",  # Manufacturing Sector: Labor Productivity
-        "MANUFACTURING_OUTPUT_PER_HOUR": "MPU4900063",
-        "UNIT_LABOR_COST": "ULCNFB",  # Nonfarm Business Sector: Unit Labor Cost
-        "UNIT_LABOUR_COST": "ULCNFB",  # UK spelling
-        "ULC": "ULCNFB",
-        "WAGES": "CES0500000003",  # Average Hourly Earnings of All Employees, Total Private
-        "AVERAGE_HOURLY_EARNINGS": "CES0500000003",
-        "WAGE_GROWTH": "CES0500000003",
-
-        # Money Supply
-        "M1": "M1SL",  # M1 Money Stock
-        "M2": "M2SL",  # M2 Money Stock
-        "M2_MONEY_SUPPLY": "M2SL",
-        "M2_GROWTH": "M2SL",  # Growth rate can be calculated from M2 data
-        "M2_MONEY_SUPPLY_GROWTH": "M2SL",
-        "M2_MONEY_SUPPLY_GROWTH_RATE": "M2SL",
-
-        # Debt
-        "HOUSEHOLD_DEBT": "HDTGPDUSQ163N",  # Household Debt to GDP
-
-        # INFRASTRUCTURE FIX: Consumer credit is different from household debt
-        # Consumer credit = unsecured credit (credit cards, personal loans, auto loans)
-        # Household debt = all household liabilities (includes mortgages)
-        "CONSUMER_CREDIT": "TOTALSL",  # Total Consumer Credit Owned and Securitized
-        "CONSUMER_CREDIT_OUTSTANDING": "TOTALSL",
-        "TOTAL_CONSUMER_CREDIT": "TOTALSL",
-        "CONSUMER_DEBT": "TOTALSL",  # Changed from HDTGPDUSQ163N
-        "CONSUMER_LOANS": "TOTALSL",
-        "BANK_LENDING": "TOTBKCR",  # Commercial Bank Credit, All Commercial Banks
-        "BANK_LENDING_GROWTH": "TOTBKCR",
-        "BANK_CREDIT": "TOTBKCR",
-        "BANK_CREDIT_GROWTH": "TOTBKCR",
-        "COMMERCIAL_BANK_CREDIT": "TOTBKCR",
-        "LENDING": "TOTBKCR",
-        "REVOLVING_CREDIT": "REVOLSL",  # Revolving Consumer Credit (credit cards)
-        "CREDIT_CARD_DEBT": "REVOLSL",
-        "NON_REVOLVING_CREDIT": "NONREVSL",  # Nonrevolving Consumer Credit (auto, student loans)
-
-        # Economic Indicators
-        "RECESSION": "USREC",
-        "NEW_ORDERS": "NEWORDER",  # Manufacturers' New Orders: Durable Goods
-
-        # Exchange Rates (daily)
-        "EXCHANGE_RATE_CNY": "DEXCHUS",  # China/US Exchange Rate
-        "EXCHANGE_RATE_CHINA": "DEXCHUS",
-        "CNY_USD": "DEXCHUS",
-        "YUAN_USD": "DEXCHUS",
-        "CHINESE_YUAN": "DEXCHUS",
-        "YUAN_TO_USD": "DEXCHUS",
-        "USD_CNY": "DEXCHUS",
-        "EXCHANGE_RATE_EUR": "DEXUSEU",  # US/Euro Exchange Rate
-        "EUR_USD": "DEXUSEU",
-        "USD_EUR": "DEXUSEU",
-        "EXCHANGE_RATE_GBP": "DEXUSUK",  # US/UK Exchange Rate
-        "GBP_USD": "DEXUSUK",
-        "USD_GBP": "DEXUSUK",
-        "EXCHANGE_RATE_JPY": "DEXJPUS",  # Japan/US Exchange Rate
-        "JPY_USD": "DEXJPUS",
-        "USD_JPY": "DEXJPUS",
-        "YEN_USD": "DEXJPUS",
-        "EXCHANGE_RATE_CAD": "DEXCAUS",  # Canada/US Exchange Rate
-        "CAD_USD": "DEXCAUS",
-        "USD_CAD": "DEXCAUS",
-
-        # Commodities
-        # NOTE: FRED does NOT have gold or silver spot prices. Precious metal prices
-        # should be routed to commodity providers (CoinGecko, etc.).
-        # Dynamic search fallback will gracefully fail for gold/silver, allowing
-        # the system to try alternative providers.
-        "GOLD_ORE": "WPU10210501",  # Gold Ores Producer Price Index (for mining data)
-        "GOLD_ORE_PPI": "WPU10210501",
-        "SILVER_ORE": "WPU10210601",  # Silver Ores Producer Price Index (for mining data)
-        "SILVER_ORE_PPI": "WPU10210601",
-        "OIL_PRICE": "DCOILWTICO",  # Crude Oil Prices: West Texas Intermediate (WTI)
-        "CRUDE_OIL": "DCOILWTICO",
-        "WTI": "DCOILWTICO",
-        "OIL_WTI": "DCOILWTICO",
-        "NATURAL_GAS": "DHHNGSP",  # Henry Hub Natural Gas Spot Price
-        "NATURAL_GAS_PRICE": "DHHNGSP",
-        "COPPER": "PCOPPUSDM",  # Global price of Copper
-        "COPPER_PRICE": "PCOPPUSDM",
-
-        # Stock Market Indices
-        "SP500": "SP500",  # S&P 500 Index
-        "S&P500": "SP500",
-        "S&P_500": "SP500",
-        "SPX": "SP500",
-        "SP_500": "SP500",
-        "S_AND_P_500": "SP500",
-        "STOCK_MARKET": "SP500",  # Default to S&P 500
-        "DOW_JONES": "DJIA",  # Dow Jones Industrial Average
-        "DJIA": "DJIA",
-        "DOW": "DJIA",
-        "NASDAQ": "NASDAQCOM",  # NASDAQ Composite Index
-        "NASDAQ_COMPOSITE": "NASDAQCOM",
-        "VIX": "VIXCLS",  # CBOE Volatility Index
-        "VOLATILITY_INDEX": "VIXCLS",
-        "VOLATILITY": "VIXCLS",
-        "WILSHIRE_5000": "WILL5000INDFC",  # Wilshire 5000 Total Market Full Cap Index
-        "WILSHIRE": "WILL5000INDFC",
-    }
-
     FREQUENCY_MAP: Dict[str, str] = {
         "Daily": "daily",
         "Weekly": "weekly",
@@ -338,9 +60,8 @@ class FREDProvider(BaseProvider):
         """
         Search FRED series using the series/search API endpoint.
 
-        This is the GENERAL solution that allows dynamic discovery of ANY FRED series,
-        not just those in the hardcoded SERIES_MAPPINGS. This enables the system to
-        find series for new indicators without code changes.
+        This enables dynamic discovery of ANY FRED series via the FRED API,
+        allowing the system to find series for new indicators without code changes.
 
         Args:
             search_text: Natural language search terms (e.g., "gold price", "S&P 500")
@@ -440,7 +161,7 @@ class FREDProvider(BaseProvider):
         """
         Find the best FRED series ID for a natural language indicator using dynamic search.
 
-        This is the GENERAL fallback when hardcoded mappings don't exist. Resolution order:
+        Resolution order:
         1. Check in-memory cache
         2. Search local indicator database (FTS5, 138K+ FRED series) - FAST
         3. Fall back to FRED API search - SLOWER, network call
@@ -504,9 +225,32 @@ class FREDProvider(BaseProvider):
         logger.warning(f"No good FRED series match for '{indicator}' (best score: {ranked[0][1] if ranked else 0:.1f})")
         return None
 
+    # Index series that should get pc1 transformation when user asks for rate/change
+    _INDEX_SERIES_FOR_RATE = {
+        "CPIAUCSL", "CPILFESL", "PCEPI", "PCEPILFE", "PPIACO",  # Price indices
+        "CPALTT01USM657N",  # CPI all items
+    }
+    _RATE_KEYWORDS = {"inflation", "rate", "change", "growth", "percent", "pct", "%"}
+
+    def _infer_transformation(self, indicator: str, series_code: str) -> Optional[str]:
+        """Infer pc1 transformation when user asks for a rate but resolved to an index series."""
+        if series_code not in self._INDEX_SERIES_FOR_RATE:
+            return None
+        indicator_lower = indicator.lower()
+        if any(kw in indicator_lower for kw in self._RATE_KEYWORDS):
+            return "pc1"
+        return None
+
     def _series_id_with_transform(self, indicator: Optional[str], series_id: Optional[str]) -> tuple[str, Optional[str]]:
         """
-        Map an indicator name to a FRED series ID and optional transformation.
+        Parse an explicit series ID or detect a raw FRED code from indicator text.
+
+        This method handles:
+        1. Explicit series_id passthrough (with optional transformation suffix like ":pc1")
+        2. Raw FRED code detection (short alphanumeric strings that look like series IDs)
+
+        All natural-language indicator resolution is delegated to IndicatorResolver
+        and dynamic FRED API search in _resolve_series_id_async().
 
         Args:
             indicator: Natural language indicator name (e.g., "GDP growth", "unemployment rate")
@@ -514,19 +258,10 @@ class FREDProvider(BaseProvider):
 
         Returns:
             Tuple of (series_id, transformation) where transformation can be None or 'pc1', 'pch', etc.
-
-        Raises:
-            ValueError: If no valid series ID can be determined
+            Returns (None, None) if no series ID can be determined from direct parsing.
         """
         # If explicit series ID provided, use it (check for transformation suffix)
         if series_id:
-            normalized_series = series_id.upper().strip().replace(" ", "_")
-            if normalized_series in self.SERIES_MAPPINGS:
-                mapping = self.SERIES_MAPPINGS[normalized_series]
-                if ":" in mapping:
-                    parts = mapping.split(":", 1)
-                    return parts[0], parts[1]
-                return mapping, None
             if ":" in series_id:
                 parts = series_id.split(":", 1)
                 return parts[0], parts[1]
@@ -535,74 +270,6 @@ class FREDProvider(BaseProvider):
         if not indicator:
             raise ValueError("Series ID or indicator is required")
 
-        # Normalize indicator name: uppercase, replace spaces with underscores
-        # Also strip common words that don't affect meaning
-        normalized = indicator.upper().strip()
-
-        # Remove common filler words
-        normalized = (normalized
-            .replace(" RATE", "_RATE")  # "unemployment rate" -> "unemployment_rate"
-            .replace(" INDEX", "_INDEX")
-            .replace(" GROWTH", "_GROWTH")
-            .replace(" PRICE", "_PRICE")
-            .replace(" PRICES", "_PRICES")
-            .replace(" ", "_"))
-
-        # Try exact match first
-        if normalized in self.SERIES_MAPPINGS:
-            mapping = self.SERIES_MAPPINGS[normalized]
-            # Check if mapping includes transformation (e.g., "CPIAUCSL:pc1")
-            if ":" in mapping:
-                parts = mapping.split(":", 1)
-                return parts[0], parts[1]
-            return mapping, None
-
-        # Try without trailing modifiers (e.g., "GDP_GROWTH" if "GDP_GROWTH_RATE" fails)
-        if normalized.endswith("_RATE"):
-            base = normalized[:-5]  # Remove "_RATE"
-            if base in self.SERIES_MAPPINGS:
-                mapping = self.SERIES_MAPPINGS[base]
-                if ":" in mapping:
-                    parts = mapping.split(":", 1)
-                    return parts[0], parts[1]
-                return mapping, None
-
-        # Handle institutional prefixes (e.g., "FEDERAL_RESERVE_INTEREST_RATE" -> "INTEREST_RATE")
-        # This is a GENERAL solution for any institutional/central bank prefix
-        institutional_prefixes = [
-            "FEDERAL_RESERVE_", "FED_", "BANK_OF_", "ECB_", "BOJ_", "BOE_",
-            "CENTRAL_BANK_", "US_", "USA_", "UNITED_STATES_"
-        ]
-        core_term = normalized
-        for prefix in institutional_prefixes:
-            if normalized.startswith(prefix):
-                core_term = normalized[len(prefix):]
-                # Try the core term
-                if core_term in self.SERIES_MAPPINGS:
-                    mapping = self.SERIES_MAPPINGS[core_term]
-                    if ":" in mapping:
-                        parts = mapping.split(":", 1)
-                        return parts[0], parts[1]
-                    return mapping, None
-                break  # Only strip one prefix
-
-        # Try common variations
-        variations = [
-            normalized.replace("_GROWTH", ""),  # "GDP_GROWTH" -> "GDP"
-            normalized.replace("_INDEX", ""),   # "CONSUMER_CONFIDENCE_INDEX" -> "CONSUMER_CONFIDENCE"
-            normalized + "_RATE",               # "UNEMPLOYMENT" -> "UNEMPLOYMENT_RATE"
-            core_term,                          # The core term after prefix stripping
-            core_term.replace("_RATE", ""),     # Core term without _RATE suffix
-        ]
-
-        for variation in variations:
-            if variation in self.SERIES_MAPPINGS:
-                mapping = self.SERIES_MAPPINGS[variation]
-                if ":" in mapping:
-                    parts = mapping.split(":", 1)
-                    return parts[0], parts[1]
-                return mapping, None
-
         # Backward-compatible explicit FRED code passthrough for code-like inputs.
         # Keep this strict to avoid treating parser-style tokens (with underscores)
         # as raw series IDs.
@@ -610,22 +277,23 @@ class FREDProvider(BaseProvider):
         if re.fullmatch(r"[A-Z0-9]{1,25}", candidate):
             return candidate, None
 
-        # No static mapping found - return None to signal dynamic search should be tried.
-        # For non-code-like natural language inputs this keeps discovery general.
+        # No direct series ID detected - return None to signal that IndicatorResolver
+        # and dynamic search should be tried in _resolve_series_id_async().
         return None, None
 
     async def _resolve_series_id_async(
         self, indicator: Optional[str], series_id: Optional[str]
     ) -> Tuple[str, Optional[str]]:
         """
-        Async version of series ID resolution with dynamic search fallback.
+        Async series ID resolution using database and dynamic search.
 
-        This method implements the GENERAL solution for FRED indicator resolution:
-        1. First tries static SERIES_MAPPINGS (fast, known mappings)
-        2. Falls back to FRED series/search API for dynamic discovery
-        3. Raises DataNotAvailableError only if both approaches fail
+        Resolution priority:
+        1. Explicit series_id passthrough (with optional transformation suffix)
+        2. Raw FRED code detection (short alphanumeric strings)
+        3. IndicatorResolver (FTS5 search over 330K+ indicators in database)
+        4. Dynamic FRED API search fallback
 
-        This ensures ANY valid FRED series can be discovered without code changes.
+        This ensures ANY valid FRED series can be discovered without hardcoded mappings.
 
         Args:
             indicator: Natural language indicator name
@@ -637,28 +305,29 @@ class FREDProvider(BaseProvider):
         Raises:
             DataNotAvailableError: If no matching series can be found
         """
-        # Try static mappings first (synchronous, fast)
+        # Try explicit series_id / raw code detection first (synchronous, fast)
         result_series, transform = self._series_id_with_transform(indicator, series_id)
 
         if result_series is not None:
             return result_series, transform
 
-        # PHASE B: Use IndicatorResolver as unified resolution (before dynamic search)
-        # This leverages the 330K+ indicator database with FTS5 search
+        # Use IndicatorResolver as primary resolution (FTS5 search over 330K+ indicators)
         if indicator:
             try:
                 from ..services.indicator_resolver import get_indicator_resolver
                 resolver = get_indicator_resolver()
                 resolved = resolver.resolve(indicator, provider="FRED")
                 if resolved and resolved.confidence >= 0.7:
-                    logger.info(f"🔍 IndicatorResolver: FRED '{indicator}' → '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
-                    return resolved.code, None
+                    logger.info(f"IndicatorResolver: FRED '{indicator}' -> '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
+                    # Auto-apply pc1 transformation for index series when user asks for rate/change
+                    transform = self._infer_transformation(indicator, resolved.code)
+                    return resolved.code, transform
             except Exception as e:
                 logger.debug(f"IndicatorResolver failed, continuing to dynamic search: {e}")
 
-        # Static mapping and IndicatorResolver failed - try dynamic search (async, FRED API call)
+        # IndicatorResolver failed - try dynamic search (async, FRED API call)
         if indicator:
-            logger.info(f"No static mapping for '{indicator}', attempting dynamic FRED series search...")
+            logger.info(f"No database match for '{indicator}', attempting dynamic FRED series search...")
             dynamic_series = await self._find_best_series(indicator)
             if dynamic_series:
                 logger.info(f"Dynamic discovery successful: '{indicator}' -> '{dynamic_series}'")
@@ -686,18 +355,31 @@ class FREDProvider(BaseProvider):
         )
 
     def _series_id(self, indicator: Optional[str], series_id: Optional[str]) -> str:
-        """Legacy method for backward compatibility - returns just the series ID.
+        """Legacy synchronous method - returns just the series ID.
 
-        NOTE: This synchronous method does NOT support dynamic FRED search fallback.
-        For full functionality with dynamic discovery, use fetch_series() instead.
+        Tries explicit series_id / raw code detection, then falls back to
+        IndicatorResolver (FTS5 database search). Does NOT support async
+        dynamic FRED API search. For full functionality, use fetch_series().
         """
         series, _ = self._series_id_with_transform(indicator, series_id)
-        if series is None:
-            raise DataNotAvailableError(
-                f"Unknown FRED indicator: '{indicator}'. "
-                f"Use fetch_series() for dynamic search support, or provide an explicit FRED series ID."
-            )
-        return series
+        if series is not None:
+            return series
+
+        # Try IndicatorResolver (synchronous FTS5 search)
+        if indicator:
+            try:
+                from ..services.indicator_resolver import get_indicator_resolver
+                resolver = get_indicator_resolver()
+                resolved = resolver.resolve(indicator, provider="FRED")
+                if resolved and resolved.confidence >= 0.7:
+                    return resolved.code
+            except Exception:
+                pass
+
+        raise DataNotAvailableError(
+            f"Unknown FRED indicator: '{indicator}'. "
+            f"Use fetch_series() for dynamic search support, or provide an explicit FRED series ID."
+        )
 
     def _map_frequency(self, fred_frequency: str) -> str:
         return self.FREQUENCY_MAP.get(fred_frequency, fred_frequency.lower())

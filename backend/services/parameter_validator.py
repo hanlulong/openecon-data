@@ -157,9 +157,9 @@ class ParameterValidator:
         """Validate FRED query parameters.
 
         NOTE: This is now more lenient. FRED provider can:
-        - Map indicator names to series IDs via SERIES_MAPPINGS
+        - Resolve indicators via IndicatorResolver (FTS5 database, 330K+ series)
         - Try unknown indicators as-is (may work if valid FRED code)
-        - Metadata search can discover correct series ID if needed
+        - Dynamic FRED API search as fallback
 
         Only reject if we have absolutely no indicator or series.
         """

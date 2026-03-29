@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.models import NormalizedData
 from backend.providers.comtrade import ComtradeProvider
@@ -64,55 +64,47 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
         self.assertEqual(version, "1.0")
 
-    def test_fred_series_id_mapping(self) -> None:
-        """Test that indicator names are properly mapped to FRED series IDs."""
+    def test_fred_series_id_explicit_codes_passthrough(self) -> None:
+        """Test that explicit FRED series codes pass through directly without resolver."""
         provider = FREDProvider(api_key="test-key")
 
-        # Test common indicator name variations
-        test_cases = [
-            # Natural language with spaces
-            ("GDP growth", "A191RL1Q225SBEA"),
-            ("unemployment rate", "UNRATE"),
-            ("consumer confidence index", "UMCSENT"),
-            ("10 year treasury", "DGS10"),
-            ("mortgage rate", "MORTGAGE30US"),
-            ("retail sales growth", "RSXFS"),
-            ("inflation rate", "CPIAUCSL"),
+        # Short alphanumeric codes that look like FRED series IDs pass through directly
+        explicit_codes = ["GDP", "UNRATE", "FEDFUNDS", "CPIAUCSL", "SP500", "DGS10", "M2SL"]
+        for code in explicit_codes:
+            with self.subTest(code=code):
+                result = provider._series_id(code, None)
+                self.assertEqual(result, code,
+                    f"Explicit code '{code}' should pass through directly")
 
-            # Underscore format (from LLM parsing)
-            ("GDP_GROWTH", "A191RL1Q225SBEA"),
-            ("UNEMPLOYMENT_RATE", "UNRATE"),
-            ("CONSUMER_CONFIDENCE_INDEX", "UMCSENT"),
-            ("10_YEAR_TREASURY", "DGS10"),
-            ("MORTGAGE_RATE", "MORTGAGE30US"),
-            ("RETAIL_SALES_GROWTH", "RSXFS"),
+    def test_fred_series_id_delegates_to_indicator_resolver(self) -> None:
+        """Test that natural language indicators are resolved via IndicatorResolver."""
+        provider = FREDProvider(api_key="test-key")
 
-            # Short forms
-            ("GDP", "GDP"),
-            ("CPI", "CPIAUCSL"),
-            ("unemployment", "UNRATE"),
-            ("inflation", "CPIAUCSL"),
+        from dataclasses import dataclass
 
-            # Case variations
-            ("gdp growth", "A191RL1Q225SBEA"),
-            ("Unemployment Rate", "UNRATE"),
+        @dataclass
+        class MockResolved:
+            code: str
+            name: str
+            confidence: float
+            source: str
+            metadata: dict = None
+            def __post_init__(self):
+                if self.metadata is None:
+                    self.metadata = {}
 
-            # Explicit series IDs should pass through
-            ("UNRATE", "UNRATE"),
-            ("FEDFUNDS", "FEDFUNDS"),
-        ]
+        mock_resolver = MagicMock()
+        mock_resolver.resolve.return_value = MockResolved(
+            code="A191RL1Q225SBEA",
+            name="Real GDP Growth Rate",
+            confidence=0.95,
+            source="database",
+        )
 
-        for indicator, expected_series_id in test_cases:
-            with self.subTest(indicator=indicator):
-                result = provider._series_id(indicator, None)
-                self.assertEqual(result, expected_series_id,
-                    f"Indicator '{indicator}' mapped to '{result}', expected '{expected_series_id}'")
-
-                # Verify result is valid for FRED API (≤25 alphanumeric chars)
-                self.assertLessEqual(len(result), 25,
-                    f"Series ID '{result}' is too long ({len(result)} chars)")
-                self.assertTrue(result.replace('_', '').isalnum(),
-                    f"Series ID '{result}' contains invalid characters")
+        with patch("backend.services.indicator_resolver.get_indicator_resolver", return_value=mock_resolver):
+            result = provider._series_id("GDP growth", None)
+            self.assertEqual(result, "A191RL1Q225SBEA")
+            mock_resolver.resolve.assert_called_with("GDP growth", provider="FRED")
 
     def test_fred_series_id_explicit_override(self) -> None:
         """Test that explicit series IDs override indicator names."""
@@ -321,7 +313,6 @@ class ProviderTests(unittest.TestCase):
 
         metadata_stub = StubMetadata()
         provider = WorldBankProvider(metadata_search_service=metadata_stub)
-        self.addCleanup(lambda: provider.INDICATOR_MAPPINGS.pop("CUSTOM_INDICATOR", None))
 
         wb_resp = MockAsyncResponse(
             [
@@ -365,7 +356,6 @@ class ProviderTests(unittest.TestCase):
 
         metadata_stub = StubMetadata()
         provider = IMFProvider(metadata_search_service=metadata_stub)
-        self.addCleanup(lambda: provider.INDICATOR_MAPPINGS.pop("CUSTOM_IMF", None))
 
         responses = [
             MockAsyncResponse(
@@ -396,7 +386,6 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNotNone(label)
         assert label is not None
         self.assertIn("debt", label.lower())
-        self.assertIn("gdp", label.lower())
 
     def test_imf_fetch_batch_uses_alternative_code_when_primary_missing(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
@@ -442,7 +431,6 @@ class ProviderTests(unittest.TestCase):
 
         metadata_stub = StubMetadata()
         provider = BISProvider(metadata_search_service=metadata_stub)
-        self.addCleanup(lambda: provider.INDICATOR_MAPPINGS.pop("CUSTOM_BIS", None))
 
         responses = [
             MockAsyncResponse(

@@ -44,98 +44,6 @@ class BISProvider(BaseProvider):
         "XM",  # Euro Area
     })
 
-    # Common indicators mapped to BIS dataflow codes
-    # NOTE: Only include VERIFIED WORKING dataflows (tested 2025-11-15)
-    # Many BIS metadata catalog indicators don't actually exist or have no data
-    INDICATOR_MAPPINGS: Dict[str, str] = {
-        # ✅ VERIFIED WORKING:
-        "POLICY_RATE": "WS_CBPOL",  # Central bank policy rates (monthly)
-        "INTEREST_RATE": "WS_CBPOL",
-        "CB_POLICY_RATE": "WS_CBPOL",
-        "CENTRAL_BANK_POLICY_RATES": "WS_CBPOL",
-
-        "TOTAL_CREDIT": "WS_TC",  # Total credit to private sector (quarterly)
-        "CREDIT": "WS_TC",
-        "CREDIT_DATA": "WS_TC",
-        "CREDIT_TO_GDP": "WS_TC",  # Credit to GDP ratio
-        "CREDIT_GDP_RATIO": "WS_TC",
-        "CREDIT_TO_GDP_RATIO": "WS_TC",
-        "CREDIT_TO_NON-FINANCIAL_SECTOR": "WS_TC",
-        "CREDIT_TO_NON-FINANCIAL_SECTOR_AS_PERCENTAGE_OF_GDP": "WS_TC",
-        "CREDIT_TO_PRIVATE_SECTOR": "WS_TC",  # Synonym for credit to non-financial sector
-        "PRIVATE_SECTOR_CREDIT": "WS_TC",
-        "PRIVATE_CREDIT": "WS_TC",
-        # Additional keyword variations for better matching
-        "CREDIT_TO_PRIVATE_NON-FINANCIAL_SECTOR": "WS_TC",
-        "CREDIT_TO_PRIVATE_NON_FINANCIAL_SECTOR": "WS_TC",
-        "PRIVATE_NON-FINANCIAL_SECTOR": "WS_TC",
-        "PRIVATE_NON_FINANCIAL_SECTOR": "WS_TC",
-        "NON-FINANCIAL_SECTOR_CREDIT": "WS_TC",
-        "NON_FINANCIAL_SECTOR_CREDIT": "WS_TC",
-        "TOTAL_CREDIT_TO_PRIVATE": "WS_TC",
-        "CREDIT_GAP": "WS_TC",  # Map credit gap queries to total credit (closest match)
-        # Bank credit growth mappings
-        "BANK_CREDIT": "WS_TC",  # Use total credit for bank credit queries
-        "BANK_CREDIT_GROWTH": "WS_TC",
-        "CREDIT_GROWTH": "WS_TC",
-        "BANKING_CREDIT": "WS_TC",
-
-        "PROPERTY_PRICES": "WS_SPP",  # Residential property prices (quarterly)
-        "PROPERTY_PRICE": "WS_SPP",
-        "RESIDENTIAL_PROPERTY_PRICE": "WS_SPP",
-        "RESIDENTIAL_PROPERTY_PRICES": "WS_SPP",
-        "HOUSE_PRICES": "WS_SPP",
-        "HOUSING_PRICES": "WS_SPP",
-        "HOUSING_PRICE": "WS_SPP",
-        "REAL_ESTATE_PRICES": "WS_SPP",
-        "REAL_ESTATE_PRICE": "WS_SPP",
-        "HOUSING_MARKET": "WS_SPP",
-        "HOUSING_MARKET_INDEX": "WS_SPP",
-        "HOUSE_PRICE_INDEX": "WS_SPP",
-        "PROPERTY_PRICE_INDEX": "WS_SPP",
-
-        "EXCHANGE_RATE": "WS_XRU",  # Effective exchange rate indices (monthly)
-        "EXCHANGE_RATES": "WS_XRU",
-        "EFFECTIVE_EXCHANGE_RATES": "WS_XRU",
-        "EXCHANGE_RATE_INDICES": "WS_XRU",
-
-        "CONSUMER_PRICES": "WS_LONG_CPI",  # Long series on consumer prices (monthly)
-        "CPI": "WS_LONG_CPI",
-        "INFLATION": "WS_LONG_CPI",
-
-        "DEBT_SERVICE_RATIO": "WS_DSR",  # Debt service ratios (quarterly)
-        "DSR": "WS_DSR",
-        "DEBT_SERVICE": "WS_DSR",
-        "DEBT_SERVICE_RATIOS": "WS_DSR",
-
-        "GLOBAL_LIQUIDITY": "WS_GLI",  # Global liquidity indicators (quarterly)
-        "LIQUIDITY": "WS_GLI",
-        "LIQUIDITY_INDICATORS": "WS_GLI",
-        "GLI": "WS_GLI",
-
-        "DEBT_SECURITIES": "WS_DEBT_SEC2_PUB",  # International debt securities (quarterly)
-        "INTERNATIONAL_DEBT_SECURITIES": "WS_DEBT_SEC2_PUB",
-        "INTERNATIONAL_DEBT": "WS_DEBT_SEC2_PUB",
-        "DEBT_SEC": "WS_DEBT_SEC2_PUB",
-
-        # Household and corporate debt - mapped to total credit (WS_TC has this breakdown)
-        "HOUSEHOLD_DEBT": "WS_TC",  # TC dataset has household sector breakdown
-        "HOUSEHOLD_CREDIT": "WS_TC",
-        "CONSUMER_DEBT": "WS_TC",
-        "CORPORATE_DEBT": "WS_TC",  # TC dataset has corporate sector breakdown
-        "CORPORATE_CREDIT": "WS_TC",
-        "BUSINESS_DEBT": "WS_TC",
-        "NONFINANCIAL_CORPORATE_DEBT": "WS_TC",
-        "NON_FINANCIAL_CORPORATE_DEBT": "WS_TC",
-        "DEBT": "WS_TC",  # Generic debt queries
-        "DEBT_RATIO": "WS_TC",
-        "DEBT_TO_GDP": "WS_TC",
-
-        # ❌ REMOVED (tested and don't work):
-        # "WS_CREDIT_GAP" - No data available, use WS_TC instead
-        # Other indicators from metadata catalog also don't work
-    }
-
     # Indicators that BIS doesn't have - redirect to other providers
     # These trigger helpful error messages with alternative data sources
     REDIRECT_INDICATORS: Dict[str, str] = {
@@ -447,9 +355,13 @@ class BISProvider(BaseProvider):
         )
 
     def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Get BIS dataflow code from common indicator name."""
-        key = indicator.upper().replace(" ", "_")
-        return self.INDICATOR_MAPPINGS.get(key)
+        """Validate BIS dataflow code via indicator translator/database lookup.
+
+        Static INDICATOR_MAPPINGS have been removed in favour of the indicator
+        database (330K+ entries) and the cross-provider IndicatorTranslator.
+        This method now delegates entirely to the translator.
+        """
+        return None
 
     def _country_code(self, country: str) -> str:
         """Get BIS country code (ISO 2-letter) from common country name.
@@ -1094,9 +1006,10 @@ class BISProvider(BaseProvider):
         if mapped:
             return mapped, indicator
 
-        # Step 2: Allow users to supply raw BIS dataflow codes directly (uppercase)
-        if indicator and indicator.upper() == indicator:
-            return indicator, None
+        # Step 2: Allow users to supply raw BIS dataflow codes directly (e.g. WS_CBPOL)
+        # BIS dataflow codes always start with "WS_"
+        if indicator and indicator.upper().startswith("WS_"):
+            return indicator.upper(), None
 
         # Step 3: Try cross-provider indicator translator (handles IMF codes, common names, etc.)
         translator = get_indicator_translator()
@@ -1150,8 +1063,6 @@ class BISProvider(BaseProvider):
 
         if discovery and discovery.get("code"):
             code = discovery["code"]
-            key = indicator.upper().replace(" ", "_")
-            self.INDICATOR_MAPPINGS[key] = code
             return code, discovery.get("name")
 
         raise DataNotAvailableError(

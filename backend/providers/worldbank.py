@@ -107,268 +107,6 @@ class WorldBankProvider(BaseProvider):
         "LEAST DEVELOPED NATIONS": "LIC",
     }
 
-    INDICATOR_MAPPINGS: Dict[str, str] = {
-        # GDP Indicators
-        "GDP": "NY.GDP.MKTP.CD",
-        "GDP_GROWTH": "NY.GDP.MKTP.KD.ZG",
-        "GDP_GROWTH_RATE": "NY.GDP.MKTP.KD.ZG",  # Same as GDP_GROWTH
-        "GDP_PER_CAPITA": "NY.GDP.PCAP.CD",
-        "GDP_GROWTH_PER_CAPITA": "NY.GDP.PCAP.KD.ZG",
-        "GDP_PER_CAPITA_PPP": "NY.GDP.PCAP.PP.CD",  # GDP per capita, PPP (current international $)
-
-        # Labor Market
-        "UNEMPLOYMENT": "SL.UEM.TOTL.ZS",
-        "UNEMPLOYMENT_RATE": "SL.UEM.TOTL.ZS",
-        "YOUTH_UNEMPLOYMENT": "SL.UEM.1524.ZS",
-        "YOUTH_UNEMPLOYMENT_RATE": "SL.UEM.1524.ZS",
-        "LABOR_FORCE_PARTICIPATION": "SL.TLF.CACT.ZS",
-        "FEMALE_LABOR_FORCE_PARTICIPATION": "SL.TLF.CACT.FE.ZS",
-        "FEMALE_LABOR_FORCE_PARTICIPATION_RATE": "SL.TLF.CACT.FE.ZS",
-
-        # Prices and Inflation
-        "INFLATION": "FP.CPI.TOTL.ZG",
-        "CPI": "FP.CPI.TOTL.ZG",
-
-        # Population
-        "POPULATION": "SP.POP.TOTL",
-        "POPULATION_GROWTH": "SP.POP.GROW",
-        "POPULATION_GROWTH_RATE": "SP.POP.GROW",
-        "URBAN_POPULATION": "SP.URB.TOTL.IN.ZS",
-        "URBAN_POPULATION_PERCENTAGE": "SP.URB.TOTL.IN.ZS",
-        "URBAN_POPULATION_GROWTH": "SP.URB.GROW",  # Urban population growth (annual %)
-        "URBAN_POPULATION_GROWTH_RATE": "SP.URB.GROW",
-
-        # Health
-        "LIFE_EXPECTANCY": "SP.DYN.LE00.IN",
-        "LIFE_EXPECTANCY_AT_BIRTH": "SP.DYN.LE00.IN",
-        "INFANT_MORTALITY": "SP.DYN.IMRT.IN",
-        "INFANT_MORTALITY_RATE": "SP.DYN.IMRT.IN",
-        "MORTALITY_UNDER_5": "SH.DYN.MORT",  # Mortality rate, under-5 (per 1,000 live births)
-        "UNDER_5_MORTALITY": "SH.DYN.MORT",
-        "HEALTH_EXPENDITURE": "SH.XPD.CHEX.GD.ZS",  # Current health expenditure (% of GDP)
-        "HEALTH_EXPENDITURE_GDP": "SH.XPD.CHEX.GD.ZS",
-        "HEALTH_EXPENDITURE_PERCENTAGE_GDP": "SH.XPD.CHEX.GD.ZS",
-        "HEALTH_EXPENDITURE_AS_PERCENTAGE_OF_GDP": "SH.XPD.CHEX.GD.ZS",
-        "HEALTH_EXPENDITURE_PER_CAPITA": "SH.XPD.CHEX.PC.CD",  # Current health expenditure per capita (current US$)
-        "CURRENT_HEALTH_EXPENDITURE": "SH.XPD.CHEX.PC.CD",
-
-        # Environment
-        "CO2_EMISSIONS": "EN.GHG.CO2.PC.CE.AR5",  # Updated 2024: CO2 emissions per capita (AR5)
-        "CO2_EMISSIONS_PER_CAPITA": "EN.GHG.CO2.PC.CE.AR5",
-        "EMISSIONS": "EN.GHG.CO2.PC.CE.AR5",  # Default to CO2
-        "EMISSIONS_PER_CAPITA": "EN.GHG.CO2.PC.CE.AR5",
-        "CARBON_EMISSIONS": "EN.GHG.CO2.PC.CE.AR5",
-        "CARBON_EMISSIONS_PER_CAPITA": "EN.GHG.CO2.PC.CE.AR5",
-        "RENEWABLE_ENERGY": "EG.FEC.RNEW.ZS",
-        "RENEWABLE_ENERGY_CONSUMPTION": "EG.FEC.RNEW.ZS",
-        "RENEWABLE_ENERGY_CONSUMPTION_SHARE": "EG.FEC.RNEW.ZS",
-        "RENEWABLE_ENERGY_SHARE": "EG.FEC.RNEW.ZS",
-        "AGRICULTURAL_LAND": "AG.LND.AGRI.ZS",  # Agricultural land (% of land area)
-        "AGRICULTURAL_LAND_PERCENTAGE": "AG.LND.AGRI.ZS",
-
-        # Poverty and Development
-        # NOTE: WorldBank changed poverty indicators in 2024
-        # SI.POV.DDAY now means $3.00/day (2021 PPP), not $2.15/day
-        "POVERTY_RATE": "SI.POV.DDAY",  # Poverty headcount ratio at $3.00 a day (2021 PPP)
-        "POVERTY_HEADCOUNT": "SI.POV.DDAY",
-        "EXTREME_POVERTY": "SI.POV.DDAY",
-        "POVERTY_HEADCOUNT_RATIO": "SI.POV.DDAY",
-        "POVERTY_RATES": "SI.POV.DDAY",  # Plural form
-
-        # Inequality
-        "GINI": "SI.POV.GINI",  # Gini index
-        "GINI_INDEX": "SI.POV.GINI",
-        "GINI_COEFFICIENT": "SI.POV.GINI",
-        "INCOME_INEQUALITY": "SI.POV.GINI",
-        "INEQUALITY": "SI.POV.GINI",
-
-        # Water & Sanitation
-        "CLEAN_WATER": "SH.H2O.SMDW.ZS",  # Safely managed drinking water (% of population)
-        "CLEAN_WATER_ACCESS": "SH.H2O.SMDW.ZS",
-        "ACCESS_TO_CLEAN_WATER": "SH.H2O.SMDW.ZS",
-        "WATER_ACCESS": "SH.H2O.SMDW.ZS",
-        "SAFE_WATER": "SH.H2O.SMDW.ZS",
-        "DRINKING_WATER": "SH.H2O.SMDW.ZS",
-        "BASIC_WATER": "SH.H2O.BASW.ZS",  # Basic drinking water (% of population)
-
-        # Food Security
-        "FOOD_SECURITY": "SN.ITK.DEFC.ZS",  # Prevalence of undernourishment (% of population)
-        "FOOD_INSECURITY": "SN.ITK.DEFC.ZS",
-        "UNDERNOURISHMENT": "SN.ITK.DEFC.ZS",
-        "MALNUTRITION": "SN.ITK.DEFC.ZS",
-
-        # Gender Equality
-        "GENDER_EQUALITY": "SG.GEN.PARL.ZS",  # Proportion of seats held by women in parliament
-        "GENDER_PARITY": "SG.GEN.PARL.ZS",
-        "WOMEN_PARLIAMENT": "SG.GEN.PARL.ZS",
-        "FEMALE_LABOR_FORCE": "SL.TLF.CACT.FE.ZS",  # Female labor force participation
-
-        # Education
-        "EDUCATION_EXPENDITURE": "SE.XPD.TOTL.GD.ZS",  # Government expenditure on education, total (% of GDP)
-        "GOVERNMENT_EXPENDITURE_EDUCATION": "SE.XPD.TOTL.GD.ZS",
-        "GOVERNMENT_EXPENDITURE_ON_EDUCATION": "SE.XPD.TOTL.GD.ZS",
-        "EDUCATION_SPENDING": "SE.XPD.TOTL.GD.ZS",  # Common phrasing
-        "EDUCATION_SPENDING_GDP": "SE.XPD.TOTL.GD.ZS",
-        "EDUCATION_SPENDING_PERCENT_GDP": "SE.XPD.TOTL.GD.ZS",
-        "EDUCATION_AS_PERCENT_OF_GDP": "SE.XPD.TOTL.GD.ZS",
-
-        # School Enrollment - Primary (CRITICAL: Use SE.PRM.ENRR for rates, not HD.HCI.EYRS)
-        "SCHOOL_ENROLLMENT_PRIMARY": "SE.PRM.NENR",
-        "PRIMARY_SCHOOL_ENROLLMENT": "SE.PRM.NENR",
-        "PRIMARY_SCHOOL_ENROLLMENT_RATE": "SE.PRM.ENRR",  # Gross enrollment ratio, primary
-        "PRIMARY_SCHOOL_ENROLLMENT_RATES": "SE.PRM.ENRR",
-        "PRIMARY_ENROLLMENT_RATE": "SE.PRM.ENRR",
-        "PRIMARY_ENROLLMENT_RATES": "SE.PRM.ENRR",
-        "PRIMARY_ENROLLMENT": "SE.PRM.ENRR",
-        "PRIMARY_SCHOOL_ENROLMENT": "SE.PRM.ENRR",  # British spelling
-        "PRIMARY_SCHOOL_ENROLMENT_RATE": "SE.PRM.ENRR",
-        "PRIMARY_SCHOOL_ENROLMENT_RATES": "SE.PRM.ENRR",
-        "ELEMENTARY_SCHOOL_ENROLLMENT": "SE.PRM.ENRR",
-        "ELEMENTARY_ENROLLMENT": "SE.PRM.ENRR",
-
-        # School Enrollment - Secondary
-        "SCHOOL_ENROLLMENT_SECONDARY": "SE.SEC.NENR",
-        "SECONDARY_SCHOOL_ENROLLMENT": "SE.SEC.NENR",
-        "SECONDARY_SCHOOL_ENROLLMENT_RATE": "SE.SEC.ENRR",  # Gross enrollment ratio, secondary
-        "SECONDARY_SCHOOL_ENROLLMENT_RATES": "SE.SEC.ENRR",
-        "SECONDARY_ENROLLMENT_RATE": "SE.SEC.ENRR",
-        "SECONDARY_ENROLLMENT_RATES": "SE.SEC.ENRR",
-        "SECONDARY_ENROLLMENT": "SE.SEC.ENRR",
-        "HIGH_SCHOOL_ENROLLMENT": "SE.SEC.ENRR",
-
-        # Tertiary Education Enrollment
-        "TERTIARY_ENROLLMENT": "SE.TER.ENRR",
-        "TERTIARY_ENROLLMENT_RATE": "SE.TER.ENRR",
-        "UNIVERSITY_ENROLLMENT": "SE.TER.ENRR",
-        "HIGHER_EDUCATION_ENROLLMENT": "SE.TER.ENRR",
-
-        # Literacy
-        "LITERACY_RATE": "SE.ADT.LITR.ZS",
-        "LITERACY": "SE.ADT.LITR.ZS",
-        "ADULT_LITERACY_RATE": "SE.ADT.LITR.ZS",
-
-        # Technology & Internet
-        "INTERNET_USERS": "IT.NET.USER.ZS",  # Individuals using the Internet (% of population)
-        "INTERNET_USERS_PERCENTAGE": "IT.NET.USER.ZS",
-        "INTERNET_USERS_PERCENT_POPULATION": "IT.NET.USER.ZS",
-
-        # Electricity Access
-        "ACCESS_TO_ELECTRICITY": "EG.ELC.ACCS.ZS",  # Access to electricity (% of population)
-        "ELECTRICITY_ACCESS": "EG.ELC.ACCS.ZS",
-        "ACCESS_ELECTRICITY": "EG.ELC.ACCS.ZS",
-        "ELECTRICITY_ACCESS_TOTAL": "EG.ELC.ACCS.ZS",
-        "ELECTRICITY_ACCESS_RURAL": "EG.ELC.ACCS.RU.ZS",  # Access to electricity, rural (% of rural population)
-        "ELECTRICITY_ACCESS_URBAN": "EG.ELC.ACCS.UR.ZS",  # Access to electricity, urban (% of urban population)
-        "RURAL_ELECTRICITY_ACCESS": "EG.ELC.ACCS.RU.ZS",
-        "URBAN_ELECTRICITY_ACCESS": "EG.ELC.ACCS.UR.ZS",
-
-        # Trade and Investment
-        "TRADE_GDP": "NE.TRD.GNFS.ZS",  # Trade (% of GDP)
-        "TRADE": "NE.TRD.GNFS.ZS",
-        "TRADE_BALANCE": "BN.GSR.GNFS.CD",  # External balance on goods and services (current US$)
-        "TRADE_SURPLUS": "BN.GSR.GNFS.CD",
-        "TRADE_DEFICIT": "BN.GSR.GNFS.CD",
-        "NET_EXPORTS": "BN.GSR.GNFS.CD",
-        "FDI": "BX.KLT.DINV.CD.WD",  # FDI, net inflows (BoP, current US$)
-        "FDI_INFLOWS": "BX.KLT.DINV.CD.WD",
-        "FDI_NET_INFLOWS": "BX.KLT.DINV.CD.WD",
-        "FOREIGN_DIRECT_INVESTMENT": "BX.KLT.DINV.CD.WD",
-        "FOREIGN_DIRECT_INVESTMENT_NET_INFLOWS": "BX.KLT.DINV.CD.WD",
-        "FDI_FLOWS": "BX.KLT.DINV.CD.WD",  # Common phrasing
-        "FOREIGN_DIRECT_INVESTMENT_FLOWS": "BX.KLT.DINV.CD.WD",
-        "FOREIGN_INVESTMENT_FLOWS": "BX.KLT.DINV.CD.WD",
-        "EXPORTS": "NE.EXP.GNFS.ZS",  # Exports (% of GDP)
-        "IMPORTS": "NE.IMP.GNFS.ZS",  # Imports (% of GDP)
-        "MERCHANDISE_EXPORTS": "TX.VAL.MRCH.CD.WT",  # Merchandise exports (current US$)
-        "MERCHANDISE_EXPORTS_GDP": "TM.VAL.MRCH.CD.WT",  # Merchandise exports (% of GDP)
-
-        # Foreign Exchange Reserves
-        "FOREIGN_EXCHANGE_RESERVES": "FI.RES.TOTL.CD",  # Total reserves (includes gold, current US$)
-        "FX_RESERVES": "FI.RES.TOTL.CD",
-        "RESERVES": "FI.RES.TOTL.CD",
-        "TOTAL_RESERVES": "FI.RES.TOTL.CD",
-        "CURRENCY_RESERVES": "FI.RES.TOTL.CD",
-        "INTERNATIONAL_RESERVES": "FI.RES.TOTL.CD",
-        "FOREX_RESERVES": "FI.RES.TOTL.CD",
-
-        # Agriculture and Industry
-        "AGRICULTURE_VALUE_ADDED": "NV.AGR.TOTL.ZS",  # Agriculture, forestry, and fishing (% of GDP)
-        "INDUSTRY_VALUE_ADDED": "NV.IND.TOTL.ZS",
-        "SERVICES_VALUE_ADDED": "NV.SRV.TOTL.ZS",
-
-        # Research and Development
-        "R&D_EXPENDITURE": "GB.XPD.RSDV.GD.ZS",  # R&D expenditure (% of GDP)
-        "RD_EXPENDITURE": "GB.XPD.RSDV.GD.ZS",
-        "RESEARCH_EXPENDITURE": "GB.XPD.RSDV.GD.ZS",
-
-        # Government Finance
-        "GOVERNMENT_EXPENDITURE": "NE.CON.GOVT.ZS",  # General government final consumption (% of GDP)
-        "TAX_REVENUE": "GC.TAX.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT": "GC.DOD.TOTL.GD.ZS",  # Central government debt, total (% of GDP)
-        "GOVERNMENT_DEBT_TO_GDP": "GC.DOD.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT_TO_GDP_RATIO": "GC.DOD.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT_GDP_RATIO": "GC.DOD.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT_GDP": "GC.DOD.TOTL.GD.ZS",
-        "DEBT_TO_GDP": "GC.DOD.TOTL.GD.ZS",
-        "DEBT_TO_GDP_RATIO": "GC.DOD.TOTL.GD.ZS",
-        "DEBT_GDP_RATIO": "GC.DOD.TOTL.GD.ZS",
-        "CENTRAL_GOVERNMENT_DEBT": "GC.DOD.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT_(%_OF_GDP)": "GC.DOD.TOTL.GD.ZS",
-        "GOVERNMENT_DEBT_(PERCENT_OF_GDP)": "GC.DOD.TOTL.GD.ZS",
-
-        # Economic Structure
-        "GROSS_CAPITAL_FORMATION": "NE.GDI.TOTL.ZS",  # Gross capital formation (% of GDP)
-        "GROSS_CAPITAL_FORMATION_PERCENTAGE": "NE.GDI.TOTL.ZS",
-        "GROSS_CAPITAL_FORMATION_GDP": "NE.GDI.TOTL.ZS",
-        "HOUSEHOLD_CONSUMPTION": "NE.CON.PRVT.ZS",  # Household final consumption (% of GDP)
-        "SAVINGS_RATE": "NY.GNS.ICTR.ZS",  # Gross savings (% of GDP)
-
-        # Balance of Payments
-        "CURRENT_ACCOUNT_BALANCE": "BN.CAB.XOKA.GD.ZS",  # Current account balance (% of GDP)
-        "CURRENT_ACCOUNT": "BN.CAB.XOKA.GD.ZS",
-        "EXTERNAL_DEBT": "DT.DOD.DECT.GN.ZS",  # External debt stocks (% of GNI)
-
-        # Labor Productivity (GDP per person employed)
-        # These are critical mappings to avoid false positives from metadata search
-        "PRODUCTIVITY": "SL.GDP.PCAP.EM.KD",  # GDP per person employed (constant 2021 PPP $)
-        "LABOR_PRODUCTIVITY": "SL.GDP.PCAP.EM.KD",
-        "LABOUR_PRODUCTIVITY": "SL.GDP.PCAP.EM.KD",  # UK spelling
-        "GDP_PER_WORKER": "SL.GDP.PCAP.EM.KD",
-        "GDP_PER_PERSON_EMPLOYED": "SL.GDP.PCAP.EM.KD",
-        "WORKER_PRODUCTIVITY": "SL.GDP.PCAP.EM.KD",
-        "OUTPUT_PER_WORKER": "SL.GDP.PCAP.EM.KD",
-        "ECONOMIC_PRODUCTIVITY": "SL.GDP.PCAP.EM.KD",
-
-        # Sector-specific productivity (value added per worker)
-        "AGRICULTURAL_PRODUCTIVITY": "NV.AGR.EMPL.KD",  # Agriculture value added per worker
-        "AGRICULTURE_PRODUCTIVITY": "NV.AGR.EMPL.KD",
-        "FARM_PRODUCTIVITY": "NV.AGR.EMPL.KD",
-        "INDUSTRY_PRODUCTIVITY": "NV.IND.EMPL.KD",  # Industry value added per worker
-        "INDUSTRIAL_PRODUCTIVITY": "NV.IND.EMPL.KD",
-        "MANUFACTURING_PRODUCTIVITY": "NV.IND.EMPL.KD",
-        "SERVICES_PRODUCTIVITY": "NV.SRV.EMPL.KD",  # Services value added per worker
-        "SERVICE_SECTOR_PRODUCTIVITY": "NV.SRV.EMPL.KD",
-
-        # Labor productivity growth
-        "PRODUCTIVITY_GROWTH": "SL.GDP.PCAP.EM.KD.ZG",
-        "LABOR_PRODUCTIVITY_GROWTH": "SL.GDP.PCAP.EM.KD.ZG",
-        "LABOUR_PRODUCTIVITY_GROWTH": "SL.GDP.PCAP.EM.KD.ZG",  # UK spelling
-
-        # Common ambiguous terms - explicit mappings to prevent false positives
-        "GROWTH": "NY.GDP.MKTP.KD.ZG",  # Default to GDP growth (most common meaning)
-        "ECONOMIC_GROWTH": "NY.GDP.MKTP.KD.ZG",
-        "OUTPUT": "NY.GDP.MKTP.CD",  # Default to GDP (most common meaning)
-        "ECONOMIC_OUTPUT": "NY.GDP.MKTP.CD",
-        "EFFICIENCY": "SL.GDP.PCAP.EM.KD",  # Usually means productivity
-        "ECONOMIC_EFFICIENCY": "SL.GDP.PCAP.EM.KD",
-        "INCOME": "NY.GNP.PCAP.CD",  # GNI per capita (most common meaning)
-        "NATIONAL_INCOME": "NY.GNP.MKTP.CD",  # GNI total
-        "PER_CAPITA_INCOME": "NY.GNP.PCAP.CD",  # GNI per capita
-        "INVESTMENT": "NE.GDI.TOTL.ZS",  # Gross capital formation (most common meaning)
-        "CAPITAL_INVESTMENT": "NE.GDI.TOTL.ZS",
-        "FOREIGN_INVESTMENT": "BX.KLT.DINV.CD.WD",  # FDI inflows
-    }
-
     # Country group expansions - maps group names to lists of country codes
     # This enables queries like "G7 countries", "Nordic countries", etc.
     COUNTRY_GROUP_EXPANSIONS: Dict[str, List[str]] = {
@@ -588,10 +326,6 @@ class WorldBankProvider(BaseProvider):
             start_date=start_date,
             end_date=end_date,
         )
-
-    def _indicator_code(self, indicator: str) -> Optional[str]:
-        key = indicator.upper().replace(" ", "_")
-        return self.INDICATOR_MAPPINGS.get(key)
 
     def _map_regional_term(self, term: str) -> Optional[str]:
         """
@@ -1084,7 +818,7 @@ class WorldBankProvider(BaseProvider):
         return results
 
     async def _resolve_indicator_code(self, indicator: str) -> str:
-        """Resolve WorldBank indicator code through IndicatorResolver (unified), hardcoded mappings, or metadata search."""
+        """Resolve WorldBank indicator code through IndicatorResolver (unified) or metadata search."""
         # Short-circuit: if indicator is already a valid WorldBank code
         # (contains dots like "NY.GDP.MKTP.CD" or "NV.IND.TOTL.KD.ZG"),
         # return it directly without re-resolving through the resolver.
@@ -1094,7 +828,7 @@ class WorldBankProvider(BaseProvider):
             logger.info(f"🔒 WorldBank: Using pre-resolved indicator code: {indicator}")
             return indicator
 
-        # PHASE B: Use IndicatorResolver as the unified first attempt
+        # Use IndicatorResolver as the unified first attempt
         # This consolidates FTS5 search, translator, and catalog into one service
         try:
             from ..services.indicator_resolver import get_indicator_resolver
@@ -1105,11 +839,6 @@ class WorldBankProvider(BaseProvider):
                 return resolved.code
         except Exception as e:
             logger.debug(f"IndicatorResolver failed, falling back: {e}")
-
-        # Fallback: hardcoded mappings
-        mapped = self._indicator_code(indicator)
-        if mapped:
-            return mapped
 
         # Allow users to supply raw WorldBank indicator codes directly
         if indicator and "." in indicator:
@@ -1149,8 +878,6 @@ class WorldBankProvider(BaseProvider):
 
         if discovery and discovery.get("code"):
             code = discovery["code"]
-            key = indicator.upper().replace(" ", "_")
-            self.INDICATOR_MAPPINGS[key] = code
             return code
 
         raise DataNotAvailableError(

@@ -361,10 +361,15 @@ class IndicatorResolver:
                     return True
                 return False
 
+            # Also check description for discriminator presence
+            result_desc_lower = (
+                (result.metadata or {}).get("description", "") or ""
+            ).lower()[:500]
             missing_discs = {
                 d for d in query_discs
                 if not _disc_present(d, result_name_lower)
                 and not _disc_present(d, (result.code or "").lower())
+                and not _disc_present(d, result_desc_lower)
             }
             if missing_discs:
                 logger.info(
@@ -1841,12 +1846,18 @@ class IndicatorResolver:
         for code in sorted(preferred_codes):
             metadata = self.lookup.get(provider, code)
             if not metadata:
+                # Code in catalog but not in local DB — trust the catalog
+                best_metadata = best_metadata or {"code": code, "provider": provider, "name": concept_name}
+                best_score = max(best_score, 0.70)
                 continue
 
             score = self._score_search_match(query, metadata)
             score += self._score_concept_alignment(concept_name, metadata)
             score += 0.15  # boost known catalog mappings
-            score = max(0.0, min(1.0, score))
+            # Catalog-designated codes get a floor: the catalog is curated expert
+            # knowledge.  Text-matching penalties (e.g., "inflation" vs "Consumer
+            # Price Index") should not veto an explicit catalog mapping.
+            score = max(0.70, min(1.0, score))
 
             if score > best_score:
                 best_score = score
