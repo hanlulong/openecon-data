@@ -1,0 +1,38 @@
+# Agriculture Indicator Catalog
+concept: agriculture
+category: sectors
+domain: macroeconomics
+
+description: |
+  Agriculture's share of GDP and agricultural production.
+
+synonyms:
+  primary:
+    - agriculture
+    - agricultural output
+  secondary:
+    - farming
+    - agriculture value added
+    - agriculture GDP
+    - agricultural sector
+    - crop production
+
+explicit_exclusions:
+  - agricultural land
+  - food prices
+
+providers:
+  WorldBank:
+    primary:
+      code: NV.AGR.TOTL.ZS
+      name: "Agriculture, forestry, and fishing, value added (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

@@ -1,0 +1,31 @@
+concept: foreign_aid
+category: financial_flows
+domain: development
+description: |
+  Net official development assistance received.
+synonyms:
+  primary:
+    - foreign aid
+    - development aid
+  secondary:
+    - ODA
+    - official development assistance
+    - aid
+    - international aid
+    - aid received
+    - aid as percent of GNI
+providers:
+  WorldBank:
+    primary:
+      code: DT.ODA.ODAT.GN.ZS
+      name: "Net ODA received (% of GNI)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

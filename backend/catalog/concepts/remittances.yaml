@@ -1,0 +1,34 @@
+# Remittances Indicator Catalog
+concept: remittances
+category: financial_flows
+domain: development
+
+description: |
+  Personal remittances received as share of GDP.
+
+synonyms:
+  primary:
+    - remittances
+    - personal remittances
+  secondary:
+    - money transfers
+    - migrant remittances
+    - remittance inflows
+    - diaspora remittances
+
+providers:
+  WorldBank:
+    primary:
+      code: BX.TRF.PWKR.DT.GD.ZS
+      name: "Personal remittances, received (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

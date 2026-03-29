@@ -1,0 +1,38 @@
+concept: trade
+category: trade
+domain: macroeconomics
+description: |
+  Total merchandise trade (exports + imports) and trade indicators.
+synonyms:
+  primary:
+    - trade
+    - international trade
+  secondary:
+    - merchandise trade
+    - total trade
+    - trade volume
+    - trade value
+    - bilateral trade
+explicit_exclusions:
+  - trade balance
+  - trade deficit
+  - trade surplus
+providers:
+  WorldBank:
+    primary:
+      code: NE.TRD.GNFS.ZS
+      name: "Trade (% of GDP)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+  Comtrade:
+    primary:
+      code: DYNAMIC
+      name: "UN Comtrade trade data"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+not_available:
+  - BIS
+  - CoinGecko
+  - ExchangeRate

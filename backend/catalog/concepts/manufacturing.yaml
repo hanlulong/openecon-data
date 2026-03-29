@@ -1,0 +1,44 @@
+# Manufacturing Indicator Catalog
+concept: manufacturing
+category: sectors
+domain: macroeconomics
+
+description: |
+  Manufacturing sector's contribution to GDP.
+
+synonyms:
+  primary:
+    - manufacturing
+    - manufacturing output
+  secondary:
+    - manufacturing value added
+    - manufacturing GDP
+    - industrial output
+    - factory output
+    - manufacturing sector
+
+explicit_exclusions:
+  - industrial production index
+
+providers:
+  WorldBank:
+    primary:
+      code: NV.IND.MANF.ZS
+      name: "Manufacturing, value added (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: OUTMS
+      name: "Manufacturing Sector: Output"
+      confidence: 0.85
+      coverage: [US]
+      frequency: quarterly
+
+not_available:
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

@@ -1,0 +1,39 @@
+# Gini Index Indicator Catalog
+concept: gini_index
+category: inequality
+domain: development
+
+description: |
+  The Gini index measures income inequality. 0 = perfect equality, 100 = perfect inequality.
+
+synonyms:
+  primary:
+    - gini coefficient
+    - gini index
+    - gini
+  secondary:
+    - income inequality
+    - inequality
+    - income distribution
+    - wealth inequality
+    - income share
+
+explicit_exclusions:
+  - gender inequality
+
+providers:
+  WorldBank:
+    primary:
+      code: SI.POV.GINI
+      name: "Gini index"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

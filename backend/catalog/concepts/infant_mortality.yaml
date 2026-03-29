@@ -1,0 +1,44 @@
+# Infant Mortality Indicator Catalog
+concept: infant_mortality
+category: health
+domain: development
+
+description: |
+  Deaths of infants under one year of age per 1,000 live births.
+
+synonyms:
+  primary:
+    - infant mortality rate
+    - infant death rate
+  secondary:
+    - child mortality
+    - mortality
+    - death rate
+    - under-5 mortality
+    - neonatal mortality
+
+explicit_exclusions:
+  - adult mortality
+  - maternal mortality
+
+providers:
+  WorldBank:
+    primary:
+      code: SP.DYN.IMRT.IN
+      name: "Mortality rate, infant (per 1,000 live births)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: DYNAMIC
+      name: "Not available in IMF"
+      confidence: 0.0
+
+not_available:
+  - FRED
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

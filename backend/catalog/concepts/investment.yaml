@@ -1,0 +1,39 @@
+concept: investment
+category: national_accounts
+domain: macroeconomics
+description: |
+  Gross capital formation (investment) as share of GDP.
+synonyms:
+  primary:
+    - investment
+    - gross capital formation
+  secondary:
+    - capital investment
+    - fixed investment
+    - gross fixed capital formation
+    - capital formation
+    - domestic investment
+explicit_exclusions:
+  - foreign direct investment
+  - FDI
+  - portfolio investment
+providers:
+  WorldBank:
+    primary:
+      code: NE.GDI.TOTL.ZS
+      name: "Gross capital formation (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+  IMF:
+    primary:
+      code: NID_NGDP
+      name: "Total investment (% of GDP)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+not_available:
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

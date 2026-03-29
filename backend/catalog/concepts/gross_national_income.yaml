@@ -1,0 +1,41 @@
+# Gross National Income Indicator Catalog
+concept: gross_national_income
+category: national_accounts
+domain: macroeconomics
+
+description: |
+  Gross National Income - total income earned by a nation's residents and businesses.
+
+synonyms:
+  primary:
+    - GNI
+    - gross national income
+  secondary:
+    - national income
+    - income per capita
+    - GNI per capita
+    - income
+
+explicit_exclusions:
+  - GDP
+  - household income
+
+providers:
+  WorldBank:
+    primary:
+      code: NY.GNP.MKTP.CD
+      name: "GNI (current US$)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    alternatives:
+      - code: NY.GNP.PCAP.CD
+        name: "GNI per capita (current US$)"
+        confidence: 0.90
+
+not_available:
+  - FRED
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

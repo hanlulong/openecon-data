@@ -1,0 +1,73 @@
+# Employment Indicator Catalog
+concept: employment
+category: labor_market
+domain: macroeconomics
+
+description: |
+  Employment to population ratio - the proportion of a country's working-age
+  population that is employed. A key measure of labor market health.
+
+synonyms:
+  primary:
+    - employment rate
+    - employment to population ratio
+  secondary:
+    - jobs
+    - employed
+    - workforce employment
+    - total employment
+    - number employed
+    - labor market
+    - employment ratio
+
+explicit_exclusions:
+  - unemployment
+  - jobless
+  - underemployment
+
+providers:
+  WorldBank:
+    primary:
+      code: SL.EMP.TOTL.SP.ZS
+      name: "Employment to population ratio, 15+, total (%)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: LE
+      name: "Employment"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+
+  FRED:
+    primary:
+      code: PAYEMS
+      name: "All Employees, Total Nonfarm"
+      confidence: 0.90
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: LFSI_EMP_A
+      name: "Employment rates by sex, age and citizenship"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "14100287"
+      name: "Labour force characteristics"
+      confidence: 0.90
+      coverage: [CA]
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS

@@ -1,0 +1,40 @@
+# Education Indicator Catalog
+concept: education
+category: education
+domain: development
+
+description: |
+  School enrollment and education access indicators.
+
+synonyms:
+  primary:
+    - school enrollment
+    - education enrollment
+  secondary:
+    - literacy
+    - literacy rate
+    - primary education
+    - secondary education
+    - tertiary education
+    - school attendance
+
+explicit_exclusions:
+  - education spending
+  - education expenditure
+
+providers:
+  WorldBank:
+    primary:
+      code: SE.PRM.ENRR
+      name: "School enrollment, primary (% gross)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

@@ -1,0 +1,35 @@
+# Military Spending Indicator Catalog
+concept: military_spending
+category: government
+domain: macroeconomics
+
+description: |
+  Military expenditure as a share of GDP.
+
+synonyms:
+  primary:
+    - military spending
+    - defense spending
+  secondary:
+    - military expenditure
+    - defense expenditure
+    - defense budget
+    - military budget
+    - arms spending
+
+providers:
+  WorldBank:
+    primary:
+      code: MS.MIL.XPND.GD.ZS
+      name: "Military expenditure (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

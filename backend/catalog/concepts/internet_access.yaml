@@ -1,0 +1,33 @@
+concept: internet_access
+category: technology
+domain: development
+description: |
+  Internet usage and access indicators.
+synonyms:
+  primary:
+    - internet access
+    - internet users
+  secondary:
+    - internet penetration
+    - internet usage
+    - online access
+    - broadband access
+    - digital access
+    - mobile subscriptions
+    - mobile phone subscriptions
+    - cellular subscriptions
+providers:
+  WorldBank:
+    primary:
+      code: IT.NET.USER.ZS
+      name: "Individuals using the Internet (% of population)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+not_available:
+  - FRED
+  - IMF
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

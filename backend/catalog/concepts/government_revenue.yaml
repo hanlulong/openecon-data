@@ -1,0 +1,37 @@
+concept: government_revenue
+category: fiscal
+domain: macroeconomics
+description: |
+  Government revenue as share of GDP.
+synonyms:
+  primary:
+    - government revenue
+    - fiscal revenue
+  secondary:
+    - revenue
+    - public revenue
+    - state revenue
+    - budget revenue
+    - deficit
+    - fiscal deficit
+    - budget deficit
+providers:
+  IMF:
+    primary:
+      code: rev
+      name: "Government revenue (% of GDP)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+  WorldBank:
+    primary:
+      code: GC.REV.XGRT.GD.ZS
+      name: "Revenue, excluding grants (% of GDP)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+not_available:
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
