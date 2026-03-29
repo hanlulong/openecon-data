@@ -1304,6 +1304,13 @@ class QueryService:
             if routed_provider == "NOT_AVAILABLE":
                 intent.apiProvider = "not_available"
                 return "NOT_AVAILABLE"
+            # When routing was decided by catalog or coverage preference
+            # (country-specific provider), mark the intent so downstream
+            # prefetch clarification trusts the resolution.
+            if deterministic_match_type in ("catalog", "country", "coverage"):
+                params = dict(intent.parameters or {})
+                params["__catalog_resolved"] = True
+                intent.parameters = params
         except Exception as exc:
             logger.warning(
                 "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
