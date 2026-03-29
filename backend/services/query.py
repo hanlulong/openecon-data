@@ -2161,34 +2161,6 @@ class QueryService:
             recovered_data = self._apply_ranking_projection(query, recovered_data)
         return recovered_data
 
-    def _score_resolved_indicator_candidate(self, query: str, resolved: Any) -> float:
-        """
-        Score one resolver candidate against query semantics.
-
-        Combines resolver confidence with query-to-indicator relevance to avoid
-        over-trusting generic translator matches.
-        """
-        if not resolved or not getattr(resolved, "code", None):
-            return -999.0
-
-        provider_name = normalize_provider_name(str(getattr(resolved, "provider", "") or ""))
-        synthetic_series = {
-            "metadata": {
-                "source": provider_name,
-                "indicator": str(getattr(resolved, "name", "") or getattr(resolved, "code", "")),
-                "seriesId": str(getattr(resolved, "code", "") or ""),
-            }
-        }
-        relevance = self._score_series_relevance(query, synthetic_series)
-        confidence = float(getattr(resolved, "confidence", 0.0) or 0.0)
-        source = str(getattr(resolved, "source", "") or "").lower()
-        source_bonus = 0.0
-        if source == "database":
-            source_bonus = 0.12
-        elif source == "catalog":
-            source_bonus = 0.06
-        return confidence + (0.12 * relevance) + source_bonus
-
     def _score_resolved_indicator_relevance(
         self,
         indicator_query: str,
@@ -6196,7 +6168,7 @@ class QueryService:
                         intent.parameters = params
                         logger.info(
                             "📝 Qualifier recovered: '%s' + '%s' → %s",
-                            iq_check, suffix.strip(), aug_code,
+                            indicator_text, suffix.strip(), aug_code,
                         )
                     break
             params = {**params, "__qualifier_checked": True}
