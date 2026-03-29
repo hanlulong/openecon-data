@@ -30,6 +30,8 @@
 
 ## Install (One Line, Then Just Talk)
 
+[![SafeSkill 84/100](https://img.shields.io/badge/SafeSkill-84%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/hanlulong-openecon-data)
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hanlulong/openecon-data/main/scripts/install.sh | bash
 ```
