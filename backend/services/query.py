@@ -6165,6 +6165,43 @@ class QueryService:
             and self._looks_like_provider_indicator_code(provider, existing_indicator)
         )
 
+        # Qualifier-aware indicator recovery: when the LLM strips qualifiers
+        # ("GDP growth G7" → indicators=["GDP"]), recover the full indicator
+        # from the original query before any resolution path.
+        if not params.get("__qualifier_checked"):
+            original_q = str(intent.originalQuery or "").lower()
+            # Use the indicator TEXT (from LLM or intent) not the resolved CODE
+            indicator_text = ""
+            if intent.indicators:
+                indicator_text = str(intent.indicators[0] or "").strip().lower()
+            if not indicator_text:
+                indicator_text = existing_indicator.lower() if existing_indicator else ""
+            _qual_pairs = [
+                ("per capita", " per capita"),
+                ("per person", " per capita"),
+                ("growth rate", " growth rate"),
+                ("growth", " growth"),
+            ]
+            for qual, suffix in _qual_pairs:
+                if qual in original_q and qual not in indicator_text:
+                    augmented = indicator_text + suffix
+                    # Verify the augmented query resolves to a different (better) code
+                    aug_code = self._get_direct_provider_indicator_translation(
+                        provider=provider, indicator_query=augmented.strip(),
+                    )
+                    if aug_code and aug_code != existing_indicator:
+                        existing_indicator = aug_code
+                        has_explicit_code = True
+                        params = {**params, "indicator": aug_code, "__catalog_resolved": True, "__qualifier_checked": True}
+                        intent.parameters = params
+                        logger.info(
+                            "📝 Qualifier recovered: '%s' + '%s' → %s",
+                            iq_check, suffix.strip(), aug_code,
+                        )
+                    break
+            params = {**params, "__qualifier_checked": True}
+            intent.parameters = params
+
         # Catalog-resolved codes are hand-verified and should not be second-guessed.
         if has_explicit_code and params.get("__catalog_resolved"):
             logger.info(
@@ -6223,6 +6260,30 @@ class QueryService:
             bool(intent.indicators)
             and indicator_query != str(intent.indicators[0] or "").strip()
         )
+
+        # Qualifier preservation: the LLM sometimes drops key modifiers
+        # like "growth", "per capita", "rate" when parsing multi-country
+        # queries.  Check the original query for these qualifiers and
+        # augment the indicator_query if they're missing.
+        # This is applied unconditionally (even for catalog-resolved codes)
+        # because the multi-country loop may reset indicators back to
+        # the raw LLM output between calls.
+        original_q = str(intent.originalQuery or "").lower()
+        iq_lower = indicator_query.lower()
+        _qualifier_map = [
+            ("per capita", " per capita"),
+            ("per person", " per capita"),
+            ("growth rate", " growth rate"),
+            ("growth", " growth"),
+        ]
+        for qualifier, suffix in _qualifier_map:
+            if qualifier in original_q and qualifier not in iq_lower:
+                indicator_query = indicator_query + suffix
+                logger.info(
+                    "📝 Qualifier preserved: added '%s' to indicator query -> '%s'",
+                    suffix.strip(), indicator_query,
+                )
+                break
 
         # Path 2: Direct translation lookup
         direct_translation_code: Optional[str] = None
@@ -8589,7 +8650,7 @@ class QueryService:
             provider, intent, params, fallback_excluded_providers
         )
 
-        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved"}
+        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__qualifier_checked"}
         if any(key in params for key in internal_param_keys):
             params = {k: v for k, v in params.items() if k not in internal_param_keys}
             intent.parameters = params
