@@ -438,15 +438,35 @@ class DeepAgentOrchestrator:
             if provider.lower() in query_lower:
                 providers_mentioned.append(provider)
 
-        # Indicator detection
-        indicator_patterns = [
+        # Indicator detection — check SPECIFIC (longer) patterns first,
+        # then fall back to generic (shorter) patterns.  This preserves
+        # qualifiers like "growth", "per capita" which are critical for
+        # getting the right indicator code in sub-queries.
+        _indicator_patterns_ordered = [
+            # Specific patterns first (order matters — first match wins)
+            "gdp growth rate", "gdp growth", "gdp per capita", "gdp deflator",
+            "population growth", "unemployment rate", "inflation rate",
+            "interest rate", "trade balance", "trade deficit", "trade surplus",
+            "debt to gdp", "fiscal deficit", "fiscal balance",
+            "life expectancy", "birth rate", "fertility rate",
+            # Generic patterns last
             "gdp", "unemployment", "inflation", "interest rate",
             "housing", "trade", "exports", "imports",
             "population", "debt", "deficit", "cpi",
+            "employment", "poverty", "mortality",
         ]
-        for ind in indicator_patterns:
-            if ind in query_lower:
+        _matched_indicators = set()
+        for ind in _indicator_patterns_ordered:
+            if ind in query_lower and ind not in _matched_indicators:
+                # Don't add a generic if a specific version already matched
+                generic_of = ind.split()[0] if " " in ind else None
+                if generic_of and generic_of in _matched_indicators:
+                    continue
                 indicators_mentioned.append(ind)
+                _matched_indicators.add(ind)
+                # Also mark the generic root as covered
+                if " " in ind:
+                    _matched_indicators.add(ind.split()[0])
 
         # Determine complexity
         total_entities = len(countries_mentioned) + len(indicators_mentioned)

@@ -116,6 +116,11 @@ class DataAgent:
                 # Fallback - use query service's parsing
                 intent = None
 
+            # Ensure originalQuery is set so qualifier preservation
+            # can detect "growth"/"per capita" even when the LLM drops them.
+            if intent and not intent.originalQuery:
+                intent.originalQuery = query
+
             # Fetch data
             result = await self._fetch_data(query, intent, context)
 

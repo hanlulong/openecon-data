@@ -225,6 +225,8 @@ async def data_node(state: AgentState) -> Dict[str, Any]:
     # the carefully resolved indicator code.
     data_agent = DataAgent(query_service=query_service, openrouter_service=openrouter_service)
     pre_resolved = state.get("parsed_intent")
+    logger.info("🔍 data_node pre_resolved: %s (type=%s)",
+                pre_resolved is not None, type(pre_resolved).__name__ if pre_resolved else "None")
     if pre_resolved and hasattr(pre_resolved, 'apiProvider') and pre_resolved.apiProvider:
         logger.info(
             "📌 Using pre-resolved intent: %s/%s",
