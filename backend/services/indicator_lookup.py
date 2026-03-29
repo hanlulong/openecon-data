@@ -99,8 +99,11 @@ class IndicatorLookup:
 
         provider = self._normalize_provider(provider)
 
-        # Use database FTS search
-        results = self.db.search(query, provider, category, limit)
+        # Over-fetch from DB to ensure quality scoring sees good candidates.
+        # BM25 favours term repetition; _rank_results applies quality signals
+        # (popularity, name density, aggregate boost) that need a broad pool.
+        db_limit = max(limit * 10, 200)
+        results = self.db.search(query, provider, category, db_limit)
 
         # Post-process and rank results
         ranked = self._rank_results(results, query)
