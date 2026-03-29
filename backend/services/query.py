@@ -7467,7 +7467,7 @@ class QueryService:
         # Fallback to catalog-based compatibility
         if indicator:
             try:
-                from .indicator_compatibility import get_fallback_providers as get_compat_fallbacks
+                from .catalog_service import get_fallback_providers as get_compat_fallbacks
                 compat_fallbacks = get_compat_fallbacks(indicator, primary_upper)
                 if compat_fallbacks:
                     compat_providers = [p for p, _, _ in compat_fallbacks]
