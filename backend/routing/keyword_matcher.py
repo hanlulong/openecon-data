@@ -107,19 +107,16 @@ class KeywordMatcher:
         # US-specific + Commodity Prices → FRED (must come before OECD)
         # NOTE: Keep FRED commodity matching focused on PPI-style indicators.
         # Broad "commodity prices" matching is handled by IMF patterns below.
+        # NOTE: Country-indicator combos like "us gdp", "us inflation" etc.
+        # are now handled by catalog (Priority 3.5) + country routing and
+        # were removed in Cycle 6 cleanup.
         "FRED": [
-            "us gdp", "us unemployment", "us inflation", "us cpi",
             "us housing", "us retail", "us industrial", "us consumer",
-            "u.s. gdp", "u.s. unemployment", "u.s. inflation", "u.s. cpi",
-            "united states gdp", "united states unemployment",
-            "american gdp", "american unemployment", "american inflation",
             "federal funds", "fed rate", "treasury yield", "treasury rate",
             "bond yield", "government bond yield", "10-year yield", "10 year yield",
             "2-year yield", "2 year yield", "yield spread", "yield curve",
             "m1 money supply", "m2 money supply", "money stock", "us money supply",
             "s&p 500", "s&p500", "dow jones", "nasdaq",
-            "us trade balance", "u.s. trade balance", "us trade deficit",
-            "u.s. trade deficit", "united states trade balance",
             # Commodity-related PPI indices
             "producer price index", "ppi commodities", "ppi all commodities",
             "metal price index", "base metal", "base metals",
@@ -139,37 +136,27 @@ class KeywordMatcher:
         ],
 
         # European countries → EUROSTAT (must come before OECD)
+        # NOTE: Country-indicator combos like "france gdp", "germany unemployment"
+        # etc. are now handled by Eurostat EU-country routing (Priority 3j) +
+        # catalog (Priority 3.5) + country-based routing (Priority 6) and were
+        # removed in Cycle 6 cleanup. "in <country>" patterns also removed as
+        # CountryResolver detects country from query text.
         "Eurostat": [
             "eu ", "european union", "eurozone", "euro area",
             "eu member states", "european countries",
-            # Major EU countries with common indicators
-            "france gdp", "france unemployment", "france inflation", "france cpi",
-            "germany gdp", "germany unemployment", "germany inflation", "germany cpi",
-            "italy gdp", "italy unemployment", "italy inflation", "italy cpi",
-            "spain gdp", "spain unemployment", "spain inflation", "spain cpi",
-            "netherlands gdp", "netherlands unemployment",
-            "belgium gdp", "belgium unemployment",
-            "austria gdp", "austria unemployment",
-            "portugal gdp", "portugal unemployment",
-            "greece gdp", "greece unemployment",
-            "ireland gdp", "ireland unemployment",
-            "poland gdp", "poland unemployment",
-            "sweden gdp", "sweden unemployment",
             # Eurostat-specific indicators
             "harmonized index", "hicp", "harmonized consumer price",
             "purchasing power standards", "pps",
             "railway freight", "freight transport by rail",
-            # Country mentions (with leading space)
-            "in france", "in germany", "in italy", "in spain",
-            "in netherlands", "in belgium", "in austria",
         ],
 
         # Canadian indicators → STATSCAN
+        # NOTE: Country-indicator combos like "canada gdp", "canadian unemployment"
+        # etc. are now handled by Canadian query handler (Priority 3g) + catalog
+        # (Priority 3.5) and were removed in Cycle 6 cleanup.
         "StatsCan": [
-            "canada gdp", "canada unemployment", "canada inflation", "canada cpi",
-            "canada population", "canada housing", "canada retail", "canada trade",
-            "canadian gdp", "canadian unemployment", "canadian inflation", "canadian cpi",
-            "canadian population", "canadian housing", "canadian retail",
+            "canada housing", "canada retail",
+            "canadian housing", "canadian retail",
             "building permit", "residential construction", "commercial construction",
             "cpi breakdown", "cpi component", "price index breakdown",
         ],
@@ -247,6 +234,10 @@ class KeywordMatcher:
         ],
 
         # OECD-specific indicators (regional phrases moved to REGIONAL_KEYWORDS)
+        # NOTE: Country-indicator combos like "japan gdp", "korea unemployment"
+        # etc. are now handled by catalog (Priority 3.5) + country-based routing
+        # (Priority 6, OECD non-EU → WorldBank) and were removed in Cycle 6
+        # cleanup.
         "OECD": [
             # OECD-specific statistics (not available elsewhere)
             "oecd average",  # Comparing to OECD average
@@ -258,16 +249,6 @@ class KeywordMatcher:
             "productivity growth", "labor productivity", "productivity comparison",
             "pension spending", "pension expenditure",
             "environmental tax", "carbon tax",
-            # OECD non-EU country indicators (Japan, Korea, Australia, etc.)
-            "japan gdp", "japan unemployment", "japan inflation", "japan cpi",
-            "korea gdp", "korea unemployment", "korea inflation", "korea cpi",
-            "south korea gdp", "south korea unemployment",
-            "australia gdp", "australia unemployment", "australia inflation",
-            "new zealand gdp", "new zealand unemployment",
-            "mexico gdp", "mexico unemployment", "mexico inflation",
-            "switzerland gdp", "switzerland unemployment", "switzerland inflation",
-            "norway gdp", "norway unemployment", "norway inflation",
-            "israel gdp", "israel unemployment", "israel inflation",
         ],
 
         # Currency/exchange → ExchangeRate
