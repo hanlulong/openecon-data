@@ -1,0 +1,82 @@
+# Corporate Bond Yield Indicator Catalog
+concept: corporate_bond_yield
+category: monetary
+domain: financial_markets
+
+description: |
+  Corporate bond yields measure the return on debt issued by corporations.
+  Key series include Moody's Seasoned Baa and Aaa Corporate Bond Yields,
+  which serve as benchmarks for investment-grade and higher-grade corporate
+  borrowing costs. Distinct from government/treasury bond yields.
+
+synonyms:
+  primary:
+    - corporate bond yield
+    - corporate bond rate
+    - corporate yield
+  secondary:
+    - Moody's BAA
+    - Moody's Baa yield
+    - BAA yield
+    - Baa corporate bond yield
+    - AAA yield
+    - Aaa corporate bond yield
+    - Moody's AAA
+    - Moody's Aaa yield
+    - corporate spread
+    - corporate bond
+    - investment grade yield
+    - investment grade bond yield
+    - high yield bond
+    - high yield bond rate
+    - junk bond yield
+    - junk bond rate
+    - corporate borrowing cost
+    - corporate interest rate
+    - BAA10Y
+    - Baa corporate bond yield relative to 10-year treasury
+
+explicit_exclusions:
+  - treasury yield
+  - government bond yield
+  - T-bill rate
+  - treasury bill rate
+  - sovereign yield
+  - 10-year yield
+  - federal funds rate
+  - policy rate
+
+providers:
+  FRED:
+    primary:
+      code: BAA
+      name: "Moody's Seasoned Baa Corporate Bond Yield"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    secondary:
+      - code: AAA
+        name: "Moody's Seasoned Aaa Corporate Bond Yield"
+        confidence: 0.90
+        coverage: [US]
+        frequency: monthly
+      - code: BAA10Y
+        name: "Moody's Seasoned Baa Corporate Bond Yield Relative to Yield on 10-Year Treasury Constant Maturity"
+        confidence: 0.85
+        coverage: [US]
+        frequency: daily
+      - code: AAA10Y
+        name: "Moody's Seasoned Aaa Corporate Bond Yield Relative to Yield on 10-Year Treasury Constant Maturity"
+        confidence: 0.85
+        coverage: [US]
+        frequency: daily
+
+not_available:
+  - WorldBank
+  - IMF
+  - Eurostat
+  - OECD
+  - StatsCan
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
