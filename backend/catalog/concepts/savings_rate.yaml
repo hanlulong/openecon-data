@@ -12,6 +12,8 @@ synonyms:
     - savings
     - savings rate
     - gross savings
+    - personal savings rate
+    - personal savings
     - gross national savings share of gdp
     - gross national savings as percent of gdp
     - savings to gdp ratio
@@ -25,16 +27,17 @@ synonyms:
 
 explicit_exclusions:
   - household savings account
-  - gross domestic savings
-  - personal savings rate
   - savings deposits
-  - imports
-  - import share
-  - exports
-  - export share
-  - trade share
 
 providers:
+  FRED:
+    primary:
+      code: PSAVERT
+      name: "Personal Saving Rate"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
   WorldBank:
     primary:
       code: NY.GNS.ICTR.ZS
