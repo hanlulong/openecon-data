@@ -1135,8 +1135,29 @@ class CountryResolver:
         if re.search(r'\beu\b', query_lower) and "EU" not in detected:
             detected.append("EU")
 
+        # Country names that contain region words — these should NOT trigger
+        # region expansion.  E.g., "South Africa" contains "africa" but is a
+        # country, not a reference to the African continent.
+        country_name_exclusions = {
+            "south africa", "central african republic", "south korea",
+            "north korea", "east timor", "west bank",
+        }
+        query_has_country_name = any(
+            cn in query_lower for cn in country_name_exclusions
+        )
+
         for pattern, region_name in region_patterns:
             if _contains_region_phrase(pattern) and region_name not in detected:
+                # If query contains a country name that includes this region
+                # word, skip the region match (e.g., "africa" in "south africa")
+                if query_has_country_name:
+                    skip = False
+                    for cn in country_name_exclusions:
+                        if cn in query_lower and pattern in cn:
+                            skip = True
+                            break
+                    if skip:
+                        continue
                 detected.append(region_name)
 
         return detected

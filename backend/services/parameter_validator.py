@@ -33,45 +33,9 @@ class ParameterValidator:
         "COIN GECKO": 1,
     }
 
-    # Known valid FRED series IDs for common indicators
-    FRED_SERIES_IDS = {
-        'GDP': 'GDP',
-        'UNEMPLOYMENT': 'UNRATE',
-        'UNEMPLOYMENT_RATE': 'UNRATE',
-        'INFLATION': 'CPIAUCSL',
-        'CPI': 'CPIAUCSL',
-        'FEDERAL_FUNDS_RATE': 'FEDFUNDS',
-        'INTEREST_RATE': 'FEDFUNDS',
-        'HOUSING_STARTS': 'HOUST',
-        'RETAIL_SALES': 'RSXFS',
-        'INDUSTRIAL_PRODUCTION': 'INDPRO',
-        'PERSONAL_CONSUMPTION': 'PCE',
-        'CONSUMER_CONFIDENCE': 'UMCSENT',
-        'PRODUCER_PRICE_INDEX': 'PPIACO',
-        'TREASURY_YIELD_10Y': 'DGS10',
-        'CORPORATE_PROFITS': 'CP',
-        'GOVERNMENT_DEBT': 'GFDEGDQ188S',
-    }
-
-    # Known valid StatsCan vector IDs
-    STATSCAN_VECTORS = {
-        'GDP': 65201210,
-        'UNEMPLOYMENT': 2062815,
-        'UNEMPLOYMENT_RATE': 2062815,
-        'INFLATION': 41690973,
-        'CPI': 41690914,
-        'POPULATION': 41690776,  # Population estimates
-        'HOUSING_STARTS': 50483,
-        'HOUSING_PRICE_INDEX': 735582,
-        'EMPLOYMENT_RATE': 14609,
-        'RETAIL_SALES': 15531546,
-        'MANUFACTURING': 379579,
-        'WAGES': 39145,
-        'IMMIGRATION': 3,  # Immigrants (permanent residents admitted)
-        'IMMIGRANTS': 3,
-        'EXPORTS': 38028,  # Exports of goods and services
-        'IMPORTS': 38029,  # Imports of goods and services
-    }
+    # Example indicator names for error messages (actual resolution via IndicatorResolver)
+    FRED_EXAMPLE_INDICATORS = ['GDP', 'Unemployment', 'Inflation', 'Retail Sales', 'Housing Starts']
+    STATSCAN_EXAMPLE_INDICATORS = ['GDP', 'Unemployment', 'Inflation', 'CPI', 'Population']
 
     @staticmethod
     def apply_default_time_periods(intent: ParsedIntent) -> None:
@@ -170,7 +134,7 @@ class ParameterValidator:
         if not series_id and not indicator:
             return False, "FRED query requires a series ID or indicator name", {
                 'suggestion': 'Try specifying a common indicator (GDP, unemployment, inflation)',
-                'common_indicators': list(ParameterValidator.FRED_SERIES_IDS.keys())[:5]
+                'common_indicators': ParameterValidator.FRED_EXAMPLE_INDICATORS
             }
 
         # If we have an indicator, we can proceed - FRED provider will map it or try as-is
@@ -203,7 +167,7 @@ class ParameterValidator:
         if not vector_id and not indicator:
             return False, "StatsCan query requires a vector ID or indicator name", {
                 'suggestion': 'Try a common indicator (GDP, UNEMPLOYMENT, HOUSING_STARTS)',
-                'common_indicators': list(ParameterValidator.STATSCAN_VECTORS.keys())[:5]
+                'common_indicators': ParameterValidator.STATSCAN_EXAMPLE_INDICATORS
             }
 
         # If we have anything (indicator or vector), we can proceed
