@@ -7,9 +7,9 @@ Consolidates keyword patterns from:
 
 This module provides:
 1. Explicit provider detection ("from OECD", "using IMF")
-2. Query type classification (trade, currency, crypto, economic)
-3. US-only indicator detection
-4. Indicator-based provider hints
+2. US-only indicator detection
+3. Indicator-based provider hints
+4. Regional keyword detection
 """
 
 from __future__ import annotations
@@ -113,8 +113,10 @@ class KeywordMatcher:
         "FRED": [
             "us housing", "us retail", "us industrial", "us consumer",
             "federal funds", "fed rate", "treasury yield", "treasury rate",
-            "bond yield", "government bond yield", "10-year yield", "10 year yield",
-            "2-year yield", "2 year yield", "yield spread", "yield curve",
+            # NOTE: "bond yield", "government bond yield", "10-year yield" etc.
+            # removed in Cycle 7 — catalog bond_yield concept handles these at
+            # Priority 3.5. "treasury" kept as US-specific term.
+            "yield spread", "yield curve",
             "m1 money supply", "m2 money supply", "money stock", "us money supply",
             "s&p 500", "s&p500", "dow jones", "nasdaq",
             # Commodity-related PPI indices
@@ -179,44 +181,34 @@ class KeywordMatcher:
         ],
 
         # Housing/property/Banking → BIS
-        # INFRASTRUCTURE FIX: Expanded banking keyword coverage
+        # NOTE: Many BIS patterns were removed in Cycle 7 cleanup.
+        # Catalog concepts (house_prices, credit, credit_to_gdp_gap,
+        # household_debt, corporate_debt, debt_service_ratio,
+        # effective_exchange_rate, interest_rate) handle most BIS routing
+        # at Priority 3.5. Only patterns NOT in catalog are kept here.
         "BIS": [
-            # Housing/Property
+            # Housing/Property (not in catalog)
             "house price to income", "property valuation",
             "housing valuation", "real estate valuation",
             "property market", "housing market valuation",
-            "residential property price", "property price index",
-            "commercial property price", "house price index",
-            # Credit to private sector
-            "credit to non-financial", "credit to gdp", "credit gap",
-            "credit-to-gdp", "credit to gdp gap", "credit-to-gdp gap",
-            "credit to private", "private non-financial", "non-financial sector",
-            "total credit", "credit to private non-financial",
-            "bank credit", "credit growth", "banking credit",
-            "private sector credit", "credit to households",
-            "credit to corporations", "corporate credit",
-            # Household debt variants
-            "household debt", "household credit",
-            "household debt to gdp", "household debt to income",
+            # Credit (not in catalog)
+            "private non-financial",
+            # Household debt ratios (catalog misroutes to gross_national_income)
+            "household debt to income",
             "household debt to disposable income",
-            "private household debt",
-            # Debt service
-            "debt service ratio", "debt service",
-            # Exchange rates
-            "effective exchange rate", "exchange rate index",
-            "real effective exchange rate", "nominal effective exchange rate",
-            # Global liquidity
+            # Exchange rates (not in catalog or catalog misroutes)
+            "exchange rate index",
+            # Global liquidity (catalog misroutes to money_supply → WorldBank)
             "global liquidity", "liquidity indicator",
             "international debt securities",
-            # Policy rates
-            "policy rate", "central bank policy rate",
-            "repo rate", "cash rate", "base rate",
-            # Banking sector indicators
+            # Policy rates (not in catalog)
+            "repo rate", "cash rate",
+            # Banking sector indicators (not in catalog)
             "banking sector", "banking system",
             "financial stability", "banking stability",
             "bank deposits", "banking deposits",
-            "interest rate spread", "lending spread",
-            "deposit rates", "lending rates",
+            "lending spread",
+            "deposit rates",
         ],
 
         # Development indicators → WorldBank
@@ -252,12 +244,12 @@ class KeywordMatcher:
         ],
 
         # Currency/exchange → ExchangeRate
+        # NOTE: Most exchange rate patterns were removed in Cycle 7 cleanup.
+        # unified_router._is_exchange_rate_query() handles "exchange rate",
+        # "forex", "usd to", "eur to", etc. at Priority 3b (before keyword
+        # matching). catalog exchange_rate concept covers "currency exchange",
+        # "fx rate" at Priority 3.5. Only keep patterns not covered elsewhere.
         "ExchangeRate": [
-            "exchange rate", "forex", "currency exchange", "fx rate",
-            "usd to", "eur to", "gbp to", "jpy to", "cny to", "cad to", "aud to",
-            "to usd", "to eur", "to gbp", "to jpy", "to cny", "to cad", "to aud",
-            "dollar to", "euro to", "pound to", "yen to", "yuan to",
-            "usd/eur", "eur/usd", "gbp/usd", "usd/jpy", "usd/cny",
             "usd strength", "currency strength index",
             "dollar strength", "currency index",
         ],
@@ -300,46 +292,11 @@ class KeywordMatcher:
         ],
     }
 
-    # ==========================================================================
-    # Query Type Patterns
-    # ==========================================================================
-
-    QUERY_TYPE_PATTERNS: Dict[str, List[str]] = {
-        "trade": [
-            "export", "import", "trade balance", "trade deficit", "trade surplus",
-            "bilateral trade", "trade flow", "trading partner",
-        ],
-        "currency": [
-            "exchange rate", "forex", "currency", "fx rate",
-            "usd to", "eur to", "gbp to",
-        ],
-        "crypto": [
-            "bitcoin", "ethereum", "crypto", "blockchain", "defi", "nft",
-            "btc", "eth", "altcoin", "xrp", "ripple", "solana", "dogecoin",
-            "market cap", "trading volume",
-        ],
-        "fiscal": [
-            "government debt", "fiscal deficit", "budget", "government spending",
-            "public debt", "national debt", "sovereign debt",
-        ],
-        "development": [
-            "poverty", "life expectancy", "literacy", "mortality",
-            "access to", "enrollment",
-        ],
-        "commodity": [
-            # Precious metals
-            "gold price", "gold", "silver price", "silver", "platinum", "palladium",
-            "precious metal", "precious metals",
-            # Base metals
-            "copper price", "copper", "iron ore", "aluminum", "zinc", "nickel",
-            # Energy
-            "oil price", "crude oil", "natural gas", "coal price", "fuel price",
-            # Agricultural
-            "wheat price", "corn price", "coffee price", "cocoa", "sugar price",
-            # General
-            "commodity", "commodities", "commodity index", "commodity price",
-        ],
-    }
+    # NOTE: QUERY_TYPE_PATTERNS and detect_query_type() were removed in
+    # Cycle 7 cleanup — they were dead code (never called from outside
+    # this module). Query type classification is handled by
+    # unified_router's special-case handlers (3a: crypto, 3b: exchange
+    # rate, 3c-3j: trade/fiscal) and catalog concepts at Priority 3.5.
 
     # ==========================================================================
     # Anti-Patterns (prevent misrouting)
@@ -559,25 +516,6 @@ class KeywordMatcher:
                         match_type="region",
                         reasoning=f"Query about '{keyword}' routed to {provider}"
                     )
-
-        return None
-
-    @classmethod
-    def detect_query_type(cls, query: str) -> Optional[str]:
-        """
-        Classify the query type (trade, currency, crypto, fiscal, development).
-
-        Args:
-            query: User's query
-
-        Returns:
-            Query type string or None
-        """
-        query_lower = query.lower()
-
-        for query_type, patterns in cls.QUERY_TYPE_PATTERNS.items():
-            if any(pattern in query_lower for pattern in patterns):
-                return query_type
 
         return None
 
