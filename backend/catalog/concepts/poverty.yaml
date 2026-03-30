@@ -32,6 +32,17 @@ providers:
       confidence: 0.95
       coverage: global
       frequency: annual
+    alternatives:
+      - code: SI.POV.NAHC
+        name: "Poverty headcount ratio at national poverty lines (% of population)"
+        confidence: 0.90
+        coverage: global
+        frequency: annual
+      - code: SI.POV.LMIC
+        name: "Poverty headcount ratio at $3.65 a day (2017 PPP)"
+        confidence: 0.85
+        coverage: global
+        frequency: annual
 
 not_available:
   - Comtrade

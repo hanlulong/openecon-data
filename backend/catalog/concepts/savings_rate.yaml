@@ -9,6 +9,9 @@ description: |
 
 synonyms:
   primary:
+    - savings
+    - savings rate
+    - gross savings
     - gross national savings share of gdp
     - gross national savings as percent of gdp
     - savings to gdp ratio
@@ -17,6 +20,8 @@ synonyms:
     - gross savings share of gdp
     - savings share of gdp
     - aggregate savings ratio
+    - national savings
+    - domestic savings
 
 explicit_exclusions:
   - household savings account
