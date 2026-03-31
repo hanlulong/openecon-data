@@ -6140,6 +6140,8 @@ class QueryService:
         # Qualifier-aware indicator recovery: when the LLM strips qualifiers
         # ("GDP growth G7" → indicators=["GDP"]), recover the full indicator
         # from the original query before any resolution path.
+        # SKIP if indicator is already a provider-specific code (e.g., SP.POP.GROW,
+        # NY.GDP.MKTP.KD.ZG) — these are already resolved and should not be augmented.
         if not params.get("__qualifier_checked"):
             original_q = str(intent.originalQuery or "").lower()
             # Use the indicator TEXT (from LLM or intent) not the resolved CODE
@@ -6148,6 +6150,10 @@ class QueryService:
                 indicator_text = str(intent.indicators[0] or "").strip().lower()
             if not indicator_text:
                 indicator_text = existing_indicator.lower() if existing_indicator else ""
+            # Skip qualifier recovery if indicator is already a provider code
+            _skip_qualifier = self._looks_like_provider_indicator_code(
+                provider, indicator_text.upper()
+            ) if indicator_text else False
             _qual_pairs = [
                 ("per capita", " per capita"),
                 ("per person", " per capita"),
@@ -6155,6 +6161,8 @@ class QueryService:
                 ("growth", " growth"),
             ]
             for qual, suffix in _qual_pairs:
+                if _skip_qualifier:
+                    break
                 if qual in original_q and qual not in indicator_text:
                     augmented = indicator_text + suffix
                     # Verify the augmented query resolves to a different (better) code
@@ -6257,41 +6265,15 @@ class QueryService:
                 )
                 break
 
-        # Path 2: Direct translation lookup
-        direct_translation_code: Optional[str] = None
-        direct_translation = self._get_direct_provider_indicator_translation(
+        # Path 2: IndicatorResolver (catalog + database FTS + vector search)
+        # Runs FIRST because the catalog (86 curated concepts) and FTS5
+        # (330K indicators) are more accurate than fuzzy substring matching.
+        resolved = resolver.resolve(
+            indicator_query,
             provider=provider,
-            indicator_query=indicator_query,
+            country=country_context,
+            countries=countries_context,
         )
-        if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
-            _resolver_inst = get_indicator_resolver()
-            _lookup = getattr(_resolver_inst, 'lookup', None)
-            _meta = _lookup.get(provider, direct_translation) if _lookup else None
-            _name = (_meta.get("name", "") if _meta else "")
-            if not self._verify_semantic_discriminators(
-                intent.originalQuery or indicator_query,
-                direct_translation,
-                _name,
-            ):
-                direct_translation = None
-
-        if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
-            logger.info(
-                "📌 Using direct %s indicator translation: '%s' -> '%s'",
-                provider,
-                indicator_query,
-                direct_translation,
-            )
-            direct_translation_code = str(direct_translation)
-            resolved = None
-        else:
-            # Path 3: IndicatorResolver (database FTS + vector search)
-            resolved = resolver.resolve(
-                indicator_query,
-                provider=provider,
-                country=country_context,
-                countries=countries_context,
-            )
 
         # Evaluate resolver result
         accepted_resolved = False
@@ -6341,10 +6323,38 @@ class QueryService:
                 accepted_resolved,
             )
 
+        # Path 3: Direct translation fallback (fuzzy IndicatorTranslator)
+        # Only runs if the resolver didn't find a confident match.
+        direct_translation_code: Optional[str] = None
+        if not accepted_resolved:
+            direct_translation = self._get_direct_provider_indicator_translation(
+                provider=provider,
+                indicator_query=indicator_query,
+            )
+            if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+                _resolver_inst = get_indicator_resolver()
+                _lookup = getattr(_resolver_inst, 'lookup', None)
+                _meta = _lookup.get(provider, direct_translation) if _lookup else None
+                _name = (_meta.get("name", "") if _meta else "")
+                if not self._verify_semantic_discriminators(
+                    intent.originalQuery or indicator_query,
+                    direct_translation,
+                    _name,
+                ):
+                    direct_translation = None
+
+            if direct_translation and self._looks_like_provider_indicator_code(provider, direct_translation):
+                logger.info(
+                    "📌 Using direct %s indicator translation fallback: '%s' -> '%s'",
+                    provider,
+                    indicator_query,
+                    direct_translation,
+                )
+                direct_translation_code = str(direct_translation)
+
         # Path 4: Apply best result or fall back to raw query
-        if direct_translation_code:
-            params = {**params, "indicator": direct_translation_code}
-        elif accepted_resolved and resolved:
+        # Resolver (catalog/FTS5) wins when accepted; translator is fallback only.
+        if accepted_resolved and resolved:
             params = {**params, "indicator": resolved.code}
             if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
                 logger.info(

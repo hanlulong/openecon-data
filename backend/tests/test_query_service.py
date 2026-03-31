@@ -2944,7 +2944,12 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
 
-    def test_fetch_data_prefers_direct_oecd_gdp_translation_over_resolver_candidate(self) -> None:
+    def test_fetch_data_prefers_resolver_over_fuzzy_translator(self) -> None:
+        """Resolver (catalog/FTS5) runs first and wins over fuzzy translator.
+
+        When the resolver returns a high-confidence, plausible result,
+        it is used directly — the fuzzy translator is not consulted.
+        """
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["GDP"],
@@ -2955,12 +2960,12 @@ class QueryServiceTests(unittest.TestCase):
 
         class _Resolved:
             def __init__(self):
-                self.code = "DSD_NAMAIN10@DF_TABLE2_B5N_HCPC"
+                self.code = "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE"
                 self.confidence = 0.99
-                self.source = "database"
-                self.name = "Annual net national income per capita, US $, current prices, current PPPs"
+                self.source = "catalog"
+                self.name = "GDP and main components - expenditure approach"
                 self.provider = "OECD"
-                self.metadata = {}
+                self.metadata = {"indicator": "GDP and main components"}
 
         class _Resolver:
             def resolve(self, *args, **kwargs):
@@ -2971,6 +2976,7 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
+        # Resolver's catalog result wins — translator not consulted
         self.assertEqual(
             fetch_mock.call_args.kwargs.get("indicator"),
             "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
