@@ -218,25 +218,57 @@ class IndicatorSelector:
     def _search_database_directly(
         self, db: Any, query: str, provider: str,
     ) -> List[Tuple[str, str]]:
-        """Search the full indicator database for niche queries not in catalog."""
+        """Search the full indicator database for niche queries not in catalog.
+
+        Uses a broader OR-based FTS5 search to handle terminology mismatches
+        (e.g., "hospital beds" when WorldBank uses "Hospital beds (per 1,000)").
+        Falls back to FAISS semantic search when FTS5 returns empty.
+        """
         conn = db._get_connection()
         cur = conn.cursor()
 
-        # Use indicator_lookup's FTS5 search with over-fetch
-        from .indicator_lookup import IndicatorLookup
-        lookup = IndicatorLookup()
-        results = lookup.search(query, provider=provider, limit=30)
+        # Direct SQL search with OR join (broader than the default AND)
+        safe_query = query
+        for char in ['"', "'", '(', ')', '*', '-', ':', '^', ',']:
+            safe_query = safe_query.replace(char, ' ')
+        words = [w.strip() for w in safe_query.split() if w.strip() and len(w.strip()) > 2]
 
-        if not results:
+        if not words:
             return []
 
-        # Convert to (code, name) tuples
-        variants = [
-            (r.get("code", ""), r.get("name", ""))
-            for r in results
-            if r.get("code")
-        ]
-        return variants[:30]
+        fts_query = " OR ".join([f'"{w}"*' for w in words])
+        try:
+            cur.execute(
+                """SELECT i.code, i.name,
+                   (bm25(indicators_fts, 0, 3.0, 10.0, 1.0, 3.0, 2.0, 2.0)
+                    - COALESCE(i.popularity, 0) * 0.05) as relevance
+                FROM indicators_fts f
+                JOIN indicators i ON f.rowid = i.id
+                WHERE indicators_fts MATCH ? AND i.provider = ?
+                ORDER BY relevance LIMIT 30""",
+                (fts_query, provider),
+            )
+            results = [(row[0], row[1]) for row in cur.fetchall()]
+            if results:
+                return results
+        except Exception:
+            pass
+
+        # FTS5 failed — try FAISS semantic search
+        try:
+            from .vector_search import VectorSearchService
+            vs = VectorSearchService()
+            vec_results = vs.search(query, top_k=20, provider=provider)
+            if vec_results:
+                return [
+                    (r.get("code", ""), r.get("name", ""))
+                    for r in vec_results
+                    if r.get("code")
+                ][:20]
+        except Exception:
+            pass
+
+        return []
 
     @staticmethod
     def _normalize_result_code(code: str, provider: str) -> str:
