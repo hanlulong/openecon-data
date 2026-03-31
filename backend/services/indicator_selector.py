@@ -88,7 +88,8 @@ class IndicatorSelector:
         from .indicator_database import IndicatorDatabase
 
         # Stage 1: Get base indicator from catalog
-        concept_name = find_concept_by_term(concept) or find_concept_by_term(query)
+        # Try query first (with spaces, more precise), then concept name (with underscores)
+        concept_name = find_concept_by_term(query) or find_concept_by_term(concept)
         if not concept_name:
             return SelectionResult(code=None, source="no_concept")
 
@@ -104,8 +105,9 @@ class IndicatorSelector:
             return SelectionResult(code=base_code, source="catalog_base")
 
         if len(variants) == 1:
+            code = self._normalize_result_code(variants[0][0], provider)
             return SelectionResult(
-                code=variants[0][0], name=variants[0][1], source="single_variant",
+                code=code, name=variants[0][1], source="single_variant",
             )
 
         # Narrow large families before sending to LLM
@@ -123,18 +125,56 @@ class IndicatorSelector:
         conn = db._get_connection()
         cur = conn.cursor()
 
-        cur.execute(
-            "SELECT name FROM indicators WHERE provider=? AND code=?",
-            (provider, base_code),
-        )
-        row = cur.fetchone()
+        # Try exact code first, then with common prefixes (BIS stores as BIS_WS_*)
+        row = None
+        for code_variant in [base_code, f"BIS_{base_code}", f"{provider.upper()}_{base_code}"]:
+            cur.execute(
+                "SELECT code, name FROM indicators WHERE provider=? AND code=?",
+                (provider, code_variant),
+            )
+            row = cur.fetchone()
+            if row:
+                base_code = row[0]  # Use the actual stored code
+                break
+
         if not row:
             return []
 
-        core = row[0].split(",")[0].split("(")[0].strip().lower()
+        base_name = row[1]
+        core = base_name.split(",")[0].split("(")[0].strip().lower()
         if len(core) < 4:
-            core = row[0].split(",")[0].strip().lower()
+            core = base_name.split(",")[0].strip().lower()
 
+        # For more precise family scoping, also consider query keywords
+        # e.g., "corporate bond yield" should find "corporate" variants,
+        # not just generic "bond yield" family
+        query_specifics = []
+        for word in query.lower().split():
+            if word not in {"rate", "the", "a", "of", "in", "for", "as", "to", "by",
+                           "us", "uk", "gdp", "and", "or", "percent", "percentage"}:
+                if word not in core and len(word) > 3:
+                    query_specifics.append(word)
+
+        # Build search: core name AND any query-specific words
+        if query_specifics:
+            # Try narrower search first (core + query specifics)
+            specifics_clause = " AND ".join(
+                f"LOWER(name) LIKE '%{w}%'" for w in query_specifics[:2]
+            )
+            cur.execute(
+                f"SELECT code, name FROM indicators "
+                f"WHERE provider=? AND LOWER(name) LIKE ? AND {specifics_clause} "
+                f"ORDER BY LENGTH(name) LIMIT 30",
+                (provider, f"%{core}%"),
+            )
+            narrow_results = cur.fetchall()
+            # Only use narrow results if we found multiple — a single
+            # narrow hit is often a false positive (e.g., "real" matching
+            # "real agricultural GDP" instead of "GDP (constant US$)")
+            if len(narrow_results) >= 2:
+                return narrow_results
+
+        # Fall back to broad family search
         cur.execute(
             "SELECT code, name FROM indicators "
             "WHERE provider=? AND LOWER(name) LIKE ? "
@@ -142,6 +182,14 @@ class IndicatorSelector:
             (provider, f"%{core}%"),
         )
         return cur.fetchall()
+
+    @staticmethod
+    def _normalize_result_code(code: str, provider: str) -> str:
+        """Normalize provider-specific code prefixes for downstream use."""
+        # BIS database stores codes as BIS_WS_CBPOL but providers expect WS_CBPOL
+        if provider.upper() == "BIS" and code.startswith("BIS_"):
+            return code[4:]
+        return code
 
     def _narrow_variants(
         self, variants: List[Tuple[str, str]], query: str,
@@ -218,6 +266,7 @@ class IndicatorSelector:
                         num = int(digits[:3]) - 1
                         if 0 <= num < len(variants):
                             code, name = variants[num]
+                            code = self._normalize_result_code(code, provider)
                             logger.info(
                                 "🎯 LLM auto-selected: '%s' → %s (%s)",
                                 query, code, name[:50],
@@ -236,6 +285,7 @@ class IndicatorSelector:
                             idx = int(digits[:3]) - 1
                             if 0 <= idx < len(variants) and idx not in [n for n, _, _ in nums]:
                                 code, name = variants[idx]
+                                code = self._normalize_result_code(code, provider)
                                 nums.append((idx, code, name))
                     if nums:
                         options_list = [
@@ -257,6 +307,7 @@ class IndicatorSelector:
                     num = int(digits[:3]) - 1
                     if 0 <= num < len(variants):
                         code, name = variants[num]
+                        code = self._normalize_result_code(code, provider)
                         return SelectionResult(
                             code=code, name=name, source="llm_selection",
                         )
