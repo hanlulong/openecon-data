@@ -87,36 +87,68 @@ class IndicatorSelector:
         from .catalog_service import find_concept_by_term, get_indicator_code
         from .indicator_database import IndicatorDatabase
 
+        db = IndicatorDatabase()
+
         # Stage 1: Get base indicator from catalog
         # Try query first (with spaces, more precise), then concept name (with underscores)
         concept_name = find_concept_by_term(query) or find_concept_by_term(concept)
-        if not concept_name:
-            return SelectionResult(code=None, source="no_concept")
 
-        base_code = get_indicator_code(concept_name, provider)
-        if not base_code or base_code in ("DYNAMIC", "N/A", "NONE"):
-            return SelectionResult(code=None, source="no_provider_code")
+        # Check if the concept match is RELEVANT to the query.
+        # "hospital beds" matching "health_expenditure" is a weak match —
+        # the concept domain is right but the specific indicator is wrong.
+        concept_is_strong = False
+        base_code = None
+        if concept_name:
+            base_code = get_indicator_code(concept_name, provider)
+            if base_code and base_code not in ("DYNAMIC", "N/A", "NONE"):
+                # Check: do the key query words appear in the concept name or base indicator?
+                query_words = set(query.lower().split()) - {
+                    "the", "a", "an", "in", "of", "for", "and", "or", "to", "as", "by",
+                    "at", "rate", "ratio", "percent", "percentage",
+                }
+                concept_words = set(concept_name.replace("_", " ").lower().split())
+                overlap = query_words & concept_words
+                concept_is_strong = len(overlap) >= 1
 
-        # Get family variants
-        db = IndicatorDatabase()
-        variants = self._get_family_variants(db, base_code, query, provider)
+        if concept_is_strong and base_code:
+            # Strong concept match → use family variant selection
+            variants = self._get_family_variants(db, base_code, query, provider)
 
-        if not variants:
-            return SelectionResult(code=base_code, source="catalog_base")
+            if not variants:
+                return SelectionResult(code=base_code, source="catalog_base")
 
-        if len(variants) == 1:
-            code = self._normalize_result_code(variants[0][0], provider)
-            return SelectionResult(
-                code=code, name=variants[0][1], source="single_variant",
+            if len(variants) == 1:
+                code = self._normalize_result_code(variants[0][0], provider)
+                return SelectionResult(
+                    code=code, name=variants[0][1], source="single_variant",
+                )
+
+            # Narrow large families before sending to LLM
+            if len(variants) > 30:
+                variants = self._narrow_variants(variants, query)
+
+            # Stage 2: LLM decides — clear (auto-pick) or ambiguous (ask user)
+            result = await self._llm_assess(query, variants, provider, base_code)
+            return result
+
+        # Weak or no concept match → search the FULL database directly
+        # This handles niche indicators not covered by the 86 catalog concepts
+        variants = self._search_database_directly(db, query, provider)
+        if variants:
+            if len(variants) == 1:
+                code = self._normalize_result_code(variants[0][0], provider)
+                return SelectionResult(
+                    code=code, name=variants[0][1], source="direct_search",
+                )
+            result = await self._llm_assess(
+                query, variants, provider, base_code or "",
             )
+            return result
 
-        # Narrow large families before sending to LLM
-        if len(variants) > 30:
-            variants = self._narrow_variants(variants, query)
-
-        # Stage 2: LLM decides — clear (auto-pick) or ambiguous (ask user)
-        result = await self._llm_assess(query, variants, provider, base_code)
-        return result
+        # Nothing found
+        if base_code:
+            return SelectionResult(code=base_code, source="catalog_fallback")
+        return SelectionResult(code=None, source="no_match")
 
     def _get_family_variants(
         self, db: Any, base_code: str, query: str, provider: str,
@@ -182,6 +214,29 @@ class IndicatorSelector:
             (provider, f"%{core}%"),
         )
         return cur.fetchall()
+
+    def _search_database_directly(
+        self, db: Any, query: str, provider: str,
+    ) -> List[Tuple[str, str]]:
+        """Search the full indicator database for niche queries not in catalog."""
+        conn = db._get_connection()
+        cur = conn.cursor()
+
+        # Use indicator_lookup's FTS5 search with over-fetch
+        from .indicator_lookup import IndicatorLookup
+        lookup = IndicatorLookup()
+        results = lookup.search(query, provider=provider, limit=30)
+
+        if not results:
+            return []
+
+        # Convert to (code, name) tuples
+        variants = [
+            (r.get("code", ""), r.get("name", ""))
+            for r in results
+            if r.get("code")
+        ]
+        return variants[:30]
 
     @staticmethod
     def _normalize_result_code(code: str, provider: str) -> str:
