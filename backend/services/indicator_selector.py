@@ -150,14 +150,19 @@ class IndicatorSelector:
             result = await self._llm_assess(query, variants, provider, base_code)
             return result
 
-        # Weak or no concept match → search the FULL database directly
-        # This handles niche indicators not covered by the 86 catalog concepts
-        variants = self._search_database_directly(db, query, provider)
+        # Weak or no concept match → use EMBEDDING RETRIEVAL (primary path for 330K)
+        # OpenAI embeddings understand semantic meaning — "fishing industry" finds
+        # "ISIC Rev.4: Fishing and aquaculture" even when words don't overlap.
+        variants = self._search_by_embedding(query, provider)
+        if not variants:
+            # Embedding unavailable — fall back to FTS5 OR search
+            variants = self._search_database_directly(db, query, provider)
+
         if variants:
             if len(variants) == 1:
                 code = self._normalize_result_code(variants[0][0], provider)
                 return SelectionResult(
-                    code=code, name=variants[0][1], source="direct_search",
+                    code=code, name=variants[0][1], source="embedding_search",
                 )
             result = await self._llm_assess(
                 query, variants, provider, base_code or "",
@@ -304,6 +309,20 @@ class IndicatorSelector:
             (provider, f"%{core}%"),
         )
         return cur.fetchall()
+
+    def _search_by_embedding(
+        self, query: str, provider: str,
+    ) -> List[Tuple[str, str]]:
+        """Search using OpenAI embedding similarity (primary retrieval for 330K)."""
+        try:
+            from .embedding_retrieval import get_embedding_retrieval
+            er = get_embedding_retrieval()
+            results = er.search(query, provider=provider, top_k=20)
+            if results:
+                return [(r["code"], r["name"]) for r in results]
+        except Exception as e:
+            logger.debug("Embedding retrieval unavailable: %s", e)
+        return []
 
     def _search_database_directly(
         self, db: Any, query: str, provider: str,
