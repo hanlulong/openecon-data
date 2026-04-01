@@ -6111,7 +6111,7 @@ class QueryService:
 
         return provider, params
 
-    def _resolve_indicator_for_fetch(
+    async def _resolve_indicator_for_fetch(
         self,
         provider: str,
         intent: ParsedIntent,
@@ -6119,9 +6119,8 @@ class QueryService:
     ) -> dict:
         """Resolve and validate the indicator code for a fetch operation.
 
-        Extracted from _fetch_data() to consolidate the 4 indicator resolution
-        paths (explicit code validation, direct translation, IndicatorResolver,
-        fallback) into a single, testable method.
+        Uses IndicatorSelector (embed → LLM pick) as primary resolution,
+        falling back to the legacy IndicatorResolver if embeddings are unavailable.
 
         Mutates intent.parameters and potentially intent.indicators (for
         WorldBank multi-indicator collapse). Returns the updated params dict.
@@ -6265,9 +6264,35 @@ class QueryService:
                 )
                 break
 
-        # Path 2: IndicatorResolver (catalog + database FTS + vector search)
-        # Runs FIRST because the catalog (86 curated concepts) and FTS5
-        # (330K indicators) are more accurate than fuzzy substring matching.
+        # Path 1.5: IndicatorSelector (embed → LLM pick) — primary resolution
+        # for all 330K indicators. Uses OpenAI embeddings for semantic retrieval
+        # and LLM for variant selection.
+        try:
+            from .indicator_selector import IndicatorSelector
+            selector = IndicatorSelector()
+            selection = await selector.select(indicator_query, provider)
+            if selection.code:
+                logger.info(
+                    "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
+                    indicator_query, selection.code, selection.source,
+                )
+                params = {**params, "indicator": selection.code}
+                intent.parameters = params
+                return params
+            if selection.needs_user_choice:
+                # Store options for clarification — will be handled by caller
+                logger.info(
+                    "🔵 IndicatorSelector needs user choice: %d options",
+                    len(selection.options),
+                )
+                params = {**params, "__indicator_options": selection.options}
+                intent.parameters = params
+                # Don't return — fall through to legacy resolver as backup
+        except Exception as e:
+            logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
+
+        # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
+        # Fallback when IndicatorSelector is unavailable or returns no result.
         resolved = resolver.resolve(
             indicator_query,
             provider=provider,
@@ -8625,7 +8650,7 @@ class QueryService:
         intent.parameters = params
 
         # PHASE B: Resolve indicator code via unified resolution pipeline
-        params = self._resolve_indicator_for_fetch(provider, intent, params)
+        params = await self._resolve_indicator_for_fetch(provider, intent, params)
 
         # Check catalog availability and re-route if needed
         provider, params = self._apply_catalog_availability_override(

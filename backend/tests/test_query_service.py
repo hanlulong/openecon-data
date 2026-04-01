@@ -2971,12 +2971,14 @@ class QueryServiceTests(unittest.TestCase):
             def resolve(self, *args, **kwargs):
                 return _Resolved()
 
+        # Mock IndicatorSelector to raise ImportError (falls through to legacy resolver)
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        # Resolver's catalog result wins — translator not consulted
+        # Legacy resolver's catalog result wins when IndicatorSelector unavailable
         self.assertEqual(
             fetch_mock.call_args.kwargs.get("indicator"),
             "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
