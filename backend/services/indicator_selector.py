@@ -51,17 +51,31 @@ the same concept that the user might want. For example:
 - "unemployment" is NOT ambiguous: it means the total rate
 
 DECISION:
-- If the query clearly maps to one indicator (or one indicator is the obvious default):
-  Reply with "PICK: <number>"
-- If there are 2-10 genuinely different MEASURES that the user might want:
-  Reply with "ASK: <number>,<number>,..." listing only those different measures.
+- ALWAYS try to PICK one indicator. Most queries have an obvious default.
+- Only use ASK when the user's query EXPLICITLY asks about something that has
+  fundamentally different measurement approaches (e.g., "health spending" could
+  be % of GDP OR per capita — genuinely different numbers).
+- Single-word or broad queries like "GDP", "trade", "energy" should PICK the
+  most standard version, NOT ask the user.
 
-Selection rules when picking:
+Reply with "PICK: <number>" (strongly preferred) or "ASK: <number>,<number>,..."
+
+Defaults for broad queries:
+- "GDP" → GDP current US$ (most standard)
+- "trade" → trade (% of GDP)
+- "energy" → energy use per capita or total
+- "emissions" → CO2 emissions total
+- "education" → school enrollment primary
+- "agriculture" → agriculture value added (% of GDP)
+- "manufacturing" → manufacturing value added (% of GDP)
+
+Selection rules:
 - Prefer modeled ILO estimates (SL.*) over Jobs Indicators (JI.*)
 - Prefer % of GDP over absolute values for cross-country comparison
 - Prefer gross enrollment over net unless user specifies "net"
 - Prefer "total" gender/age when user doesn't specify male/female/youth
-- Prefer the most general/standard version of an indicator"""
+- Prefer the most general/standard version of an indicator
+- When in doubt, PICK — the user can always ask for a different variant"""
 
 
 class IndicatorSelector:
