@@ -163,6 +163,15 @@ class ProcessingStep(BaseModel):
     metadata: Optional[dict[str, Any]] = None  # Additional info about the step
 
 
+class AlternativeSeries(BaseModel):
+    """A related indicator the user might also want to explore."""
+    code: str
+    name: str
+    provider: str
+    description: Optional[str] = None
+    apiUrl: Optional[str] = None
+
+
 class QueryResponse(BaseModel):
     conversationId: str
     intent: Optional[ParsedIntent] = None
@@ -174,7 +183,8 @@ class QueryResponse(BaseModel):
     message: Optional[str] = None
     codeExecution: Optional[CodeExecutionResult] = None
     isProMode: Optional[bool] = None
-    processingSteps: Optional[List[ProcessingStep]] = None  # Track what happened during processing
+    processingSteps: Optional[List[ProcessingStep]] = None
+    alternativeSeries: Optional[List[AlternativeSeries]] = None  # Related indicators user might want
 
 
 class StreamEvent(BaseModel):
