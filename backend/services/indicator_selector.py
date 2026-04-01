@@ -89,6 +89,13 @@ class IndicatorSelector:
 
         db = IndicatorDatabase()
 
+        # Stage 0: Direct name match — fastest path for all 330K indicators.
+        # If the query closely matches an indicator name in the database,
+        # use it directly. No concept matching, no LLM call needed.
+        direct = self._match_by_name(db, query, provider)
+        if direct:
+            return direct
+
         # Stage 1: Get base indicator from catalog
         # Try query first (with spaces, more precise), then concept name (with underscores)
         concept_name = find_concept_by_term(query) or find_concept_by_term(concept)
@@ -161,6 +168,77 @@ class IndicatorSelector:
         if base_code:
             return SelectionResult(code=base_code, source="catalog_fallback")
         return SelectionResult(code=None, source="no_match")
+
+    def _match_by_name(
+        self, db: Any, query: str, provider: str,
+    ) -> Optional[SelectionResult]:
+        """Stage 0: Direct name substring match against indicator database.
+
+        This is the fastest resolution path — a single SQL LIKE query.
+        It handles ALL 330K indicators without catalog concepts or LLM calls.
+        Only triggers when there's a strong match (few results, high specificity).
+        """
+        if len(query) < 5:
+            return None  # Too short for reliable name matching
+
+        conn = db._get_connection()
+        cur = conn.cursor()
+
+        # Search for indicators whose name starts with or closely matches the query
+        query_clean = query.strip().lower()
+
+        # Try exact prefix match first (most precise)
+        cur.execute(
+            "SELECT code, name FROM indicators "
+            "WHERE provider=? AND LOWER(name) LIKE ? "
+            "ORDER BY LENGTH(name) LIMIT 5",
+            (provider, f"{query_clean}%"),
+        )
+        results = cur.fetchall()
+
+        # If no prefix match, try substring match
+        if not results and len(query_clean) >= 10:
+            cur.execute(
+                "SELECT code, name FROM indicators "
+                "WHERE provider=? AND LOWER(name) LIKE ? "
+                "ORDER BY LENGTH(name) LIMIT 10",
+                (provider, f"%{query_clean}%"),
+            )
+            results = cur.fetchall()
+
+        if not results:
+            return None
+
+        if len(results) == 1:
+            code = self._normalize_result_code(results[0][0], provider)
+            logger.info(
+                "⚡ Direct name match: '%s' → %s (%s)",
+                query[:40], code, results[0][1][:40],
+            )
+            return SelectionResult(
+                code=code, name=results[0][1], source="name_match",
+            )
+
+        if len(results) <= 3:
+            # Few results — pick shortest name (most general) or exact match
+            for code, name in results:
+                if name.lower().startswith(query_clean):
+                    code = self._normalize_result_code(code, provider)
+                    logger.info(
+                        "⚡ Direct name match (best of %d): '%s' → %s",
+                        len(results), query[:40], code,
+                    )
+                    return SelectionResult(
+                        code=code, name=name, source="name_match",
+                    )
+            # Return first (shortest name)
+            code = self._normalize_result_code(results[0][0], provider)
+            return SelectionResult(
+                code=code, name=results[0][1], source="name_match",
+            )
+
+        # Too many matches — not specific enough, fall through to concept/LLM
+        return None
 
     def _get_family_variants(
         self, db: Any, base_code: str, query: str, provider: str,
