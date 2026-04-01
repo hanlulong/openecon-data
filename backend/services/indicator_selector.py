@@ -96,19 +96,31 @@ class IndicatorSelector:
         # Check if the concept match is RELEVANT to the query.
         # "hospital beds" matching "health_expenditure" is a weak match —
         # the concept domain is right but the specific indicator is wrong.
+        # "Fiscal" matching "fiscal_balance" is also weak — too vague.
         concept_is_strong = False
         base_code = None
         if concept_name:
             base_code = get_indicator_code(concept_name, provider)
             if base_code and base_code not in ("DYNAMIC", "N/A", "NONE"):
-                # Check: do the key query words appear in the concept name or base indicator?
                 query_words = set(query.lower().split()) - {
                     "the", "a", "an", "in", "of", "for", "and", "or", "to", "as", "by",
-                    "at", "rate", "ratio", "percent", "percentage",
+                    "at", "rate", "ratio", "percent", "percentage", "total", "net",
+                    "gross", "annual", "monthly", "per", "capita",
                 }
                 concept_words = set(concept_name.replace("_", " ").lower().split())
                 overlap = query_words & concept_words
-                concept_is_strong = len(overlap) >= 1
+                # Require SUBSTANTIAL overlap: at least 1 word AND the overlap
+                # covers a meaningful fraction of the concept name.
+                # "GDP growth" (2 content words) matching "gdp_growth" (2 words) → 100% → strong
+                # "Fiscal" (1 word) matching "fiscal_balance" (2 words) → 50% → weak
+                # "Learning Deprivation" (2 words) matching "education" (1 word) → 0% → weak
+                if overlap:
+                    overlap_ratio = len(overlap) / max(len(concept_words), 1)
+                    query_coverage = len(overlap) / max(len(query_words), 1)
+                    # Strong if: good overlap with concept AND query isn't way broader
+                    concept_is_strong = overlap_ratio > 0.5 or (
+                        len(overlap) >= 2 and query_coverage >= 0.3
+                    )
 
         if concept_is_strong and base_code:
             # Strong concept match → use family variant selection
