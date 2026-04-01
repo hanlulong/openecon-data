@@ -94,6 +94,27 @@ The LLM understands that:
 
 All 10 providers: FRED (139K), IMF (115K), WorldBank (29K), CoinGecko (19K), Comtrade (8K), Eurostat (8K), StatsCan (8K), OECD (3K), BIS (61), ExchangeRate (49).
 
-## Migration Status
+## Integration Status
 
-The IndicatorSelector is built and tested but **not yet integrated** into the main query pipeline (`query.py`). The current production system uses `indicator_resolver.py`. Integration is the next step.
+**INTEGRATED** (2026-04-01): The IndicatorSelector is wired into `query.py`'s
+`_resolve_indicator_for_fetch()` as the PRIMARY resolution path. The legacy
+`indicator_resolver.py` serves as fallback when embeddings are unavailable.
+
+```python
+# In query.py _resolve_indicator_for_fetch():
+selection = await IndicatorSelector().select(indicator_query, provider)
+if selection.code:
+    return selection.code  # Embed → LLM picked the indicator
+# else: fall through to legacy IndicatorResolver
+```
+
+## Cleanup Status
+
+| Component | Status | Lines |
+|-----------|--------|-------|
+| ChromaDB code in vector_search.py | REMOVED | -165 |
+| indicator_selector.py | SIMPLIFIED to embed→LLM | 220 |
+| embedding_retrieval.py | ACTIVE | 215 |
+| Old 4-stage selector code | REPLACED with 2-step | -280 |
+| semantic_provider_router.py | DEPRECATED, pending archive | 473 |
+| provider_router.py | DEPRECATED, pending migration | 988 |
