@@ -89,14 +89,7 @@ class IndicatorSelector:
 
         db = IndicatorDatabase()
 
-        # Stage 0: Direct name match — fastest path for all 330K indicators.
-        # If the query closely matches an indicator name in the database,
-        # use it directly. No concept matching, no LLM call needed.
-        direct = self._match_by_name(db, query, provider)
-        if direct:
-            return direct
-
-        # Stage 1: Get base indicator from catalog
+        # Stage 1: Get base indicator from catalog (runs FIRST for common queries)
         # Try query first (with spaces, more precise), then concept name (with underscores)
         concept_name = find_concept_by_term(query) or find_concept_by_term(concept)
 
@@ -150,7 +143,12 @@ class IndicatorSelector:
             result = await self._llm_assess(query, variants, provider, base_code)
             return result
 
-        # Weak or no concept match → use EMBEDDING RETRIEVAL (primary path for 330K)
+        # Stage 1.5: Direct name match — for specific indicator names not in catalog
+        direct = self._match_by_name(db, query, provider)
+        if direct:
+            return direct
+
+        # Stage 2: Embedding retrieval (primary path for 330K niche indicators)
         # OpenAI embeddings understand semantic meaning — "fishing industry" finds
         # "ISIC Rev.4: Fishing and aquaculture" even when words don't overlap.
         variants = self._search_by_embedding(query, provider)
@@ -183,8 +181,8 @@ class IndicatorSelector:
         It handles ALL 330K indicators without catalog concepts or LLM calls.
         Only triggers when there's a strong match (few results, high specificity).
         """
-        if len(query) < 5:
-            return None  # Too short for reliable name matching
+        if len(query) < 15:
+            return None  # Short queries should use catalog/embedding, not name match
 
         conn = db._get_connection()
         cur = conn.cursor()
@@ -213,6 +211,21 @@ class IndicatorSelector:
 
         if not results:
             return None
+
+        # Filter: only keep results where the indicator name is CLOSE to the query
+        # (not just a substring match that adds extra qualifiers like "agricultural")
+        query_words = set(query_clean.split())
+        filtered = []
+        for code, name in results:
+            name_words = set(name.lower().replace(",", " ").replace("(", " ").replace(")", " ").split())
+            extra_words = name_words - query_words - {
+                "the", "a", "an", "in", "of", "for", "and", "or", "to", "as", "by", "at",
+                "%", "us$", "us", "$", "total", "all", "items", "index",
+            }
+            # Allow up to 3 extra words (parenthetical units, methodology notes)
+            if len(extra_words) <= 3:
+                filtered.append((code, name))
+        results = filtered if filtered else results[:1]  # Fall back to first if all filtered out
 
         if len(results) == 1:
             code = self._normalize_result_code(results[0][0], provider)
