@@ -368,8 +368,8 @@ Only set needs_clarification to true if the query is truly ambiguous AND no prov
             # CRITICAL FIX: Enforce explicit provider detection at code level
             # This ensures user's explicit "from Eurostat", "from BIS", etc. is ALWAYS respected
             # even if LLM incorrectly selects a different provider
-            from ..services.provider_router import ProviderRouter
-            explicit_provider = ProviderRouter.detect_explicit_provider(query)
+            from ..routing.unified_router import detect_explicit_provider
+            explicit_provider = detect_explicit_provider(query)
             if explicit_provider and explicit_provider.upper() != provider:
                 logger.info(f"🔄 EXPLICIT PROVIDER OVERRIDE: '{provider}' → '{explicit_provider.upper()}' (user explicitly requested '{explicit_provider}')")
                 provider = explicit_provider.upper()

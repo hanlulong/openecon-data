@@ -1076,3 +1076,95 @@ def route_provider(intent: Any, original_query: str) -> str:
     router = UnifiedRouter()
     decision = router.route_with_intent(intent, original_query)
     return decision.provider
+
+
+def detect_explicit_provider(query: str) -> Optional[str]:
+    """
+    Compatibility function matching ProviderRouter.detect_explicit_provider() signature.
+
+    Delegates to KeywordMatcher.detect_explicit_provider() and returns just the
+    provider name string (or None).
+
+    Args:
+        query: User's natural language query
+
+    Returns:
+        Provider name if explicitly mentioned, None otherwise
+    """
+    match = KeywordMatcher.detect_explicit_provider(query)
+    return match.provider if match else None
+
+
+def correct_coingecko_misrouting(provider: str, query: str, indicators: list) -> str:
+    """
+    Compatibility function matching ProviderRouter.correct_coingecko_misrouting() signature.
+
+    Delegates to KeywordMatcher.correct_coingecko_misrouting() and returns just the
+    corrected provider string (discards the reason).
+
+    Args:
+        provider: Selected provider
+        query: Original query
+        indicators: List of indicators
+
+    Returns:
+        Corrected provider name string
+    """
+    corrected, _reason = KeywordMatcher.correct_coingecko_misrouting(provider, query, indicators)
+    return corrected
+
+
+def validate_routing(provider: str, original_query: str, intent: Any) -> Optional[str]:
+    """
+    Post-routing validation to catch incorrect routing decisions.
+
+    Migrated from ProviderRouter.validate_routing(). Checks for obvious mismatches
+    between query content and selected provider.
+
+    Args:
+        provider: Selected provider
+        original_query: Original user query
+        intent: ParsedIntent object
+
+    Returns:
+        Warning message if routing seems incorrect, None if OK
+    """
+    query_lower = original_query.lower()
+
+    # Check 1: European/EU query but not routed to Eurostat
+    if any(keyword in query_lower for keyword in ["european countries", "eu countries", "eu member"]):
+        if provider.upper() not in ["EUROSTAT", "OECD"]:
+            warning = f"Query mentions European countries but routed to {provider}, not Eurostat"
+            logger.warning(warning)
+            return warning
+
+    # Check 2: OECD query but not routed to OECD
+    if any(keyword in query_lower for keyword in ["oecd countries", "oecd members"]):
+        if provider.upper() != "OECD":
+            warning = f"Query mentions OECD countries but routed to {provider}, not OECD"
+            logger.warning(warning)
+            return warning
+
+    # Check 3: FRED selected for non-US multi-country query
+    if provider.upper() == "FRED":
+        parameters = getattr(intent, "parameters", {}) or {}
+        countries = parameters.get("countries", [])
+        country = parameters.get("country", "")
+        if isinstance(countries, list) and len(countries) > 1:
+            if not all(c.upper() in ["US", "USA", "UNITED STATES"] for c in countries):
+                warning = f"FRED selected for multi-country query ({countries}) - should use WorldBank"
+                logger.warning(warning)
+                return warning
+        elif country and country.upper() not in ["US", "USA", "UNITED STATES"]:
+            warning = f"FRED selected for non-US query (country={country}) - should use WorldBank or OECD"
+            logger.warning(warning)
+            return warning
+
+    # Check 4: Developing countries query not routed to WorldBank
+    if any(keyword in query_lower for keyword in ["developing countries", "emerging markets"]):
+        if provider.upper() not in ["WORLDBANK", "IMF"]:
+            warning = f"Query about developing countries routed to {provider}, not WorldBank"
+            logger.warning(warning)
+            return warning
+
+    return None

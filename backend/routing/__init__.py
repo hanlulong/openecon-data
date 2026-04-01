@@ -16,7 +16,14 @@ Components:
 from .country_resolver import CountryResolver
 from .keyword_matcher import KeywordMatcher
 from .semantic_provider_router import SemanticProviderRouter
-from .unified_router import UnifiedRouter, RoutingDecision
+from .unified_router import (
+    UnifiedRouter,
+    RoutingDecision,
+    route_provider,
+    detect_explicit_provider,
+    correct_coingecko_misrouting,
+    validate_routing,
+)
 
 __all__ = [
     "CountryResolver",
@@ -24,4 +31,8 @@ __all__ = [
     "SemanticProviderRouter",
     "UnifiedRouter",
     "RoutingDecision",
+    "route_provider",
+    "detect_explicit_provider",
+    "correct_coingecko_misrouting",
+    "validate_routing",
 ]

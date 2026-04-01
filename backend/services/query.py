@@ -27,7 +27,11 @@ from ..services.openrouter import OpenRouterService
 from ..services.query_complexity import QueryComplexityAnalyzer
 from ..services.parameter_validator import ParameterValidator
 from ..services.metadata_search import MetadataSearchService
-from ..services.provider_router import ProviderRouter
+from ..routing.unified_router import (
+    route_provider as unified_route_provider,
+    correct_coingecko_misrouting as unified_correct_coingecko_misrouting,
+    validate_routing as unified_validate_routing,
+)
 from ..services.indicator_translator import IndicatorTranslator
 from ..services.indicator_resolver import get_indicator_resolver
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
@@ -1149,7 +1153,7 @@ class QueryService:
             intent=intent,
             explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
             routed_provider=api_provider,
-            validation_warning=ProviderRouter.validate_routing(
+            validation_warning=unified_validate_routing(
                 api_provider,
                 refined_query,
                 intent,
@@ -1306,9 +1310,9 @@ class QueryService:
                 "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
                 exc,
             )
-            routed_provider = ProviderRouter.route_provider(intent, query)
+            routed_provider = unified_route_provider(intent, query)
 
-        routed_provider = ProviderRouter.correct_coingecko_misrouting(
+        routed_provider = unified_correct_coingecko_misrouting(
             routed_provider,
             query,
             intent.indicators,
@@ -1360,7 +1364,7 @@ class QueryService:
                     baseline_decision=deterministic_decision,
                 )
                 semantic_provider = normalize_provider_name(decision.provider)
-                semantic_provider = ProviderRouter.correct_coingecko_misrouting(
+                semantic_provider = unified_correct_coingecko_misrouting(
                     semantic_provider,
                     query,
                     intent.indicators,
@@ -1414,7 +1418,7 @@ class QueryService:
                 llm_provider_hint=intent.apiProvider,
             )
             hybrid_provider = normalize_provider_name(decision.provider)
-            hybrid_provider = ProviderRouter.correct_coingecko_misrouting(
+            hybrid_provider = unified_correct_coingecko_misrouting(
                 hybrid_provider,
                 query,
                 intent.indicators,
@@ -2909,7 +2913,7 @@ class QueryService:
                 intent=deterministic_intent,
                 explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
                 routed_provider=deterministic_intent.apiProvider,
-                validation_warning=ProviderRouter.validate_routing(
+                validation_warning=unified_validate_routing(
                     deterministic_intent.apiProvider,
                     refined_query,
                     deterministic_intent,

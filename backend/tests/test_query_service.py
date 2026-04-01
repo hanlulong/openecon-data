@@ -3187,7 +3187,7 @@ class QueryServiceTests(unittest.TestCase):
         self.service.semantic_provider_router = None
         self.service.hybrid_router = None
 
-        with patch("backend.services.query.ProviderRouter.route_provider", side_effect=AssertionError("legacy baseline should not run")):
+        with patch("backend.services.query.unified_route_provider", side_effect=AssertionError("legacy baseline should not run")):
             provider = run(self.service._select_routed_provider(intent, "gdp growth germany"))  # pylint: disable=protected-access
         self.assertEqual(provider, "IMF")
 

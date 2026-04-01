@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..models import ParsedIntent
 from .parameter_validator import ParameterValidator
-from .provider_router import ProviderRouter
+from ..routing.unified_router import validate_routing as unified_validate_routing
 
 if TYPE_CHECKING:
     from .query import QueryService
@@ -88,7 +88,7 @@ class QueryPipeline:
                 )
                 parsed_intent.apiProvider = routed_provider
 
-        validation_warning = ProviderRouter.validate_routing(routed_provider, query, parsed_intent)
+        validation_warning = unified_validate_routing(routed_provider, query, parsed_intent)
         if validation_warning:
             logger.warning("Routing validation: %s", validation_warning)
 

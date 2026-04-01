@@ -51,7 +51,7 @@ def test_parse_and_route_enforces_explicit_provider() -> None:
     service.routed_provider = "IMF"  # Should be ignored when explicit provider exists.
     pipeline = QueryPipeline(service)
 
-    with patch("backend.services.query_pipeline.ProviderRouter.validate_routing", return_value=None):
+    with patch("backend.services.query_pipeline.unified_validate_routing", return_value=None):
         result = run(pipeline.parse_and_route("gdp from oecd", history=[]))
 
     assert service.country_overrides_applied is True
@@ -66,7 +66,7 @@ def test_parse_and_route_uses_router_when_no_explicit_provider() -> None:
     service.routed_provider = "IMF"
     pipeline = QueryPipeline(service)
 
-    with patch("backend.services.query_pipeline.ProviderRouter.validate_routing", return_value="warn"):
+    with patch("backend.services.query_pipeline.unified_validate_routing", return_value="warn"):
         result = run(pipeline.parse_and_route("gdp in us", history=[]))
 
     assert result.explicit_provider is None
