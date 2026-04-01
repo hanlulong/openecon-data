@@ -267,30 +267,17 @@ class QueryService:
         Returns provider name if found, None otherwise.
 
         This ensures user's explicit choice is always honored, regardless of LLM interpretation.
+
+        Delegates to KeywordMatcher.detect_explicit_provider() — the single source
+        of truth for explicit provider detection.  Maintaining a separate keyword
+        dictionary here caused drift (e.g., bare "imf"/"bis" false positives that
+        the KeywordMatcher had already fixed).
         """
-        query_lower = query.lower()
-
-        # Provider keywords with their variations
-        provider_patterns = {
-            # Bare "oecd" can denote country group context (for example "OECD economies"),
-            # not an explicit provider request. Require explicit phrasing.
-            "OECD": ["from oecd", "using oecd", "via oecd", "according to oecd", "oecd data"],
-            "FRED": ["fred", "from fred", "using fred", "via fred", "federal reserve", "st. louis fed", "stlouisfed"],
-            "WORLDBANK": ["world bank", "worldbank", "from world bank", "using world bank", "world bank data"],
-            "Comtrade": ["comtrade", "un comtrade", "from comtrade", "using comtrade", "united nations comtrade"],
-            "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan", "using statscan"],
-            "IMF": ["imf", "from imf", "using imf", "international monetary fund", "from the imf"],
-            "BIS": ["bis", "from bis", "using bis", "bank for international settlements"],
-            "Eurostat": ["eurostat", "from eurostat", "using eurostat", "eu statistics", "european statistics"],
-            "ExchangeRate": ["exchangerate", "exchange rate api", "from exchangerate"],
-            "CoinGecko": ["coingecko", "coin gecko", "from coingecko", "using coingecko"]
-        }
-
-        # Check each provider's patterns
-        for provider, patterns in provider_patterns.items():
-            for pattern in patterns:
-                if pattern in query_lower:
-                    return provider
+        from ..routing.keyword_matcher import KeywordMatcher
+        match = KeywordMatcher.detect_explicit_provider(query)
+        if match and match.provider:
+            return match.provider
+        return None
 
     def _extract_countries_from_query(self, query: str) -> List[str]:
         """
@@ -1575,8 +1562,16 @@ class QueryService:
 
         cues: set[str] = set()
         for cue, phrases in cue_map.items():
-            if any(phrase in search_text for phrase in phrases):
-                cues.add(cue)
+            for phrase in phrases:
+                # Short acronyms (≤3 chars) need word-boundary matching
+                # to avoid "ppi" matching inside "philippines"
+                if len(phrase) <= 3:
+                    if re.search(rf"\b{re.escape(phrase)}\b", search_text):
+                        cues.add(cue)
+                        break
+                elif phrase in search_text:
+                    cues.add(cue)
+                    break
 
         # "Energy importers/exporters" is a country-group qualifier, not a
         # directional trade-flow request. Keep current-account semantics primary.

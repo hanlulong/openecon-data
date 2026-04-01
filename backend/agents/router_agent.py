@@ -387,27 +387,13 @@ class RouterAgent:
         """Extract context for standard data fetch query"""
         context = {"data_fetch_mode": True}
 
-        # Extract any explicit provider mention
-        query_lower = query.lower()
-        providers = {
-            "from eurostat": "EUROSTAT",
-            "from fred": "FRED",
-            "from worldbank": "WORLDBANK",
-            "from world bank": "WORLDBANK",
-            "from imf": "IMF",
-            "from oecd": "OECD",
-            "from bis": "BIS",
-            "from statscan": "STATSCAN",
-            "from statistics canada": "STATSCAN",
-            "from comtrade": "COMTRADE",
-            "eurostat data": "EUROSTAT",
-            "fred data": "FRED",
-        }
-
-        for pattern, provider in providers.items():
-            if pattern in query_lower:
-                context["explicit_provider"] = provider
-                break
+        # Delegate explicit provider detection to the single source of truth
+        # (KeywordMatcher) to avoid drift between duplicate keyword dicts.
+        from ..routing.keyword_matcher import KeywordMatcher
+        match = KeywordMatcher.detect_explicit_provider(query)
+        if match and match.provider:
+            from ..services.query import normalize_provider_name
+            context["explicit_provider"] = normalize_provider_name(match.provider)
 
         return context
 

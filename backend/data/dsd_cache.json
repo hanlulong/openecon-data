@@ -193,5 +193,125 @@
       ]
     },
     "cached_at": "2026-04-01T16:32:48.288048"
+  },
+  "OECD:OECD.SDD.TPS:DSD_PRICES_EXC:1.0": {
+    "dsd": {
+      "dsd_id": "DSD_PRICES_EXC",
+      "name": "Consumer price indices DSD for exchange, COICOP 1999",
+      "dimensions": [
+        {
+          "id": "REF_AREA",
+          "position": 0,
+          "name": "REF_AREA",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
+        },
+        {
+          "id": "FREQ",
+          "position": 1,
+          "name": "FREQ",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
+        },
+        {
+          "id": "METHODOLOGY",
+          "position": 2,
+          "name": "METHODOLOGY",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_METHODOLOGY_PRI(1.0)"
+        },
+        {
+          "id": "MEASURE",
+          "position": 3,
+          "name": "MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_MEASURE_PRI(1.0)"
+        },
+        {
+          "id": "UNIT_MEASURE",
+          "position": 4,
+          "name": "UNIT_MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.7)"
+        },
+        {
+          "id": "EXPENDITURE",
+          "position": 5,
+          "name": "EXPENDITURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_COICOP_99(1.1)"
+        },
+        {
+          "id": "ADJUSTMENT",
+          "position": 6,
+          "name": "ADJUSTMENT",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ADJUSTMENT(1.0)"
+        },
+        {
+          "id": "TRANSFORMATION",
+          "position": 7,
+          "name": "TRANSFORMATION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_TRANSFORMATION(1.0)"
+        }
+      ]
+    },
+    "cached_at": "2026-04-01T16:41:10.427525"
+  },
+  "OECD:OECD.SDD.NAD:DSD_NASU:1.0": {
+    "dsd": {
+      "dsd_id": "DSD_NASU",
+      "name": "National Accounts Supply and Use Tables",
+      "dimensions": [
+        {
+          "id": "FREQ",
+          "position": 0,
+          "name": "FREQ",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
+        },
+        {
+          "id": "REF_AREA",
+          "position": 1,
+          "name": "REF_AREA",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
+        },
+        {
+          "id": "TRANSACTION",
+          "position": 2,
+          "name": "TRANSACTION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TRANSACTION(1.0)"
+        },
+        {
+          "id": "ACTIVITY",
+          "position": 3,
+          "name": "ACTIVITY",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ACTIVITY_ISIC4(1.0)"
+        },
+        {
+          "id": "PRODUCT",
+          "position": 4,
+          "name": "PRODUCT",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRODUCT_CPA2008(1.1)"
+        },
+        {
+          "id": "UNIT_MEASURE",
+          "position": 5,
+          "name": "UNIT_MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.1)"
+        },
+        {
+          "id": "VALUATION",
+          "position": 6,
+          "name": "VALUATION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_VALUATION(1.0)"
+        },
+        {
+          "id": "PRICE_BASE",
+          "position": 7,
+          "name": "PRICE_BASE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRICES(1.0)"
+        },
+        {
+          "id": "TABLE_IDENTIFIER",
+          "position": 8,
+          "name": "TABLE_IDENTIFIER",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TABLEID(1.0)"
+        }
+      ]
+    },
+    "cached_at": "2026-04-01T16:41:59.653247"
   }
 }

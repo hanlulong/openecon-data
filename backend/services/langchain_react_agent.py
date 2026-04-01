@@ -455,22 +455,12 @@ class LangChainReActAgent:
                 analysis["pro_mode_reason"] = None
                 self._log_reasoning("ANALYSIS_OVERRIDE", "Provincial query - using StatsCan batch method instead of Pro Mode")
 
-        # Detect explicit provider requests
-        provider_keywords = {
-            "from fred": "FRED",
-            "from world bank": "WorldBank",
-            "from statscan": "StatsCan",
-            "from statistics canada": "StatsCan",
-            "from imf": "IMF",
-            "from bis": "BIS",
-            "from eurostat": "Eurostat",
-            "from oecd": "OECD",
-        }
-        for keyword, provider in provider_keywords.items():
-            if keyword in query_lower:
-                analysis["explicit_provider"] = provider
-                self._log_reasoning("ANALYSIS", f"Explicit provider requested: {provider}")
-                break
+        # Detect explicit provider requests — delegate to single source of truth
+        from ..routing.keyword_matcher import KeywordMatcher
+        match = KeywordMatcher.detect_explicit_provider(query)
+        if match and match.provider:
+            analysis["explicit_provider"] = match.provider
+            self._log_reasoning("ANALYSIS", f"Explicit provider requested: {match.provider}")
 
         return analysis
 

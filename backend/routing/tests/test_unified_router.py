@@ -113,6 +113,39 @@ class TestKeywordMatcher:
         assert result is not None
         assert result.provider == "IMF"
 
+    def test_explicit_provider_from_eurostat(self):
+        """Test explicit Eurostat detection for various phrasings."""
+        # "from Eurostat" phrasing
+        result = KeywordMatcher.detect_explicit_provider("Poland unemployment from Eurostat")
+        assert result is not None
+        assert result.provider == "Eurostat"
+
+        # "using Eurostat" phrasing
+        result = KeywordMatcher.detect_explicit_provider("Germany GDP using Eurostat")
+        assert result is not None
+        assert result.provider == "Eurostat"
+
+        # "Eurostat data" phrasing
+        result = KeywordMatcher.detect_explicit_provider("Show me Eurostat data on inflation")
+        assert result is not None
+        assert result.provider == "Eurostat"
+
+    def test_explicit_provider_all_providers(self):
+        """Test that explicit detection works for every provider with 'from X' syntax."""
+        cases = [
+            ("GDP from FRED", "FRED"),
+            ("data from World Bank", "WorldBank"),
+            ("trade from Comtrade", "Comtrade"),
+            ("GDP from StatsCan", "StatsCan"),
+            ("data from IMF", "IMF"),
+            ("rates from BIS", "BIS"),
+            ("data from Eurostat", "Eurostat"),
+        ]
+        for query, expected_provider in cases:
+            result = KeywordMatcher.detect_explicit_provider(query)
+            assert result is not None, f"Expected {expected_provider} for '{query}', got None"
+            assert result.provider == expected_provider, f"For '{query}': {result.provider} != {expected_provider}"
+
     def test_start_of_query_provider(self):
         """Test provider detection at start of query."""
         result = KeywordMatcher.detect_explicit_provider("OECD GDP for Italy")
@@ -218,6 +251,32 @@ class TestUnifiedRouter:
         """Explicit IMF request."""
         decision = router.route("Get debt data from IMF")
         assert decision.provider == "IMF"
+        assert decision.match_type == "explicit"
+
+    def test_explicit_eurostat(self, router):
+        """Explicit Eurostat request routes to Eurostat, not WorldBank."""
+        decision = router.route("Poland unemployment from Eurostat")
+        assert decision.provider == "Eurostat"
+        assert decision.match_type == "explicit"
+        assert decision.confidence >= 0.9
+
+    def test_explicit_eurostat_various_phrasings(self, router):
+        """All Eurostat explicit phrasings route correctly."""
+        queries = [
+            "Germany GDP from Eurostat",
+            "France inflation using Eurostat",
+            "Italy unemployment via Eurostat",
+            "Show me Eurostat data on GDP",
+        ]
+        for q in queries:
+            decision = router.route(q)
+            assert decision.provider == "Eurostat", f"'{q}' routed to {decision.provider}, expected Eurostat"
+            assert decision.match_type == "explicit"
+
+    def test_explicit_bis(self, router):
+        """Explicit BIS request."""
+        decision = router.route("Policy rate from BIS")
+        assert decision.provider == "BIS"
         assert decision.match_type == "explicit"
 
     # ==========================================================================

@@ -50,15 +50,15 @@ class KeywordMatcher:
     # Phrases that explicitly request a specific provider
     EXPLICIT_PROVIDER_KEYWORDS: Dict[str, List[str]] = {
         "OECD": ["from oecd", "using oecd", "via oecd", "according to oecd", "oecd data"],
-        "FRED": ["fred", "from fred", "federal reserve", "st. louis fed", "the fed"],
-        "WorldBank": ["world bank", "worldbank", "from world bank", "wb data"],
-        "Comtrade": ["comtrade", "un comtrade", "from comtrade", "united nations comtrade"],
-        "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan"],
+        "FRED": ["fred", "from fred", "using fred", "via fred", "federal reserve", "st. louis fed", "stlouisfed", "the fed"],
+        "WorldBank": ["world bank", "worldbank", "from world bank", "using world bank", "wb data", "world bank data"],
+        "Comtrade": ["comtrade", "un comtrade", "from comtrade", "using comtrade", "united nations comtrade"],
+        "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan", "using statscan"],
         "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "according to the imf", "imf data"],
         "BIS": ["from bis", "using bis", "bank for international settlements", "bis data"],
-        "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics"],
-        "ExchangeRate": ["exchangerate", "exchange rate api"],
-        "CoinGecko": ["coingecko", "coin gecko", "crypto prices"]
+        "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics", "eurostat data"],
+        "ExchangeRate": ["exchangerate", "exchange rate api", "from exchangerate"],
+        "CoinGecko": ["coingecko", "coin gecko", "from coingecko", "using coingecko", "crypto prices"]
     }
 
     # Providers that can appear at start of query (e.g., "OECD GDP for Italy")
