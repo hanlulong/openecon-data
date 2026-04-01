@@ -1,4 +1,67 @@
 {
+  "OECD:OECD.SDD.NAD:DSD_NASU:1.0": {
+    "dsd": {
+      "dsd_id": "DSD_NASU",
+      "name": "National Accounts Supply and Use Tables",
+      "dimensions": [
+        {
+          "id": "FREQ",
+          "position": 0,
+          "name": "FREQ",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
+        },
+        {
+          "id": "REF_AREA",
+          "position": 1,
+          "name": "REF_AREA",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
+        },
+        {
+          "id": "TRANSACTION",
+          "position": 2,
+          "name": "TRANSACTION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TRANSACTION(1.0)"
+        },
+        {
+          "id": "ACTIVITY",
+          "position": 3,
+          "name": "ACTIVITY",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ACTIVITY_ISIC4(1.0)"
+        },
+        {
+          "id": "PRODUCT",
+          "position": 4,
+          "name": "PRODUCT",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRODUCT_CPA2008(1.1)"
+        },
+        {
+          "id": "UNIT_MEASURE",
+          "position": 5,
+          "name": "UNIT_MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.1)"
+        },
+        {
+          "id": "VALUATION",
+          "position": 6,
+          "name": "VALUATION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_VALUATION(1.0)"
+        },
+        {
+          "id": "PRICE_BASE",
+          "position": 7,
+          "name": "PRICE_BASE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRICES(1.0)"
+        },
+        {
+          "id": "TABLE_IDENTIFIER",
+          "position": 8,
+          "name": "TABLE_IDENTIFIER",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TABLEID(1.0)"
+        }
+      ]
+    },
+    "cached_at": "2026-03-30T22:50:52.273250"
+  },
   "OECD:OECD.SDD.TPS:DSD_LFS:1.0": {
     "dsd": {
       "dsd_id": "DSD_LFS",
@@ -60,360 +123,93 @@
         }
       ]
     },
-    "cached_at": "2026-03-26T18:38:45.530800"
+    "cached_at": "2026-03-31T15:10:21.640898"
   },
-  "OECD:OECD.SDD.TPS:DSD_PRICES_EXC:1.0": {
+  "OECD:OECD.SDD.NAD:DSD_NAMAIN1:1.0": {
     "dsd": {
-      "dsd_id": "DSD_PRICES_EXC",
-      "name": "Consumer price indices DSD for exchange, COICOP 1999",
+      "dsd_id": "DSD_NAMAIN1",
+      "name": "National Accounts Main Aggregates 1",
       "dimensions": [
         {
-          "id": "REF_AREA",
-          "position": 0,
-          "name": "REF_AREA",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
-        },
-        {
           "id": "FREQ",
-          "position": 1,
+          "position": 0,
           "name": "FREQ",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
         },
         {
-          "id": "METHODOLOGY",
-          "position": 2,
-          "name": "METHODOLOGY",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_METHODOLOGY_PRI(1.0)"
-        },
-        {
-          "id": "MEASURE",
-          "position": 3,
-          "name": "MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_MEASURE_PRI(1.0)"
-        },
-        {
-          "id": "UNIT_MEASURE",
-          "position": 4,
-          "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.7)"
-        },
-        {
-          "id": "EXPENDITURE",
-          "position": 5,
-          "name": "EXPENDITURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_COICOP_99(1.1)"
-        },
-        {
           "id": "ADJUSTMENT",
-          "position": 6,
+          "position": 1,
           "name": "ADJUSTMENT",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ADJUSTMENT(1.0)"
         },
         {
-          "id": "TRANSFORMATION",
-          "position": 7,
-          "name": "TRANSFORMATION",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_TRANSFORMATION(1.0)"
-        }
-      ]
-    },
-    "cached_at": "2026-03-26T18:54:05.452143"
-  },
-  "OECD:OECD.CTP.TPS:DSD_TAX_CIT:1.0": {
-    "dsd": {
-      "dsd_id": "DSD_TAX_CIT",
-      "name": "Corporate income tax rates",
-      "dimensions": [
-        {
           "id": "REF_AREA",
-          "position": 0,
-          "name": "REF_AREA",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.6)"
-        },
-        {
-          "id": "FREQ",
-          "position": 1,
-          "name": "FREQ",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
-        },
-        {
-          "id": "MEASURE",
           "position": 2,
-          "name": "MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_MEASURE_CIT(1.0)"
-        },
-        {
-          "id": "TARGETING",
-          "position": 3,
-          "name": "TARGETING",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_TARGETING_CIT(1.0)"
-        },
-        {
-          "id": "UNIT_MEASURE",
-          "position": 4,
-          "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.13)"
-        },
-        {
-          "id": "SECTOR",
-          "position": 5,
-          "name": "SECTOR",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SECTOR(1.3)"
-        },
-        {
-          "id": "RATE_STRUCTURE",
-          "position": 6,
-          "name": "RATE_STRUCTURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_RATE_STRUCTURE_CIT(1.0)"
-        },
-        {
-          "id": "TAX_BASE",
-          "position": 7,
-          "name": "TAX_BASE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_TAX_BASE_CIT(1.0)"
-        }
-      ]
-    },
-    "cached_at": "2026-03-27T02:45:26.292912"
-  },
-  "OECD:OECD.CTP.TPS:DSD_REV_ASAP:1.0": {
-    "dsd": {
-      "dsd_id": "DSD_REV_ASAP",
-      "name": "DSD revenue statistics of Asia and the Pacific",
-      "dimensions": [
-        {
-          "id": "REF_AREA",
-          "position": 0,
-          "name": "REF_AREA",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.3)"
-        },
-        {
-          "id": "MEASURE",
-          "position": 1,
-          "name": "MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_MEASURE_REV(1.0)"
-        },
-        {
-          "id": "SECTOR",
-          "position": 2,
-          "name": "SECTOR",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SECTOR(1.2)"
-        },
-        {
-          "id": "STANDARD_REVENUE",
-          "position": 3,
-          "name": "STANDARD_REVENUE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_STANDARD_REVENUE(1.0)"
-        },
-        {
-          "id": "CTRY_SPECIFIC_REVENUE",
-          "position": 4,
-          "name": "CTRY_SPECIFIC_REVENUE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_CTRY_SPECIFIC_REVENUE(1.1)"
-        },
-        {
-          "id": "UNIT_MEASURE",
-          "position": 5,
-          "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.14)"
-        },
-        {
-          "id": "FREQ",
-          "position": 6,
-          "name": "FREQ",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
-        }
-      ]
-    },
-    "cached_at": "2026-03-27T10:45:09.441608"
-  },
-  "OECD:OECD.CTP.TPS:DSD_REV_COMP_OECD:1.0": {
-    "dsd": {
-      "dsd_id": "DSD_REV_COMP_OECD",
-      "name": "DSD comparative series of OECD member countries",
-      "dimensions": [
-        {
-          "id": "REF_AREA",
-          "position": 0,
-          "name": "REF_AREA",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.6)"
-        },
-        {
-          "id": "MEASURE",
-          "position": 1,
-          "name": "MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_MEASURE_REV(1.0)"
-        },
-        {
-          "id": "SECTOR",
-          "position": 2,
-          "name": "SECTOR",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SECTOR(1.2)"
-        },
-        {
-          "id": "STANDARD_REVENUE",
-          "position": 3,
-          "name": "STANDARD_REVENUE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_STANDARD_REVENUE(1.1)"
-        },
-        {
-          "id": "CTRY_SPECIFIC_REVENUE",
-          "position": 4,
-          "name": "CTRY_SPECIFIC_REVENUE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CTP.TPS:CL_CTRY_SPECIFIC_REVENUE(1.3)"
-        },
-        {
-          "id": "UNIT_MEASURE",
-          "position": 5,
-          "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.16)"
-        },
-        {
-          "id": "FREQ",
-          "position": 6,
-          "name": "FREQ",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
-        }
-      ]
-    },
-    "cached_at": "2026-03-27T10:46:31.349578"
-  },
-  "OECD:OECD.SDD.NAD:DSD_NAMAIN10:1.0": {
-    "dsd": {
-      "dsd_id": "DSD_NAMAIN10",
-      "name": "National Accounts Main Aggregates10",
-      "dimensions": [
-        {
-          "id": "FREQ",
-          "position": 0,
-          "name": "FREQ",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
-        },
-        {
-          "id": "REF_AREA",
-          "position": 1,
           "name": "REF_AREA",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
         },
         {
           "id": "SECTOR",
-          "position": 2,
+          "position": 3,
           "name": "SECTOR",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SECTOR(1.1)"
         },
         {
           "id": "COUNTERPART_SECTOR",
-          "position": 3,
+          "position": 4,
           "name": "COUNTERPART_SECTOR",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SECTOR(1.1)"
         },
         {
           "id": "TRANSACTION",
-          "position": 4,
+          "position": 5,
           "name": "TRANSACTION",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TRANSACTION(1.0)"
         },
         {
           "id": "INSTR_ASSET",
-          "position": 5,
+          "position": 6,
           "name": "INSTR_ASSET",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_INSTR_ASSET(1.0)"
         },
         {
           "id": "ACTIVITY",
-          "position": 6,
+          "position": 7,
           "name": "ACTIVITY",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ACTIVITY_ISIC4(1.0)"
         },
         {
           "id": "EXPENDITURE",
-          "position": 7,
+          "position": 8,
           "name": "EXPENDITURE",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_COICOP_99(1.0)"
         },
         {
           "id": "UNIT_MEASURE",
-          "position": 8,
+          "position": 9,
           "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.5)"
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.1)"
         },
         {
           "id": "PRICE_BASE",
-          "position": 9,
+          "position": 10,
           "name": "PRICE_BASE",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRICES(1.0)"
         },
         {
           "id": "TRANSFORMATION",
-          "position": 10,
+          "position": 11,
           "name": "TRANSFORMATION",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_TRANSFORMATION(1.1)"
         },
         {
           "id": "TABLE_IDENTIFIER",
-          "position": 11,
+          "position": 12,
           "name": "TABLE_IDENTIFIER",
           "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.NAD:CL_TABLEID(1.0)"
         }
       ]
     },
-    "cached_at": "2026-03-27T14:36:46.484418"
-  },
-  "OECD:OECD.SDD.TPS:DSD_PRICES:1.0": {
-    "dsd": {
-      "dsd_id": "DSD_PRICES",
-      "name": "Consumer price indices DSD",
-      "dimensions": [
-        {
-          "id": "REF_AREA",
-          "position": 0,
-          "name": "REF_AREA",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
-        },
-        {
-          "id": "FREQ",
-          "position": 1,
-          "name": "FREQ",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
-        },
-        {
-          "id": "METHODOLOGY",
-          "position": 2,
-          "name": "METHODOLOGY",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_METHODOLOGY_PRI(1.0)"
-        },
-        {
-          "id": "MEASURE",
-          "position": 3,
-          "name": "MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_MEASURE_PRI(1.0)"
-        },
-        {
-          "id": "UNIT_MEASURE",
-          "position": 4,
-          "name": "UNIT_MEASURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.7)"
-        },
-        {
-          "id": "EXPENDITURE",
-          "position": 5,
-          "name": "EXPENDITURE",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_COICOP_99(1.1)"
-        },
-        {
-          "id": "ADJUSTMENT",
-          "position": 6,
-          "name": "ADJUSTMENT",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ADJUSTMENT(1.0)"
-        },
-        {
-          "id": "TRANSFORMATION",
-          "position": 7,
-          "name": "TRANSFORMATION",
-          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_TRANSFORMATION(1.0)"
-        }
-      ]
-    },
-    "cached_at": "2026-03-27T16:38:39.335237"
+    "cached_at": "2026-03-31T15:23:43.020493"
   }
 }
