@@ -9165,9 +9165,8 @@ class QueryService:
         """
         Execute query using LangChain orchestrator for intelligent routing.
 
-        Supports three modes:
+        Supports two modes:
         - LangGraph (USE_LANGGRAPH=true, default): State-persistent agent graph
-        - ReAct Agent (USE_LANGCHAIN_REACT_AGENT=true): Multi-step reasoning with error recovery
         - Simple Orchestrator: Basic LLM-based routing
 
         Args:
@@ -9181,7 +9180,6 @@ class QueryService:
         try:
             # Check mode: Deep Agents (for complex queries) > LangGraph > ReAct > Simple Orchestrator
             use_langgraph = os.getenv('USE_LANGGRAPH', 'true').lower() == 'true'
-            use_react_agent = os.getenv('USE_LANGCHAIN_REACT_AGENT', 'false').lower() == 'true'
             use_deep_agents = os.getenv('USE_DEEP_AGENTS', 'true').lower() == 'true'
 
             # Get conversation history for context
@@ -9270,43 +9268,12 @@ class QueryService:
             # Pass the pre-resolved intent so LangGraph doesn't re-parse from scratch
             # (the intent has already been through concept override, indicator resolution,
             # semantic validation, etc. — all of which would be lost on re-parse).
-            if use_langgraph and not use_react_agent:
+            if use_langgraph:
                 return await self._execute_with_langgraph(
                     query, conversation_id, conversation_history, tracker,
                     pre_resolved_intent=intent,
                 )
 
-            if use_react_agent:
-                # Use enhanced ReAct agent with multi-step reasoning
-                from ..services.langchain_react_agent import create_react_agent
-
-                logger.info("🤖 Using LangChain ReAct agent for intelligent query routing")
-
-                if tracker:
-                    with tracker.track(
-                        "react_agent_execution",
-                        "🧠 ReAct agent analyzing query...",
-                        {
-                            "conversation_id": conversation_id,
-                            "history_length": len(conversation_history),
-                        },
-                    ):
-                        agent = create_react_agent(
-                            query_service=self,
-                            conversation_id=conversation_id
-                        )
-                        result = await agent.execute(query, chat_history=conversation_history)
-                else:
-                    agent = create_react_agent(
-                        query_service=self,
-                        conversation_id=conversation_id
-                    )
-                    result = await agent.execute(query, chat_history=conversation_history)
-
-                # Include reasoning log in response
-                reasoning_log = result.get("reasoning_log", [])
-                if reasoning_log:
-                    logger.info(f"ReAct agent reasoning: {len(reasoning_log)} steps")
             else:
                 # Use simple orchestrator (original implementation)
                 from ..services.langchain_orchestrator import create_langchain_orchestrator
