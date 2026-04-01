@@ -130,3 +130,6 @@ backend/data/indicators.db
 # Generated frontend files
 packages/frontend/out.css
 packages/frontend/dist-data/
+
+# OpenAI embedding index (build locally with EmbeddingRetrieval.build_index())
+backend/data/openai_embeddings/
