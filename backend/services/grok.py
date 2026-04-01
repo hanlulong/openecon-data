@@ -100,7 +100,11 @@ fig.tight_layout()
 
 class GrokService:
     """
-    Service for generating Python code using x-ai/grok-code-fast-1 model.
+    Service for generating Python code for economic data analysis.
+
+    Uses the local LLM (gpt-oss-120b via vLLM) by default, falling back
+    to OpenRouter if local is unavailable. This removes the X.AI/Grok
+    external dependency.
 
     Features:
     - Enhanced prompts for economic data analysis
@@ -113,8 +117,13 @@ class GrokService:
         settings = get_settings()
         self.api_key = settings.openrouter_api_key
         self.app_url = settings.app_url
-        self.base_url = "https://openrouter.ai/api/v1"
-        self.model = "x-ai/grok-code-fast-1"
+        # Use local LLM (gpt-oss-120b) instead of external Grok API
+        if settings.llm_provider == "vllm" and settings.llm_base_url:
+            self.base_url = settings.llm_base_url.rstrip("/") + "/v1"
+            self.model = settings.llm_model or "gpt-oss-120b"
+        else:
+            self.base_url = "https://openrouter.ai/api/v1"
+            self.model = settings.llm_model or "openai/gpt-4o-mini"
         self.max_retries = 2  # For error recovery
         self.visualization_templates = VISUALIZATION_TEMPLATES
 
