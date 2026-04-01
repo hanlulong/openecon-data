@@ -213,51 +213,8 @@ class VectorSearchService:
                 logger.warning(f"⚠️  Failed to initialize FAISS backend: {e}")
                 logger.info("Falling back to ChromaDB...")
 
-        # Fall back to ChromaDB
-        if CHROMA_AVAILABLE:
-            try:
-                logger.info("📦 Initializing ChromaDB backend")
-                self._init_chroma()
-                logger.info(f"✅ ChromaDB backend initialized")
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize ChromaDB backend: {e}", exc_info=True)
-                raise
-        else:
-            logger.error("❌ No vector search backends available")
-            raise RuntimeError("FAISS and ChromaDB both unavailable")
-
-    def _init_chroma(self):
-        """Initialize Chroma client and collection."""
-        try:
-            logger.info(f"📦 Initializing Chroma client (persist_directory: {self.persist_directory})")
-
-            # Create persist directory if it doesn't exist
-            os.makedirs(self.persist_directory, exist_ok=True)
-
-            # Initialize Chroma client
-            self.client = chromadb.PersistentClient(
-                path=self.persist_directory,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True,
-                )
-            )
-
-            # Get or create collection using ChromaDB's built-in method
-            self.collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"}  # Use cosine similarity
-            )
-            doc_count = self.collection.count()
-            if doc_count > 0:
-                logger.info(f"✅ Loaded existing collection: {self.collection_name}")
-                logger.info(f"   - Document count: {doc_count}")
-            else:
-                logger.info(f"✅ Created new collection: {self.collection_name}")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Chroma: {e}", exc_info=True)
-            raise
+        logger.error("❌ FAISS vector search backend unavailable")
+        raise RuntimeError("FAISS unavailable. Install with: pip install faiss-cpu")
 
     def embed_text(self, text: str) -> List[float]:
         """
@@ -326,83 +283,10 @@ class VectorSearchService:
 
         self._ensure_initialized()
 
-        # Delegate to appropriate backend
         if self.backend is not None:
-            # Using FAISS
             self.backend.index_indicators(indicators, batch_size, clear_existing)
-        elif self.collection is not None:
-            # Using ChromaDB
-            self._index_indicators_chroma(indicators, batch_size, clear_existing)
         else:
             logger.error("❌ No vector search backend available")
-
-    def _index_indicators_chroma(self, indicators: List[Dict[str, Any]], batch_size: int = 100, clear_existing: bool = True):
-        """Index indicators using ChromaDB backend."""
-        logger.info(f"📊 Indexing {len(indicators)} indicators into ChromaDB...")
-
-        # Clear existing collection if re-indexing and clear_existing is True
-        if clear_existing:
-            current_count = self.collection.count()
-            if current_count > 0:
-                logger.info(f"🗑️  Clearing existing {current_count} documents...")
-                # Get all document IDs and delete them (preserving collection)
-                try:
-                    # Get all documents in the collection
-                    results = self.collection.get()
-                    if results and results.get("ids"):
-                        all_ids = results["ids"]
-                        logger.info(f"   Deleting {len(all_ids)} documents...")
-                        # Delete in batches to avoid timeout
-                        batch_size_delete = 1000
-                        for i in range(0, len(all_ids), batch_size_delete):
-                            batch_ids = all_ids[i:i+batch_size_delete]
-                            self.collection.delete(ids=batch_ids)
-                        logger.info(f"   ✅ Deleted {len(all_ids)} documents")
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Error clearing documents, recreating collection: {e}")
-                    # Fallback: delete and recreate collection
-                    self.client.delete_collection(name=self.collection_name)
-                    import time
-                    time.sleep(0.5)  # Small delay to avoid race condition
-                    self.collection = self.client.get_or_create_collection(
-                        name=self.collection_name,
-                        metadata={"hnsw:space": "cosine"}
-                    )
-
-        # Process in batches
-        total = len(indicators)
-        for i in range(0, total, batch_size):
-            batch = indicators[i:i+batch_size]
-            batch_end = min(i + batch_size, total)
-
-            logger.info(f"   Processing batch {i+1}-{batch_end}/{total}...")
-
-            # Prepare batch data
-            ids = [ind["code"] for ind in batch]
-            documents = [ind["name"] for ind in batch]
-            metadatas = [
-                {
-                    "code": ind["code"],
-                    "name": ind["name"],
-                    "provider": ind["provider"],
-                    **({"original_code": ind["original_code"]} if "original_code" in ind else {})
-                }
-                for ind in batch
-            ]
-
-            # Generate embeddings (batch size: 128 for better throughput)
-            embeddings = self.embed_batch(documents, batch_size=128)
-
-            # Add to collection
-            self.collection.add(
-                ids=ids,
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas
-            )
-
-        final_count = self.collection.count()
-        logger.info(f"✅ Indexing complete: {final_count} indicators indexed")
 
     def search(
         self,
@@ -432,51 +316,12 @@ class VectorSearchService:
             logger.warning(f"⚠️ Failed to initialize vector search: {e}")
             return []
 
-        # Delegate to appropriate backend
         if self.backend is not None:
-            # Using FAISS
             provider_filter = where.get("provider") if where else None
             return self.backend.search(query, limit, provider_filter)
-        elif self.collection is not None:
-            # Using ChromaDB
-            return self._search_chroma(query, limit, where)
         else:
             logger.debug("Vector search not initialized")
             return []
-
-    def _search_chroma(self, query: str, limit: int = 10, where: Optional[Dict[str, Any]] = None) -> List[VectorSearchResult]:
-        """Search using ChromaDB backend."""
-        # Check if collection is empty
-        if self.collection.count() == 0:
-            logger.warning("⚠️  Vector database is empty - call index_indicators() first")
-            return []
-
-        # Generate query embedding
-        query_embedding = self.embed_text(query)
-
-        # Search in Chroma
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=limit,
-            where=where,
-            include=["metadatas", "distances"]
-        )
-
-        # Convert to VectorSearchResult objects
-        search_results = []
-        if results and results["ids"] and len(results["ids"]) > 0:
-            for i, doc_id in enumerate(results["ids"][0]):
-                metadata = results["metadatas"][0][i]
-                distance = results["distances"][0][i]
-
-                search_results.append(VectorSearchResult(
-                    code=metadata["code"],
-                    name=metadata["name"],
-                    provider=metadata["provider"],
-                    distance=distance
-                ))
-
-        return search_results
 
     def is_indexed(self) -> bool:
         """Check if the vector database has been indexed."""
@@ -487,8 +332,6 @@ class VectorSearchService:
 
         if self.backend is not None:
             return self.backend.is_indexed()
-        elif self.collection is not None:
-            return self.collection.count() > 0
         return False
 
     def get_index_size(self) -> int:
@@ -500,8 +343,6 @@ class VectorSearchService:
 
         if self.backend is not None:
             return self.backend.get_index_size()
-        elif self.collection is not None:
-            return self.collection.count()
         return 0
 
     def reset(self):
@@ -509,12 +350,6 @@ class VectorSearchService:
         logger.warning("🗑️  Resetting vector database...")
         if self.backend is not None:
             self.backend.reset()
-        elif self.collection is not None:
-            self.client.delete_collection(name=self.collection_name)
-            self.collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
         logger.info("✅ Vector database reset")
 
 

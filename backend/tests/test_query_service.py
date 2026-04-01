@@ -247,6 +247,7 @@ class QueryServiceTests(unittest.TestCase):
                 return _Resolved()
 
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
