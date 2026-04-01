@@ -288,16 +288,6 @@ class QueryService:
                 if pattern in query_lower:
                     return provider
 
-    def _extract_country_from_query(self, query: str) -> Optional[str]:
-        """
-        Extract first country code from query using CountryResolver.
-
-        Returns:
-            ISO Alpha-2 country code if found, else None
-        """
-        countries = self._extract_countries_from_query(query)
-        return countries[0] if countries else None
-
     def _extract_countries_from_query(self, query: str) -> List[str]:
         """
         Extract all country codes from query in appearance order.
@@ -7495,20 +7485,6 @@ class QueryService:
             while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
                 self._fallback_provider_cache.popitem(last=False)
         return fallback_list
-
-    def _get_fallback_provider(self, primary_provider: str) -> Optional[str]:
-        """
-        Get the first fallback provider for a given primary provider.
-        (Kept for backwards compatibility)
-
-        Args:
-            primary_provider: The primary provider that failed
-
-        Returns:
-            Fallback provider name or None if no fallback available
-        """
-        fallbacks = self._get_fallback_providers(primary_provider)
-        return fallbacks[0] if fallbacks else None
 
     def _get_no_data_suggestions(self, provider: str, intent: ParsedIntent) -> str:
         """
