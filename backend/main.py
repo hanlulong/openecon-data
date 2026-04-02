@@ -639,7 +639,13 @@ async def session_history(session_id: str = Query(..., description="Session ID",
     response_model=QueryResponse,
     operation_id="query_data",
     summary="Query economic data using natural language",
-    description="Query economic data from multiple sources (FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate-API, BIS, Eurostat) using natural language. Example queries: 'Show me US GDP for 2023', 'What is the unemployment rate in Canada?', 'Compare inflation between US and UK from 2020-2023'.",
+    description=(
+        "Query economic data from 10 providers covering 330,000+ indicators. "
+        "Response includes data points, direct API URL (metadata.apiUrl) for programmatic access, "
+        "source URL (metadata.sourceUrl) for verification, and alternativeSeries for related indicators. "
+        "Examples: 'US GDP 2020-2024', 'Japan inflation rate', 'Compare BRICS GDP growth', "
+        "'female youth unemployment in Nigeria', 'bitcoin price last 7 days'."
+    ),
     tags=["Economic Data"],
 )
 async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
@@ -1633,9 +1639,18 @@ if not settings.disable_mcp:
     mcp = FastApiMCP(
         app,
         name="OpenEcon Data MCP Server",
-        description="AI-powered economic data aggregation service. Query economic data using natural language from sources including FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate-API, BIS, and Eurostat.",
+        description=(
+            "Query economic data from 10 providers (FRED, World Bank, IMF, BIS, Eurostat, "
+            "StatsCan, Comtrade, CoinGecko, ExchangeRate-API, OECD) using natural language. "
+            "Covers 330,000+ indicators. Response includes: data points, metadata with direct "
+            "API URL (apiUrl) for programmatic access, source URL (sourceUrl) for verification, "
+            "and alternativeSeries suggesting related indicators. "
+            "Supports: year ranges ('GDP 2020-2024'), multi-country ('BRICS inflation'), "
+            "variants ('female youth unemployment'), explicit provider ('from Eurostat'), "
+            "and informational queries ('What FRED data is available?')."
+        ),
         include_operations=[
-            "query_data",  # Only expose the query endpoint to MCP clients
+            "query_data",
         ],
     )
 
