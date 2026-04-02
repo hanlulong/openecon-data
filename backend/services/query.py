@@ -10308,7 +10308,7 @@ class QueryService:
 
             # Get the concept family — indicators with similar name prefix
             core = indicator_name.split(",")[0].split("(")[0].strip().lower()
-            if len(core) < 4:
+            if len(core) < 2:
                 return None
 
             normalized_provider = normalize_provider_name(provider)
