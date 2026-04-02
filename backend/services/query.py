@@ -8108,17 +8108,32 @@ class QueryService:
                     "indicators": intent.indicators,
                 })
 
-            # Framework fix: if user explicitly said "from Eurostat" or "using IMF",
-            # ALWAYS override the LLM's provider choice. The user knows what they want.
-            explicit_provider = self._detect_explicit_provider(query)
-            if explicit_provider:
-                normalized = normalize_provider_name(explicit_provider)
-                if normalized and normalized.upper() != normalize_provider_name(intent.apiProvider or "").upper():
-                    logger.info(
-                        "🎯 Explicit provider override: LLM chose %s, user said '%s' → %s",
-                        intent.apiProvider, explicit_provider, normalized,
-                    )
-                    intent.apiProvider = normalized
+            # Framework: UnifiedRouter determines the provider (overrides LLM).
+            # The LLM may guess wrong (e.g., NOT_AVAILABLE for gold price,
+            # WorldBank for "from Eurostat"). UnifiedRouter is deterministic
+            # and handles explicit mentions, country context, and catalog concepts.
+            try:
+                router_decision = self.unified_router.route(
+                    query=query,
+                    indicators=intent.indicators or [],
+                    llm_provider=intent.apiProvider,
+                    country=intent.parameters.get("country") if intent.parameters else None,
+                )
+                if router_decision and router_decision.provider:
+                    routed = normalize_provider_name(router_decision.provider)
+                    llm_prov = normalize_provider_name(intent.apiProvider or "")
+                    if routed != llm_prov:
+                        logger.info(
+                            "🎯 UnifiedRouter override: LLM=%s → Router=%s (type=%s, conf=%.2f)",
+                            intent.apiProvider, routed, router_decision.match_type, router_decision.confidence,
+                        )
+                        intent.apiProvider = routed
+                    # Fix NOT_AVAILABLE — LLM says not available but router found a provider
+                    if llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", ""):
+                        intent.apiProvider = routed
+                        logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
+            except Exception as e:
+                logger.debug("UnifiedRouter override failed: %s", e)
 
             # Framework enrichment: recover from avoidable parser clarifications and
             # auto-expand clear multi-concept comparisons to multi-indicator intents.
