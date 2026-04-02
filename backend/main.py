@@ -104,6 +104,19 @@ async def lifespan(app: FastAPI):
     HTTPClientPool()  # Initialize singleton
     logger.info("✅ HTTP client pool ready (connection pooling enabled)")
 
+    # Pre-load OpenAI embedding index in background (non-blocking).
+    # This eliminates the 30-40s delay on the first query that uses
+    # the IndicatorSelector for variant/niche indicator resolution.
+    try:
+        from .services.embedding_retrieval import get_embedding_retrieval
+        er = get_embedding_retrieval()
+        if er._load_index():
+            logger.info("✅ OpenAI embedding index pre-loaded (%d indicators)", len(er._codes))
+        else:
+            logger.info("ℹ️  Embedding index not available (build with EmbeddingRetrieval.build_index())")
+    except Exception as e:
+        logger.debug("Embedding index pre-load skipped: %s", e)
+
     # Load metadata asynchronously in background (non-blocking startup)
     from .services.metadata_loader import MetadataLoader
     from .services.vector_search import VECTOR_SEARCH_AVAILABLE
