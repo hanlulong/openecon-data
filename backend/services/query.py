@@ -9264,236 +9264,75 @@ class QueryService:
                     query, conversation_id, conversation_history, tracker
                 )
 
-            # LangGraph mode - state-persistent agent orchestration.
-            # Pass the pre-resolved intent so LangGraph doesn't re-parse from scratch
-            # (the intent has already been through concept override, indicator resolution,
-            # semantic validation, etc. — all of which would be lost on re-parse).
-            if use_langgraph:
-                return await self._execute_with_langgraph(
-                    query, conversation_id, conversation_history, tracker,
-                    pre_resolved_intent=intent,
+            # Standard pipeline — the deterministic pipeline with IndicatorSelector
+            # now handles indicator resolution for ALL 330K indicators.
+            # LangGraph/orchestrator is bypassed in favor of the simpler, more
+            # reliable direct pipeline that includes:
+            # - IndicatorSelector (OpenAI embed → LLM pick)
+            # - Resolver-first resolution order
+            # - Qualifier preservation
+            # - All provider routing
+            #
+            # The intent has already been parsed (line 9194), validated, and
+            # clarified — just execute it through the standard fetch path.
+            logger.info("📊 Using standard pipeline (IndicatorSelector + direct fetch)")
+            return await self._execute_standard_pipeline(
+                query, conversation_id, intent, tracker,
+            )
+
+        except Exception as e:
+            logger.error(f"Orchestration error: {e}", exc_info=True)
+            # Fallback: try standard pipeline directly
+            try:
+                logger.info("⚠️ Orchestration fallback to standard pipeline")
+                parse_result = await self.pipeline.parse_and_route(query, [])
+                return await self._execute_standard_pipeline(
+                    query, conversation_id, parse_result.intent, tracker,
                 )
-
-            else:
-                # Use simple orchestrator (original implementation)
-                from ..services.langchain_orchestrator import create_langchain_orchestrator
-
-                if tracker:
-                    with tracker.track(
-                        "orchestrator_execution",
-                        "🤖 Using intelligent query routing...",
-                        {
-                            "conversation_id": conversation_id,
-                            "history_length": len(conversation_history),
-                        },
-                    ):
-                        orchestrator = create_langchain_orchestrator(
-                            query_service=self,
-                            conversation_id=conversation_id
-                        )
-                        result = await orchestrator.execute(query, chat_history=conversation_history)
-                else:
-                    orchestrator = create_langchain_orchestrator(
-                        query_service=self,
-                        conversation_id=conversation_id
-                    )
-                    result = await orchestrator.execute(query, chat_history=conversation_history)
-
-            # Convert orchestrator result to QueryResponse
-            if result.get("success"):
-                output = result.get("output", "")
-                data = result.get("data")  # Get actual data from orchestrator
-                query_type = result.get("query_type", "standard")
-
-                if isinstance(data, list) and data:
-                    self._normalize_bis_metadata_labels(data)
-                    data = self._rerank_data_by_query_relevance(query, data)
-                    data = self._apply_ranking_projection(query, data)
-
-                # Add to conversation history
-                conversation_id = conversation_manager.add_message_safe(
-                    conversation_id,
-                    "assistant",
-                    f"LangChain Orchestrator: {output[:200]}..."
-                )
-
-                # Create response message (keep it clean without internal routing details)
-                response_message = output
-
-                # Check for empty data in orchestrator path
-                if not data or (isinstance(data, list) and len(data) == 0):
-                    # Get provider info from result
-                    provider_name = result.get("provider") or result.get("api_provider") or "Unknown"
-                    indicators_list = result.get("indicators", [])
-                    indicators = ", ".join(indicators_list) if indicators_list else "requested indicator"
-                    country = result.get("country") or ""
-
-                    logger.warning(f"Orchestrator: No data returned from {provider_name}")
-                    if provider_name == "Unknown" or indicators == "requested indicator":
-                        logger.warning(
-                            "Orchestrator returned empty result without usable routing metadata. "
-                            "Retrying through standard pipeline."
-                        )
-                        return await self._standard_query_processing(
-                            query,
-                            conversation_id,
-                            tracker,
-                            record_user_message=False,
-                        )
-
-                    recovery_intent = ParsedIntent(
-                        apiProvider=str(provider_name),
-                        indicators=list(indicators_list) if indicators_list else [query],
-                        parameters={"country": country} if country else {},
-                        clarificationNeeded=False,
-                        originalQuery=query,
-                    )
-                    recovered_data = await self._maybe_recover_from_empty_data(query, recovery_intent)
-                    if recovered_data:
-                        recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
-                            query,
-                            recovery_intent,
-                            recovered_data,
-                        )
-                        return QueryResponse(
-                            conversationId=conversation_id,
-                            intent=recovery_intent,
-                            data=recovered_data,
-                            clarificationNeeded=False,
-                            message=coverage_warning,
-                            processingSteps=tracker.to_list() if tracker else None,
-                        )
-
-                    no_data_clarification = self._build_no_data_indicator_clarification(
-                        conversation_id=conversation_id,
-                        query=query,
-                        intent=recovery_intent,
-                        processing_steps=tracker.to_list() if tracker else None,
-                    )
-                    if no_data_clarification:
-                        return no_data_clarification
-
-                    error_details = []
-                    error_details.append(f"No data found for **{indicators}**")
-                    if country:
-                        error_details.append(f"for **{country}**")
-                    error_details.append(f"from **{provider_name}**.")
-
-                    suggestions = self._get_no_data_suggestions(provider_name, None)
-
-                    return QueryResponse(
-                        conversationId=conversation_id,
-                        data=None,
-                        clarificationNeeded=False,
-                        error="no_data_found",
-                        message=f"⚠️ **No Data Available**\n\n{' '.join(error_details)}\n\n{suggestions}",
-                        processingSteps=tracker.to_list() if tracker else None,
-                    )
-
-                # Build response with data if available
-                response = QueryResponse(
-                    conversationId=conversation_id,
-                    clarificationNeeded=False,
-                    message=response_message,
-                    processingSteps=tracker.to_list() if tracker else None,
-                )
-
-                # Add data if present
-                if data:
-                    response.data = data
-
-                # Handle comparison/follow-up specific fields
-                if result.get("merge_with_previous"):
-                    # Frontend should merge this with previous chart
-                    # CRITICAL FIX: Use safe helper to handle None elements in data list
-                    valid_data = _filter_valid_data(data)
-                    response.intent = ParsedIntent(
-                        apiProvider=_safe_get_source(valid_data),
-                        indicators=[d.metadata.indicator for d in valid_data if d.metadata] if valid_data else [],
-                        parameters={"merge_with_previous": True},
-                        clarificationNeeded=False,
-                        recommendedChartType=result.get("chart_type", "line"),
-                    )
-
-                if result.get("legend_labels"):
-                    # Include legend labels for multi-series
-                    if not response.intent:
-                        # CRITICAL FIX: Use safe helper to handle None elements
-                        response.intent = ParsedIntent(
-                            apiProvider=_safe_get_source(data),
-                            indicators=[],
-                            parameters={},
-                            clarificationNeeded=False,
-                        )
-                    response.intent.parameters["legend_labels"] = result.get("legend_labels")
-
-                if data and not response.intent:
-                    valid_data = _filter_valid_data(data)
-                    if valid_data:
-                        response.intent = ParsedIntent(
-                            apiProvider=_safe_get_source(valid_data),
-                            indicators=[d.metadata.indicator for d in valid_data if d.metadata],
-                            parameters={},
-                            clarificationNeeded=False,
-                            originalQuery=query,
-                        )
-
-                if data:
-                    if response.intent:
-                        recovered_uncertain_data = await self._maybe_recover_from_uncertain_match(
-                            query,
-                            response.intent,
-                            data,
-                        )
-                        if recovered_uncertain_data:
-                            data = recovered_uncertain_data
-                            response.data = data
-                    if response.intent:
-                        data, coverage_warning = await self._maybe_improve_country_coverage(
-                            query,
-                            response.intent,
-                            data,
-                        )
-                        response.data = data
-                        if coverage_warning:
-                            if response.message:
-                                response.message = f"{response.message}\n\n{coverage_warning}"
-                            else:
-                                response.message = coverage_warning
-                    clarification_response = self._build_uncertain_result_clarification(
-                        conversation_id=conversation_id,
-                        query=query,
-                        intent=response.intent,
-                        data=data,
-                        processing_steps=tracker.to_list() if tracker else None,
-                    )
-                    if clarification_response:
-                        return clarification_response
-
-                return response
-            else:
-                error_msg = result.get("error", "Unknown error")
-                logger.error(f"Orchestrator execution failed: {error_msg}")
-
+            except Exception as fallback_error:
                 return QueryResponse(
                     conversationId=conversation_id,
                     clarificationNeeded=False,
-                    error="orchestrator_error",
-                    message=f"❌ **Intelligent routing encountered an error**\n\n{error_msg}",
-                    processingSteps=tracker.to_list() if tracker else None,
+                    error=f"Query failed: {str(e)[:200]}",
                 )
 
-        except Exception as exc:
-            logger.exception("LangChain orchestrator error")
-            # Fall back to standard processing
-            logger.warning("Falling back to standard query processing")
-            return await self._standard_query_processing(
-                query,
-                conversation_id,
-                tracker,
-                record_user_message=False,
-            )
+    async def _execute_standard_pipeline(
+        self,
+        query: str,
+        conversation_id: str,
+        intent: ParsedIntent,
+        tracker: Optional['ProcessingTracker'] = None,
+    ) -> QueryResponse:
+        """Execute query through the standard deterministic pipeline.
 
+        This replaces the LangGraph/orchestrator path with the simpler,
+        more reliable direct pipeline that includes IndicatorSelector
+        for 330K indicator resolution.
+        """
+        # Use the same _fetch_data path as the non-orchestrator pipeline
+        try:
+            result = await self._fetch_data(intent, tracker=tracker)
+            if result:
+                conversation_manager.add_message_safe(
+                    conversation_id, "assistant",
+                    f"Data fetched: {intent.apiProvider}",
+                    intent=intent,
+                )
+                return result
+        except Exception as e:
+            logger.warning(f"Standard pipeline fetch error: {e}")
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            clarificationNeeded=False,
+            error="No data found for this query.",
+        )
+
+    # Legacy orchestrator code removed — replaced by _execute_standard_pipeline.
+    # See git history for the old LangChain orchestrator implementation.
+
+    def _placeholder_legacy_orchestrator_removed(self):
+        pass
     def _should_use_deep_agents(self, query: str) -> bool:
         """
         Determine if a query should use Deep Agents for parallel processing.
