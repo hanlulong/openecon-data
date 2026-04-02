@@ -654,6 +654,13 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     auto_pro = settings.promode_enabled
     result = await query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro)
 
+    # Add alternative series suggestions if data was returned and not already present
+    if result.data and not result.alternativeSeries:
+        try:
+            result.alternativeSeries = query_service._build_alternative_series(result.intent, result.data)
+        except Exception:
+            pass  # Non-critical — don't break the response
+
     # Don't treat "data_not_available" as a server error - return 200 with error message
     # Only return 500 for actual processing errors
     if result.error == "processing_error":

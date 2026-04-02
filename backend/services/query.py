@@ -9329,9 +9329,12 @@ class QueryService:
                 if isinstance(result, QueryResponse):
                     if not result.conversationId:
                         result.conversationId = conversation_id
+                    # Add alternative series if not already present
+                    if result.data and not result.alternativeSeries:
+                        result.alternativeSeries = self._build_alternative_series(intent, result.data)
                     return result
                 elif isinstance(result, list):
-                    # Wrap raw data list in QueryResponse
+                    alternatives = self._build_alternative_series(intent, result)
                     conversation_manager.add_message_safe(
                         conversation_id, "assistant",
                         f"Data fetched: {intent.apiProvider}",
@@ -9342,6 +9345,7 @@ class QueryService:
                         intent=intent,
                         data=result,
                         clarificationNeeded=False,
+                        alternativeSeries=alternatives,
                     )
         except Exception as e:
             logger.warning(f"Standard pipeline fetch error: {e}")
