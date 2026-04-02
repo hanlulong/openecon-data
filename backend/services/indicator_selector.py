@@ -104,8 +104,8 @@ class IndicatorSelector:
         Returns:
             SelectionResult with selected code or options for user choice
         """
-        # Step 1: Find candidates via embedding similarity
-        candidates = self._get_candidates(query, provider)
+        # Step 1: Find candidates via embedding similarity (with scores)
+        candidates, scores = self._get_candidates_with_scores(query, provider)
 
         if not candidates:
             return SelectionResult(code=None, source="no_candidates")
@@ -114,8 +114,23 @@ class IndicatorSelector:
             code = self._normalize_code(candidates[0][0], provider)
             return SelectionResult(code=code, name=candidates[0][1], source="single_match")
 
+        # Step 1.5: If top candidates have very similar scores, the embedding
+        # can't confidently distinguish them. Tell the LLM to ASK the user
+        # instead of guessing. This reduces overconfident wrong picks.
+        # Threshold: if top 3+ candidates are within 0.03 cosine similarity,
+        # they're too similar for automated selection.
+        candidates_are_ambiguous = False
+        if len(scores) >= 3 and scores[0] > 0:
+            score_spread = scores[0] - scores[2]  # gap between #1 and #3
+            if score_spread < 0.03:
+                candidates_are_ambiguous = True
+                logger.info(
+                    "🔍 Top candidates very similar (spread=%.4f < 0.03) — will prefer ASK",
+                    score_spread,
+                )
+
         # Step 2: LLM picks from candidates
-        result = await self._llm_pick(query, candidates, provider)
+        result = await self._llm_pick(query, candidates, provider, prefer_ask=candidates_are_ambiguous)
 
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
@@ -124,20 +139,29 @@ class IndicatorSelector:
 
         return result or SelectionResult(code=candidates[0][0], name=candidates[0][1], source="top_candidate")
 
-    def _get_candidates(
+    def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 20,
-    ) -> List[tuple[str, str]]:
-        """Step 1: Find nearest indicators using OpenAI embeddings."""
+    ) -> tuple[List[tuple[str, str]], List[float]]:
+        """Step 1: Find nearest indicators with similarity scores."""
         try:
             from .embedding_retrieval import get_embedding_retrieval
             er = get_embedding_retrieval()
             results = er.search(query, provider=provider, top_k=top_k)
             if results:
-                return [(r["code"], r["name"]) for r in results]
+                candidates = [(r["code"], r["name"]) for r in results]
+                scores = [r.get("score", 0.0) for r in results]
+                return candidates, scores
         except Exception as e:
             logger.warning("Embedding retrieval failed: %s", e)
 
-        # Fallback: FTS5 OR search if embeddings unavailable
+        # Fallback
+        candidates = self._get_candidates_fts5(query, provider, top_k)
+        return candidates, [0.0] * len(candidates)
+
+    def _get_candidates_fts5(
+        self, query: str, provider: str, top_k: int = 20,
+    ) -> List[tuple[str, str]]:
+        """FTS5 fallback when embeddings unavailable."""
         try:
             from .indicator_database import IndicatorDatabase
             db = IndicatorDatabase()
@@ -171,6 +195,7 @@ class IndicatorSelector:
         query: str,
         candidates: List[tuple[str, str]],
         provider: str,
+        prefer_ask: bool = False,
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates."""
         options = "\n".join(
@@ -181,6 +206,15 @@ class IndicatorSelector:
         prompt = LLM_SELECTION_PROMPT.format(
             query=query, provider=provider, options=options,
         )
+
+        # When candidates are very similar (embedding scores within 0.03),
+        # tell the LLM to prefer ASK over PICK to avoid overconfident wrong picks.
+        if prefer_ask:
+            prompt += (
+                "\n\nIMPORTANT: The available indicators are VERY similar to each other. "
+                "Unless you are HIGHLY confident one is clearly the best match, "
+                "use ASK to let the user choose from the top 3-5 most relevant options."
+            )
 
         settings = self._settings
         if settings.llm_provider == "openrouter":
