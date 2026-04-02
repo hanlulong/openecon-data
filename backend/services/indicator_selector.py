@@ -81,12 +81,22 @@ CRITICAL RULE — Match specificity of answer to specificity of question:
 Selection rules:
 - Prefer NATIONAL/AGGREGATE over state/county/MSA/regional variants
 - Prefer TOTAL over demographic subsets (female, male, youth, elderly)
-- Prefer SEASONALLY ADJUSTED over not adjusted
+- Prefer SEASONALLY ADJUSTED over not adjusted (NSA)
 - Prefer modeled ILO estimates (SL.*) over Jobs Indicators (JI.*)
 - Prefer % of GDP over absolute values for cross-country comparison
 - Prefer gross enrollment over net unless user specifies "net"
+- Prefer SHORTER/SIMPLER indicator codes when concepts are identical
 - Prefer the most GENERAL version — never pick a more specific variant than asked
-- When in doubt, PICK the most general — the user can always ask for a variant"""
+
+FRED-specific rules for near-identical series:
+- Flow of Funds codes (BOGZ1F...): prefer L (Level) over R (Revaluation),
+  A (Transactions), U (Volume changes). Users want LEVELS unless specified.
+- When two codes differ only by trailing letters (Q vs A, SA vs NSA, MM vs YY):
+  prefer the STANDARD version (SA, Annual, or the shorter code)
+- "Total Private" is more general than "Construction" or other industry subsets
+- Prefer US Dollar denomination over other currencies unless user specifies
+
+When in doubt, PICK the most general — the user can always ask for a variant"""
 
 
 class IndicatorSelector:
