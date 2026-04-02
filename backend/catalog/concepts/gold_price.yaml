@@ -3,7 +3,10 @@ category: commodities
 domain: financial_markets
 
 description: |
-  Gold commodity price. Available from FRED (London Fixing Price).
+  Gold commodity spot prices are not directly available as a simple
+  time series through our current providers. FRED has gold stock/reserve
+  data but not spot prices. For real-time gold prices, use dedicated
+  commodity services.
 
 synonyms:
   primary:
@@ -19,16 +22,8 @@ synonyms:
     - xau
     - london gold
 
-providers:
-  FRED:
-    primary:
-      code: GOLDAMGBD228NLBM
-      name: "Gold Fixing Price 10:30 A.M. (London time) in London Bullion Market"
-      confidence: 0.90
-      coverage: global
-      frequency: daily
-
 not_available:
+  - FRED
   - WorldBank
   - StatsCan
   - Comtrade
@@ -37,3 +32,5 @@ not_available:
   - Eurostat
   - OECD
   - ExchangeRate
+
+providers: {}
