@@ -129,8 +129,9 @@ class IndicatorSelector:
                     score_spread,
                 )
 
-        # Step 2: LLM picks from candidates
-        result = await self._llm_pick(query, candidates, provider, prefer_ask=candidates_are_ambiguous)
+        # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
+        llm_candidates = candidates[:20]
+        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous)
 
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
@@ -140,7 +141,7 @@ class IndicatorSelector:
         return result or SelectionResult(code=candidates[0][0], name=candidates[0][1], source="top_candidate")
 
     def _get_candidates_with_scores(
-        self, query: str, provider: str, top_k: int = 20,
+        self, query: str, provider: str, top_k: int = 50,
     ) -> tuple[List[tuple[str, str]], List[float]]:
         """Step 1: Find nearest indicators with similarity scores."""
         try:
