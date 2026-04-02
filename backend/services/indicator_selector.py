@@ -12,11 +12,16 @@ The embedding understands semantic meaning; the LLM understands context.
 from __future__ import annotations
 
 import logging
+import sqlite3
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from ..config import Settings
+
+# Indicators database path
+_INDICATORS_DB = Path(__file__).parent.parent / "data" / "indicators.db"
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,8 @@ CRITICAL RULE — Match specificity of answer to specificity of question:
 - The answer should NEVER be more specific than what the user asked for.
 
 Selection rules:
+- NEVER pick a DISCONTINUED series when active alternatives exist
+- Prefer ACTIVE (recent data) over DISCONTINUED/OBSOLETE series
 - Prefer NATIONAL/AGGREGATE over state/county/MSA/regional variants
 - Prefer TOTAL over demographic subsets (female, male, youth, elderly)
 - Prefer SEASONALLY ADJUSTED over not adjusted (NSA)
@@ -212,6 +219,67 @@ class IndicatorSelector:
 
         return []
 
+    def _enrich_candidates(
+        self,
+        candidates: List[tuple[str, str]],
+        provider: str,
+    ) -> List[Dict[str, Any]]:
+        """Enrich candidates with metadata from indicators.db (frequency, unit, end_date).
+
+        Returns a list of dicts with keys: code, name, frequency, unit, end_date, discontinued.
+        This gives the LLM visibility into whether a series is active or obsolete.
+        """
+        enriched = []
+        try:
+            conn = sqlite3.connect(str(_INDICATORS_DB))
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            codes = [c[0] for c in candidates]
+            # Build a lookup map: (provider, code) -> metadata row
+            placeholders = ",".join(["?"] * len(codes))
+            cur.execute(
+                f"SELECT code, frequency, unit, end_date FROM indicators "
+                f"WHERE provider = ? AND code IN ({placeholders})",
+                [provider] + codes,
+            )
+            meta_map: Dict[str, Dict[str, Any]] = {}
+            for row in cur.fetchall():
+                meta_map[row["code"]] = {
+                    "frequency": row["frequency"] or "",
+                    "unit": row["unit"] or "",
+                    "end_date": row["end_date"] or "",
+                }
+            conn.close()
+        except Exception as e:
+            logger.warning("Failed to enrich candidates from DB: %s", e)
+            meta_map = {}
+
+        for code, name in candidates:
+            meta = meta_map.get(code, {})
+            end_date = meta.get("end_date", "")
+            # Mark as discontinued if last observation is before 2020
+            discontinued = False
+            if end_date:
+                try:
+                    # end_date may be "2025-11-01" or "2021-01-01T05:00:00Z"
+                    year = int(end_date[:4])
+                    if year < 2020:
+                        discontinued = True
+                except (ValueError, IndexError):
+                    pass
+
+            enriched.append({
+                "code": code,
+                "name": name,
+                "frequency": meta.get("frequency", ""),
+                "unit": meta.get("unit", ""),
+                "end_date": end_date,
+                "discontinued": discontinued,
+            })
+
+        return enriched
+
     async def _llm_pick(
         self,
         query: str,
@@ -220,10 +288,27 @@ class IndicatorSelector:
         prefer_ask: bool = False,
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates."""
-        options = "\n".join(
-            f"{i + 1}. [{code}] {name}"
-            for i, (code, name) in enumerate(candidates)
-        )
+        # Enrich candidates with metadata so the LLM can see frequency,
+        # unit, and whether a series is discontinued/obsolete.
+        enriched = self._enrich_candidates(candidates, provider)
+
+        option_lines = []
+        for i, item in enumerate(enriched):
+            parts = [f"{i + 1}. [{item['code']}] {item['name']}"]
+            meta_parts = []
+            if item["frequency"]:
+                meta_parts.append(item["frequency"])
+            if item["unit"]:
+                meta_parts.append(item["unit"])
+            if item["end_date"]:
+                meta_parts.append(f"last data: {item['end_date'][:10]}")
+            if item["discontinued"]:
+                meta_parts.append("DISCONTINUED")
+            if meta_parts:
+                parts.append(f"  ({', '.join(meta_parts)})")
+            option_lines.append("".join(parts))
+
+        options = "\n".join(option_lines)
 
         prompt = LLM_SELECTION_PROMPT.format(
             query=query, provider=provider, options=options,

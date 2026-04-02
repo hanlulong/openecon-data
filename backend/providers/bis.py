@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -510,263 +511,238 @@ class BISProvider(BaseProvider):
             # GLI doesn't filter by single country, get all data
             return await self._fetch_gli_data(start_year, end_year)
 
-        # Loop through each country
+        # Fetch all countries in parallel using asyncio.gather with a semaphore
+        # to avoid overwhelming the BIS API while being much faster than sequential.
         # Use shared HTTP client pool for better performance
         client = get_http_client()
-        for country_code_raw in country_list:
-            country_code = self._country_code(country_code_raw)
 
-            # Build SDMX query key based on indicator type
-            # Format: data/{dataflow}/{freq}.{country}?startPeriod=YYYY&endPeriod=YYYY
-            params = {}
-            if start_year:
-                params["startPeriod"] = str(start_year)
-            if end_year:
-                params["endPeriod"] = str(end_year)
+        # Concurrency limiter: allow up to 5 parallel requests to BIS
+        semaphore = asyncio.Semaphore(5)
 
-            # For Eurozone countries requesting monetary indicators,
-            # try Euro area (XM) if the country-specific data is outdated or unavailable
-            country_codes_to_try = [country_code]
-            if country_code in self.EUROZONE_COUNTRIES and indicator_code in ["WS_CBPOL", "WS_LONG_CPI"]:
-                # Try country first, then Euro area as fallback
-                country_codes_to_try.append("XM")
+        async def _fetch_single_country(country_code_raw: str) -> Optional[NormalizedData]:
+            """Fetch data for a single country, returning None on failure."""
+            async with semaphore:
+                country_code = self._country_code(country_code_raw)
 
-            result_found = False
-            for current_country_code in country_codes_to_try:
-                if result_found:
-                    break
+                # Build SDMX query key based on indicator type
+                date_params: dict = {}
+                if start_year:
+                    date_params["startPeriod"] = str(start_year)
+                if end_year:
+                    date_params["endPeriod"] = str(end_year)
 
-                # Construct the SDMX data query
-                # All BIS dataflows use standard structure: freq.country
-                sdmx_key = f"{frequency}.{current_country_code}"
+                # For Eurozone countries requesting monetary indicators,
+                # try Euro area (XM) if the country-specific data is outdated or unavailable
+                country_codes_to_try = [country_code]
+                if country_code in self.EUROZONE_COUNTRIES and indicator_code in ["WS_CBPOL", "WS_LONG_CPI"]:
+                    country_codes_to_try.append("XM")
 
-                url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
+                for current_country_code in country_codes_to_try:
+                    sdmx_key = f"{frequency}.{current_country_code}"
+                    url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
 
-                try:
-                    # First attempt: with date parameters
-                    response = await client.get(url, params=params, headers={
-                        "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-                    }, timeout=30.0)
-
-                    # Check response before parsing JSON
-                    payload = None
-                    if response.status_code == 200 and response.content:
-                        try:
-                            payload = response.json()
-                        except Exception:
-                            payload = None
-
-                    # Some BIS dataflows don't support startPeriod/endPeriod parameters
-                    # If we get an error or empty response, retry without date filters
-                    if payload is None or "errors" in payload or response.status_code != 200:
-                        # Retry without date parameters
-                        response = await client.get(url, headers={
+                    try:
+                        # First attempt: with date parameters
+                        response = await client.get(url, params=date_params, headers={
                             "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-                        }, timeout=30.0)
-                        if response.status_code != 200 or not response.content:
-                            logger.debug(f"BIS: No data for {current_country_code} (status: {response.status_code})")
-                            continue  # Try next country code
-                        try:
-                            payload = response.json()
-                        except Exception as json_err:
-                            logger.debug(f"BIS: JSON parse error for {current_country_code}: {json_err}")
-                            continue  # Try next country code
+                        }, timeout=20.0)
 
-                    # Parse SDMX-JSON format
-                    if "data" not in payload or "dataSets" not in payload["data"]:
-                        continue  # Try next country code
+                        payload = None
+                        if response.status_code == 200 and response.content:
+                            try:
+                                payload = response.json()
+                            except Exception:
+                                payload = None
 
-                    datasets = payload["data"]["dataSets"]
-                    if not datasets or "series" not in datasets[0]:
-                        continue  # Try next country code
+                        # Some BIS dataflows don't support startPeriod/endPeriod parameters
+                        if payload is None or "errors" in payload or response.status_code != 200:
+                            response = await client.get(url, headers={
+                                "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
+                            }, timeout=20.0)
+                            if response.status_code != 200 or not response.content:
+                                logger.debug(f"BIS: No data for {current_country_code} (status: {response.status_code})")
+                                continue
+                            try:
+                                payload = response.json()
+                            except Exception as json_err:
+                                logger.debug(f"BIS: JSON parse error for {current_country_code}: {json_err}")
+                                continue
 
-                    # Extract time dimension and observations
-                    structure = payload["data"]["structure"]
-                    dimensions = structure["dimensions"]["observation"]
-                    time_dimension = next((d for d in dimensions if d["id"] == "TIME_PERIOD"), None)
-
-                    if not time_dimension:
-                        continue  # Try next country code
-
-                    time_values = time_dimension["values"]
-
-                    # Get all series data
-                    series_data = datasets[0]["series"]
-                    if not series_data:
-                        continue  # Try next country code
-
-                    # BIS often returns multiple series with different dimension combinations
-                    # We need to find the most relevant series or use the first one with data
-                    # Get series dimensions to interpret keys
-                    series_dimensions = structure["dimensions"].get("series", [])
-
-                    # Find the best series (prefer unadjusted, market value, domestic currency)
-                    best_series_key, observations = self._select_best_series(
-                        series_data, series_dimensions, indicator_code
-                    )
-
-                    if not observations:
-                        continue  # Try next country code
-
-                    # Build data points
-                    data_points = []
-                    for time_idx_str, obs_data in observations.items():
-                        try:
-                            time_idx = int(time_idx_str)
-                        except (ValueError, TypeError):
-                            logger.warning(f"Invalid time index '{time_idx_str}' in BIS response, skipping")
+                        if "data" not in payload or "dataSets" not in payload["data"]:
                             continue
-                        if time_idx < len(time_values):
-                            time_period = time_values[time_idx]["id"]
 
-                            # Extract value from observation data
-                            # BIS observation format: [value_str, status1, status2, status3]
-                            value = None
-                            if obs_data and len(obs_data) > 0:
-                                try:
-                                    value_str = obs_data[0]
-                                    if value_str is not None and value_str != "":
-                                        value = float(value_str)
-                                except (ValueError, TypeError, IndexError):
-                                    value = None
+                        datasets = payload["data"]["dataSets"]
+                        if not datasets or "series" not in datasets[0]:
+                            continue
 
-                            # Convert time period to ISO date format
-                            # BIS uses formats like "2020-01", "2020-Q1", "2020"
-                            if "-" in time_period:
-                                if "Q" in time_period:
-                                    # Quarterly: "2020-Q1" -> "2020-01-01"
-                                    year, quarter = time_period.split("-Q")
-                                    month = (int(quarter) - 1) * 3 + 1
-                                    date_str = f"{year}-{month:02d}-01"
-                                    year_int = int(year)
+                        structure = payload["data"]["structure"]
+                        dimensions = structure["dimensions"]["observation"]
+                        time_dimension = next((d for d in dimensions if d["id"] == "TIME_PERIOD"), None)
+
+                        if not time_dimension:
+                            continue
+
+                        time_values = time_dimension["values"]
+                        series_data = datasets[0]["series"]
+                        if not series_data:
+                            continue
+
+                        series_dimensions = structure["dimensions"].get("series", [])
+                        best_series_key, observations = self._select_best_series(
+                            series_data, series_dimensions, indicator_code
+                        )
+
+                        if not observations:
+                            continue
+
+                        data_points = []
+                        for time_idx_str, obs_data in observations.items():
+                            try:
+                                time_idx = int(time_idx_str)
+                            except (ValueError, TypeError):
+                                logger.warning(f"Invalid time index '{time_idx_str}' in BIS response, skipping")
+                                continue
+                            if time_idx < len(time_values):
+                                time_period = time_values[time_idx]["id"]
+
+                                value = None
+                                if obs_data and len(obs_data) > 0:
+                                    try:
+                                        value_str = obs_data[0]
+                                        if value_str is not None and value_str != "":
+                                            value = float(value_str)
+                                    except (ValueError, TypeError, IndexError):
+                                        value = None
+
+                                if "-" in time_period:
+                                    if "Q" in time_period:
+                                        year, quarter = time_period.split("-Q")
+                                        month = (int(quarter) - 1) * 3 + 1
+                                        date_str = f"{year}-{month:02d}-01"
+                                        year_int = int(year)
+                                    else:
+                                        date_str = f"{time_period}-01"
+                                        year_int = int(time_period.split("-")[0])
                                 else:
-                                    # Monthly: "2020-01" -> "2020-01-01"
-                                    date_str = f"{time_period}-01"
-                                    year_int = int(time_period.split("-")[0])
-                            else:
-                                # Annual: "2020" -> "2020-01-01"
-                                date_str = f"{time_period}-01-01"
-                                year_int = int(time_period)
+                                    date_str = f"{time_period}-01-01"
+                                    year_int = int(time_period)
 
-                            # Filter by date range if specified (when API didn't filter)
-                            if start_year and year_int < start_year:
-                                continue
-                            if end_year and year_int > end_year:
-                                continue
+                                if start_year and year_int < start_year:
+                                    continue
+                                if end_year and year_int > end_year:
+                                    continue
 
-                            data_points.append({
-                                "date": date_str,
-                                "value": value
-                            })
+                                data_points.append({
+                                    "date": date_str,
+                                    "value": value
+                                })
 
-                    if not data_points:
-                        continue  # Try next country code
+                        if not data_points:
+                            continue
 
-                    # Determine frequency label
-                    freq_label = {"M": "monthly", "Q": "quarterly", "A": "annual"}.get(frequency, frequency)
+                        freq_label = {"M": "monthly", "Q": "quarterly", "A": "annual"}.get(frequency, frequency)
 
-                    # Determine unit based on indicator
-                    if indicator_code == "WS_CBPOL":
-                        unit = "percent"
-                    elif indicator_code in ["WS_LONG_CPI", "WS_CPP"]:
-                        unit = "index" # Consumer/producer price indices
-                    elif indicator_code == "WS_XRU":
-                        unit = "index" # Effective exchange rate index
-                    elif indicator_code == "WS_TC":
-                        unit = "percent of GDP" # Total credit to GDP ratio
-                    elif indicator_code == "WS_SPP":
-                        unit = "index" # Property price index
-                    else:
-                        unit = ""
-
-                    # Build API URL for reproducibility
-                    api_url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
-                    if params:
-                        param_str = "&".join(f"{k}={v}" for k, v in params.items())
-                        api_url += f"?{param_str}"
-
-                    # Determine indicator display name and description
-                    indicator_name = self._build_indicator_display_name(
-                        indicator_code=indicator_code,
-                        indicator_label=indicator_label,
-                        series_key=best_series_key,
-                        series_dimensions=series_dimensions,
-                    )
-                    _, dataflow_description = self._lookup_dataflow_info(indicator_code)
-
-                    # Use original country code or Euro area if fallback was used
-                    display_country = self._display_country_name(current_country_code)
-
-                    # Human-readable URL for data verification on BIS Data Portal
-                    # Map dataflow codes to topic URLs (verified 2025-11)
-                    # See: https://data.bis.org/topics for available topics
-                    topic_map = {
-                        "WS_CBPOL": "CBPOL",           # Central bank policy rates
-                        "WS_TC": "TOTAL_CREDIT",       # Total credit to non-financial sector
-                        "WS_SPP": "RPP",               # Residential Property Prices (NOT PROPERTY_PRICES)
-                        "WS_XRU": "EER",               # Effective exchange rates
-                        "WS_LONG_CPI": "CPI",          # Consumer prices
-                        "WS_GLI": "GLI",               # Global liquidity indicators
-                        "WS_DSR": "DSR",               # Debt service ratios
-                        "WS_DEBT_SEC2_PUB": "SEC_PUB", # International debt securities
-                    }
-                    topic = topic_map.get(indicator_code, indicator_code)
-                    source_url = f"https://data.bis.org/topics/{topic}"
-
-                    # Enhanced metadata fields
-                    # Only mark as seasonally adjusted for level data, NOT ratio/percentage data
-                    if indicator_code == "WS_TC":
-                        # Credit-to-GDP ratios (percent) are NOT seasonally adjusted
-                        # Only level data in local currency would be seasonally adjusted
-                        if "percent" in unit.lower() or "gdp" in unit.lower():
-                            seasonal_adjustment = None
+                        if indicator_code == "WS_CBPOL":
+                            unit = "percent"
+                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP"]:
+                            unit = "index"
+                        elif indicator_code == "WS_XRU":
+                            unit = "index"
+                        elif indicator_code == "WS_TC":
+                            unit = "percent of GDP"
+                        elif indicator_code == "WS_SPP":
+                            unit = "index"
                         else:
-                            seasonal_adjustment = "Seasonally Adjusted"
-                    else:
-                        seasonal_adjustment = None
+                            unit = ""
 
-                    # Determine data type based on indicator
-                    if indicator_code == "WS_CBPOL":
-                        data_type = "Rate"
-                    elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_SPP"]:
-                        data_type = "Index"
-                    elif indicator_code in ["WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
-                        data_type = "Level"
-                    else:
-                        data_type = None
+                        api_url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
+                        if date_params:
+                            param_str = "&".join(f"{k}={v}" for k, v in date_params.items())
+                            api_url += f"?{param_str}"
 
-                    # Determine price type for real price indices
-                    price_type = "Real (inflation-adjusted)" if indicator_code in ["WS_SPP", "WS_CPP"] and "real" in indicator_name.lower() else None
+                        indicator_name = self._build_indicator_display_name(
+                            indicator_code=indicator_code,
+                            indicator_label=indicator_label,
+                            series_key=best_series_key,
+                            series_dimensions=series_dimensions,
+                        )
+                        _, dataflow_description = self._lookup_dataflow_info(indicator_code)
 
-                    # Extract start and end dates from data points
-                    start_date = data_points[0]["date"] if data_points else None
-                    end_date = data_points[-1]["date"] if data_points else None
+                        display_country = self._display_country_name(current_country_code)
 
-                    metadata = Metadata(
-                        source="BIS",
-                        indicator=indicator_name,
-                        country=display_country,
-                        frequency=freq_label,
-                        unit=unit,
-                        lastUpdated="",  # BIS doesn't provide explicit last updated date
-                        seriesId=indicator_code,
-                        apiUrl=api_url,
-                        sourceUrl=source_url,
-                        seasonalAdjustment=seasonal_adjustment,
-                        dataType=data_type,
-                        priceType=price_type,
-                        description=dataflow_description or indicator_name,
-                        notes=None,
-                        startDate=start_date,
-                        endDate=end_date,
-                    )
+                        topic_map = {
+                            "WS_CBPOL": "CBPOL",
+                            "WS_TC": "TOTAL_CREDIT",
+                            "WS_SPP": "RPP",
+                            "WS_XRU": "EER",
+                            "WS_LONG_CPI": "CPI",
+                            "WS_GLI": "GLI",
+                            "WS_DSR": "DSR",
+                            "WS_DEBT_SEC2_PUB": "SEC_PUB",
+                        }
+                        topic = topic_map.get(indicator_code, indicator_code)
+                        source_url = f"https://data.bis.org/topics/{topic}"
 
-                    results.append(NormalizedData(metadata=metadata, data=data_points))
-                    result_found = True  # Successfully got data, don't try other country codes
+                        if indicator_code == "WS_TC":
+                            if "percent" in unit.lower() or "gdp" in unit.lower():
+                                seasonal_adjustment = None
+                            else:
+                                seasonal_adjustment = "Seasonally Adjusted"
+                        else:
+                            seasonal_adjustment = None
 
-                except Exception:
-                    # Try next country code if any error occurs
-                    continue
+                        if indicator_code == "WS_CBPOL":
+                            data_type = "Rate"
+                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_SPP"]:
+                            data_type = "Index"
+                        elif indicator_code in ["WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
+                            data_type = "Level"
+                        else:
+                            data_type = None
+
+                        price_type = "Real (inflation-adjusted)" if indicator_code in ["WS_SPP", "WS_CPP"] and "real" in indicator_name.lower() else None
+
+                        start_date_val = data_points[0]["date"] if data_points else None
+                        end_date_val = data_points[-1]["date"] if data_points else None
+
+                        metadata = Metadata(
+                            source="BIS",
+                            indicator=indicator_name,
+                            country=display_country,
+                            frequency=freq_label,
+                            unit=unit,
+                            lastUpdated="",
+                            seriesId=indicator_code,
+                            apiUrl=api_url,
+                            sourceUrl=source_url,
+                            seasonalAdjustment=seasonal_adjustment,
+                            dataType=data_type,
+                            priceType=price_type,
+                            description=dataflow_description or indicator_name,
+                            notes=None,
+                            startDate=start_date_val,
+                            endDate=end_date_val,
+                        )
+
+                        return NormalizedData(metadata=metadata, data=data_points)
+
+                    except Exception:
+                        continue
+
+                return None  # No data found for this country
+
+        # Launch all country fetches in parallel
+        logger.info(f"🌍 BIS: Fetching {len(country_list)} countries in parallel for {indicator_code}")
+        country_results = await asyncio.gather(
+            *[_fetch_single_country(c) for c in country_list],
+            return_exceptions=True,
+        )
+
+        for cr in country_results:
+            if isinstance(cr, NormalizedData):
+                results.append(cr)
+            elif isinstance(cr, Exception):
+                logger.debug(f"BIS: Country fetch failed: {cr}")
 
         # INFRASTRUCTURE FIX: Raise error for empty results to trigger fallback
         # This enables the query orchestrator to try alternative providers

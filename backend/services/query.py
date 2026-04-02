@@ -8597,22 +8597,45 @@ class QueryService:
                 originalQuery=intent.originalQuery,
             )
 
-            # Create fetch task with retry
+            # Create fetch task with retry — use fewer attempts for multi-indicator
+            # queries to avoid compounding latency across many parallel fetches
             task = retry_async(
                 lambda i=single_intent: self._fetch_data(i),
-                max_attempts=3,
-                initial_delay=1.0,
+                max_attempts=2,
+                initial_delay=0.5,
             )
             fetch_tasks.append(task)
 
-        # Fetch all indicators in parallel
-        logger.info("🔄 Fetching %s indicators in parallel...", len(fetch_tasks))
-        results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        # Fetch all indicators in parallel with a total timeout.
+        # Multi-indicator + multi-country queries can generate many API calls;
+        # cap total wall-clock time to avoid exceeding client timeouts.
+        num_countries = len(
+            intent.parameters.get("countries", []) if intent.parameters else []
+        )
+        # Scale timeout: base 45s, +5s per country beyond 3 (max 90s)
+        total_timeout = min(90, 45 + max(0, num_countries - 3) * 5)
+        logger.info(
+            "🔄 Fetching %s indicators in parallel (timeout=%ds, countries=%d)...",
+            len(fetch_tasks), total_timeout, num_countries,
+        )
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*fetch_tasks, return_exceptions=True),
+                timeout=total_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "⏰ Multi-indicator fetch timed out after %ds — returning partial results",
+                total_timeout,
+            )
+            results = []
 
         # Collect successful results
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.warning("Failed to fetch indicator %s: %s", intent.indicators[i], result)
+                indicator_name = intent.indicators[i] if i < len(intent.indicators) else "unknown"
+                logger.warning("Failed to fetch indicator %s: %s", indicator_name, result)
                 continue
 
             # Result is a list of NormalizedData
@@ -9021,19 +9044,30 @@ class QueryService:
 
                 if is_multi_country:
                     logger.info(f"🌍 Multi-country Eurostat query detected: {countries_param}")
-                    series_list = []
-                    for country in countries_param:
-                        try:
-                            series = await self.eurostat_provider.fetch_indicator(
-                                indicator=indicator,
-                                country=country,
-                                start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                                end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
-                            )
-                            series_list.append(series)
-                        except Exception as e:
-                            logger.warning(f"Failed to fetch {indicator} for {country}: {e}")
-                            continue
+                    # Fetch all countries in parallel with a concurrency limiter
+                    eurostat_sem = asyncio.Semaphore(5)
+
+                    async def _fetch_eurostat_country(country_code: str) -> Optional[NormalizedData]:
+                        async with eurostat_sem:
+                            try:
+                                return await self.eurostat_provider.fetch_indicator(
+                                    indicator=indicator,
+                                    country=country_code,
+                                    start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
+                                    end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch {indicator} for {country_code}: {e}")
+                                return None
+
+                    eurostat_results = await asyncio.gather(
+                        *[_fetch_eurostat_country(c) for c in countries_param],
+                        return_exceptions=True,
+                    )
+                    series_list = [
+                        r for r in eurostat_results
+                        if isinstance(r, NormalizedData)
+                    ]
 
                     if not series_list:
                         raise DataNotAvailableError(f"No Eurostat data available for {indicator} in any requested countries")
@@ -9330,17 +9364,22 @@ class QueryService:
         except Exception as e:
             logger.error(f"Orchestration error: {e}", exc_info=True)
             # Fallback: try standard pipeline directly
+            fallback_intent = intent if 'intent' in locals() and intent else None
             try:
-                logger.info("⚠️ Orchestration fallback to standard pipeline")
+                logger.info("Orchestration fallback to standard pipeline")
                 parse_result = await self.pipeline.parse_and_route(query, [])
+                fallback_intent = parse_result.intent
                 return await self._execute_standard_pipeline(
                     query, conversation_id, parse_result.intent, tracker,
                 )
             except Exception as fallback_error:
+                logger.warning("Orchestration fallback also failed: %s", fallback_error)
                 return QueryResponse(
                     conversationId=conversation_id,
+                    intent=fallback_intent,
                     clarificationNeeded=False,
                     error=f"Query failed: {str(e)[:200]}",
+                    processingSteps=tracker.to_list() if tracker else None,
                 )
 
     async def _execute_standard_pipeline(
@@ -9355,8 +9394,13 @@ class QueryService:
         This replaces the LangGraph/orchestrator path with the simpler,
         more reliable direct pipeline that includes IndicatorSelector
         for 330K indicator resolution.
+
+        Includes fallback providers and stale cache recovery so that
+        multi-country / multi-provider queries don't silently fail.
         """
-        # Use the same _fetch_data path as the non-orchestrator pipeline
+        fetch_error: Optional[Exception] = None
+
+        # Primary fetch attempt
         try:
             result = await self._fetch_data(intent)
             if result:
@@ -9364,11 +9408,20 @@ class QueryService:
                 if isinstance(result, QueryResponse):
                     if not result.conversationId:
                         result.conversationId = conversation_id
+                    # Ensure intent is always present in the response
+                    if not result.intent:
+                        result.intent = intent
                     # Add alternative series if not already present
                     if result.data and not result.alternativeSeries:
                         result.alternativeSeries = self._build_alternative_series(intent, result.data)
                     return result
                 elif isinstance(result, list):
+                    # Rerank and project before returning
+                    result = self._rerank_data_by_query_relevance(query, result)
+                    result = self._apply_ranking_projection(query, result)
+                    result, coverage_warning = await self._maybe_improve_country_coverage(
+                        query, intent, result,
+                    )
                     alternatives = self._build_alternative_series(intent, result)
                     conversation_manager.add_message_safe(
                         conversation_id, "assistant",
@@ -9380,22 +9433,112 @@ class QueryService:
                         intent=intent,
                         data=result,
                         clarificationNeeded=False,
+                        message=coverage_warning,
                         alternativeSeries=alternatives,
+                        processingSteps=tracker.to_list() if tracker else None,
                     )
         except Exception as e:
-            logger.warning(f"Standard pipeline fetch error: {e}")
+            fetch_error = e
+            logger.warning(f"Standard pipeline primary fetch error: {e}", exc_info=True)
+
+        # Fallback: try alternative providers before giving up
+        try:
+            logger.info("🔄 Standard pipeline: attempting fallback providers...")
+            fallback_data = await self._try_with_fallback(intent, fetch_error or Exception("No data"))
+            if fallback_data:
+                logger.info("✅ Standard pipeline: fallback provider succeeded")
+                fallback_data = self._rerank_data_by_query_relevance(query, fallback_data)
+                fallback_data = self._apply_ranking_projection(query, fallback_data)
+                fallback_data, coverage_warning = await self._maybe_improve_country_coverage(
+                    query, intent, fallback_data,
+                )
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    intent=intent,
+                    data=fallback_data,
+                    clarificationNeeded=False,
+                    message=coverage_warning,
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+        except Exception as fallback_exc:
+            logger.warning("Standard pipeline fallback providers failed: %s", fallback_exc)
+
+        # Semantic recovery pass
+        try:
+            recovered_data = await self._maybe_recover_from_empty_data(query, intent)
+            if recovered_data:
+                logger.info("✅ Standard pipeline: semantic recovery succeeded")
+                recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
+                    query, intent, recovered_data,
+                )
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    intent=intent,
+                    data=recovered_data,
+                    clarificationNeeded=False,
+                    message=coverage_warning,
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+        except Exception as recovery_exc:
+            logger.warning("Standard pipeline semantic recovery failed: %s", recovery_exc)
+
+        # Last resort: serve stale (expired) cached data rather than nothing
+        try:
+            stale_data = await self._get_stale_from_cache(
+                normalize_provider_name(intent.apiProvider), intent.parameters or {}
+            )
+            if stale_data:
+                stale_list = stale_data if isinstance(stale_data, list) else [stale_data]
+                return QueryResponse(
+                    conversationId=conversation_id,
+                    intent=intent,
+                    data=stale_list,
+                    clarificationNeeded=False,
+                    message="The data provider is temporarily unavailable. Showing cached data (may not be the latest).",
+                    processingSteps=tracker.to_list() if tracker else None,
+                )
+        except Exception:
+            pass
+
+        # Build indicator-specific clarification if possible
+        clarification_response = self._build_no_data_indicator_clarification(
+            conversation_id=conversation_id,
+            query=query,
+            intent=intent,
+            processing_steps=tracker.to_list() if tracker else None,
+        )
+        if clarification_response:
+            return clarification_response
+
+        # Final error response - ALWAYS include intent so frontend knows what was parsed
+        provider_name = intent.apiProvider
+        indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
+        country = ""
+        if intent.parameters:
+            country = intent.parameters.get("country") or ""
+            if not country:
+                countries = intent.parameters.get("countries", [])
+                if countries:
+                    country = ", ".join(str(c) for c in countries)
+
+        error_details = [f"No data found for **{indicators}**"]
+        if country:
+            error_details.append(f"for **{country}**")
+        error_details.append(f"from **{provider_name}**.")
+        suggestions = self._get_no_data_suggestions(provider_name, intent)
 
         return QueryResponse(
             conversationId=conversation_id,
+            intent=intent,
             clarificationNeeded=False,
-            error="No data found for this query.",
+            error="no_data_found",
+            message=f"No Data Available\n\n{' '.join(error_details)}\n\n{suggestions}",
+            processingSteps=tracker.to_list() if tracker else None,
         )
 
     # Legacy orchestrator code removed — replaced by _execute_standard_pipeline.
     # See git history for the old LangChain orchestrator implementation.
 
-    def _placeholder_legacy_orchestrator_removed(self):
-        pass
     def _should_use_deep_agents(self, query: str) -> bool:
         """
         Determine if a query should use Deep Agents for parallel processing.
@@ -9468,59 +9611,49 @@ class QueryService:
         # Use QueryComplexityAnalyzer for comprehensive detection
         complexity = QueryComplexityAnalyzer.detect_complexity(query)
 
-        # Deep Agents for truly complex queries
+        # PERFORMANCE FIX: The standard pipeline already handles multi-country +
+        # multi-indicator comparison queries efficiently:
+        # - _maybe_expand_multi_concept_intent() detects comparison queries
+        # - _fetch_multi_indicator_data() fetches indicators in parallel
+        # - WorldBank/IMF batch country requests in a single API call
+        # - BIS/Eurostat fetch countries in parallel with semaphore
+        #
+        # Deep Agents decomposes into N*M individual process_query() calls, each
+        # requiring a full LLM parse (~5s), so a G7 x 2 indicators query = 14
+        # LLM calls = 70+ seconds.  The standard pipeline avoids this entirely.
+        #
+        # Only use Deep Agents for queries that require multi-step analysis
+        # (correlation, regression, forecasting, etc.).
+
+        is_multi_country = complexity.get('is_multi_country', False)
+        is_multi_indicator = complexity.get('is_multi_indicator', False)
+        is_ranking = complexity.get('is_ranking', False)
+
+        # Check if this is a pure data retrieval/comparison query vs analysis
+        analysis_keywords = [
+            "correlation", "correlate", "regression", "decompose",
+            "optimize", "forecast", "predict", "simulate", "model",
+            "causal", "elasticity", "sensitivity",
+        ]
+        needs_analysis = any(kw in query_lower for kw in analysis_keywords)
+
+        # Standard comparison/data-fetch queries: the deterministic pipeline is
+        # faster and more reliable.  Skip Deep Agents for these.
+        if (is_multi_country or is_multi_indicator or is_ranking) and not needs_analysis:
+            logger.info(
+                "⏭️ Deep Agents skipped: multi-country/indicator comparison handled "
+                "by standard pipeline (multi_country=%s, multi_indicator=%s, ranking=%s)",
+                is_multi_country, is_multi_indicator, is_ranking,
+            )
+            return False
+
+        # Deep Agents only for truly complex analytical queries
         is_complex = False
         trigger_reason = []
 
-        # Multi-country queries with 3+ countries
-        if complexity.get('is_multi_country'):
-            trigger_reason.append("multi-country")
+        if needs_analysis:
+            trigger_reason.append("analysis")
             is_complex = True
-
-        # Ranking/sorting queries across entities
-        if complexity.get('is_ranking'):
-            trigger_reason.append("ranking")
-            is_complex = True
-
-        # Multi-indicator analysis
-        if complexity.get('is_multi_indicator'):
-            trigger_reason.append("multi-indicator")
-            is_complex = True
-
-        # Complex calculations (correlation, aggregations)
-        if complexity.get('is_calculation'):
-            # Only for true calculations, not indicator names
-            query_lower = query.lower()
-            if any(w in query_lower for w in ['correlation', 'aggregate', 'combine', 'versus']):
-                trigger_reason.append("calculation")
-                is_complex = True
-
-        # Fallback: simple keyword-based detection
-        if not is_complex:
-            query_lower = query.lower()
-            comparison_keywords = ["compare", "vs", "versus", "both", "all countries"]
-            has_comparison = any(kw in query_lower for kw in comparison_keywords)
-
-            country_keywords = [
-                "us", "usa", "uk", "germany", "france", "japan", "china",
-                "canada", "india", "brazil", "eu", "europe", "italy", "spain",
-                "australia", "mexico", "korea", "russia"
-            ]
-            country_count = sum(1 for c in country_keywords if c in query_lower.split())
-
-            indicator_keywords = [
-                "gdp", "unemployment", "inflation", "trade", "exports", "imports",
-                "interest rate", "population", "debt"
-            ]
-            indicator_count = sum(1 for i in indicator_keywords if i in query_lower)
-
-            is_complex = (
-                (has_comparison and (country_count > 1 or indicator_count > 1)) or
-                (country_count >= 3) or
-                (indicator_count >= 2 and country_count >= 2)
-            )
-            if is_complex:
-                trigger_reason.append(f"keywords({country_count}c/{indicator_count}i)")
 
         if is_complex:
             logger.info(f"🧠 Deep Agents triggered: {', '.join(trigger_reason)}")

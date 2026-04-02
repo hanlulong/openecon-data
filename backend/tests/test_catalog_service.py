@@ -101,11 +101,11 @@ def test_get_best_provider_prefers_eurostat_for_hicp_inflation():
     assert code == "PRC_HICP_AIND"
 
 
-def test_get_best_provider_prefers_imf_for_real_effective_exchange_rate():
+def test_get_best_provider_prefers_bis_for_real_effective_exchange_rate():
     reload_catalog()
     provider, code, _ = get_best_provider("real_effective_exchange_rate", countries=["JP"])
-    assert provider == "IMF"
-    assert code == "EREER"
+    assert provider == "BIS"
+    assert code == "WS_XRU"
 
 
 def test_get_best_provider_prefers_global_coverage_without_country_context():
