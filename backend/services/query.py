@@ -10291,12 +10291,12 @@ class QueryService:
 
             # Get the indicator code from returned data
             first_data = data[0] if isinstance(data, list) else data
-            meta = first_data.get("metadata", {}) if isinstance(first_data, dict) else getattr(first_data, "metadata", None)
+            meta = getattr(first_data, "metadata", None) if not isinstance(first_data, dict) else first_data.get("metadata")
             if not meta:
                 return None
-            series_id = str(getattr(meta, "seriesId", "") or meta.get("seriesId", "") if isinstance(meta, dict) else "")
-            provider = str(getattr(meta, "source", "") or meta.get("source", "") if isinstance(meta, dict) else "")
-            indicator_name = str(getattr(meta, "indicator", "") or meta.get("indicator", "") if isinstance(meta, dict) else "")
+            series_id = str(getattr(meta, "seriesId", "") or "")
+            provider = str(getattr(meta, "source", "") or "")
+            indicator_name = str(getattr(meta, "indicator", "") or "")
 
             if not series_id or not provider:
                 return None
