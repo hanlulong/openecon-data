@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Dict, List, Optional, TYPE_CHECKING
 import logging
 
@@ -622,26 +623,37 @@ class WorldBankProvider(BaseProvider):
             logger.warning(f"Error fetching batched data: {e}")
             payload = None
 
-        # If batch request failed, fall back to sequential per-country.
+        # If batch request failed, fall back to parallel per-country fetch.
         # Accumulate ALL country records into a single payload so the
         # batch processing loop below handles all countries together.
         if not payload:
             accumulated_records = []
             fallback_meta = None
-            for country_code_raw in country_list:
-                try:
-                    country_code = self._country_code(country_code_raw)
-                    single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
-                    response = await client.get(single_url, params=params, headers=headers, timeout=30.0)
-                    response.raise_for_status()
-                    single_payload = response.json()
-                    if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
-                        accumulated_records.extend(single_payload[1])
-                        if not fallback_meta:
-                            fallback_meta = single_payload[0]
-                except Exception as e:
-                    logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
-                    continue
+            wb_sem = asyncio.Semaphore(5)
+
+            async def _fetch_single_country(country_code_raw: str):
+                async with wb_sem:
+                    try:
+                        country_code = self._country_code(country_code_raw)
+                        single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
+                        response = await client.get(single_url, params=params, headers=headers, timeout=20.0)
+                        response.raise_for_status()
+                        single_payload = response.json()
+                        if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
+                            return single_payload
+                    except Exception as e:
+                        logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
+                    return None
+
+            fallback_results = await asyncio.gather(
+                *[_fetch_single_country(c) for c in country_list],
+                return_exceptions=True,
+            )
+            for fr in fallback_results:
+                if isinstance(fr, list) and len(fr) >= 2 and fr[1]:
+                    accumulated_records.extend(fr[1])
+                    if not fallback_meta:
+                        fallback_meta = fr[0]
             if accumulated_records and fallback_meta:
                 payload = [fallback_meta, accumulated_records]
 
