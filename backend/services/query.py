@@ -10314,9 +10314,9 @@ class QueryService:
             normalized_provider = normalize_provider_name(provider)
             cur.execute(
                 "SELECT code, name FROM indicators "
-                "WHERE provider=? AND LOWER(name) LIKE ? AND code != ? "
+                "WHERE UPPER(provider)=? AND LOWER(name) LIKE ? AND code != ? "
                 "ORDER BY LENGTH(name) LIMIT 5",
-                (normalized_provider, f"%{core}%", series_id),
+                (normalized_provider.upper(), f"%{core}%", series_id),
             )
             rows = cur.fetchall()
 
