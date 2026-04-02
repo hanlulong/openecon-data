@@ -340,7 +340,7 @@ class SecureLogger:
             tb = traceback.format_exc()
             # Replace absolute paths with relative ones
             tb = re.sub(r'/home/[^/]+/', '~/', tb)
-            tb = re.sub(r'C:\\Users\\[^\\]+\\', 'C:\\Users\\***\\', tb)
+            tb = re.sub(r'C:\\Users\\[^\\]+\\', lambda m: 'C:\\\\Users\\\\***\\\\', tb)
             log_data["traceback"] = tb
 
         return log_data
