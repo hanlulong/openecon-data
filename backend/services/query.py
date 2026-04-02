@@ -10255,6 +10255,9 @@ class QueryService:
             f"Retrieved {len(data)} data series from {intent.apiProvider}",
         )
 
+        # Generate alternative series suggestions for user exploration
+        alternatives = self._build_alternative_series(intent, data)
+
         return QueryResponse(
             conversationId=conversation_id,
             intent=intent,
@@ -10262,7 +10265,71 @@ class QueryService:
             clarificationNeeded=False,
             message=coverage_warning,
             processingSteps=tracker.to_list() if tracker else None,
+            alternativeSeries=alternatives,
         )
+
+    def _build_alternative_series(
+        self,
+        intent: ParsedIntent,
+        data: Any,
+    ) -> Optional[list]:
+        """Generate alternative indicator suggestions based on the returned data.
+
+        Shows related indicators the user might also want to explore.
+        E.g., after GDP (current US$), suggest GDP growth, GDP per capita, GDP PPP.
+        """
+        from .indicator_database import IndicatorDatabase
+        from ..models import AlternativeSeries
+
+        try:
+            if not data:
+                return None
+
+            # Get the indicator code from returned data
+            first_data = data[0] if isinstance(data, list) else data
+            meta = first_data.get("metadata", {}) if isinstance(first_data, dict) else getattr(first_data, "metadata", None)
+            if not meta:
+                return None
+            series_id = str(getattr(meta, "seriesId", "") or meta.get("seriesId", "") if isinstance(meta, dict) else "")
+            provider = str(getattr(meta, "source", "") or meta.get("source", "") if isinstance(meta, dict) else "")
+            indicator_name = str(getattr(meta, "indicator", "") or meta.get("indicator", "") if isinstance(meta, dict) else "")
+
+            if not series_id or not provider:
+                return None
+
+            # Find related indicators by name similarity
+            db = IndicatorDatabase()
+            conn = db._get_connection()
+            cur = conn.cursor()
+
+            # Get the concept family — indicators with similar name prefix
+            core = indicator_name.split(",")[0].split("(")[0].strip().lower()
+            if len(core) < 4:
+                return None
+
+            normalized_provider = normalize_provider_name(provider)
+            cur.execute(
+                "SELECT code, name FROM indicators "
+                "WHERE provider=? AND LOWER(name) LIKE ? AND code != ? "
+                "ORDER BY LENGTH(name) LIMIT 5",
+                (normalized_provider, f"%{core}%", series_id),
+            )
+            rows = cur.fetchall()
+
+            if not rows:
+                return None
+
+            alternatives = []
+            for code, name in rows:
+                alternatives.append(AlternativeSeries(
+                    code=code,
+                    name=name,
+                    provider=normalized_provider,
+                ))
+
+            return alternatives if alternatives else None
+        except Exception:
+            return None
 
     async def _execute_pro_mode(self, query: str, conversation_id: str) -> QueryResponse:
         """Execute query using Pro Mode (LangChain agent or Grok code generation)"""
