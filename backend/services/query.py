@@ -6170,16 +6170,33 @@ class QueryService:
             params = {**params, "__qualifier_checked": True}
             intent.parameters = params
 
-        # Catalog-resolved codes are hand-verified and should not be second-guessed.
+        # Catalog-resolved codes may be the BASE indicator (e.g., total unemployment).
+        # If the query has variant qualifiers (female, youth, male, rural, per capita, PPP),
+        # let the IndicatorSelector find the specific variant instead of locking to base.
         if has_explicit_code and params.get("__catalog_resolved"):
-            logger.info(
-                "🔒 Keeping catalog-resolved %s indicator: %s",
-                provider,
-                existing_indicator,
-            )
-            params = {**params, "indicator": existing_indicator}
-            intent.parameters = params
-            return params
+            original_query = str(intent.originalQuery or "").lower()
+            variant_qualifiers = {
+                "female", "male", "youth", "young", "adolescent", "adult", "elderly",
+                "rural", "urban", "primary", "secondary", "tertiary",
+                "per capita", "per person", "per 1000", "per 100",
+                "ppp", "constant", "real", "nominal", "net", "gross",
+            }
+            has_variant = any(q in original_query for q in variant_qualifiers)
+            if not has_variant:
+                logger.info(
+                    "🔒 Keeping catalog-resolved %s indicator: %s",
+                    provider, existing_indicator,
+                )
+                params = {**params, "indicator": existing_indicator}
+                intent.parameters = params
+                return params
+            else:
+                logger.info(
+                    "🔓 Catalog resolved %s but query has variant qualifiers — letting IndicatorSelector refine",
+                    existing_indicator,
+                )
+                # Clear catalog lock so IndicatorSelector can run
+                has_explicit_code = False
 
         # Path 1: Validate explicit code against query context
         if has_explicit_code:
