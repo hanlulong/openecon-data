@@ -3,9 +3,7 @@ category: commodities
 domain: financial_markets
 
 description: |
-  Gold commodity spot prices are not available through our current providers.
-  FRED discontinued gold spot price series, and WorldBank archived PE.USG.LNDN.
-  This concept exists to provide a helpful error message rather than silent failure.
+  Gold commodity price. Available from FRED (London Fixing Price).
 
 synonyms:
   primary:
@@ -21,8 +19,16 @@ synonyms:
     - xau
     - london gold
 
+providers:
+  FRED:
+    primary:
+      code: GOLDAMGBD228NLBM
+      name: "Gold Fixing Price 10:30 A.M. (London time) in London Bullion Market"
+      confidence: 0.90
+      coverage: global
+      frequency: daily
+
 not_available:
-  - FRED
   - WorldBank
   - StatsCan
   - Comtrade
@@ -30,7 +36,4 @@ not_available:
   - IMF
   - Eurostat
   - OECD
-  - CoinGecko
   - ExchangeRate
-
-providers: {}
