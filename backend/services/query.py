@@ -8108,6 +8108,18 @@ class QueryService:
                     "indicators": intent.indicators,
                 })
 
+            # Framework fix: if user explicitly said "from Eurostat" or "using IMF",
+            # ALWAYS override the LLM's provider choice. The user knows what they want.
+            explicit_provider = self._detect_explicit_provider(query)
+            if explicit_provider:
+                normalized = normalize_provider_name(explicit_provider)
+                if normalized and normalized.upper() != normalize_provider_name(intent.apiProvider or "").upper():
+                    logger.info(
+                        "🎯 Explicit provider override: LLM chose %s, user said '%s' → %s",
+                        intent.apiProvider, explicit_provider, normalized,
+                    )
+                    intent.apiProvider = normalized
+
             # Framework enrichment: recover from avoidable parser clarifications and
             # auto-expand clear multi-concept comparisons to multi-indicator intents.
             self._maybe_resolve_region_clarification(query, intent)
