@@ -6273,10 +6273,13 @@ class QueryService:
         # Path 1.5: IndicatorSelector (embed → LLM pick) — primary resolution
         # for all 330K indicators. Uses OpenAI embeddings for semantic retrieval
         # and LLM for variant selection.
+        # Use the ORIGINAL query (not LLM-stripped indicator_query) to preserve
+        # all variant qualifiers (female, youth, rural, per capita, etc.)
+        selector_query = str(intent.originalQuery or indicator_query or "").strip()
         try:
             from .indicator_selector import IndicatorSelector
             selector = IndicatorSelector()
-            selection = await selector.select(indicator_query, provider)
+            selection = await selector.select(selector_query, provider)
             if selection.code:
                 logger.info(
                     "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
