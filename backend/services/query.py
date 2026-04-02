@@ -9323,7 +9323,7 @@ class QueryService:
         """
         # Use the same _fetch_data path as the non-orchestrator pipeline
         try:
-            result = await self._fetch_data(intent, tracker=tracker)
+            result = await self._fetch_data(intent)
             if result:
                 conversation_manager.add_message_safe(
                     conversation_id, "assistant",
