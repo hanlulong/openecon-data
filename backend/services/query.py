@@ -9325,12 +9325,24 @@ class QueryService:
         try:
             result = await self._fetch_data(intent)
             if result:
-                conversation_manager.add_message_safe(
-                    conversation_id, "assistant",
-                    f"Data fetched: {intent.apiProvider}",
-                    intent=intent,
-                )
-                return result
+                # _fetch_data may return QueryResponse or list of NormalizedData
+                if isinstance(result, QueryResponse):
+                    if not result.conversationId:
+                        result.conversationId = conversation_id
+                    return result
+                elif isinstance(result, list):
+                    # Wrap raw data list in QueryResponse
+                    conversation_manager.add_message_safe(
+                        conversation_id, "assistant",
+                        f"Data fetched: {intent.apiProvider}",
+                        intent=intent,
+                    )
+                    return QueryResponse(
+                        conversationId=conversation_id,
+                        intent=intent,
+                        data=result,
+                        clarificationNeeded=False,
+                    )
         except Exception as e:
             logger.warning(f"Standard pipeline fetch error: {e}")
 
