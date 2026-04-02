@@ -8553,13 +8553,13 @@ class QueryService:
             # Create parameters for this indicator
             params = dict(intent.parameters) if intent.parameters else {}
 
-            # For FRED provider, set indicator (let _series_id() handle normalization)
-            if normalize_provider_name(intent.apiProvider) == "FRED":
-                params["indicator"] = indicator
-
-            # For StatsCan, set indicator field
-            if normalize_provider_name(intent.apiProvider) == "STATSCAN":
-                params["indicator"] = indicator
+            # Always set the indicator param for each sub-intent so that
+            # concept-override logic in _fetch_data does not clobber it with
+            # a match from the original (multi-concept) query text.
+            params["indicator"] = indicator
+            # Remove stale catalog-resolved flag so the sub-intent goes
+            # through proper indicator resolution for its specific indicator.
+            params.pop("__catalog_resolved", None)
 
             single_provider = normalize_provider_name(intent.apiProvider)
             if explicit_provider:
@@ -8586,7 +8586,15 @@ class QueryService:
                         exc,
                     )
 
-            # Create a new intent with single indicator
+            # Create a new intent with single indicator.
+            # Use a narrowed originalQuery that focuses on this specific
+            # indicator so that concept-override matching doesn't confuse
+            # indicators (e.g., matching "inflation" when fetching "unemployment").
+            countries_text = ""
+            if params.get("countries"):
+                countries_text = f" for {', '.join(str(c) for c in params['countries'][:3])}"
+            narrowed_query = f"{indicator}{countries_text}"
+
             single_intent = ParsedIntent(
                 apiProvider=single_provider,
                 indicators=[indicator],
@@ -8594,7 +8602,7 @@ class QueryService:
                 clarificationNeeded=False,
                 confidence=intent.confidence,
                 recommendedChartType=intent.recommendedChartType,
-                originalQuery=intent.originalQuery,
+                originalQuery=narrowed_query,
             )
 
             # Create fetch task with retry — use fewer attempts for multi-indicator
@@ -9400,9 +9408,20 @@ class QueryService:
         """
         fetch_error: Optional[Exception] = None
 
+        # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
+        # and use the parallel multi-indicator fetch path.
+        is_multi_indicator = bool(intent.indicators and len(intent.indicators) > 1)
+
         # Primary fetch attempt
         try:
-            result = await self._fetch_data(intent)
+            if is_multi_indicator:
+                logger.info(
+                    "📊 Standard pipeline: multi-indicator query (%d indicators)",
+                    len(intent.indicators),
+                )
+                result = await self._fetch_multi_indicator_data(intent)
+            else:
+                result = await self._fetch_data(intent)
             if result:
                 # _fetch_data may return QueryResponse or list of NormalizedData
                 if isinstance(result, QueryResponse):
