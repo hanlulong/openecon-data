@@ -602,6 +602,15 @@ class MetadataSearchService:
         Returns:
             Tuple of (is_valid, confidence, reason, suggested_alternative)
         """
+        # Skip validation when user_indicator is already a provider code (not natural language).
+        # Provider codes contain patterns like underscores, dots, or are all-caps — the LLM
+        # misinterprets code suffixes (e.g., _NGDP in GGXCNL_NGDP) as semantic meaning.
+        import re
+        if user_indicator and re.match(r'^[A-Z0-9_.]+$', user_indicator) and len(user_indicator) > 3:
+            logger.info(
+                f"✅ Skipping semantic validation for provider code '{user_indicator}' (not natural language)"
+            )
+            return True, 0.8, "Provider code — skip semantic validation", None
         prompt = f"""You are validating economic indicator matches. Your job is to catch WRONG matches.
 
 User asked for: "{user_indicator}"

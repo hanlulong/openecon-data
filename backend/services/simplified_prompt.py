@@ -38,6 +38,11 @@ Important constraints:
 - Only set a specific provider when user explicitly requests one (for example: "from IMF").
 - If no provider is explicitly requested, set apiProvider to "WorldBank" as a neutral placeholder.
 - Do not invent indicator codes. Use natural-language indicator names unless user explicitly gives a code.
+- Keep compound concepts as ONE indicator, not split into multiple:
+  - "average wages and earnings" → ["average wages and earnings"] (one item, NOT two)
+  - "housing starts and building permits" → ["housing starts", "building permits"] (two distinct series — split is OK)
+  - "imports and exports" → ["imports", "exports"] (two distinct flows — split is OK)
+  - Rule: only split into multiple indicators when they are genuinely DIFFERENT data series
 - Preserve ALL semantic modifiers in indicator names — these change the meaning:
   - "GDP growth rate" is different from "GDP" (growth % vs level)
   - "real interest rate" is different from "interest rate" (inflation-adjusted vs nominal)

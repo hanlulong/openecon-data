@@ -172,22 +172,15 @@ class UnifiedRouter:
 
         # 3b: Exchange rate queries → ExchangeRate
         if self._is_exchange_rate_query(query_lower, indicators):
-            # Exception: Real/Nominal effective exchange rate (REER/NEER) → IMF or BIS
-            if "real effective exchange rate" in query_lower or "reer" in query_lower:
-                return self._create_decision(
-                    provider="IMF",
-                    confidence=0.90,
-                    match_type="indicator",
-                    matched_pattern="real effective exchange rate",
-                    reasoning="Real effective exchange rate (REER) is best sourced from IMF",
-                )
-            if "nominal effective exchange rate" in query_lower or "neer" in query_lower:
+            # Exception: Real/Nominal effective exchange rate (REER/NEER) → BIS
+            # BIS has WS_XRU (REER) and WS_EER (NEER) with global country coverage
+            if any(t in query_lower for t in ("real effective exchange rate", "reer", "nominal effective exchange rate", "neer", "effective exchange rate")):
                 return self._create_decision(
                     provider="BIS",
                     confidence=0.90,
                     match_type="indicator",
-                    matched_pattern="nominal effective exchange rate",
-                    reasoning="Nominal effective exchange rate (NEER) is best sourced from BIS",
+                    matched_pattern="effective exchange rate",
+                    reasoning="Effective exchange rates (REER/NEER) are best sourced from BIS (WS_XRU/WS_EER)",
                 )
             return self._create_decision(
                 provider="ExchangeRate",

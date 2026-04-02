@@ -399,8 +399,8 @@ async def run_single(
             id=case.id,
             category=case.category,
             query=case.query,
-            status="fail",
-            failure_type="clarification",
+            status="clarify",
+            failure_type=None,
             expected_provider=case.expected_provider,
             provider_returned=_norm_provider((payload.get("intent") or {}).get("apiProvider")),
             indicator_returned=None,
@@ -408,7 +408,7 @@ async def run_single(
             response_time_ms=elapsed_ms,
             series_count=0,
             non_null_points=0,
-            error_message="clarification needed",
+            error_message=None,
             notes=str(payload.get("clarificationQuestions") or "")[:400],
         )
 
@@ -543,7 +543,7 @@ async def run_sweep(
         for idx, done in enumerate(asyncio.as_completed(tasks), start=1):
             result = await done
             results.append(result)
-            emoji = {"pass": "✅", "warn": "⚠️", "fail": "❌", "error": "🛑", "timeout": "⏱️"}.get(result.status, "•")
+            emoji = {"pass": "✅", "warn": "⚠️", "clarify": "🔵", "fail": "❌", "error": "🛑", "timeout": "⏱️"}.get(result.status, "•")
             print(
                 f"[{idx:03d}/{total:03d}] {emoji} Q{result.id:03d} {result.category} "
                 f"({result.response_time_ms:.0f}ms) {result.query[:88]}"
@@ -552,7 +552,8 @@ async def run_sweep(
 
 
 def summarize(results: List[SweepResult]) -> Dict[str, Any]:
-    by_status: Dict[str, int] = {k: 0 for k in ["pass", "warn", "fail", "error", "timeout"]}
+    statuses = ["pass", "warn", "clarify", "fail", "error", "timeout"]
+    by_status: Dict[str, int] = {k: 0 for k in statuses}
     by_failure: Dict[str, int] = {}
     by_category: Dict[str, Dict[str, int]] = {}
     for r in results:
@@ -560,11 +561,11 @@ def summarize(results: List[SweepResult]) -> Dict[str, Any]:
         if r.failure_type:
             by_failure[r.failure_type] = by_failure.get(r.failure_type, 0) + 1
         if r.category not in by_category:
-            by_category[r.category] = {k: 0 for k in ["pass", "warn", "fail", "error", "timeout"]}
+            by_category[r.category] = {k: 0 for k in statuses}
         by_category[r.category][r.status] += 1
 
     total = len(results)
-    effective_pass = by_status["pass"] + by_status["warn"]
+    effective_pass = by_status["pass"] + by_status["warn"] + by_status["clarify"]
     return {
         "total": total,
         "by_status": by_status,
@@ -598,11 +599,12 @@ def write_todo_md(
     lines.append(f"- Total: **{summary['total']}**")
     lines.append(f"- Pass: **{summary['by_status'].get('pass', 0)}**")
     lines.append(f"- Warn: **{summary['by_status'].get('warn', 0)}**")
+    lines.append(f"- Clarify: **{summary['by_status'].get('clarify', 0)}** (valid — system asked user for details)")
     lines.append(f"- Fail: **{summary['by_status'].get('fail', 0)}**")
     lines.append(f"- Error: **{summary['by_status'].get('error', 0)}**")
     lines.append(f"- Timeout: **{summary['by_status'].get('timeout', 0)}**")
     lines.append(f"- Strict Pass Rate: **{summary['strict_pass_rate']:.1f}%**")
-    lines.append(f"- Effective Pass Rate (pass+warn): **{summary['effective_pass_rate']:.1f}%**")
+    lines.append(f"- Effective Pass Rate (pass+warn+clarify): **{summary['effective_pass_rate']:.1f}%**")
     lines.append(f"- Average Response Time: **{summary['avg_response_time_ms']:.0f} ms**")
     lines.append("")
 
@@ -616,7 +618,7 @@ def write_todo_md(
     lines.append("## Query Checklist")
     lines.append("")
     for r in results:
-        checked = "x" if r.status in {"pass", "warn"} else " "
+        checked = "x" if r.status in {"pass", "warn", "clarify"} else " "
         detail_parts: List[str] = [f"`{r.status.upper()}`", f"`{r.category}`"]
         if r.provider_returned:
             detail_parts.append(f"`{r.provider_returned}`")

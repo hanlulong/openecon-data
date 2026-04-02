@@ -24,11 +24,19 @@ explicit_exclusions:
   - spot exchange rate
 
 providers:
+  BIS:
+    primary:
+      code: WS_XRU
+      name: "Effective exchange rates (REER/NEER, BIS dataflow WS_XRU)"
+      confidence: 0.95
+      coverage: global
+      frequency: monthly
+
   IMF:
     primary:
       code: EREER
       name: "Real Effective Exchange Rate"
-      confidence: 0.92
+      confidence: 0.88
       coverage: global
       frequency: annual
 
@@ -36,7 +44,7 @@ providers:
     primary:
       code: PX.REX.REER
       name: "Real effective exchange rate index (2010 = 100)"
-      confidence: 0.90
+      confidence: 0.85
       coverage: global
       frequency: annual
 
@@ -44,7 +52,7 @@ providers:
     primary:
       code: REER
       name: "Real effective exchange rates"
-      confidence: 0.86
+      confidence: 0.82
       coverage: oecd_members
       frequency: monthly
 
@@ -52,4 +60,3 @@ not_available:
   - Comtrade
   - CoinGecko
   - ExchangeRate
-  - BIS

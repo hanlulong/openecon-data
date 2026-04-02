@@ -1009,7 +1009,11 @@ class BISProvider(BaseProvider):
         # Step 2: Allow users to supply raw BIS dataflow codes directly (e.g. WS_CBPOL)
         # BIS dataflow codes always start with "WS_"
         if indicator and indicator.upper().startswith("WS_"):
-            return indicator.upper(), None
+            code = indicator.upper()
+            # Normalize aliases: WS_EER is served via WS_XRU in BIS API
+            bis_aliases = {"WS_EER": "WS_XRU"}
+            code = bis_aliases.get(code, code)
+            return code, None
 
         # Step 3: Try cross-provider indicator translator (handles IMF codes, common names, etc.)
         translator = get_indicator_translator()
