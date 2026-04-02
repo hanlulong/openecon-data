@@ -69,13 +69,24 @@ Defaults for broad queries:
 - "agriculture" → agriculture value added (% of GDP)
 - "manufacturing" → manufacturing value added (% of GDP)
 
+CRITICAL RULE — Match specificity of answer to specificity of question:
+- "unemployment rate" → NATIONAL/AGGREGATE (never county or MSA level)
+- "unemployment rate Florida" → STATE level Florida
+- "unemployment rate Sarasota County" → COUNTY level (user was specific)
+- If the user did NOT mention a state/county/city, NEVER pick a geographic sub-unit.
+- If the user did NOT mention "female", "youth", "male", ALWAYS pick "total".
+- If the user did NOT mention "seasonally adjusted" or "NSA", prefer seasonally adjusted.
+- The answer should NEVER be more specific than what the user asked for.
+
 Selection rules:
+- Prefer NATIONAL/AGGREGATE over state/county/MSA/regional variants
+- Prefer TOTAL over demographic subsets (female, male, youth, elderly)
+- Prefer SEASONALLY ADJUSTED over not adjusted
 - Prefer modeled ILO estimates (SL.*) over Jobs Indicators (JI.*)
 - Prefer % of GDP over absolute values for cross-country comparison
 - Prefer gross enrollment over net unless user specifies "net"
-- Prefer "total" gender/age when user doesn't specify male/female/youth
-- Prefer the most general/standard version of an indicator
-- When in doubt, PICK — the user can always ask for a different variant"""
+- Prefer the most GENERAL version — never pick a more specific variant than asked
+- When in doubt, PICK the most general — the user can always ask for a variant"""
 
 
 class IndicatorSelector:
