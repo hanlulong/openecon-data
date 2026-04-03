@@ -1856,15 +1856,19 @@ class QueryService:
             if parse_stage_clarification:
                 return parse_stage_clarification
 
-        if validation.is_multi_indicator:
-            logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
-            data = await self._fetch_multi_indicator_data(intent)
-        else:
-            data = await retry_async(
-                lambda: self._fetch_data(intent),
-                max_attempts=3,
-                initial_delay=1.0,
-            )
+        try:
+            if validation.is_multi_indicator:
+                logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
+                data = await self._fetch_multi_indicator_data(intent)
+            else:
+                data = await retry_async(
+                    lambda: self._fetch_data(intent),
+                    max_attempts=3,
+                    initial_delay=1.0,
+                )
+        except DataNotAvailableError as fetch_exc:
+            logger.warning("Data not available in _execute_resolved_intent: %s", fetch_exc)
+            data = []  # Treat as empty data — let fallback logic below handle it
 
         if not data or (isinstance(data, list) and len(data) == 0):
             logger.warning(f"No data returned from {intent.apiProvider} for query: {query}")
@@ -3219,14 +3223,22 @@ class QueryService:
             if not bypass_orchestrator and self._is_simple_single_country_query(query):
                 bypass_orchestrator = True
                 logger.info("⏭️ Bypassing orchestrator for simple single-country query; deterministic pipeline is more reliable")
-            # Phase 4: Bypass orchestrator when previous turn was a clarification.
-            # The deterministic pipeline with LLM conversation context handles
-            # clarification answers better (preserves country, indicator context).
+            # Bypass orchestrator when there is ANY conversation context.
+            # The deterministic pipeline builds conversation_context for the LLM
+            # prompt (indicator, country, provider from previous turn), enabling
+            # proper follow-up detection.  The orchestrator's parse_and_route
+            # does NOT pass conversation_context, so follow-up queries like
+            # "what about GDP growth" (indicator switch) or "exports" (clarification
+            # answer) lose the previous turn's country/indicator and return
+            # intent=null.
             if not bypass_orchestrator:
                 last_intent_for_orch = conversation_manager.get_last_intent(conv_id)
-                if last_intent_for_orch and last_intent_for_orch.clarificationNeeded:
+                if last_intent_for_orch:
                     bypass_orchestrator = True
-                    logger.info("⏭️ Bypassing orchestrator for clarification answer; LLM conversation context required")
+                    if last_intent_for_orch.clarificationNeeded:
+                        logger.info("⏭️ Bypassing orchestrator for clarification answer; LLM conversation context required")
+                    else:
+                        logger.info("⏭️ Bypassing orchestrator for follow-up query; deterministic pipeline preserves conversation context")
             if allow_orchestrator and (use_orchestrator or settings.use_langchain_orchestrator) and not bypass_orchestrator:
                 logger.info("🤖 Using LangChain orchestrator for intelligent query routing")
                 return await self._execute_with_orchestrator(query, conv_id, tracker)
@@ -3708,6 +3720,7 @@ class QueryService:
             )
             return QueryResponse(
                 conversationId=conv_id,
+                intent=intent if "intent" in locals() else None,
                 clarificationNeeded=False,
                 error="data_not_available",
                 message=formatted_message,
@@ -3794,18 +3807,63 @@ class QueryService:
             # Get conversation history for context
             conversation_history = conversation_manager.get_messages(conversation_id)
 
+            # Build conversation_context so the LLM can detect follow-ups
+            # (same logic as deterministic pipeline path).
+            orch_conversation_context = None
+            orch_last_intent = conversation_manager.get_last_intent(conversation_id)
+            if orch_last_intent:
+                li_params = orch_last_intent.parameters or {}
+                prior_country = li_params.get("country", "")
+                prior_countries_list = li_params.get("countries")
+                if prior_countries_list and isinstance(prior_countries_list, list):
+                    country_str = ", ".join(str(c) for c in prior_countries_list)
+                elif prior_country:
+                    country_str = str(prior_country)
+                else:
+                    country_str = "not specified"
+                orch_conversation_context = {
+                    "indicator": ", ".join(orch_last_intent.indicators) if orch_last_intent.indicators else "not specified",
+                    "country": country_str,
+                    "provider": orch_last_intent.apiProvider or "not specified",
+                    "startDate": li_params.get("startDate", "not specified"),
+                    "endDate": li_params.get("endDate", "not specified"),
+                    "originalQuery": orch_last_intent.originalQuery or "not specified",
+                }
+                if orch_last_intent.clarificationNeeded:
+                    pending_ctx = conversation_manager.get_pending_clarification_context(conversation_id)
+                    if pending_ctx:
+                        orch_conversation_context["pendingClarification"] = True
+                        orch_conversation_context["clarificationQuestion"] = pending_ctx.get("question", "")
+                        orch_conversation_context["clarificationOptions"] = ", ".join(
+                            str(opt) for opt in (pending_ctx.get("options") or [])
+                        )
+                        original_from_pending = pending_ctx.get("original_query", "")
+                        if original_from_pending:
+                            orch_conversation_context["originalQuery"] = original_from_pending
+                    elif orch_last_intent.clarificationQuestions:
+                        orch_conversation_context["pendingClarification"] = True
+                        orch_conversation_context["clarificationQuestion"] = " ".join(
+                            orch_last_intent.clarificationQuestions
+                        )
+                        orch_conversation_context["clarificationOptions"] = ""
+                    conversation_manager.clear_all_pending(conversation_id)
+
             # Run the same post-parse clarification guardrails used by the
             # standard pipeline before agent orchestration takes over.
             if tracker:
                 with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
-                    parse_result = await self.pipeline.parse_and_route(query, conversation_history)
+                    parse_result = await self.pipeline.parse_and_route(
+                        query, conversation_history, conversation_context=orch_conversation_context,
+                    )
                     intent = parse_result.intent
                     update_parse_metadata({
                         "provider": intent.apiProvider,
                         "indicators": intent.indicators,
                     })
             else:
-                parse_result = await self.pipeline.parse_and_route(query, conversation_history)
+                parse_result = await self.pipeline.parse_and_route(
+                    query, conversation_history, conversation_context=orch_conversation_context,
+                )
                 intent = parse_result.intent
 
             self._maybe_resolve_region_clarification(query, intent)
