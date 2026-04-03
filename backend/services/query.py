@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -89,6 +90,40 @@ _OPTION_PROVIDER_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s*")
 _OPTION_TRAILING_PARENS_RE = re.compile(r"\s*\([^()]+\)\s*$")
 _OPTION_TRAILING_PARENS_ALT_RE = re.compile(r"\([^()]*\)\s*$")
 _OPTION_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+# ---------------------------------------------------------------------------
+# Intent cache — avoids re-parsing identical queries via LLM (saves 4-6s)
+# ---------------------------------------------------------------------------
+_intent_cache: Dict[str, Tuple[Any, float]] = {}  # hash -> (ParseRouteResult, timestamp)
+_INTENT_CACHE_TTL = 300  # 5 minutes
+_INTENT_CACHE_MAX_SIZE = 200  # evict oldest when exceeded
+
+
+def _intent_cache_key(query: str) -> str:
+    """Deterministic hash for a query string (case-insensitive, stripped)."""
+    return hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _get_cached_parse_result(query_hash: str) -> Optional[Any]:
+    """Return cached ParseRouteResult if still fresh, else None."""
+    entry = _intent_cache.get(query_hash)
+    if entry is not None:
+        result, ts = entry
+        if time.time() - ts < _INTENT_CACHE_TTL:
+            return result
+        # Stale — remove
+        del _intent_cache[query_hash]
+    return None
+
+
+def _put_cached_parse_result(query_hash: str, result: Any) -> None:
+    """Store a ParseRouteResult in the intent cache."""
+    # Simple size cap: drop oldest entries when over limit
+    if len(_intent_cache) >= _INTENT_CACHE_MAX_SIZE:
+        oldest_key = min(_intent_cache, key=lambda k: _intent_cache[k][1])
+        del _intent_cache[oldest_key]
+    _intent_cache[query_hash] = (result, time.time())
 
 
 # Provider name aliases to normalize LLM outputs to canonical names
@@ -1590,14 +1625,6 @@ class QueryService:
                 cues.discard("export")
                 cues.discard("trade_balance")
 
-        # Capture ratio phrasing variants not reliably covered by static phrase lists.
-        debt_ratio_patterns = [
-            r"\bdebt\b.{0,36}\b(?:% of gdp|percent of gdp|percentage of gdp|to gdp|gdp ratio)\b",
-            r"\bgdp\b.{0,24}\bdebt\b.{0,12}\bratio\b",
-        ]
-        if any(re.search(pattern, search_text) for pattern in debt_ratio_patterns):
-            cues.add("debt_gdp_ratio")
-
         return cues
 
     @staticmethod
@@ -1779,13 +1806,6 @@ class QueryService:
             "regions",
         ):
             penalty += 1.3
-
-        if not query_mentions("youth", "age", "aged", "years old", "15-24", "15 to 24", "25-64", "25 to 64") and (
-            re.search(r"\baged?\b", candidate_lower)
-            or re.search(r"\b\d{1,2}\s*(?:to|-)\s*\d{1,2}\b", candidate_lower)
-            or re.search(r"\b\d{1,2}\s+years?\s+(?:and|or)\s+over\b", candidate_lower)
-        ):
-            penalty += 2.0
 
         return penalty
 
@@ -5299,26 +5319,6 @@ class QueryService:
                 return False
 
         if provider_upper == "FRED":
-            domain_tokens = {
-                "credit": ("CREDIT", "LOAN", "LEND", "TOTBKCR", "BUSLOANS", "REVOL", "NONREV", "TOTALSL"),
-                "inflation": ("CPI", "PPI", "PCE", "DEFL", "INFL"),
-                "exchange_rate": ("DEX", "EXCH", "XRU", "REER"),
-                "real_effective_exchange_rate": ("REER",),
-                "trade_balance": ("BOP", "TRADE", "NETEXP"),
-                "current_account": ("BCA", "CURR", "CAB"),
-                "import": ("IMP", "IMPORT"),
-                "export": ("EXP", "EXPORT"),
-                "money_supply": ("M1", "M2", "M3", "MZM", "MONEY", "MONETARY"),
-                "policy_rate": ("FEDFUNDS", "DFEDTAR", "DFF"),
-                "bond_yield": ("DGS", "GS", "TB3MS", "YIELD", "TREASURY"),
-                "house_prices": ("HPI", "CSUSHPI", "USSTHPI"),
-                "reserves": ("REER", "DEX", "EXCH", "RESERV"),
-            }
-
-            for cue, tokens in domain_tokens.items():
-                if cue in query_cues and not any(token in code_upper for token in tokens):
-                    return False
-
             if "m1" in query_lower and "M1" not in code_upper:
                 return False
             if "m2" in query_lower and "M2" not in code_upper:
@@ -7963,10 +7963,28 @@ class QueryService:
 
             logger.info("Parsing query with LLM: %s", query)
 
+            # --- Intent-level caching (Optimization 2) ---
+            # Cache parsed intents for identical queries to skip LLM re-parsing
+            # (saves 4-6s on repeated queries). Only cache when there is no
+            # conversation context — follow-ups need fresh parsing.
+            _use_intent_cache = conversation_context is None
+            _query_hash = _intent_cache_key(query) if _use_intent_cache else None
+            _cached = _get_cached_parse_result(_query_hash) if _query_hash else None
+
             with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
-                parse_result = await self.pipeline.parse_and_route(
-                    query, history, conversation_context=conversation_context,
-                )
+                if _cached is not None:
+                    import copy
+                    parse_result = copy.deepcopy(_cached)
+                    logger.info("⚡ Intent cache HIT for: %s (skipped LLM call)", query[:60])
+                else:
+                    parse_result = await self.pipeline.parse_and_route(
+                        query, history, conversation_context=conversation_context,
+                    )
+                    # Cache the result for future identical queries (only without conversation context)
+                    if _use_intent_cache and _query_hash and not parse_result.intent.clarificationNeeded:
+                        _put_cached_parse_result(_query_hash, parse_result)
+                        logger.info("⚡ Intent cache STORE for: %s", query[:60])
+
                 intent = parse_result.intent
                 # Ensure originalQuery stores the user's raw query, not the
                 # context-enriched version sent to the LLM.
@@ -8569,6 +8587,12 @@ class QueryService:
         provider, params = self._apply_catalog_availability_override(
             provider, intent, params, fallback_excluded_providers
         )
+
+        # Preserve catalog-resolved flag as a transient attribute on the intent
+        # before stripping internal keys. Used by _build_alternative_series to
+        # skip the FTS5 lookup for high-confidence catalog matches.
+        if params.get("__catalog_resolved"):
+            object.__setattr__(intent, "_catalog_resolved", True)
 
         internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__qualifier_checked"}
         if any(key in params for key in internal_param_keys):
@@ -10383,12 +10407,30 @@ class QueryService:
 
         Shows related indicators the user might also want to explore.
         E.g., after GDP (current US$), suggest GDP growth, GDP per capita, GDP PPP.
+
+        Performance optimizations:
+        1. Skip entirely for catalog-resolved indicators (high confidence).
+           These are already the correct indicator — alternatives add latency
+           without value for the majority of queries.
+        2. Uses FTS5 full-text search instead of LIKE '%...%' scan.
+           FTS5 is indexed and runs in <50ms vs 2-6s for LIKE on 330K rows.
         """
         from .indicator_database import IndicatorDatabase
         from ..models import AlternativeSeries
 
         try:
             if not data:
+                return None
+
+            # Optimization 1: Skip alternatives for catalog-resolved indicators.
+            # When the indicator was resolved via the catalog (high confidence),
+            # the user got exactly what they asked for — building alternatives
+            # is wasted work (saves 50-200ms FTS5 time + DB connection overhead).
+            if getattr(intent, "_catalog_resolved", False):
+                logger.debug(
+                    "Skipping alternative series — catalog-resolved indicator: %s",
+                    (intent.parameters or {}).get("indicator", "?"),
+                )
                 return None
 
             # Get the indicator code from returned data
@@ -10403,24 +10445,50 @@ class QueryService:
             if not series_id or not provider:
                 return None
 
-            # Find related indicators by name similarity
-            db = IndicatorDatabase()
-            conn = db._get_connection()
-            cur = conn.cursor()
-
             # Get the concept family — indicators with similar name prefix
             core = indicator_name.split(",")[0].split("(")[0].strip().lower()
             if len(core) < 2:
                 return None
 
             normalized_provider = normalize_provider_name(provider)
-            cur.execute(
-                "SELECT code, name FROM indicators "
-                "WHERE UPPER(provider)=? AND LOWER(name) LIKE ? AND code != ? "
-                "ORDER BY LENGTH(name) LIMIT 5",
-                (normalized_provider.upper(), f"%{core}%", series_id),
-            )
-            rows = cur.fetchall()
+
+            # Use FTS5 search instead of LIKE '%...%' scan.
+            # FTS5 is indexed and runs in <50ms vs 2-6s for LIKE on 330K rows.
+            db = IndicatorDatabase()
+            conn = db._get_connection()
+            cur = conn.cursor()
+
+            # Build FTS5 query from core words (strip punctuation, use OR)
+            fts_words = [w.strip() for w in core.split() if w.strip() and len(w.strip()) > 2]
+            if not fts_words:
+                return None
+
+            # Quote each word for FTS5 safety and join with AND for relevance
+            fts_query = " AND ".join([f'"{w}"' for w in fts_words[:4]])
+
+            try:
+                cur.execute(
+                    """SELECT i.code, i.name FROM indicators_fts f
+                    JOIN indicators i ON f.rowid = i.id
+                    WHERE indicators_fts MATCH ? AND i.provider = ? AND i.code != ?
+                    ORDER BY bm25(indicators_fts) LIMIT 5""",
+                    (fts_query, normalized_provider.upper(), series_id),
+                )
+                rows = cur.fetchall()
+            except Exception:
+                # FTS5 fallback: if match fails, try simpler query
+                simple_fts = " OR ".join([f'"{w}"' for w in fts_words[:3]])
+                try:
+                    cur.execute(
+                        """SELECT i.code, i.name FROM indicators_fts f
+                        JOIN indicators i ON f.rowid = i.id
+                        WHERE indicators_fts MATCH ? AND i.provider = ? AND i.code != ?
+                        ORDER BY bm25(indicators_fts) LIMIT 5""",
+                        (simple_fts, normalized_provider.upper(), series_id),
+                    )
+                    rows = cur.fetchall()
+                except Exception:
+                    rows = []
 
             if not rows:
                 return None

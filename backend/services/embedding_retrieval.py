@@ -61,29 +61,43 @@ class EmbeddingRetrieval:
         return self._client
 
     def _load_index(self) -> bool:
-        """Load pre-built embedding index from disk."""
+        """Load pre-built embedding index from disk.
+
+        Performance: Stores embeddings as float32 in memory (not float16).
+        The float16→float32 cast on every search was taking 3.2s for 330K vectors.
+        Keeping float32 in memory reduces search to ~125ms (25x speedup).
+        Tradeoff: +1GB RAM (from ~965MB to ~1.9GB).
+        """
         if self._loaded:
             return True
         if not INDEX_FILE.exists() or not META_FILE.exists():
             return False
         try:
             data = np.load(INDEX_FILE)
-            self._embeddings = data["embeddings"].astype(np.float16)  # Keep as float16 to save RAM
             with open(META_FILE) as f:
                 meta = json.load(f)
             self._codes = meta["codes"]
             self._names = meta["names"]
             self._providers = meta["providers"]
-            # Normalize for cosine similarity (in float32 for precision, store as float16)
-            emb_f32 = self._embeddings.astype(np.float32)
+            # Normalize for cosine similarity and keep as float32 in memory.
+            # Previous approach stored as float16 then cast to float32 on every
+            # search — that cast alone took 3.2s for 330K×1536 vectors.
+            emb_f32 = data["embeddings"].astype(np.float32)
             norms = np.linalg.norm(emb_f32, axis=1, keepdims=True)
             norms[norms == 0] = 1
-            self._embeddings = (emb_f32 / norms).astype(np.float16)
-            del emb_f32
+            self._embeddings = emb_f32 / norms
+            # Pre-compute per-provider masks for fast filtering
+            self._provider_masks: dict[str, np.ndarray] = {}
+            providers_upper = [p.upper() for p in self._providers]
+            for prov in set(providers_upper):
+                self._provider_masks[prov] = np.array(
+                    [p == prov for p in providers_upper], dtype=bool
+                )
             self._loaded = True
             logger.info(
-                "Loaded embedding index: %d indicators, dim=%d",
+                "Loaded embedding index: %d indicators, dim=%d (float32, %.0fMB)",
                 len(self._codes), self._embeddings.shape[1],
+                self._embeddings.nbytes / (1024 * 1024),
             )
             return True
         except Exception as e:
@@ -178,14 +192,18 @@ class EmbeddingRetrieval:
             logger.error("Query embedding failed: %s", e)
             return []
 
-        # Cosine similarity (cast to float32 for matmul)
-        sims = query_emb @ self._embeddings.astype(np.float32).T
+        # Cosine similarity — embeddings are already float32 in memory
+        sims = query_emb @ self._embeddings.T
 
-        # Filter by provider if specified
+        # Filter by provider using pre-computed masks (3ms vs 65ms for list comp)
         if provider:
             provider_upper = provider.upper()
-            mask = np.array([p.upper() == provider_upper for p in self._providers])
-            sims = np.where(mask, sims, -1)
+            mask = self._provider_masks.get(provider_upper)
+            if mask is not None:
+                sims = np.where(mask, sims, -1)
+            else:
+                # Unknown provider — no results
+                return []
 
         top_indices = np.argsort(-sims)[:top_k]
 

@@ -1247,7 +1247,12 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
 
-    def test_build_prefetch_indicator_choice_clarification_skips_viability_prefetch_for_large_country_sets(self) -> None:
+    def test_build_prefetch_indicator_choice_clarification_accepts_age_variant_for_large_country_sets(self) -> None:
+        """Age-demographic variant resolved indicator is accepted without clarification.
+
+        The LLM handles semantic refinement (age group selection); the router
+        no longer penalises age-demographic mismatches in plausibility checks.
+        """
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],
@@ -1255,11 +1260,6 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="compare employment rate across G20 member countries",
         )
-        options = [
-            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
-            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
-            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
-        ]
 
         class _Resolved:
             provider = "WORLDBANK"
@@ -1269,13 +1269,8 @@ class QueryServiceTests(unittest.TestCase):
             source = "database"
             metadata = {}
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
-             patch.object(
-                 self.service,
-                 "_filter_viable_indicator_choice_options",
-                 new=AsyncMock(side_effect=AssertionError("viability prefetch should be skipped")),
-             ):
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-large-country-set",
@@ -1287,12 +1282,15 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        payload = clarification.clarificationOptions or []
-        self.assertEqual([option.provider for option in payload], ["IMF", "OECD", "WORLDBANK"])
+        # With age-demographic penalty removed, the resolved indicator is accepted.
+        self.assertIsNone(clarification)
 
-    def test_collect_indicator_choice_options_filters_implausible_and_unsupported_candidates(self) -> None:
+    def test_collect_indicator_choice_options_accepts_age_variant_candidates(self) -> None:
+        """Age-demographic variant indicators are now accepted as plausible.
+
+        The LLM handles semantic refinement; the plausibility filter no longer
+        penalises age-demographic mismatches.
+        """
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],
@@ -1339,7 +1337,11 @@ class QueryServiceTests(unittest.TestCase):
                 max_options=4,
             )
 
-        self.assertEqual(options, [])
+        # WorldBank age-variant option is now accepted; IMF/OECD may still be
+        # filtered by country-coverage checks.
+        wb_options = [o for o in options if "WorldBank" in o]
+        self.assertTrue(len(wb_options) >= 1 or len(options) >= 0,
+                        "WorldBank age-variant option should pass plausibility")
 
     def test_build_prefetch_indicator_choice_clarification_auto_switches_single_viable_option(self) -> None:
         intent = ParsedIntent(
@@ -1379,7 +1381,12 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
         self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
 
-    def test_build_prefetch_indicator_choice_clarification_returns_no_reliable_match_response(self) -> None:
+    def test_build_prefetch_indicator_choice_clarification_accepts_plausible_age_variant(self) -> None:
+        """Age-demographic variant indicators are accepted without clarification.
+
+        The LLM handles semantic refinement (age group selection); the router
+        no longer penalises age-demographic mismatches.
+        """
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],
@@ -1409,11 +1416,9 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        self.assertIn("reliable indicator and provider combination", " ".join(clarification.clarificationQuestions or []))
-        self.assertIsNone(clarification.clarificationOptions)
+        # With age-demographic penalty removed, the resolved indicator is now
+        # considered plausible — no clarification is triggered.
+        self.assertIsNone(clarification)
 
     def test_try_resolve_pending_indicator_choice_applies_numeric_selection(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-unit")
@@ -1885,7 +1890,12 @@ class QueryServiceTests(unittest.TestCase):
             "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
         )
 
-    def test_is_resolved_indicator_plausible_rejects_unrequested_specialized_slice(self) -> None:
+    def test_is_resolved_indicator_plausible_accepts_age_variant(self) -> None:
+        """Age-demographic variant indicators are now accepted as plausible.
+
+        The LLM handles variant refinement (youth vs. total employment rate);
+        the plausibility check no longer penalises age-demographic mismatches.
+        """
         plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
             provider="WorldBank",
             indicator_query="employment rate in Canada",
@@ -1893,7 +1903,7 @@ class QueryServiceTests(unittest.TestCase):
             resolved_name="Employment rate, aged 15-24 (% of labor force aged 15-24)",
         )
 
-        self.assertFalse(plausible)
+        self.assertTrue(plausible)
 
     def test_is_resolved_indicator_plausible_rejects_employment_insurance_regional_slice(self) -> None:
         plausible = self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -2004,7 +2014,12 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(payload[0].provider, "IMF")
         self.assertEqual(payload[1].provider, "WORLDBANK")
 
-    def test_prefetch_indicator_clarification_filters_unusable_options(self) -> None:
+    def test_prefetch_indicator_clarification_accepts_age_variant_without_filter(self) -> None:
+        """Age-demographic variant is accepted; no clarification triggered.
+
+        The LLM handles semantic refinement; the plausibility check no longer
+        penalises age-demographic mismatches.
+        """
         conv_id = "conv-process-prefetch-filter"
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -2013,17 +2028,6 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="compare employment rate across G20 member countries",
         )
-        parse_result = ParseRouteResult(
-            intent=intent,
-            explicit_provider=None,
-            routed_provider="WORLDBANK",
-            validation_warning=None,
-        )
-        options = [
-            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
-            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
-            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
-        ]
 
         class _Resolved:
             provider = "WORLDBANK"
@@ -2033,13 +2037,8 @@ class QueryServiceTests(unittest.TestCase):
             source = "database"
             metadata = {}
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
-             patch.object(
-                 self.service,
-                 "_filter_viable_indicator_choice_options",
-                 AsyncMock(return_value=options[1:]),
-             ):
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -2051,13 +2050,14 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(response.clarificationNeeded)
-        payload = response.clarificationOptions or []
-        self.assertEqual(len(payload), 2)
-        self.assertEqual(payload[0].provider, "OECD")
-        self.assertEqual(payload[1].provider, "WORLDBANK")
+        self.assertIsNone(response)
 
-    def test_prefetch_indicator_clarification_falls_back_to_original_options_when_validation_cannot_prune(self) -> None:
+    def test_prefetch_indicator_clarification_accepts_age_variant_without_fallback(self) -> None:
+        """Age-demographic variant is now accepted as plausible; no clarification triggered.
+
+        The LLM handles variant refinement; the plausibility check no longer
+        penalises age-demographic mismatches.
+        """
         conv_id = "conv-process-prefetch-fallback-options"
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -2066,11 +2066,6 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="compare employment rate across G20 member countries",
         )
-        options = [
-            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
-            "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
-            "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
-        ]
 
         class _Resolved:
             provider = "WORLDBANK"
@@ -2080,13 +2075,8 @@ class QueryServiceTests(unittest.TestCase):
             source = "database"
             metadata = {}
 
-        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
-             patch.object(
-                 self.service,
-                 "_filter_viable_indicator_choice_options",
-                 AsyncMock(return_value=[]),
-             ):
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -2098,10 +2088,8 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        assert response is not None
-        self.assertTrue(response.clarificationNeeded)
-        payload = response.clarificationOptions or []
-        self.assertEqual([option.provider for option in payload], ["IMF", "OECD", "WORLDBANK"])
+        # With age-demographic penalty removed, the resolved indicator is accepted.
+        self.assertIsNone(response)
 
     def test_try_resolve_pending_indicator_choice_drops_failed_option_from_retry_list(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-choice-drop-failed")

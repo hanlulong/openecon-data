@@ -1,18 +1,20 @@
 """
 Unified Router - Single Entry Point for All Routing Decisions
 
-Phase 3 of the LLM-refactor: simplified from ~1,300 lines to ~300 lines.
-The LLM now handles semantic routing (indicator detection, fiscal vs. trade
-classification, etc.) via the provider capability matrix in the prompt.
+The LLM now handles all semantic routing (indicator detection, crypto vs.
+fiscal classification, US-only indicators, etc.) via the provider capability
+matrix in the prompt.
 
 This router retains only STRUCTURAL routing:
 1. Explicit provider mention ("from FRED", "using IMF")
-2. Crypto detection (CoinGecko is the ONLY crypto provider)
-3. Exchange rate detection (ExchangeRate-API + BIS for REER/NEER)
-4. Bilateral trade detection (Comtrade is the ONLY bilateral trade provider)
-5. Catalog concept matching (data-driven YAML lookups, not rules)
-6. Country-based defaults (structural membership: EU→Eurostat, US→FRED)
-7. LLM provider choice (trust the LLM for everything else)
+2. Exchange rate detection (ExchangeRate-API + BIS for REER/NEER)
+3. Bilateral trade detection (Comtrade is the ONLY bilateral trade provider)
+4. Catalog concept matching (data-driven YAML lookups, not rules)
+5. Country-based defaults (structural membership: EU→Eurostat, US→FRED)
+6. LLM provider choice (trust the LLM for everything else)
+
+A lightweight CoinGecko guard (_correct_coingecko) prevents fiscal queries
+from landing on the crypto-only provider.
 
 Usage:
     from backend.routing import UnifiedRouter
@@ -29,7 +31,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Set, Tuple
+from typing import Optional, List, Dict, Any, Tuple
 
 from .country_resolver import CountryResolver
 
@@ -57,20 +59,6 @@ _EXPLICIT_PROVIDER_KEYWORDS: Dict[str, List[str]] = {
 _START_OF_QUERY_PROVIDERS = ["OECD", "IMF", "BIS", "Eurostat"]
 _START_OF_QUERY_EXCLUSIONS = ["countries", "country", "members", "member", "nations", "nation", "average"]
 
-_CRYPTO_KEYWORDS: Set[str] = {
-    "bitcoin", "btc", "ethereum", "eth", "crypto", "cryptocurrency",
-    "solana", "cardano", "dogecoin", "altcoin", "defi", "nft",
-    "blockchain", "stablecoin", "coin", "token", "xrp", "ripple",
-    "litecoin", "ltc", "bnb",
-}
-
-# Anti-misrouting: fiscal keywords that should NEVER go to CoinGecko
-_NON_CRYPTO_FISCAL_KEYWORDS: Set[str] = {
-    "government", "deficit", "surplus", "fiscal", "budget",
-    "debt", "gdp", "unemployment", "inflation", "trade",
-    "export", "import", "tax", "spending", "economic",
-}
-
 
 def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
     """Return (provider, matched_keyword) if user explicitly names a provider, else None."""
@@ -90,48 +78,13 @@ def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def detect_us_only_indicator(
-    query: str,
-    indicators: List[str],
-    country: Optional[str] = None,
-    countries: Optional[List[str]] = None,
-) -> Optional[str]:
-    """Return matched US-only indicator term, or None.
-
-    Kept for backward compatibility but the set is intentionally minimal.
-    The LLM now handles most US-specific indicator routing.
-    """
-    all_countries = countries or ([country] if country else [])
-    if all_countries:
-        non_us = [c for c in all_countries
-                  if c.upper() not in ("US", "USA", "UNITED STATES", "UNITED_STATES")]
-        if non_us:
-            return None
-
-    query_lower = query.lower()
-    indicators_str = " ".join(indicators).lower() if indicators else ""
-    combined = f"{query_lower} {indicators_str}"
-
-    # Minimal set: only truly US-exclusive indicators (no international equivalent)
-    us_only = {
-        "case-shiller", "case shiller",
-        "federal funds", "fed funds",
-        "nonfarm payrolls",
-        "initial claims", "unemployment claims",
-        "s&p 500", "sp500", "s&p",
-        "dow jones", "djia",
-    }
-    for indicator in us_only:
-        if indicator in combined:
-            return indicator
-
-    return None
-
 
 def _correct_coingecko(provider: str, query: str, indicators: List[str]) -> Tuple[str, Optional[str]]:
     """If CoinGecko was chosen for a non-crypto query, redirect to IMF.
 
     Returns (corrected_provider, reason_or_None).
+    This is a lightweight structural guard — CoinGecko only serves crypto data,
+    so fiscal/macro queries that land here are obvious misroutes.
     """
     if provider.upper() != "COINGECKO":
         return provider, None
@@ -140,13 +93,19 @@ def _correct_coingecko(provider: str, query: str, indicators: List[str]) -> Tupl
     indicators_str = " ".join(indicators).lower() if indicators else ""
     combined = f" {query_lower} {indicators_str} "
 
-    def has_word(text: str, word: str) -> bool:
-        return f" {word} " in text or text.startswith(f"{word} ") or text.endswith(f" {word}")
+    # Structural: if the query mentions macro/fiscal terms but no crypto asset
+    # names, CoinGecko cannot serve it.  The LLM should rarely misroute, but
+    # this guard catches edge cases.
+    _FISCAL = re.compile(
+        r"\b(?:government|deficit|surplus|fiscal|budget|debt|gdp|unemployment"
+        r"|inflation|tax|spending)\b"
+    )
+    _CRYPTO = re.compile(
+        r"\b(?:bitcoin|btc|ethereum|eth|crypto|cryptocurrency|xrp|ripple"
+        r"|solana|cardano|dogecoin|litecoin|bnb|defi|nft|stablecoin|altcoin)\b"
+    )
 
-    has_crypto = any(has_word(combined, kw) for kw in _CRYPTO_KEYWORDS)
-    has_fiscal = any(has_word(combined, kw) for kw in _NON_CRYPTO_FISCAL_KEYWORDS)
-
-    if has_fiscal and not has_crypto:
+    if _FISCAL.search(combined) and not _CRYPTO.search(combined):
         reason = "CoinGecko corrected to IMF: query has fiscal keywords but no crypto"
         logger.warning(f"  {reason}")
         return "IMF", reason
@@ -169,17 +128,22 @@ class UnifiedRouter:
     """
     Single entry point for all provider routing decisions.
 
-    After Phase 3 LLM-refactor, this router handles only structural routing:
+    After LLM-refactor, this router handles only structural routing:
     1. Explicit provider mention (highest confidence)
-    2. US-only indicators (Case-Shiller, S&P 500, etc.)
-    3. Crypto → CoinGecko (only crypto provider)
-    4. Exchange rate → ExchangeRate-API / BIS for REER
-    5. Bilateral trade → Comtrade (only bilateral trade provider)
+    2. Exchange rate → ExchangeRate-API / BIS for REER
+    3. Bilateral trade → Comtrade (only bilateral trade provider)
+    4. Canadian queries → StatsCan (only Canada-specific provider)
+    5. Regional group routing (EU countries → Eurostat, etc.)
     6. Catalog concept match (data-driven YAML lookups)
-    7. Regional group routing (EU countries → Eurostat, etc.)
-    8. Country-based routing (US → FRED, EU → Eurostat, etc.)
+    7. Country-based routing (US → FRED, EU → Eurostat, etc.)
+    8. Multi-country routing
     9. LLM provider choice (trust the LLM for semantic decisions)
     10. Default → WorldBank
+
+    Semantic routing (US-only indicators, crypto detection, indicator
+    classification) is handled by the LLM via the provider capability
+    matrix in the prompt.  The _correct_coingecko() guard remains as
+    a lightweight structural safeguard.
     """
 
     # Fallback chains when primary provider fails
@@ -260,30 +224,7 @@ class UnifiedRouter:
                 reasoning=f"Explicit mention of '{matched_kw}' requests {provider_name}",
             )
 
-        # 2. US-only indicators (Case-Shiller, S&P, Fed funds — no intl equivalent)
-        us_indicator = detect_us_only_indicator(
-            query, indicators, country=country, countries=countries
-        )
-        if us_indicator:
-            return self._create_decision(
-                provider="FRED",
-                confidence=0.95,
-                match_type="indicator",
-                matched_pattern=us_indicator,
-                reasoning=f"'{us_indicator}' is a US-only indicator that requires FRED",
-            )
-
-        # 3. Crypto → CoinGecko (structural: only crypto provider)
-        if self._is_crypto_query(query_lower, indicators):
-            return self._create_decision(
-                provider="CoinGecko",
-                confidence=0.92,
-                match_type="indicator",
-                matched_pattern="crypto asset query",
-                reasoning="Cryptocurrency/token market query routed to CoinGecko",
-            )
-
-        # 4. Exchange rate → ExchangeRate-API / BIS for REER/NEER
+        # 2. Exchange rate → ExchangeRate-API / BIS for REER/NEER
         if self._is_exchange_rate_query(query_lower, indicators):
             if any(t in query_lower for t in (
                 "real effective exchange rate", "reer",
@@ -305,7 +246,7 @@ class UnifiedRouter:
                 reasoning="Exchange rate query routed to ExchangeRate-API",
             )
 
-        # 5. Bilateral trade → Comtrade (structural: only bilateral trade provider)
+        # 3. Bilateral trade → Comtrade (structural: only bilateral trade provider)
         if self._is_bilateral_trade_query(query_lower, query):
             return self._create_decision(
                 provider="Comtrade",
@@ -315,17 +256,17 @@ class UnifiedRouter:
                 reasoning="Bilateral trade query routed to Comtrade",
             )
 
-        # 6. Canadian queries (structural: StatsCan is the only Canada-specific provider)
+        # 4. Canadian queries (structural: StatsCan is the only Canada-specific provider)
         if CountryResolver.is_canadian_region(query):
             return self._handle_canadian_query(query, indicators, country)
 
-        # 7. Regional group routing (EU countries, OECD countries, etc.)
+        # 5. Regional group routing (EU countries, OECD countries, etc.)
         #    Moved BEFORE catalog so regional context overrides catalog defaults.
         regional_decision = self._route_by_regional_group(query_lower)
         if regional_decision:
             return regional_decision
 
-        # 8. Catalog concept match (data-driven YAML lookups)
+        # 6. Catalog concept match (data-driven YAML lookups)
         #    Pass detected region so coverage-specific providers are preferred.
         if self._use_catalog and self._catalog_service:
             catalog_decision = self._route_by_catalog(
@@ -335,12 +276,12 @@ class UnifiedRouter:
             if catalog_decision:
                 return catalog_decision
 
-        # 9. Country-based routing
+        # 7. Country-based routing
         country_decision = self._route_by_country(country, countries, query_lower, indicators)
         if country_decision:
             return country_decision
 
-        # 10. Multi-country with non-OECD → WorldBank
+        # 8. Multi-country with non-OECD → WorldBank
         if countries and len(countries) > 1:
             has_non_oecd = any(CountryResolver.is_non_oecd_major(c) for c in countries)
             if has_non_oecd:
@@ -351,7 +292,7 @@ class UnifiedRouter:
                     reasoning="Multi-country query with non-OECD countries → WorldBank",
                 )
 
-        # 11. Trust LLM's provider choice
+        # 9. Trust LLM's provider choice
         if llm_provider and llm_provider != self.DEFAULT_PROVIDER:
             corrected, reason = _correct_coingecko(llm_provider, query, indicators)
             return self._create_decision(
@@ -361,7 +302,7 @@ class UnifiedRouter:
                 reasoning=reason or f"Using LLM suggested provider: {llm_provider}",
             )
 
-        # 12. Default
+        # 10. Default
         return self._create_decision(
             provider=self.DEFAULT_PROVIDER,
             confidence=0.50,
@@ -416,26 +357,6 @@ class UnifiedRouter:
             match_type=match_type,
             matched_pattern=matched_pattern,
         )
-
-    def _is_crypto_query(self, query_lower: str, indicators: List[str]) -> bool:
-        """Check if query is about cryptocurrencies/tokens."""
-        indicators_str = " ".join(indicators).lower()
-        combined = f"{query_lower} {indicators_str}"
-
-        strong_terms = [
-            "bitcoin", "btc", "ethereum", "eth", "crypto", "cryptocurrency",
-            "xrp", "ripple", "solana", "cardano", "dogecoin", "litecoin",
-            "altcoin", "defi", "nft", "token", "stablecoin", "bnb",
-        ]
-
-        if any(re.search(rf"\b{re.escape(term)}\b", combined) for term in strong_terms):
-            return True
-        if "binance coin" in combined:
-            return True
-
-        has_market_word = any(term in combined for term in ["market cap", "market capitalization", "trading volume", "coin ranking"])
-        has_coin_context = any(term in combined for term in ["coin", "token", "cryptocurrency", "crypto"])
-        return bool(has_market_word and has_coin_context)
 
     def _is_exchange_rate_query(self, query_lower: str, indicators: List[str]) -> bool:
         """Check if query is about exchange rates."""

@@ -15,11 +15,13 @@ Configuration via environment variables:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import instructor
@@ -32,6 +34,57 @@ from .simplified_prompt import SimplifiedPrompt
 from .json_parser import parse_json_response, JSONParseError
 
 logger = logging.getLogger(__name__)
+
+
+class _IntentCache:
+    """LRU cache for parsed intents to skip redundant LLM calls.
+
+    Caching the LLM parse result for identical queries saves 4-6 seconds
+    per repeat query (the entire LLM round-trip). TTL prevents stale results
+    when upstream prompts or models change.
+
+    Only caches queries WITHOUT conversation context (follow-ups need fresh parsing).
+    """
+
+    def __init__(self, max_size: int = 256, ttl_seconds: float = 600):
+        self._cache: OrderedDict[str, Tuple[float, ParsedIntent]] = OrderedDict()
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+        self._hits = 0
+        self._misses = 0
+
+    @staticmethod
+    def _key(query: str) -> str:
+        normalized = query.strip().lower()
+        return hashlib.md5(normalized.encode()).hexdigest()
+
+    def get(self, query: str) -> Optional[ParsedIntent]:
+        key = self._key(query)
+        entry = self._cache.get(key)
+        if entry is None:
+            self._misses += 1
+            return None
+        ts, intent = entry
+        if time.time() - ts > self._ttl:
+            del self._cache[key]
+            self._misses += 1
+            return None
+        # Move to end (most recently used)
+        self._cache.move_to_end(key)
+        self._hits += 1
+        # Return a deep copy so downstream mutations don't corrupt the cache
+        return intent.model_copy(deep=True)
+
+    def put(self, query: str, intent: ParsedIntent) -> None:
+        key = self._key(query)
+        self._cache[key] = (time.time(), intent.model_copy(deep=True))
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        return {"hits": self._hits, "misses": self._misses, "size": len(self._cache)}
 
 
 class OpenRouterService:
@@ -57,6 +110,7 @@ class OpenRouterService:
 
         self.api_key = api_key
         self.settings = settings or get_settings()
+        self._intent_cache = _IntentCache(max_size=256, ttl_seconds=600)
 
         # Initialize LLM provider based on configuration
         try:
@@ -174,18 +228,41 @@ class OpenRouterService:
         Raises:
             RuntimeError: If LLM fails to return valid format after retries
         """
+        # Intent-level cache: skip LLM call for identical queries without
+        # conversation context. Saves 4-6s per repeat query.
+        # Only cache standalone queries — follow-ups need fresh parsing.
+        _cacheable = not conversation_context and not conversation_history
+        if _cacheable:
+            cached_intent = self._intent_cache.get(query)
+            if cached_intent is not None:
+                logger.info(
+                    "Intent cache hit: '%s' → provider=%s, indicators=%s (cache %s)",
+                    query[:50], cached_intent.apiProvider, cached_intent.indicators,
+                    self._intent_cache.stats,
+                )
+                cached_intent.originalQuery = query
+                return cached_intent
+
         # Primary path: Instructor-based structured output
+        intent: Optional[ParsedIntent] = None
         if self.instructor_client:
             try:
-                return await self._parse_with_instructor(query, conversation_history, conversation_context)
+                intent = await self._parse_with_instructor(query, conversation_history, conversation_context)
             except Exception as e:
                 logger.warning(f"Instructor parsing failed, falling back to manual: {e}")
 
         # Fallback: manual JSON parsing
-        if self.llm_provider:
-            return await self._parse_with_provider(query, conversation_history, conversation_context)
-        else:
-            return await self._parse_direct(query, conversation_history, conversation_context)
+        if intent is None:
+            if self.llm_provider:
+                intent = await self._parse_with_provider(query, conversation_history, conversation_context)
+            else:
+                intent = await self._parse_direct(query, conversation_history, conversation_context)
+
+        # Cache the result for future identical queries
+        if _cacheable and intent is not None:
+            self._intent_cache.put(query, intent)
+
+        return intent
 
     async def _parse_with_instructor(
         self,
@@ -210,9 +287,10 @@ class OpenRouterService:
                 messages.append({"role": role, "content": msg})
         messages.append({"role": "user", "content": query})
 
-        # Use higher max_tokens for reasoning models (they spend tokens on
-        # internal reasoning before producing the JSON output).
-        max_tok = 2000 if self.settings.llm_provider in ("vllm",) else 500
+        # Reasoning models spend tokens on internal reasoning before producing
+        # JSON output. 1000 is enough for ~400 reasoning + ~600 JSON output.
+        # Previous 2000 was wasteful — actual usage was 500-650 tokens.
+        max_tok = 1000 if self.settings.llm_provider in ("vllm",) else 500
 
         llm_start = time.perf_counter()
         intent: ParsedIntent = await self.instructor_client.chat.completions.create(

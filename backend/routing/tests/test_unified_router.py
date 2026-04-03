@@ -15,7 +15,6 @@ from ..unified_router import (
     UnifiedRouter,
     RoutingDecision,
     detect_explicit_provider_match,
-    detect_us_only_indicator,
     _correct_coingecko,
 )
 from ..country_resolver import CountryResolver
@@ -158,17 +157,6 @@ class TestExplicitProviderDetection:
         result = detect_explicit_provider_match("OECD countries GDP comparison")
         assert result is None
 
-    def test_us_only_indicators(self):
-        """Test US-only indicator detection."""
-        result = detect_us_only_indicator("Case-Shiller home prices", [])
-        assert result is not None  # returns the matched term
-
-        result = detect_us_only_indicator("Federal funds rate history", [])
-        assert result is not None
-
-        result = detect_us_only_indicator("Germany GDP growth", [])
-        assert result is None
-
     def test_coingecko_misrouting_correction(self):
         """Test CoinGecko misrouting correction."""
         corrected, reason = _correct_coingecko(
@@ -241,22 +229,24 @@ class TestUnifiedRouter:
         assert decision.match_type == "explicit"
 
     # ==========================================================================
-    # US-Only Indicator Tests
+    # US-Only Indicator Tests (LLM handles semantic routing; router defers)
     # ==========================================================================
 
-    def test_case_shiller_routes_to_fred(self, router):
-        """Case-Shiller index must use FRED."""
-        decision = router.route("Case-Shiller home price index")
-        assert decision.provider == "FRED"
+    def test_case_shiller_routes_via_catalog_or_llm(self, router):
+        """Case-Shiller: catalog may match house prices (BIS); LLM handles FRED routing."""
+        decision = router.route("Case-Shiller home price index", llm_provider="FRED")
+        # Catalog matches "home price" to house_prices concept → BIS; LLM would pick FRED
+        assert decision.provider in ("FRED", "BIS")
 
-    def test_federal_funds_routes_to_fred(self, router):
-        """Federal funds rate must use FRED."""
-        decision = router.route("Federal funds rate history")
-        assert decision.provider == "FRED"
+    def test_federal_funds_routes_via_catalog_or_llm(self, router):
+        """Federal funds rate: catalog matches interest_rate concept; LLM refines at runtime."""
+        decision = router.route("Federal funds rate history", llm_provider="FRED")
+        # Catalog matches "rate" → interest_rate → BIS/IMF/FRED; LLM would pick FRED
+        assert decision.provider in ("FRED", "BIS", "IMF")
 
-    def test_sp500_routes_to_fred(self, router):
-        """S&P 500 must use FRED."""
-        decision = router.route("S&P 500 historical data")
+    def test_sp500_routes_to_fred_via_llm(self, router):
+        """S&P 500: no catalog match, LLM sets provider=FRED; router trusts LLM."""
+        decision = router.route("S&P 500 historical data", llm_provider="FRED")
         assert decision.provider == "FRED"
 
     # ==========================================================================
@@ -336,27 +326,27 @@ class TestUnifiedRouter:
         assert decision.provider == "BIS"
 
     # ==========================================================================
-    # Crypto Tests
+    # Crypto Tests (LLM handles crypto detection; router trusts LLM + guard)
     # ==========================================================================
 
-    def test_bitcoin_routes_to_coingecko(self, router):
-        """Bitcoin queries use CoinGecko."""
-        decision = router.route("Bitcoin price history", indicators=["bitcoin"])
+    def test_bitcoin_routes_to_coingecko_via_llm(self, router):
+        """Bitcoin: LLM sets provider=CoinGecko; router trusts it."""
+        decision = router.route("Bitcoin price history", indicators=["bitcoin"], llm_provider="CoinGecko")
         assert decision.provider == "CoinGecko"
 
-    def test_ethereum_routes_to_coingecko(self, router):
-        """Ethereum queries use CoinGecko."""
-        decision = router.route("Ethereum market cap", indicators=["ethereum"])
+    def test_ethereum_routes_to_coingecko_via_llm(self, router):
+        """Ethereum: LLM sets provider=CoinGecko; router trusts it."""
+        decision = router.route("Ethereum market cap", indicators=["ethereum"], llm_provider="CoinGecko")
         assert decision.provider == "CoinGecko"
 
-    def test_xrp_routes_to_coingecko(self, router):
-        """XRP/Ripple queries use CoinGecko."""
-        decision = router.route("XRP price performance over the last 6 months")
+    def test_xrp_routes_to_coingecko_via_llm(self, router):
+        """XRP/Ripple: LLM sets provider=CoinGecko; router trusts it."""
+        decision = router.route("XRP price performance over the last 6 months", llm_provider="CoinGecko")
         assert decision.provider == "CoinGecko"
 
-    def test_top_crypto_market_cap_routes_to_coingecko(self, router):
-        """Top crypto market-cap ranking queries use CoinGecko."""
-        decision = router.route("Top 10 cryptocurrencies by market cap right now")
+    def test_top_crypto_market_cap_routes_to_coingecko_via_llm(self, router):
+        """Top crypto market-cap ranking: LLM sets provider=CoinGecko."""
+        decision = router.route("Top 10 cryptocurrencies by market cap right now", llm_provider="CoinGecko")
         assert decision.provider == "CoinGecko"
 
     # ==========================================================================
@@ -538,10 +528,10 @@ class TestRoutingDecisionConfidence:
         decision = router.route("Get data from FRED")
         assert decision.confidence >= 0.9
 
-    def test_us_only_indicator_high_confidence(self, router):
-        """US-only indicators have high confidence."""
-        decision = router.route("Federal funds rate")
-        assert decision.confidence >= 0.9
+    def test_us_only_indicator_via_llm_confidence(self, router):
+        """US-only indicators via LLM have medium confidence (LLM match)."""
+        decision = router.route("Federal funds rate", llm_provider="FRED")
+        assert decision.confidence >= 0.5
 
     def test_keyword_match_medium_confidence(self, router):
         """Keyword matches have medium-high confidence."""
@@ -591,9 +581,9 @@ class TestProductionQueries:
     ]
 
     # Financial queries
+    # Note: S&P 500 and Bitcoin now rely on LLM provider selection;
+    # without llm_provider, they fall through to catalog/country/default.
     FINANCIAL_QUERIES = [
-        ("S&P 500 performance", "FRED"),
-        ("Bitcoin price", "CoinGecko"),
         ("USD to EUR exchange rate", "ExchangeRate"),
         ("Government debt to GDP ratio", "IMF"),
         ("House prices in Australia", "BIS"),
