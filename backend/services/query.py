@@ -6007,6 +6007,25 @@ class QueryService:
         if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
             return params
 
+        # --- StatsCan fast-path: if intent.indicators match a known vector or coordinate
+        # mapping, lock the indicator immediately and skip the IndicatorSelector.
+        # The IndicatorSelector often picks a StatsCan table ID (e.g. "14100330") from
+        # the 330K indicator database, which may be a discontinued or annual-only table.
+        # The hardcoded VECTOR_MAPPINGS point to verified, current, high-frequency data.
+        if provider in {"STATSCAN", "STATISTICS CANADA"}:
+            _sc = self.statscan_provider
+            for hr_indicator in (intent.indicators or []):
+                hr_key = hr_indicator.upper().replace(" ", "_").replace("-", "_")
+                if hr_key in _sc.VECTOR_MAPPINGS or hr_key in _sc.COORDINATE_PRODUCT_MAPPINGS:
+                    logger.info(
+                        "StatsCan fast-path: intent indicator '%s' matches known mapping '%s'; "
+                        "skipping IndicatorSelector to use verified vector/coordinate",
+                        hr_indicator, hr_key,
+                    )
+                    params = {**params, "indicator": hr_key, "__catalog_resolved": True}
+                    intent.parameters = params
+                    return params
+
         existing_indicator = str(params.get("indicator") or "").strip()
         has_explicit_code = bool(
             existing_indicator
@@ -8779,6 +8798,51 @@ class QueryService:
                 entity = params.get("entity")
                 indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)
 
+                # --- Framework fix: resolve numeric table/product IDs back to known vectors ---
+                # The LLM sometimes sets params.indicator to a StatsCan table ID (e.g. "14100330")
+                # instead of a semantic name (e.g. "UNEMPLOYMENT_RATE"). When that happens the
+                # hardcoded vector lookup is bypassed and we hit a potentially stale/annual table.
+                # Fix: always check the human-readable intent.indicators against VECTOR_MAPPINGS
+                # and COORDINATE_PRODUCT_MAPPINGS first, regardless of what the LLM put in params.
+                resolved_indicator = indicator  # what we'll actually use
+                indicator_key = indicator.upper().replace(" ", "_") if indicator else None
+                _sc_vectors = self.statscan_provider.VECTOR_MAPPINGS
+                _sc_coords = self.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
+
+                if indicator_key and indicator_key not in _sc_vectors and indicator_key not in _sc_coords:
+                    # The params indicator didn't match any known mapping.
+                    # Try each human-readable indicator from intent.indicators.
+                    for hr_indicator in (intent.indicators or []):
+                        hr_key = hr_indicator.upper().replace(" ", "_")
+                        if hr_key in _sc_vectors or hr_key in _sc_coords:
+                            logger.info(
+                                f"StatsCan: LLM indicator '{indicator}' not in mappings; "
+                                f"resolved from intent.indicators '{hr_indicator}' -> key '{hr_key}'"
+                            )
+                            resolved_indicator = hr_indicator
+                            indicator_key = hr_key
+                            # Also update params so downstream fetch_series sees the correct indicator
+                            params = {**params, "indicator": hr_indicator}
+                            break
+                    else:
+                        # None of the intent.indicators matched either.
+                        # Try normalising common natural-language phrases:
+                        # "unemployment rate" -> UNEMPLOYMENT_RATE, "gdp" -> GDP, etc.
+                        for hr_indicator in (intent.indicators or []):
+                            normalised_key = hr_indicator.upper().replace(" ", "_").replace("-", "_")
+                            if normalised_key in _sc_vectors or normalised_key in _sc_coords:
+                                logger.info(
+                                    f"StatsCan: resolved via normalised intent indicator "
+                                    f"'{hr_indicator}' -> '{normalised_key}'"
+                                )
+                                resolved_indicator = normalised_key
+                                indicator_key = normalised_key
+                                params = {**params, "indicator": normalised_key}
+                                break
+
+                indicator = resolved_indicator
+                # --- End framework fix ---
+
                 # Check for industry/breakdown parameter (e.g., "GDP goods-producing industries")
                 industry = params.get("industry") or params.get("breakdown")
                 if industry:
@@ -8827,7 +8891,7 @@ class QueryService:
                 else:
                     # Check if this is a hardcoded indicator or needs dynamic discovery
                     # Hardcoded indicators: GDP, UNEMPLOYMENT, CPI, HOUSING_STARTS, etc.
-                    if indicator and indicator.upper() in self.statscan_provider.VECTOR_MAPPINGS:
+                    if indicator and indicator.upper().replace(" ", "_") in self.statscan_provider.VECTOR_MAPPINGS:
                         # Use vector-based fetch for hardcoded indicators
                         series = await self.statscan_provider.fetch_series(params)
                         return [series]

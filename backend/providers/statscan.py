@@ -642,7 +642,7 @@ class StatsCanProvider(BaseProvider):
             raise ValueError("Vector ID or indicator is required")
 
         # Try hardcoded mappings first (fast path)
-        key = indicator.upper().replace(" ", "_")
+        key = indicator.upper().replace(" ", "_").replace("-", "_")
         mapped = self.VECTOR_MAPPINGS.get(key)
         if mapped:
             logger.info(f"✅ Using hardcoded mapping for '{indicator}': vector {mapped}")
@@ -1491,7 +1491,7 @@ class StatsCanProvider(BaseProvider):
             NormalizedData object with metadata and data points
         """
         indicator = params.get("indicator")
-        indicator_key = indicator.upper().replace(" ", "_") if indicator else None
+        indicator_key = indicator.upper().replace(" ", "_").replace("-", "_") if indicator else None
 
         # Priority 1: Check if this indicator requires coordinate-based query
         if indicator_key and indicator_key in self.COORDINATE_PRODUCT_MAPPINGS:
@@ -2037,6 +2037,20 @@ class StatsCanProvider(BaseProvider):
         # This ensures the search works with StatsCan's actual cube titles
         search_term = display_indicator.lower().replace("_", " ")
         logger.info(f"📊 Search term: '{search_term}' (normalized from '{indicator}')")
+
+        # --- Defense-in-depth: before treating a numeric indicator as a product ID,
+        # check if the human-readable display_indicator matches a known vector or
+        # coordinate mapping.  This catches cases where the LLM puts a table ID
+        # in params.indicator while the semantic name is in indicatorLabel.
+        if display_indicator and display_indicator != indicator:
+            display_key = display_indicator.upper().replace(" ", "_").replace("-", "_")
+            if display_key in self.VECTOR_MAPPINGS or display_key in self.COORDINATE_PRODUCT_MAPPINGS:
+                logger.info(
+                    f"Redirecting numeric indicator '{indicator}' -> known mapping "
+                    f"'{display_key}' (from display label '{display_indicator}')"
+                )
+                redirect_params = {**params, "indicator": display_key}
+                return await self.fetch_series(redirect_params)
 
         exact_product_id = self._normalize_metadata_product_id(indicator)
         indicator_digits = "".join(ch for ch in str(indicator or "") if ch.isdigit())
