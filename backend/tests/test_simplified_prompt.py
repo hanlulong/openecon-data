@@ -43,7 +43,7 @@ def test_simplified_prompt_with_conversation_context() -> None:
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:
     prompt = SimplifiedPrompt.generate()
     assert "CONVERSATION CONTEXT" not in prompt
-    assert "followUpType" not in prompt
+    assert "Previous query" not in prompt
 
 
 def test_simplified_prompt_with_clarification_context() -> None:
@@ -66,8 +66,8 @@ def test_simplified_prompt_with_clarification_context() -> None:
     assert "exports, imports, trade balance" in prompt
     assert "clarification_answer" in prompt
     assert "China" in prompt
-    # Should NOT include the normal follow-up detection rules (those are for non-clarification turns)
-    assert "country_change" not in prompt.split("clarification_answer")[0]
+    # The clarification context section should appear after the base prompt
+    assert "CONVERSATION CONTEXT" in prompt
 
 
 def test_simplified_prompt_non_clarification_follow_up_has_normal_rules() -> None:

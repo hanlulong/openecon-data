@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1030,6 +1031,9 @@ class QueryService:
             clarificationNeeded=False,
             originalQuery=refined_query,
             confidence=0.90,
+            isFollowUp=True,
+            followUpType="indicator_switch",
+            resolvedQuery=refined_query,
         )
 
         parse_result = ParseRouteResult(
@@ -1144,6 +1148,11 @@ class QueryService:
         intent.confidence = max(float(last_intent.confidence or 0.0), 0.95)
         intent.originalQuery = refined_query
 
+        # Populate follow-up detection fields
+        intent.isFollowUp = True
+        intent.followUpType = "country_change"
+        intent.resolvedQuery = refined_query
+
         parse_result = ParseRouteResult(
             intent=intent,
             explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
@@ -1155,46 +1164,6 @@ class QueryService:
             ),
         )
         return refined_query, intent, parse_result
-
-    async def _try_resolve_pending_country_follow_up(
-        self,
-        query: str,
-        conversation_id: str,
-        auto_pro_mode: bool,
-        tracker: Optional['ProcessingTracker'] = None,
-    ) -> Optional[QueryResponse]:
-        """
-        Let geography-only follow-ups override a pending semantic clarification.
-
-        Example:
-        - pending clarification from "imports share of gdp in G20"
-        - follow-up: "show only US"
-        - rewritten query: "imports share of gdp in US"
-        """
-        pending = conversation_manager.get_pending_semantic_clarification(conversation_id)
-        if not pending:
-            return None
-
-        extracted_countries = self._extract_countries_from_query(query)
-        expanded_region_countries = CountryResolver.expand_regions_in_query(query)
-        target_countries = self._normalize_country_targets(extracted_countries or expanded_region_countries)
-        if not self._looks_like_country_follow_up(query, target_countries):
-            return None
-
-        original_query = str(pending.get("original_query") or "").strip()
-        refined_query = self._rewrite_query_with_country_targets(original_query, target_countries)
-        if not refined_query:
-            return None
-
-        conversation_manager.clear_pending_semantic_clarification(conversation_id)
-        conversation_manager.clear_pending_indicator_options(conversation_id)
-        return await self.process_query(
-            query=refined_query,
-            conversation_id=conversation_id,
-            auto_pro_mode=auto_pro_mode,
-            use_orchestrator=False,
-            allow_orchestrator=False,
-        )
 
     def _build_intent_from_semantic_clarification(
         self,
@@ -2754,6 +2723,11 @@ class QueryService:
         if not intent.originalQuery:
             intent.originalQuery = original_query or query
 
+        # Populate follow-up detection fields
+        intent.isFollowUp = True
+        intent.followUpType = "clarification_answer"
+        intent.resolvedQuery = original_query or query
+
         params = dict(intent.parameters or {})
         params.pop("seriesId", None)
         params.pop("series_id", None)
@@ -2838,106 +2812,6 @@ class QueryService:
             data=data,
             clarificationNeeded=False,
             processingSteps=tracker.to_list() if tracker else None,
-        )
-
-    async def _try_resolve_pending_semantic_clarification(
-        self,
-        query: str,
-        conversation_id: str,
-        auto_pro_mode: bool,
-        use_orchestrator: bool,
-        allow_orchestrator: bool,
-        tracker: Optional['ProcessingTracker'] = None,
-    ) -> Optional[QueryResponse]:
-        """Apply a pending semantic clarification and re-enter the main pipeline."""
-        pending = conversation_manager.get_pending_semantic_clarification(conversation_id)
-        if not pending:
-            return None
-
-        option_payloads = pending.get("options") or []
-        options: List[ClarificationOption] = []
-        for raw_option in option_payloads:
-            try:
-                options.append(ClarificationOption.model_validate(raw_option))
-            except Exception:
-                continue
-
-        if not options:
-            conversation_manager.clear_pending_semantic_clarification(conversation_id)
-            return None
-
-        selected_option = self._match_structured_clarification_option(query, options)
-        refined_query = ""
-        if selected_option is not None:
-            refined_query = str(selected_option.value or "").strip()
-        else:
-            text = str(query or "").strip()
-            if re.fullmatch(r"\d{1,2}", text):
-                return QueryResponse(
-                    conversationId=conversation_id,
-                    clarificationNeeded=True,
-                    clarificationQuestions=pending.get("question_lines") or [],
-                    clarificationOptions=options,
-                    message="Please choose one of the listed option numbers, or type the metric you want.",
-                    processingSteps=tracker.to_list() if tracker else None,
-                )
-
-            if len(text.split()) <= 6:
-                # Previously delegated to SemanticClarifier.build_custom_query.
-                # Now just use the user's text directly as the refined query
-                # when it looks like a specific metric name (short phrase).
-                refined_query = text
-
-            if not refined_query:
-                if len(text.split()) >= 3:
-                    conversation_manager.clear_pending_semantic_clarification(conversation_id)
-                return None
-
-        original_query = str(pending.get("original_query") or "").strip()
-        if refined_query.lower() == original_query.lower():
-            return QueryResponse(
-                conversationId=conversation_id,
-                clarificationNeeded=True,
-                clarificationQuestions=pending.get("question_lines") or [],
-                clarificationOptions=options,
-                message="Please choose a more specific metric, or type a different one.",
-                processingSteps=tracker.to_list() if tracker else None,
-            )
-
-        conversation_manager.clear_pending_semantic_clarification(conversation_id)
-        deterministic_intent = self._build_intent_from_semantic_clarification(
-            pending=pending,
-            selected_option=selected_option if selected_option is not None else ClarificationOption(
-                id="custom",
-                label=refined_query,
-                value=refined_query,
-            ),
-            refined_query=refined_query,
-        )
-        if deterministic_intent is not None:
-            parse_result = ParseRouteResult(
-                intent=deterministic_intent,
-                explicit_provider=self._normalize_provider_alias(self._detect_explicit_provider(refined_query)),
-                routed_provider=deterministic_intent.apiProvider,
-                validation_warning=unified_validate_routing(
-                    deterministic_intent.apiProvider,
-                    refined_query,
-                    deterministic_intent,
-                ),
-            )
-            return await self._execute_resolved_intent(
-                query=refined_query,
-                conversation_id=conversation_id,
-                intent=deterministic_intent,
-                parse_result=parse_result,
-                tracker=tracker,
-            )
-        return await self.process_query(
-            query=refined_query,
-            conversation_id=conversation_id,
-            auto_pro_mode=auto_pro_mode,
-            use_orchestrator=False,
-            allow_orchestrator=False,
         )
 
     async def _maybe_recover_from_uncertain_match(
@@ -3788,33 +3662,6 @@ class QueryService:
             return False
         return True
 
-    def _auto_resolve_broad_concept_for_region(self, query: str) -> str:
-        """
-        Auto-rewrite broad concepts to their default metric for region queries.
-
-        Previously used SemanticClarifier to detect broad concepts and auto-select
-        the first option.  Now the LLM handles ambiguity via clarificationNeeded,
-        so this method simply returns the original query unchanged.
-        """
-        return query
-
-    def _build_semantic_ambiguity_clarification(
-        self,
-        conversation_id: str,
-        query: str,
-        intent: Optional[ParsedIntent],
-        is_multi_indicator: bool,
-        processing_steps: Optional[List[Any]] = None,
-    ) -> Optional[QueryResponse]:
-        """
-        Previously detected broad economic concepts and asked clarification.
-
-        Removed in Phase 2 LLM refactor.  The LLM prompt now sets
-        clarificationNeeded=true when the query is genuinely ambiguous.
-        Always returns None so the pipeline proceeds to data fetch.
-        """
-        return None
-
     @staticmethod
     def _humanize_region_name(region: str) -> str:
         """Convert normalized region keys into user-facing labels."""
@@ -4450,16 +4297,6 @@ class QueryService:
         )
         if multi_concept_clarification:
             return multi_concept_clarification
-
-        semantic_clarification = self._build_semantic_ambiguity_clarification(
-            conversation_id=conversation_id,
-            query=query,
-            intent=intent,
-            is_multi_indicator=validation.is_multi_indicator,
-            processing_steps=processing_steps,
-        )
-        if semantic_clarification:
-            return semantic_clarification
 
         group_scope_clarification = self._build_group_scope_clarification(
             conversation_id=conversation_id,
@@ -7931,15 +7768,8 @@ class QueryService:
                 return pending_choice_response
 
             # ── Phase 4: LLM-based clarification resolution ───────────
-            # Semantic clarifications (e.g., "exports" in response to
-            # "exports, imports, or trade balance?") and country follow-ups
-            # (e.g., "show only US" after a group scope question) are now
+            # Semantic clarifications and country follow-ups are now
             # handled by the LLM via enhanced conversation context.
-            # The pending state is checked to build context, then cleared
-            # so the LLM pipeline handles the response with full context.
-            # _try_resolve_pending_semantic_clarification and
-            # _try_resolve_pending_country_follow_up are preserved but no
-            # longer called here — the LLM handles these cases natively.
 
             contextual_follow_up = self._build_intent_from_contextual_follow_up(
                 query=query,
@@ -7977,9 +7807,6 @@ class QueryService:
             # ONLY after LLM parse (in _build_post_parse_clarification) where
             # they have full intent context.  Pre-parse checks with intent=None
             # were redundant and less accurate.
-
-            # Auto-rewrite broad concepts for multi-country region queries.
-            query = self._auto_resolve_broad_concept_for_region(query)
 
             # Check if LangChain orchestrator should be used
             from ..config import get_settings
@@ -9242,13 +9069,20 @@ class QueryService:
                     "indicator_count": len(intent.indicators),
                 },
             ) as update_fetch_metadata:
+                provider_start = time.perf_counter()
                 result = await fetch_from_provider()
+                provider_elapsed = time.perf_counter() - provider_start
+                logger.info(f"Provider {provider} fetch: {provider_elapsed:.2f}s")
                 update_fetch_metadata({
                     "series_count": len(result),
                     "cached": False,
+                    "fetch_time_ms": round(provider_elapsed * 1000, 1),
                 })
         else:
+            provider_start = time.perf_counter()
             result = await fetch_from_provider()
+            provider_elapsed = time.perf_counter() - provider_start
+            logger.info(f"Provider {provider} fetch: {provider_elapsed:.2f}s")
 
         if not result or (len(result) == 1 and not result[0].data):
             raise DataNotAvailableError(

@@ -141,7 +141,10 @@ Output schema (all keys required unless noted null):
   "needsDecomposition": false,
   "decompositionType": null,
   "decompositionEntities": null,
-  "useProMode": false
+  "useProMode": false,
+  "isFollowUp": false,
+  "followUpType": null,
+  "resolvedQuery": null
 }}
 
 Required formatting rules:
@@ -158,6 +161,9 @@ Required formatting rules:
 - clarificationQuestions: array (empty when clarificationNeeded=false)
 - confidence: float from 0.0 to 1.0
 - recommendedChartType: one of "line", "bar", "scatter", "table"
+- isFollowUp: boolean — true when the query references a previous conversation turn
+- followUpType: one of "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse", "clarification_answer", or null
+- resolvedQuery: string — if isFollowUp is true, the fully explicit rewritten query combining previous context with the new request; null otherwise
 
 Confidence guidance:
 - 0.9-1.0: explicit metric + geography + clear timeframe

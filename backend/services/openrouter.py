@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -213,6 +214,7 @@ class OpenRouterService:
         # internal reasoning before producing the JSON output).
         max_tok = 2000 if self.settings.llm_provider in ("vllm",) else 500
 
+        llm_start = time.perf_counter()
         intent: ParsedIntent = await self.instructor_client.chat.completions.create(
             model=self.instructor_model,
             messages=messages,
@@ -221,9 +223,13 @@ class OpenRouterService:
             temperature=0.0,
             max_tokens=max_tok,
         )
+        llm_elapsed = time.perf_counter() - llm_start
         intent.originalQuery = query
-        logger.info(f"Instructor parsed: provider={intent.apiProvider}, "
+        logger.info(f"LLM parse: {llm_elapsed:.2f}s | provider={intent.apiProvider}, "
                      f"indicators={intent.indicators}, type={intent.queryType}")
+        if conversation_context:
+            logger.info(f"Follow-up fields: isFollowUp={intent.isFollowUp}, "
+                         f"followUpType={intent.followUpType}, resolvedQuery={intent.resolvedQuery}")
         return intent
 
     async def _parse_with_provider(
@@ -256,6 +262,7 @@ class OpenRouterService:
                 user_prompt += f"\n\n🚨 PREVIOUS ERROR: {last_error}\nPlease fix and return valid JSON."
 
             try:
+                llm_start = time.perf_counter()
                 result = await self.llm_provider.generate(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
@@ -263,6 +270,8 @@ class OpenRouterService:
                     max_tokens=500,
                     response_format={"type": "json_object"}
                 )
+                llm_elapsed = time.perf_counter() - llm_start
+                logger.info(f"LLM parse (provider fallback, attempt {attempt + 1}): {llm_elapsed:.2f}s")
 
                 content = result["choices"][0]["message"]["content"]
 
@@ -318,6 +327,7 @@ class OpenRouterService:
         last_error = None
 
         for attempt in range(max_retries):
+            llm_start = time.perf_counter()
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/chat/completions",
@@ -335,6 +345,8 @@ class OpenRouterService:
                         "max_tokens": 300,
                     },
                 )
+            llm_elapsed = time.perf_counter() - llm_start
+            logger.info(f"LLM parse (direct, attempt {attempt + 1}): {llm_elapsed:.2f}s")
 
             if response.status_code >= 400:
                 content_type = response.headers.get("content-type", "")

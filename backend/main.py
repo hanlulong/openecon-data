@@ -665,6 +665,7 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
+    query_start = time.perf_counter()
     conversation_id = get_request_conversation_id(request, user)
     logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
@@ -679,6 +680,11 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
             result.alternativeSeries = query_service._build_alternative_series(result.intent, result.data)
         except Exception:
             pass  # Non-critical — don't break the response
+
+    # Record end-to-end processing time
+    elapsed_ms = (time.perf_counter() - query_start) * 1000
+    result.processingTimeMs = round(elapsed_ms, 1)
+    logger.info("Query completed in %.2fs: %s", elapsed_ms / 1000, request.query[:80])
 
     # Don't treat "data_not_available" as a server error - return 200 with error message
     # Only return 500 for actual processing errors

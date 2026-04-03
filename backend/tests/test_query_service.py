@@ -1050,29 +1050,6 @@ class QueryServiceTests(unittest.TestCase):
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
 
-    def test_build_semantic_ambiguity_clarification_always_returns_none(self) -> None:
-        """After Phase 2 LLM refactor, semantic ambiguity is handled by the LLM prompt."""
-        conv_id = conversation_manager.get_or_create("conv-semantic-employment")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        intent = ParsedIntent(
-            apiProvider="WORLDBANK",
-            indicators=["employment"],
-            parameters={"country": "US"},
-            clarificationNeeded=False,
-            originalQuery="total employment in US",
-        )
-
-        clarification = self.service._build_semantic_ambiguity_clarification(  # pylint: disable=protected-access
-            conversation_id=conv_id,
-            query="total employment in US",
-            intent=intent,
-            is_multi_indicator=False,
-            processing_steps=None,
-        )
-
-        # After Phase 2 refactor, this always returns None — LLM handles ambiguity
-        self.assertIsNone(clarification)
-
     def test_build_group_scope_clarification_for_region_query(self) -> None:
         """Group scope clarification should fire for vague queries without specific indicators."""
         conv_id = conversation_manager.get_or_create("conv-group-scope")
@@ -1153,20 +1130,6 @@ class QueryServiceTests(unittest.TestCase):
             processing_steps=None,
         )
         self.assertIsNone(clarification)
-
-    def test_semantic_ambiguity_skipped_for_multi_country_region(self) -> None:
-        """Semantic ambiguity clarification should not fire for multi-country group queries."""
-        clarification = self.service._build_semantic_ambiguity_clarification(  # pylint: disable=protected-access
-            conversation_id="conv-semantic-region",
-            query="employment in G20 countries",
-            intent=None,
-            is_multi_indicator=False,
-            processing_steps=None,
-        )
-        self.assertIsNone(clarification)
-
-    # NOTE: SemanticClarifier tests removed in Phase 2 LLM refactor.
-    # Ambiguity detection is now handled by the LLM prompt's clarificationNeeded field.
 
     def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
@@ -1509,203 +1472,6 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.intent.parameters.get("indicator"), "BT_GDP")
         self.assertIsNone(conversation_manager.get_pending_indicator_options(conv_id))
 
-    def test_try_resolve_pending_semantic_clarification_rewrites_short_custom_reply(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-semantic-reply")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        conversation_manager.set_pending_semantic_clarification(
-            conv_id,
-            {
-                "kind": "employment_metric",
-                "concept_label": "employment",
-                "original_query": "total employment in G20",
-                "question_lines": ["Choose the metric you want:"],
-                "options": [
-                    {
-                        "id": "1",
-                        "label": "number employed",
-                        "value": "number employed in G20",
-                    },
-                    {
-                        "id": "2",
-                        "label": "employment rate",
-                        "value": "employment rate in G20",
-                    },
-                ],
-            },
-        )
-
-        expected_response = QueryResponse(
-            conversationId=conv_id,
-            clarificationNeeded=False,
-            message="ok",
-        )
-        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
-             patch.object(self.service, "process_query", AsyncMock()) as process_query:
-            response = run(
-                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
-                    query="employment rate",
-                    conversation_id=conv_id,
-                    auto_pro_mode=False,
-                    use_orchestrator=False,
-                    allow_orchestrator=True,
-                    tracker=None,
-                )
-            )
-
-        self.assertEqual(response, expected_response)
-        execute_intent.assert_awaited_once()
-        process_query.assert_not_awaited()
-        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
-
-    def test_try_resolve_pending_semantic_clarification_matches_group_scope_keyword(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-group-scope-reply")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        conversation_manager.set_pending_semantic_clarification(
-            conv_id,
-            {
-                "kind": "group_scope",
-                "region": "G20",
-                "original_query": "employment rate in G20",
-                "question_lines": ["Choose the scope you want:"],
-                "options": [
-                    {
-                        "id": "1",
-                        "label": "compare member countries",
-                        "value": "compare employment rate across G20 member countries",
-                    },
-                    {
-                        "id": "2",
-                        "label": "one overall group value (aggregate/average if available)",
-                        "value": "employment rate for the G20 group as a whole",
-                    },
-                ],
-            },
-        )
-
-        expected_response = QueryResponse(
-            conversationId=conv_id,
-            clarificationNeeded=False,
-            message="ok",
-        )
-        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
-            response = run(
-                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
-                    query="aggregate",
-                    conversation_id=conv_id,
-                    auto_pro_mode=False,
-                    use_orchestrator=False,
-                    allow_orchestrator=True,
-                    tracker=None,
-                )
-            )
-
-        self.assertEqual(response, expected_response)
-        process_query.assert_awaited_once_with(
-            query="employment rate for the G20 group as a whole",
-            conversation_id=conv_id,
-            auto_pro_mode=False,
-            use_orchestrator=False,
-            allow_orchestrator=False,
-        )
-
-    def test_try_resolve_pending_semantic_clarification_matches_numeric_option(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-semantic-numeric-reply")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        conversation_manager.set_pending_semantic_clarification(
-            conv_id,
-            {
-                "kind": "employment_metric",
-                "concept_label": "employment",
-                "original_query": "employment in Canada",
-                "question_lines": ["Choose the metric you want:"],
-                "options": [
-                    {
-                        "id": "1",
-                        "label": "number employed",
-                        "value": "number employed in Canada",
-                    },
-                    {
-                        "id": "2",
-                        "label": "employment rate",
-                        "value": "employment rate in Canada",
-                    },
-                ],
-            },
-        )
-
-        expected_response = QueryResponse(
-            conversationId=conv_id,
-            clarificationNeeded=False,
-            message="ok",
-        )
-        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
-             patch.object(self.service, "process_query", AsyncMock()) as process_query:
-            response = run(
-                self.service._try_resolve_pending_semantic_clarification(  # pylint: disable=protected-access
-                    query="1",
-                    conversation_id=conv_id,
-                    auto_pro_mode=False,
-                    use_orchestrator=False,
-                    allow_orchestrator=True,
-                    tracker=None,
-                )
-            )
-
-        self.assertEqual(response, expected_response)
-        execute_intent.assert_awaited_once()
-        process_query.assert_not_awaited()
-        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
-
-    def test_try_resolve_pending_country_follow_up_rewrites_pending_group_query(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-pending-country-follow-up")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        conversation_manager.set_pending_semantic_clarification(
-            conv_id,
-            {
-                "kind": "group_scope",
-                "region": "G20",
-                "original_query": "imports share of gdp in G20",
-                "question_lines": ["Choose the scope you want:"],
-                "options": [
-                    {
-                        "id": "1",
-                        "label": "compare member countries",
-                        "value": "imports share of gdp across G20 member countries",
-                    },
-                    {
-                        "id": "2",
-                        "label": "one overall group value (aggregate/average if available)",
-                        "value": "imports share of gdp for the G20 group as a whole",
-                    },
-                ],
-            },
-        )
-
-        expected_response = QueryResponse(
-            conversationId=conv_id,
-            clarificationNeeded=False,
-            message="ok",
-        )
-        with patch.object(self.service, "process_query", AsyncMock(return_value=expected_response)) as process_query:
-            response = run(
-                self.service._try_resolve_pending_country_follow_up(  # pylint: disable=protected-access
-                    query="show only US",
-                    conversation_id=conv_id,
-                    auto_pro_mode=False,
-                    tracker=None,
-                )
-            )
-
-        self.assertEqual(response, expected_response)
-        process_query.assert_awaited_once_with(
-            query="imports share of gdp in US",
-            conversation_id=conv_id,
-            auto_pro_mode=False,
-            use_orchestrator=False,
-            allow_orchestrator=False,
-        )
-        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
-
     def test_build_intent_from_semantic_clarification_sets_country_and_indicator(self) -> None:
         pending = {
             "kind": "employment_metric",
@@ -2011,16 +1777,6 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual([option.id for option in options_payload], ["1", "2"])
         self.assertEqual(options_payload[0].provider, "IMF")
         self.assertEqual(options_payload[1].provider, "WORLDBANK")
-
-    def test_semantic_clarification_always_returns_none_after_llm_refactor(self) -> None:
-        """After Phase 2 LLM refactor, semantic ambiguity detection always returns None."""
-        clarification = self.service._build_semantic_ambiguity_clarification(
-            conversation_id="conv-semantic-direct",
-            query="total employment in Canada",
-            intent=None,
-            is_multi_indicator=False,
-        )
-        self.assertIsNone(clarification)
 
     def test_process_query_skips_group_scope_clarification_for_specific_indicator(self) -> None:
         """Queries with specific indicators + group name should NOT ask for group scope."""

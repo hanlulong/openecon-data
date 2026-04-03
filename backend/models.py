@@ -190,6 +190,7 @@ class QueryResponse(BaseModel):
     isProMode: Optional[bool] = None
     processingSteps: Optional[List[ProcessingStep]] = None
     alternativeSeries: Optional[List[AlternativeSeries]] = None  # Related indicators user might want
+    processingTimeMs: Optional[float] = None  # End-to-end query processing time in milliseconds
 
 
 class StreamEvent(BaseModel):
