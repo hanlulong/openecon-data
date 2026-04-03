@@ -580,6 +580,13 @@ class TestProductionQueries:
         ("Trade deficit between US and Mexico", "Comtrade"),
         ("Exports as % of GDP for Germany", "WorldBank"),
         ("US trade balance history", "FRED"),
+        # Aggregate trade indicators (% of GDP) must NOT route to Comtrade
+        ("Import share of GDP in China and US", "WorldBank"),
+        ("Imports of goods and services as % of GDP for India and Indonesia", "WorldBank"),
+        ("Merchandise imports as share of GDP in Mexico and Brazil", "WorldBank"),
+        ("Service imports share of GDP in UAE and Qatar", "WorldBank"),
+        ("Import share of GDP in India vs Vietnam", "WorldBank"),
+        ("Export share of GDP in Japan and South Korea", "WorldBank"),
     ]
 
     # Financial queries

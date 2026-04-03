@@ -441,11 +441,42 @@ class UnifiedRouter:
         ]
         return any(pattern in combined for pattern in exchange_patterns)
 
+    @staticmethod
+    def _is_aggregate_trade_indicator(query_lower: str) -> bool:
+        """Detect aggregate/macro trade indicators that belong to WorldBank/IMF, not Comtrade.
+
+        Queries about trade ratios, shares, or percentages of GDP are macro indicators
+        (e.g., "Imports of goods and services (% of GDP)") — NOT bilateral trade flows.
+        These are available from WorldBank (NE.IMP.GNFS.ZS, NE.EXP.GNFS.ZS, NE.TRD.GNFS.ZS)
+        and should never be routed to Comtrade.
+        """
+        # Ratio/share/percentage qualifiers that indicate a macro indicator
+        aggregate_patterns = [
+            r"\b(?:share|%|percent(?:age)?|ratio)\s+(?:of\s+)?gdp\b",
+            r"\bof\s+gdp\b",
+            r"\bas\s+(?:a\s+)?(?:%|percent(?:age)?|share|proportion|fraction)\s+of\b",
+            r"\bto\s+gdp\s+ratio\b",
+            r"\bgdp\s+(?:share|ratio|percent(?:age)?)\b",
+            r"\b(?:goods\s+and\s+services)\s+(?:as\s+)?(?:%|percent(?:age)?)\b",
+            r"\b(?:goods\s+and\s+services)\s+(?:as\s+)?(?:share|proportion)\s+of\b",
+            r"\b(?:service|services)\s+(?:imports?|exports?)\s+(?:share|%|percent)\b",
+            r"\b(?:merchandise)\s+(?:imports?|exports?)\s+(?:as\s+)?(?:share|%|percent)\b",
+        ]
+        return any(re.search(pat, query_lower) for pat in aggregate_patterns)
+
     def _is_bilateral_trade_query(self, query_lower: str, query: str) -> bool:
         """Detect bilateral trade queries (exports from X to Y, trade between X and Y).
 
         This is structural: Comtrade is the only provider for bilateral trade flows.
+
+        IMPORTANT: Aggregate trade indicators (import/export share of GDP, trade as % of GDP)
+        are macro indicators from WorldBank/IMF, NOT bilateral trade flows. These must NOT
+        match here so they can fall through to catalog routing.
         """
+        # Early exit: aggregate trade indicators (% of GDP, share of GDP) are NOT bilateral
+        if self._is_aggregate_trade_indicator(query_lower):
+            return False
+
         # Explicit bilateral language
         if any(term in query_lower for term in ["bilateral", "trading partner", "trade partner"]):
             return True
