@@ -68,6 +68,29 @@ from ..utils.processing_steps import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Pre-compiled regex patterns (deduplicated from multiple call-sites)
+# ---------------------------------------------------------------------------
+
+# Year extraction – matches 4-digit years in the 1900–2099 range.
+_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+# Currency pair parsing – "USD TO EUR", "EUR/GBP", "JPY-USD", "USD VS EUR"
+_CURRENCY_TO_RE = re.compile(r"\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b")
+_CURRENCY_SLASH_RE = re.compile(r"\b([A-Z]{3})[/\-]([A-Z]{3})\b")
+_CURRENCY_VS_RE = re.compile(r"\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b")
+_CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
+
+# Top-N detection – "top 10", "top 5", etc.
+_TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
+
+# Option label parsing – strips leading "[PROVIDER] " prefix and trailing "(CODE)".
+_OPTION_PROVIDER_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s*")
+_OPTION_TRAILING_PARENS_RE = re.compile(r"\s*\([^()]+\)\s*$")
+_OPTION_TRAILING_PARENS_ALT_RE = re.compile(r"\([^()]*\)\s*$")
+_OPTION_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
 # Provider name aliases to normalize LLM outputs to canonical names
 PROVIDER_ALIASES = {
     # Comtrade variations
@@ -616,7 +639,7 @@ class QueryService:
         is_ranking = any(t in metric_text for t in ranking_keywords)
 
         if is_ranking and "market cap" in metric_text:
-            top_n_match = re.search(r'top\s+(\d+)', query_lower)
+            top_n_match = _TOP_N_RE.search(query_lower)
             per_page = int(top_n_match.group(1)) if top_n_match else 10
             per_page = max(1, min(250, per_page))
             return await self.coingecko_provider.get_market_data(
@@ -723,14 +746,12 @@ class QueryService:
         FRED has daily exchange rate series for 21 major currency pairs.
         Returns list of NormalizedData on success, None if currency not supported.
         """
-        import re
-
         base_currency = params.get("baseCurrency", "USD")
         target_currency = params.get("targetCurrency")
 
         if not target_currency:
             query_upper = (intent.originalQuery or "").upper()
-            to_match = re.search(r'\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b', query_upper)
+            to_match = _CURRENCY_TO_RE.search(query_upper)
             slash_match = re.search(r'\b([A-Z]{3})[/\s](?:VS\s)?([A-Z]{3})\b', query_upper)
             if to_match:
                 base_currency, target_currency = to_match.group(1), to_match.group(2)
@@ -2422,9 +2443,9 @@ class QueryService:
             if code_key in seen_by_code:
                 continue
 
-            option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text)
-            option_label = re.sub(r"\([^()]*\)\s*$", "", option_body).strip().lower()
-            option_label = re.sub(r"[^a-z0-9]+", " ", option_label).strip()
+            option_body = _OPTION_PROVIDER_PREFIX_RE.sub("", option_text)
+            option_label = _OPTION_TRAILING_PARENS_ALT_RE.sub("", option_body).strip().lower()
+            option_label = _OPTION_NON_ALNUM_RE.sub(" ", option_label).strip()
             label_key = (provider, option_label)
 
             if option_label and label_key in seen_by_label:
@@ -2512,8 +2533,8 @@ class QueryService:
             parsed = self._parse_indicator_option(option_text)
             if parsed:
                 provider, code = parsed
-                option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text).strip()
-                label = re.sub(r"\s*\([^()]+\)\s*$", "", option_body).strip() or option_body or option_text
+                option_body = _OPTION_PROVIDER_PREFIX_RE.sub("", option_text).strip()
+                label = _OPTION_TRAILING_PARENS_RE.sub("", option_body).strip() or option_body or option_text
 
             structured_options.append(
                 ClarificationOption(
@@ -2533,9 +2554,9 @@ class QueryService:
         option_text = str(option or "").strip()
         if not option_text:
             return None
-        option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text).strip()
-        label = re.sub(r"\s*\([^()]+\)\s*$", "", option_body).strip() or option_body
-        label_key = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+        option_body = _OPTION_PROVIDER_PREFIX_RE.sub("", option_text).strip()
+        label = _OPTION_TRAILING_PARENS_RE.sub("", option_body).strip() or option_body
+        label_key = _OPTION_NON_ALNUM_RE.sub(" ", label.lower()).strip()
         return label_key or None
 
     def _has_materially_distinct_indicator_options(self, options: Optional[List[str]]) -> bool:
@@ -2648,7 +2669,7 @@ class QueryService:
                 continue
 
             option_lower = re.sub(r"\s+", " ", option_text.lower()).strip()
-            option_body = re.sub(r"^\[[^\]]+\]\s*", "", option_text).strip()
+            option_body = _OPTION_PROVIDER_PREFIX_RE.sub("", option_text).strip()
             option_body_lower = re.sub(r"\s+", " ", option_body.lower()).strip()
 
             if normalized in {option_lower, option_body_lower}:
@@ -6266,12 +6287,12 @@ class QueryService:
         query_lower = str(query or "").lower()
         if "before" not in query_lower or "after" not in query_lower:
             return False
-        return bool(re.search(r"\b(19\d{2}|20\d{2})\b", query_lower))
+        return bool(_YEAR_RE.search(query_lower))
 
     def _extract_top_n_from_query(self, query: str, default: int = 10) -> int:
         """Extract ranking limit from query text (for example, 'top 10')."""
         query_lower = str(query or "").lower()
-        match = re.search(r"\btop\s+(\d{1,3})\b", query_lower)
+        match = _TOP_N_RE.search(query_lower)
         if match:
             try:
                 value = int(match.group(1))
@@ -6285,7 +6306,7 @@ class QueryService:
     def _extract_target_year_from_query(self, query: str) -> Optional[int]:
         """Extract explicit target year from query, if present."""
         query_text = str(query or "")
-        years = [int(match) for match in re.findall(r"\b(19\d{2}|20\d{2})\b", query_text)]
+        years = [int(m) for m in _YEAR_RE.findall(query_text)]
         if not years:
             return None
         # For ranking-like phrasing, the latest stated year is usually intended target.
@@ -6624,7 +6645,7 @@ class QueryService:
         if "before" not in query_lower or "after" not in query_lower:
             return False
 
-        years = [int(match) for match in re.findall(r"\b(19\d{2}|20\d{2})\b", query_lower)]
+        years = [int(m) for m in _YEAR_RE.findall(query_lower)]
         if not years:
             return False
         split_year = max(years)
@@ -6714,7 +6735,7 @@ class QueryService:
         target_currency = params.get("targetCurrency")
 
         # Pattern 1: "X to Y" (e.g., "USD to EUR", "JPY to USD")
-        to_match = re.search(r'\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b', query_text)
+        to_match = _CURRENCY_TO_RE.search(query_text)
         if to_match:
             base_currency = to_match.group(1)
             target_currency = to_match.group(2)
@@ -6722,7 +6743,7 @@ class QueryService:
 
         # Pattern 2: "X/Y" or "X-Y" (e.g., "USD/EUR", "EUR-GBP")
         if not base_currency or not target_currency:
-            slash_match = re.search(r'\b([A-Z]{3})[/\-]([A-Z]{3})\b', query_text)
+            slash_match = _CURRENCY_SLASH_RE.search(query_text)
             if slash_match:
                 base_currency = slash_match.group(1)
                 target_currency = slash_match.group(2)
@@ -6730,7 +6751,7 @@ class QueryService:
 
         # Pattern 3: "X vs Y" (e.g., "USD vs EUR")
         if not base_currency or not target_currency:
-            vs_match = re.search(r'\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b', query_text)
+            vs_match = _CURRENCY_VS_RE.search(query_text)
             if vs_match:
                 base_currency = vs_match.group(1)
                 target_currency = vs_match.group(2)
@@ -6739,7 +6760,7 @@ class QueryService:
         # Pattern 4: Try to find any currency codes in the query
         if not base_currency or not target_currency:
             # Look for 3-letter currency codes
-            all_codes = re.findall(r'\b([A-Z]{3})\b', query_text)
+            all_codes = _CURRENCY_CODE_RE.findall(query_text)
             # Filter to known currency codes
             valid_codes = {"USD", "EUR", "GBP", "JPY", "CNY", "CHF", "CAD", "AUD",
                           "INR", "KRW", "BRL", "MXN", "ZAR", "TRY", "SGD", "HKD",

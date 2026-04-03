@@ -243,6 +243,11 @@ class UnifiedRouter:
             elif len(detected_countries) > 1:
                 countries = detected_countries
 
+        # Detect regional context (EU/Europe, OECD, etc.) from the query.
+        # This feeds into catalog routing so coverage-specific providers
+        # (e.g., Eurostat for EU) are preferred over global defaults.
+        detected_region = self._detect_region_context(query_lower)
+
         # 1. Explicit provider mention (ABSOLUTE HIGHEST)
         explicit_match = detect_explicit_provider_match(query)
         if explicit_match:
@@ -314,16 +319,21 @@ class UnifiedRouter:
         if CountryResolver.is_canadian_region(query):
             return self._handle_canadian_query(query, indicators, country)
 
-        # 7. Catalog concept match (data-driven YAML lookups)
-        if self._use_catalog and self._catalog_service:
-            catalog_decision = self._route_by_catalog(indicators, country, query=query)
-            if catalog_decision:
-                return catalog_decision
-
-        # 8. Regional group routing (EU countries, OECD countries, etc.)
+        # 7. Regional group routing (EU countries, OECD countries, etc.)
+        #    Moved BEFORE catalog so regional context overrides catalog defaults.
         regional_decision = self._route_by_regional_group(query_lower)
         if regional_decision:
             return regional_decision
+
+        # 8. Catalog concept match (data-driven YAML lookups)
+        #    Pass detected region so coverage-specific providers are preferred.
+        if self._use_catalog and self._catalog_service:
+            catalog_decision = self._route_by_catalog(
+                indicators, country, query=query,
+                region_context=detected_region,
+            )
+            if catalog_decision:
+                return catalog_decision
 
         # 9. Country-based routing
         country_decision = self._route_by_country(country, countries, query_lower, indicators)
@@ -583,6 +593,17 @@ class UnifiedRouter:
                 reasoning="Query about EU/European countries routed to Eurostat",
             )
 
+        # Bare "EU" or "Europe"/"European"/"Eurozone" as region indicator → Eurostat
+        # "EU employment rate", "European inflation", "Eurozone GDP growth"
+        if re.search(r"\beu\b", query_lower) or re.search(r"\beuro(?:pe|pean|zone)\b", query_lower):
+            return self._create_decision(
+                provider="Eurostat",
+                confidence=0.80,
+                match_type="region",
+                matched_pattern="EU/Europe region",
+                reasoning="Query mentions EU/Europe region, routed to Eurostat",
+            )
+
         # OECD for OECD group queries
         oecd_group_terms = [
             "oecd countries", "oecd members", "oecd area", "oecd nations",
@@ -683,11 +704,47 @@ class UnifiedRouter:
 
         return None
 
+    @staticmethod
+    def _detect_region_context(query_lower: str) -> Optional[str]:
+        """Detect regional context from query text.
+
+        Returns a region tag (``"eu"``, ``"oecd"``, etc.) when the query
+        mentions a region/bloc but not a specific country.  This allows
+        downstream catalog routing to prefer region-specific providers
+        (e.g. Eurostat for EU queries, OECD for OECD-group queries).
+        """
+        # EU / Europe / Eurozone
+        if re.search(r"\b(?:eu|euro(?:pe|pean|zone|stat)?)\b", query_lower):
+            return "eu"
+        # OECD
+        if re.search(r"\boecd\b", query_lower):
+            return "oecd"
+        return None
+
+    @staticmethod
+    def _region_to_representative_countries(region: str) -> Optional[List[str]]:
+        """Map a detected region tag to a representative country list.
+
+        The catalog's ``get_best_provider`` uses country context to apply
+        coverage bonuses.  By supplying a representative EU member, we
+        nudge the catalog toward Eurostat (coverage=eu_members) instead
+        of WorldBank (coverage=global).
+        """
+        if region == "eu":
+            # DE (Germany) is an EU member; any single EU member works.
+            return ["DE"]
+        if region == "oecd":
+            # Use a non-EU OECD member so the catalog prefers OECD-coverage
+            # providers over EU-specific ones.
+            return ["AU"]
+        return None
+
     def _route_by_catalog(
         self,
         indicators: List[str],
         country: Optional[str],
         query: Optional[str] = None,
+        region_context: Optional[str] = None,
     ) -> Optional[RoutingDecision]:
         """Route using CatalogService YAML mappings (data-driven, not rules)."""
         if not self._catalog_service:
@@ -707,6 +764,12 @@ class UnifiedRouter:
             concept_name = self._catalog_service.find_concept_by_term(term)
             if concept_name:
                 countries_list = [country] if country else None
+
+                # If no explicit country but a region was detected, use a
+                # representative country so the catalog applies coverage bonuses
+                # (e.g. Eurostat for EU queries).
+                if not countries_list and region_context:
+                    countries_list = self._region_to_representative_countries(region_context)
 
                 provider, code, confidence = self._catalog_service.get_best_provider(
                     concept_name,

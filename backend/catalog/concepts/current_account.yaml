@@ -11,6 +11,7 @@ synonyms:
   primary:
     - current account balance
     - current account
+    - balance of payments
   secondary:
     - current account deficit
     - current account surplus
@@ -18,6 +19,7 @@ synonyms:
     - current account as share of gdp
     - external balance
     - balance of payments current account
+    - bop
 
 explicit_exclusions:
   - fiscal balance

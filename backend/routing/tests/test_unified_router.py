@@ -490,12 +490,13 @@ class TestUnifiedRouter:
         assert decision.provider in ("IMF", "WorldBank")
 
     def test_forecast_queries_route_to_valid_provider(self, router):
-        """Projection/forecast queries use IMF or catalog provider.
+        """Projection/forecast queries use IMF, WorldBank, or Eurostat.
 
+        Eurozone queries now correctly route to Eurostat via region detection.
         After Phase 3, the LLM handles forecast detection.
         """
         decision = router.route("Eurozone GDP growth projections 2024-2026")
-        assert decision.provider in ("IMF", "WorldBank")
+        assert decision.provider in ("IMF", "WorldBank", "Eurostat")
 
     def test_eu_country_government_debt_routes_to_eurostat_or_catalog(self, router):
         """Historical EU-country macro debt query should use Eurostat or catalog provider.

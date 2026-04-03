@@ -26,6 +26,8 @@ explicit_exclusions:
   - total trade
   - exports
   - imports
+  - balance of payments
+  - bop
 
 providers:
   WorldBank:
