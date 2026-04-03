@@ -27,8 +27,12 @@ from .base import BaseProvider
 logger = logging.getLogger(__name__)
 
 # Retry configuration for rate limiting
-MAX_RETRIES = 5  # Increased from 3 to handle Comtrade API instability
-RETRY_DELAY_BASE = 2.0  # Increased from 1.0 for more conservative backoff
+# Worst-case latency = MAX_RETRIES * REQUEST_TIMEOUT + sum(backoff delays).
+# With MAX_RETRIES=3, TIMEOUT=30s, BASE=1.5:  3*30 + (1.5+3) = ~94.5s upper bound
+# for a single reporter (vs. old 5*60 + 30 = 330s).
+MAX_RETRIES = 3
+RETRY_DELAY_BASE = 1.5
+REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1-10s when healthy)
 RATE_LIMIT_STATUS = 429
 
 
@@ -187,7 +191,7 @@ class ComtradeProvider(BaseProvider):
     def provider_name(self) -> str:
         return "Comtrade"
 
-    def __init__(self, api_key: Optional[str], timeout: float = 60.0) -> None:
+    def __init__(self, api_key: Optional[str], timeout: float = REQUEST_TIMEOUT) -> None:
         super().__init__(timeout=timeout)
         settings = get_settings()
         self.base_url = settings.comtrade_base_url.rstrip("/")
@@ -492,7 +496,7 @@ class ComtradeProvider(BaseProvider):
         # Implement exponential backoff retry for rate limiting
         for attempt in range(MAX_RETRIES):
             try:
-                response = await client.get(url_path, params=params, timeout=60.0)
+                response = await client.get(url_path, params=params, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 payload = response.json()
                 break  # Success, exit retry loop
@@ -948,8 +952,10 @@ class ComtradeProvider(BaseProvider):
         # Use shared HTTP client pool for better performance (timeout passed per-request)
         client = get_http_client()
         # Fetch combinations with bounded concurrency to reduce 429 bursts.
-        # Comtrade applies aggressive short-window rate limits.
-        max_concurrent_requests = 1 if freq_code == "A" else 2
+        # Comtrade applies aggressive short-window rate limits, but serialising
+        # annual requests entirely (concurrency=1) is the main contributor to
+        # high latency when there are multiple reporters or period chunks.
+        max_concurrent_requests = 2 if freq_code == "A" else 3
         semaphore = asyncio.Semaphore(max_concurrent_requests)
 
         async def _guarded_fetch(
@@ -975,12 +981,31 @@ class ComtradeProvider(BaseProvider):
             for period_param in period_chunks
         ]
 
-        # Wait for all requests to complete
-        results_list = await asyncio.gather(*tasks)
+        # Overall time budget: cap total wall-clock time so a cascade of 429
+        # retries across many tasks cannot stall the pipeline for minutes.
+        # Budget = per-request timeout * 2 to allow one retry cycle.
+        overall_budget = REQUEST_TIMEOUT * 2  # 60s default
 
-        # Flatten results (each task returns a list)
+        try:
+            results_list = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=overall_budget,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Comtrade overall time budget (%.0fs) exceeded for %d tasks; "
+                "returning partial results",
+                overall_budget,
+                len(tasks),
+            )
+            results_list = []
+
+        # Flatten results (each task returns a list; exceptions become empty)
         all_results = []
         for result in results_list:
+            if isinstance(result, BaseException):
+                logger.debug("Comtrade sub-task failed: %s", result)
+                continue
             all_results.extend(result)
 
         return self._merge_series_segments(all_results)
@@ -1029,8 +1054,8 @@ class ComtradeProvider(BaseProvider):
                 f"Failed to fetch export data for trade balance calculation: {str(exc)}"
             ) from exc
 
-        # Add 0.5s delay between exports and imports requests to reduce rate limit risk
-        await asyncio.sleep(0.5)
+        # Brief delay between exports and imports requests to reduce rate limit risk
+        await asyncio.sleep(0.2)
 
         try:
             imports_data = await self.fetch_trade_data(

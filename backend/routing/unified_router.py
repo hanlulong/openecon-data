@@ -154,7 +154,7 @@ class UnifiedRouter:
         "IMF": ["BIS", "WorldBank", "OECD"],
         "STATSCAN": ["WorldBank", "OECD"],
         "FRED": ["WorldBank", "OECD"],
-        "COMTRADE": ["WorldBank"],
+        "COMTRADE": ["Eurostat", "WorldBank"],
         "WORLDBANK": ["IMF", "OECD"],
         "EXCHANGERATE": ["FRED"],
         "COINGECKO": [],

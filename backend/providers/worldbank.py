@@ -586,11 +586,12 @@ class WorldBankProvider(BaseProvider):
         # Single batched request for all countries
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
+        batch_response = None  # Track response for metadata (e.g. Date header)
         try:
-            response = await client.get(url, params=params, headers=headers, timeout=30.0)
-            logger.info(f"WorldBank API response: status={response.status_code}, content_length={len(response.content)}")
-            response.raise_for_status()
-            payload = response.json()
+            batch_response = await client.get(url, params=params, headers=headers, timeout=30.0)
+            logger.info(f"WorldBank API response: status={batch_response.status_code}, content_length={len(batch_response.content)}")
+            batch_response.raise_for_status()
+            payload = batch_response.json()
 
             if isinstance(payload, list) and len(payload) > 0:
                 if isinstance(payload[0], dict) and "message" in payload[0]:
@@ -658,12 +659,12 @@ class WorldBankProvider(BaseProvider):
                 payload = [fallback_meta, accumulated_records]
 
         # Process batched payload — group records by country
-        if not payload or len(payload) < 2 or not payload[1]:
-            return results
-
-        all_records = payload[1]
-        if not all_records:
-            return results
+        # NOTE: Do NOT return early here — fall through to alternative indicator
+        # fallback logic below when payload is empty/missing. Early return would
+        # bypass the infrastructure that tries alternative indicators.
+        all_records = []
+        if payload and len(payload) >= 2 and payload[1]:
+            all_records = payload[1]
 
         # Group records by country code
         from collections import defaultdict
@@ -744,7 +745,7 @@ class WorldBankProvider(BaseProvider):
                     country=country_name,
                     frequency="annual",
                     unit=unit,
-                    lastUpdated=response.headers.get("Date", ""),
+                    lastUpdated=batch_response.headers.get("Date", "") if batch_response else "",
                     seriesId=indic,  # Add seriesId with indicator code
                     apiUrl=api_url,
                     sourceUrl=source_url,

@@ -83,12 +83,27 @@ def rerank_candidates(
         rerank_request = RerankRequest(query=query, passages=passages)
         results = ranker.rerank(rerank_request)
 
-        # Sort by score descending and return top_k
+        # Sort by blended score: cross-encoder relevance + quality signals.
+        # The quality _score from indicator ranking (modeled vs national estimate,
+        # aggregate preference, freshness, etc.) is blended as a tiebreaker
+        # when semantic relevance is close. This prevents the cross-encoder from
+        # overriding critical quality preferences when candidates are semantically
+        # near-identical (e.g., "maternal mortality ratio — modeled estimate" vs
+        # "maternal mortality ratio — national estimate").
         reranked = []
-        for r in sorted(results, key=lambda x: x.get("score", 0), reverse=True)[:top_k]:
+        for r in results:
             meta = r.get("meta", {})
-            score = float(r.get("score", 0))
-            reranked.append((meta, score))
+            ce_score = float(r.get("score", 0))
+            # Normalize quality _score to [0, 0.15] range so it acts as a
+            # tiebreaker, not a dominant signal. The cross-encoder score is
+            # typically in [0, 1] range.
+            quality_score = meta.get("_score", 0)
+            quality_bonus = min(max(quality_score / 500.0, -0.15), 0.15)
+            blended = ce_score + quality_bonus
+            reranked.append((meta, blended))
+
+        reranked.sort(key=lambda x: x[1], reverse=True)
+        reranked = reranked[:top_k]
 
         if reranked:
             logger.info(

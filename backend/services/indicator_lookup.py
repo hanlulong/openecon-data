@@ -455,6 +455,18 @@ class IndicatorLookup:
                 if query_domain in query_lower and any(w in name_lower for w in wrong_domains):
                     score -= 12
 
+            # WorldBank: prefer modeled/international estimates over national estimates.
+            # National estimates (code suffix .NE) have sparse coverage — many countries
+            # don't report directly. Modeled estimates use regression models and have
+            # data for virtually all countries. This is a framework-level preference
+            # that helps ALL WorldBank indicator queries, not just specific ones.
+            if provider == "WORLDBANK":
+                code_upper = (r.get("code") or "").upper()
+                if "national estimate" in name_lower or code_upper.endswith(".NE"):
+                    score -= 6  # Penalize national-only estimates (sparse data)
+                elif "modeled estimate" in name_lower:
+                    score += 4  # Boost modeled estimates (broad coverage)
+
             r["_score"] = score
             ranked.append(r)
 
