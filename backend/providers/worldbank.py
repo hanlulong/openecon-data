@@ -614,19 +614,21 @@ class WorldBankProvider(BaseProvider):
         if date_param:
             params["date"] = date_param
 
-        # Track total fetch time to enforce a 20s budget for the entire operation.
+        # Track total fetch time to enforce a time budget for the entire operation.
         # This prevents cascading timeouts (batch + fallback + alternatives)
-        # from pushing the total past 60s.
+        # from pushing the total past 60s.  The budget must be generous enough
+        # that the primary batch request (25s) can complete — the WB API is
+        # notoriously slow, especially over HTTP/2.
         import time as _time
         _fetch_start = _time.perf_counter()
-        _FETCH_BUDGET_S = 20.0  # Total time budget for all WB API calls
+        _FETCH_BUDGET_S = 30.0  # Total time budget for all WB API calls
 
         # Single batched request for all countries
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
         try:
-            batch_response = await client.get(url, params=params, headers=headers, timeout=15.0)
+            batch_response = await client.get(url, params=params, headers=headers, timeout=25.0)
             logger.info(f"WorldBank API response: status={batch_response.status_code}, content_length={len(batch_response.content)}")
             batch_response.raise_for_status()
             payload = batch_response.json()
@@ -678,7 +680,7 @@ class WorldBankProvider(BaseProvider):
                     try:
                         country_code = self._country_code(country_code_raw)
                         single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
-                        response = await client.get(single_url, params=params, headers=headers, timeout=10.0)
+                        response = await client.get(single_url, params=params, headers=headers, timeout=15.0)
                         response.raise_for_status()
                         single_payload = response.json()
                         if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
@@ -817,26 +819,29 @@ class WorldBankProvider(BaseProvider):
             )
             results.append(normalized)
 
-        # If no results found, try income aggregate fallback (only if time budget allows)
+        # If we got results, return them.
+        if results:
+            return results
+
+        # No results — try fallbacks in order of priority.
         _results_elapsed = _time.perf_counter() - _fetch_start
-        if not results and _results_elapsed < _FETCH_BUDGET_S:
-            # Check if any of the original countries were income aggregates with fallbacks
+
+        # 1. Income aggregate fallback (only if time budget allows)
+        if _results_elapsed < _FETCH_BUDGET_S:
             income_aggregates_tried = [c for c in country_list if c in self.INCOME_AGGREGATE_FALLBACKS]
 
             if income_aggregates_tried:
-                # Try geographic region fallbacks for income aggregates
                 logger.info(f"⚠️ Income aggregate(s) {income_aggregates_tried} returned no data for {indic}. Trying geographic region fallbacks...")
 
                 fallback_regions = set()
                 for agg in income_aggregates_tried:
                     fallback_regions.update(self.INCOME_AGGREGATE_FALLBACKS[agg])
 
-                # Recursively fetch from fallback regions (avoid infinite recursion by not using income aggregates)
                 fallback_results = []
                 for region in fallback_regions:
                     try:
                         region_data = await self.fetch_indicator(
-                            indicator=indic,  # Use resolved indicator code directly
+                            indicator=indic,
                             country=region,
                             start_date=start_date,
                             end_date=end_date,
@@ -853,40 +858,45 @@ class WorldBankProvider(BaseProvider):
                     logger.info(f"✅ Income aggregate fallback succeeded: got data from {len(fallback_results)} geographic regions")
                     return fallback_results
 
-            # INFRASTRUCTURE FIX: Try alternative indicators before giving up
-            # This handles archived/unavailable indicators by trying similar ones.
-            # Skip if time budget is already exhausted.
-            _alt_elapsed = _time.perf_counter() - _fetch_start
-            if not _skip_alternatives and _alt_elapsed < _FETCH_BUDGET_S:
-                alternatives = await self._get_alternative_indicators(indicator, indic, limit=3)
-                if alternatives:
-                    logger.info(f"⚠️ Primary indicator {indic} failed. Trying {len(alternatives)} alternatives: {alternatives}")
-                    for alt_code in alternatives:
-                        try:
-                            alt_results = await self.fetch_indicator(
-                                indicator=alt_code,  # Use alternative code directly
-                                countries=country_list,
-                                start_date=start_date,
-                                end_date=end_date,
-                                _skip_alternatives=True,  # Prevent infinite recursion
-                            )
-                            if alt_results:
-                                logger.info(f"✅ Alternative indicator succeeded: {alt_code}")
-                                return alt_results
-                        except DataNotAvailableError:
-                            logger.debug(f"Alternative indicator {alt_code} also has no data")
-                            continue
-                        except Exception as e:
-                            logger.debug(f"Error with alternative indicator {alt_code}: {e}")
-                            continue
+        # 2. Alternative indicators (only if time budget allows and not already tried)
+        _alt_elapsed = _time.perf_counter() - _fetch_start
+        if not _skip_alternatives and _alt_elapsed < _FETCH_BUDGET_S:
+            alternatives = await self._get_alternative_indicators(indicator, indic, limit=3)
+            if alternatives:
+                logger.info(f"⚠️ Primary indicator {indic} failed. Trying {len(alternatives)} alternatives: {alternatives}")
+                for alt_code in alternatives:
+                    try:
+                        alt_results = await self.fetch_indicator(
+                            indicator=alt_code,
+                            countries=country_list,
+                            start_date=start_date,
+                            end_date=end_date,
+                            _skip_alternatives=True,
+                        )
+                        if alt_results:
+                            logger.info(f"✅ Alternative indicator succeeded: {alt_code}")
+                            return alt_results
+                    except DataNotAvailableError:
+                        logger.debug(f"Alternative indicator {alt_code} also has no data")
+                        continue
+                    except Exception as e:
+                        logger.debug(f"Error with alternative indicator {alt_code}: {e}")
+                        continue
 
-            # No fallback available or fallback also failed
-            raise DataNotAvailableError(
-                f"No data found for any of the requested countries for indicator {indic}. "
-                f"The data may not be available for the specified countries or indicator."
-            )
-
-        return results
+        # All paths exhausted — ALWAYS raise so the query service knows WB
+        # failed and can attempt cross-provider fallback (IMF, Eurostat, etc.).
+        # Previously, when the time budget was exceeded, this returned an empty
+        # list which the query service treated as "no data" rather than an error,
+        # silently skipping the WB provider without triggering fallback chains.
+        _total_elapsed = _time.perf_counter() - _fetch_start
+        logger.warning(
+            "WorldBank fetch failed for indicator %s after %.1fs (budget=%.0fs)",
+            indic, _total_elapsed, _FETCH_BUDGET_S,
+        )
+        raise DataNotAvailableError(
+            f"No data found for any of the requested countries for indicator {indic}. "
+            f"The data may not be available for the specified countries or indicator."
+        )
 
     async def _resolve_indicator_code(self, indicator: str) -> str:
         """Resolve WorldBank indicator code through IndicatorResolver (unified) or metadata search.
