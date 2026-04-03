@@ -8,7 +8,7 @@ from typing import TypedDict, Optional, List, Dict, Any, Annotated
 from operator import add
 from langgraph.graph import MessagesState
 
-from backend.memory.conversation_state import DataReference, EntityContext, QueryType
+from backend.memory.conversation_state import EntityContext
 
 
 class LangGraphProcessingStep(TypedDict):
@@ -127,26 +127,3 @@ def create_initial_state(
         current_indicators=[],
         clarification_attempts=0,
     )
-
-
-def merge_state_with_history(
-    current_state: AgentState,
-    history_messages: List[Any],
-) -> AgentState:
-    """
-    Merge current state with conversation history.
-
-    Args:
-        current_state: Current agent state
-        history_messages: Previous conversation messages
-
-    Returns:
-        State with merged message history
-    """
-    # Prepend history to current messages
-    merged_messages = history_messages + current_state.get("messages", [])
-
-    return {
-        **current_state,
-        "messages": merged_messages,
-    }

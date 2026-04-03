@@ -552,28 +552,3 @@ class AgentOrchestrator:
         )
 
 
-# Create default orchestrator (will be initialized with services later)
-agent_orchestrator: Optional[AgentOrchestrator] = None
-
-
-def get_orchestrator() -> AgentOrchestrator:
-    """Get or create the global orchestrator instance"""
-    global agent_orchestrator
-    if agent_orchestrator is None:
-        agent_orchestrator = AgentOrchestrator()
-    return agent_orchestrator
-
-
-def initialize_orchestrator(
-    query_service=None,
-    openrouter_service=None,
-    metadata_search=None,
-) -> AgentOrchestrator:
-    """Initialize the global orchestrator with services"""
-    global agent_orchestrator
-    agent_orchestrator = AgentOrchestrator(
-        query_service=query_service,
-        openrouter_service=openrouter_service,
-        metadata_search=metadata_search,
-    )
-    return agent_orchestrator
