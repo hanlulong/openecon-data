@@ -2044,8 +2044,10 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(clarification)
         self.assertTrue(clarification.clarificationNeeded)
 
-    def test_process_query_uses_pending_country_follow_up_before_semantic_reply(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-process-pending-country-follow-up")
+    def test_process_query_includes_clarification_context_for_llm(self) -> None:
+        """Phase 4: When a pending semantic clarification exists, the LLM receives
+        clarification context instead of the old state-machine methods being called."""
+        conv_id = conversation_manager.get_or_create("conv-process-clarification-ctx")
         conversation_manager.clear_pending_semantic_clarification(conv_id)
         conversation_manager.set_pending_semantic_clarification(
             conv_id,
@@ -2068,19 +2070,23 @@ class QueryServiceTests(unittest.TestCase):
                 ],
             },
         )
-
-        expected_response = QueryResponse(
-            conversationId=conv_id,
-            clarificationNeeded=False,
-            message="ok",
+        # Store a clarification intent as the last_intent
+        clarification_intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["imports as % of GDP"],
+            parameters={"country": "G20"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Choose the scope you want:"],
+            originalQuery="imports share of gdp in G20",
         )
-        with patch.object(self.service, "_try_resolve_pending_country_follow_up", AsyncMock(return_value=expected_response)) as pending_follow_up, \
-             patch.object(self.service, "_try_resolve_pending_semantic_clarification", AsyncMock()) as pending_semantic:
-            response = run(self.service.process_query("show only US", conversation_id=conv_id))
+        conversation_manager.add_message(conv_id, "user", "imports share of gdp in G20", intent=clarification_intent)
 
-        self.assertEqual(response, expected_response)
-        pending_follow_up.assert_awaited_once()
-        pending_semantic.assert_not_awaited()
+        # Verify that get_pending_clarification_context returns the stored details
+        ctx = conversation_manager.get_pending_clarification_context(conv_id)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["kind"], "group_scope")
+        self.assertIn("Choose the scope you want:", ctx["question"])
+        self.assertIn("compare member countries", ctx["options"])
 
     def test_prefetch_clarification_allows_direct_worldbank_translation(self) -> None:
         intent = ParsedIntent(

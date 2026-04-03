@@ -7920,6 +7920,8 @@ class QueryService:
             conv_id = conversation_manager.get_or_create(conversation_id)
             history = conversation_manager.get_history(conv_id)
 
+            # ── Pending indicator choice (numeric "1", "2" responses) ───
+            # Keep this for structural resolution — no LLM needed for "pick option 2".
             pending_choice_response = await self._try_resolve_pending_indicator_choice(
                 query=query,
                 conversation_id=conv_id,
@@ -7928,30 +7930,16 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
-            pending_country_follow_up = await self._try_resolve_pending_country_follow_up(
-                query=query,
-                conversation_id=conv_id,
-                auto_pro_mode=auto_pro_mode,
-                tracker=tracker,
-            )
-            if pending_country_follow_up is not None:
-                return pending_country_follow_up
-
-            pending_semantic_response = await self._try_resolve_pending_semantic_clarification(
-                query=query,
-                conversation_id=conv_id,
-                auto_pro_mode=auto_pro_mode,
-                use_orchestrator=use_orchestrator,
-                allow_orchestrator=allow_orchestrator,
-                tracker=tracker,
-            )
-            if pending_semantic_response is not None:
-                return pending_semantic_response
-
-            # All pending clarification attempts failed — this is a new query.
-            # Clear stale pending states to prevent them from interfering with
-            # future turns (fixes zombie clarification bug).
-            conversation_manager.clear_all_pending(conv_id)
+            # ── Phase 4: LLM-based clarification resolution ───────────
+            # Semantic clarifications (e.g., "exports" in response to
+            # "exports, imports, or trade balance?") and country follow-ups
+            # (e.g., "show only US" after a group scope question) are now
+            # handled by the LLM via enhanced conversation context.
+            # The pending state is checked to build context, then cleared
+            # so the LLM pipeline handles the response with full context.
+            # _try_resolve_pending_semantic_clarification and
+            # _try_resolve_pending_country_follow_up are preserved but no
+            # longer called here — the LLM handles these cases natively.
 
             contextual_follow_up = self._build_intent_from_contextual_follow_up(
                 query=query,
@@ -8010,6 +7998,14 @@ class QueryService:
             if not bypass_orchestrator and self._is_simple_single_country_query(query):
                 bypass_orchestrator = True
                 logger.info("⏭️ Bypassing orchestrator for simple single-country query; deterministic pipeline is more reliable")
+            # Phase 4: Bypass orchestrator when previous turn was a clarification.
+            # The deterministic pipeline with LLM conversation context handles
+            # clarification answers better (preserves country, indicator context).
+            if not bypass_orchestrator:
+                last_intent_for_orch = conversation_manager.get_last_intent(conv_id)
+                if last_intent_for_orch and last_intent_for_orch.clarificationNeeded:
+                    bypass_orchestrator = True
+                    logger.info("⏭️ Bypassing orchestrator for clarification answer; LLM conversation context required")
             if allow_orchestrator and (use_orchestrator or settings.use_langchain_orchestrator) and not bypass_orchestrator:
                 logger.info("🤖 Using LangChain orchestrator for intelligent query routing")
                 return await self._execute_with_orchestrator(query, conv_id, tracker)
@@ -8030,7 +8026,7 @@ class QueryService:
             # The raw query is preserved as `original_raw_query` for downstream use.
             conversation_context = None
             last_intent = conversation_manager.get_last_intent(conv_id)
-            if last_intent and not last_intent.clarificationNeeded:
+            if last_intent:
                 li_params = last_intent.parameters or {}
                 # Gather country/countries from prior intent
                 prior_country = li_params.get("country", "")
@@ -8050,10 +8046,45 @@ class QueryService:
                     "endDate": li_params.get("endDate", "not specified"),
                     "originalQuery": last_intent.originalQuery or "not specified",
                 }
-                logger.info(
-                    "📎 Built conversation context for LLM follow-up detection (prior: %s / %s)",
-                    last_intent.indicators, last_intent.apiProvider,
-                )
+
+                # Phase 4: Include clarification context when previous turn was a clarification.
+                # This lets the LLM see what was asked and resolve the user's answer with full context.
+                if last_intent.clarificationNeeded:
+                    # Check for pending semantic clarification details (group scope, etc.)
+                    pending_ctx = conversation_manager.get_pending_clarification_context(conv_id)
+                    if pending_ctx:
+                        conversation_context["pendingClarification"] = True
+                        conversation_context["clarificationQuestion"] = pending_ctx.get("question", "")
+                        conversation_context["clarificationOptions"] = ", ".join(
+                            str(opt) for opt in (pending_ctx.get("options") or [])
+                        )
+                        # Use the original query from the pending state if available
+                        original_from_pending = pending_ctx.get("original_query", "")
+                        if original_from_pending:
+                            conversation_context["originalQuery"] = original_from_pending
+                        logger.info(
+                            "📎 Built clarification context for LLM resolution (pending: %s)",
+                            pending_ctx.get("kind", "unknown"),
+                        )
+                    elif last_intent.clarificationQuestions:
+                        # LLM-generated clarification (not stored in pending state)
+                        conversation_context["pendingClarification"] = True
+                        conversation_context["clarificationQuestion"] = " ".join(
+                            last_intent.clarificationQuestions
+                        )
+                        conversation_context["clarificationOptions"] = ""
+                        logger.info(
+                            "📎 Built LLM-clarification context for resolution (questions: %s)",
+                            last_intent.clarificationQuestions[:2],
+                        )
+
+                    # Clear pending state now — LLM will handle resolution
+                    conversation_manager.clear_all_pending(conv_id)
+                else:
+                    logger.info(
+                        "📎 Built conversation context for LLM follow-up detection (prior: %s / %s)",
+                        last_intent.indicators, last_intent.apiProvider,
+                    )
 
             logger.info("Parsing query with LLM: %s", query)
 
@@ -9291,6 +9322,11 @@ class QueryService:
             self._maybe_expand_multi_concept_intent(query, intent)
 
             if intent.clarificationNeeded:
+                # Store the clarification intent so Phase 4 LLM-based resolution
+                # can build conversation context on the next turn.
+                conversation_manager.add_message_safe(
+                    conversation_id, "user", query, intent=intent,
+                )
                 conversation_manager.clear_pending_indicator_options(conversation_id)
                 conversation_manager.clear_pending_semantic_clarification(conversation_id)
                 return QueryResponse(

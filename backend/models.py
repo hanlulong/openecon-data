@@ -95,7 +95,7 @@ class ParsedIntent(BaseModel):
 
     # Follow-up detection fields (populated by LLM when conversation context is provided)
     isFollowUp: bool = False
-    followUpType: Optional[str] = None  # "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse"
+    followUpType: Optional[str] = None  # "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse", "clarification_answer"
     resolvedQuery: Optional[str] = None  # The explicit rewritten query if follow-up
 
     # Query decomposition for "all provinces", "each state", etc.

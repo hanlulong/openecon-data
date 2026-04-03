@@ -228,6 +228,49 @@ class TestPendingState:
         assert mgr.get_pending_semantic_clarification(cid) is None
 
 
+# ─── Pending Clarification Context (Phase 4) ───────────────────────
+
+class TestPendingClarificationContext:
+    def test_returns_none_when_no_pending(self):
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        assert mgr.get_pending_clarification_context(cid) is None
+
+    def test_returns_semantic_clarification_context(self):
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.set_pending_semantic_clarification(cid, {
+            "kind": "group_scope",
+            "original_query": "GDP in G7",
+            "question_lines": ["Compare members or group value?", "1. compare member countries"],
+            "options": [
+                {"id": "1", "label": "compare member countries", "value": "GDP across G7 members"},
+                {"id": "2", "label": "group value", "value": "GDP for G7 as a whole"},
+            ],
+        })
+
+        ctx = mgr.get_pending_clarification_context(cid)
+        assert ctx is not None
+        assert ctx["kind"] == "group_scope"
+        assert ctx["original_query"] == "GDP in G7"
+        assert "Compare members or group value?" in ctx["question"]
+        assert "compare member countries" in ctx["options"]
+        assert "group value" in ctx["options"]
+
+    def test_returns_none_when_only_indicator_pending(self):
+        """Indicator choice is handled by structural resolution, not LLM context."""
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.set_pending_indicator_options(cid, {"options": ["[FRED] GDP (A191RL1Q225SBEA)"]})
+
+        ctx = mgr.get_pending_clarification_context(cid)
+        assert ctx is None
+
+    def test_returns_none_for_unknown_conversation(self):
+        mgr = _fresh_manager()
+        assert mgr.get_pending_clarification_context("nonexistent") is None
+
+
 # ─── Last Intent ─────────────────────────────────────────────────────
 
 class TestLastIntent:

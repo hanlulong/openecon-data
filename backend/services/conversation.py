@@ -322,6 +322,42 @@ class ConversationManager:
                 return None
             return conversation.last_intent.model_copy(deep=True)
 
+    def get_pending_clarification_context(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Return pending clarification details for LLM context building.
+
+        Checks both semantic and indicator pending states and returns a dict
+        with the clarification question and options, suitable for inclusion
+        in the LLM conversation context.
+
+        Returns:
+            Dict with keys: question, options, original_query, kind
+            or None if no pending clarification exists.
+        """
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return None
+
+            # Check semantic clarification first (e.g., group scope)
+            semantic = conversation.pending_semantic_clarification
+            if semantic and isinstance(semantic, dict):
+                question_lines = semantic.get("question_lines") or []
+                options = semantic.get("options") or []
+                option_labels = []
+                for opt in options:
+                    if isinstance(opt, dict):
+                        option_labels.append(opt.get("label", opt.get("value", str(opt))))
+                    else:
+                        option_labels.append(str(opt))
+                return {
+                    "kind": semantic.get("kind", "semantic"),
+                    "question": " ".join(question_lines) if question_lines else "Please clarify your query.",
+                    "options": option_labels,
+                    "original_query": semantic.get("original_query", ""),
+                }
+
+            return None
+
     def clear_all_pending(self, conversation_id: str) -> None:
         """Clear all pending clarification states for a conversation.
 

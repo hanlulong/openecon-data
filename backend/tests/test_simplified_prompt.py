@@ -46,6 +46,49 @@ def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:
     assert "followUpType" not in prompt
 
 
+def test_simplified_prompt_with_clarification_context() -> None:
+    """Phase 4: When pendingClarification is set, the prompt includes clarification-specific instructions."""
+    ctx = {
+        "indicator": "trade",
+        "country": "China",
+        "provider": "WorldBank",
+        "startDate": "not specified",
+        "endDate": "not specified",
+        "originalQuery": "trade data China",
+        "pendingClarification": True,
+        "clarificationQuestion": "Do you want exports, imports, or trade balance?",
+        "clarificationOptions": "exports, imports, trade balance",
+    }
+    prompt = SimplifiedPrompt.generate(conversation_context=ctx)
+
+    # Should include clarification resolution instructions
+    assert "clarification question" in prompt.lower()
+    assert "exports, imports, trade balance" in prompt
+    assert "clarification_answer" in prompt
+    assert "China" in prompt
+    # Should NOT include the normal follow-up detection rules (those are for non-clarification turns)
+    assert "country_change" not in prompt.split("clarification_answer")[0]
+
+
+def test_simplified_prompt_non_clarification_follow_up_has_normal_rules() -> None:
+    """When no pending clarification, the prompt uses normal follow-up rules."""
+    ctx = {
+        "indicator": "GDP",
+        "country": "US",
+        "provider": "FRED",
+        "startDate": "2020-01-01",
+        "endDate": "2024-12-31",
+        "originalQuery": "GDP in US",
+    }
+    prompt = SimplifiedPrompt.generate(conversation_context=ctx)
+
+    # Should have normal follow-up rules
+    assert "country_change" in prompt
+    assert "indicator_switch" in prompt
+    # Should NOT have clarification-specific instructions
+    assert "clarification question" not in prompt.lower().split("conversation context")[0]
+
+
 def test_simplified_prompt_avoids_hardcoded_provider_routing_rules() -> None:
     prompt = SimplifiedPrompt.generate().lower()
 

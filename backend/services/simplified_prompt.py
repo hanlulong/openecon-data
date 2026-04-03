@@ -201,10 +201,11 @@ Reference date defaults for relative time understanding:
 
     @classmethod
     def _follow_up_section(cls, ctx: dict) -> str:
-        """Build follow-up context section (~40 lines) that tells the LLM about the previous turn.
+        """Build follow-up context section that tells the LLM about the previous turn.
 
         Args:
-            ctx: dict with keys: indicator, country, provider, startDate, endDate, originalQuery
+            ctx: dict with keys: indicator, country, provider, startDate, endDate, originalQuery,
+                 and optionally: pendingClarification, clarificationQuestion, clarificationOptions
         """
         indicator = ctx.get("indicator", "not specified")
         country = ctx.get("country", "not specified")
@@ -213,7 +214,7 @@ Reference date defaults for relative time understanding:
         end_date = ctx.get("endDate", "not specified")
         original_query = ctx.get("originalQuery", "not specified")
 
-        return f"""
+        section = f"""
 
 --- CONVERSATION CONTEXT (follow-up detection) ---
 
@@ -223,7 +224,35 @@ Previous intent details:
 - Country/countries: {country}
 - Provider: {provider}
 - Time period: {start_date} to {end_date}
+"""
 
+        # Add clarification context when the previous turn was a clarification
+        if ctx.get("pendingClarification"):
+            clarification_question = ctx.get("clarificationQuestion", "")
+            clarification_options = ctx.get("clarificationOptions", "")
+
+            section += f"""
+IMPORTANT — The previous turn asked the user a clarification question:
+- Clarification question: "{clarification_question}"
+- Options presented: {clarification_options}
+
+The user's current message is answering that clarification question.
+You MUST:
+1. Interpret the user's response as an answer to the clarification question above.
+2. Combine the answer with ALL context from the original query (country, time period, provider).
+3. Output a complete, self-contained intent with clarificationNeeded=false.
+4. Set isFollowUp=true and followUpType="clarification_answer".
+5. Set resolvedQuery to the full explicit query combining the original context with the user's answer.
+
+Examples:
+- Original query: "trade data China" → Clarification: "exports, imports, or trade balance?"
+  User says: "exports" → resolvedQuery: "exports in China", indicators: ["exports"], country: "China"
+- Original query: "employment G7" → Clarification: "compare members or group value?"
+  User says: "compare member countries" → resolvedQuery: "employment rate G7 member countries",
+  indicators: ["employment rate"], countries: ["US", "UK", "France", "Germany", "Italy", "Canada", "Japan"]
+"""
+        else:
+            section += """
 Follow-up detection rules:
 - If this new message references the previous context (e.g., "same for Germany",
   "show me last 20 years", "what about unemployment", "use FRED instead",
@@ -241,12 +270,15 @@ Follow-up detection rules:
   resolvedQuery should be "GDP in Canada last 20 years".
 - If the message is NOT a follow-up (i.e., a completely new independent query),
   set isFollowUp=false, followUpType=null, resolvedQuery=null.
+"""
 
+        section += """
 Additional output fields for follow-ups:
   "isFollowUp": true/false,
-  "followUpType": "country_change" | "indicator_switch" | "time_change" | "provider_change" | "pronoun_reuse" | null,
+  "followUpType": "country_change" | "indicator_switch" | "time_change" | "provider_change" | "pronoun_reuse" | "clarification_answer" | null,
   "resolvedQuery": "explicit rewritten query" | null
 """
+        return section
 
     @classmethod
     def _provider_matrix(cls) -> str:
