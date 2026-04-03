@@ -335,6 +335,31 @@ class CountryResolver:
         "JM", "KN", "LC", "SR", "TT", "VC"
     })
 
+    # Anglosphere / English-speaking countries
+    ANGLOSPHERE_MEMBERS: FrozenSet[str] = frozenset({
+        "US", "GB", "CA", "AU", "NZ", "IE"
+    })
+
+    # Asia-Pacific (OECD members)
+    ASIA_PACIFIC_MEMBERS: FrozenSet[str] = frozenset({
+        "JP", "KR", "AU", "NZ"
+    })
+
+    # Southern Europe
+    SOUTHERN_EUROPE_MEMBERS: FrozenSet[str] = frozenset({
+        "ES", "IT", "GR", "PT"
+    })
+
+    # Eastern Europe (OECD members)
+    EASTERN_EUROPE_MEMBERS: FrozenSet[str] = frozenset({
+        "PL", "CZ", "HU", "SK", "SI", "EE", "LV", "LT"
+    })
+
+    # Scandinavia (subset of Nordic - excludes Finland and Iceland)
+    SCANDINAVIA_MEMBERS: FrozenSet[str] = frozenset({
+        "SE", "NO", "DK"
+    })
+
     # European sub-regional groupings (infrastructure addition for multi-country queries)
     # These are commonly used economic groupings that weren't previously supported
 
@@ -784,6 +809,8 @@ class CountryResolver:
             "EU_MEMBERS": cls.EU_MEMBERS,
             "EUROPEAN_UNION": cls.EU_MEMBERS,
             "EU_MEMBER_STATES": cls.EU_MEMBERS,
+            "EU27": cls.EU_MEMBERS,
+            "EU27_2020": cls.EU_MEMBERS,
             # Eurozone
             "EUROZONE": cls.EUROZONE_MEMBERS,
             "EURO_AREA": cls.EUROZONE_MEMBERS,
@@ -795,8 +822,25 @@ class CountryResolver:
             # Nordic
             "NORDIC": cls.NORDIC_MEMBERS,
             "NORDIC_COUNTRIES": cls.NORDIC_MEMBERS,
-            "SCANDINAVIAN": cls.NORDIC_MEMBERS,
-            "SCANDINAVIA": cls.NORDIC_MEMBERS,
+            # Scandinavia (subset of Nordic: Sweden, Norway, Denmark)
+            "SCANDINAVIA": cls.SCANDINAVIA_MEMBERS,
+            "SCANDINAVIAN": cls.SCANDINAVIA_MEMBERS,
+            "SCANDINAVIAN_COUNTRIES": cls.SCANDINAVIA_MEMBERS,
+            # Anglosphere / English-speaking
+            "ANGLOSPHERE": cls.ANGLOSPHERE_MEMBERS,
+            "ENGLISH_SPEAKING": cls.ANGLOSPHERE_MEMBERS,
+            "ENGLISH_SPEAKING_COUNTRIES": cls.ANGLOSPHERE_MEMBERS,
+            # Asia-Pacific (OECD members)
+            "ASIA_PACIFIC": cls.ASIA_PACIFIC_MEMBERS,
+            "ASIA PACIFIC": cls.ASIA_PACIFIC_MEMBERS,
+            "APAC": cls.ASIA_PACIFIC_MEMBERS,
+            # Southern Europe
+            "SOUTHERN_EUROPE": cls.SOUTHERN_EUROPE_MEMBERS,
+            "SOUTHERN EUROPE": cls.SOUTHERN_EUROPE_MEMBERS,
+            "MEDITERRANEAN": cls.SOUTHERN_EUROPE_MEMBERS,
+            # Eastern Europe
+            "EASTERN_EUROPE": cls.EASTERN_EUROPE_MEMBERS,
+            "EASTERN EUROPE": cls.EASTERN_EUROPE_MEMBERS,
             # OECD
             "OECD": cls.OECD_MEMBERS,
             "OECD_COUNTRIES": cls.OECD_MEMBERS,
@@ -1253,15 +1297,15 @@ class CountryResolver:
 
     # ISO Alpha-2 to UN Comtrade numeric codes
     ISO2_TO_UN_NUMERIC: Dict[str, int] = {
-        # G7
-        "US": 842, "GB": 826, "FR": 251, "DE": 276, "IT": 380, "CA": 124, "JP": 392,
+        # G7 (IT=381 and IN=699 use Comtrade-specific codes, not ISO 3166-1 numeric)
+        "US": 842, "GB": 826, "FR": 251, "DE": 276, "IT": 381, "CA": 124, "JP": 392,
         # EU major
         "ES": 724, "NL": 528, "BE": 56, "AT": 40, "PL": 616, "SE": 752, "DK": 208,
         "FI": 246, "PT": 620, "GR": 300, "IE": 372, "CZ": 203, "RO": 642, "HU": 348,
         "BG": 100, "HR": 191, "CY": 196, "EE": 233, "LV": 428, "LT": 440,
         "LU": 442, "MT": 470, "SK": 703, "SI": 705,
         # BRICS
-        "CN": 156, "IN": 356, "BR": 76, "RU": 643, "ZA": 710,
+        "CN": 156, "IN": 699, "BR": 76, "RU": 643, "ZA": 710,
         # ASEAN
         "ID": 360, "TH": 764, "MY": 458, "SG": 702, "PH": 608, "VN": 704,
         "MM": 104, "KH": 116, "LA": 418, "BN": 96,

@@ -108,13 +108,25 @@ if selection.code:
 # else: fall through to legacy IndicatorResolver
 ```
 
+## Routing Architecture (Updated 2026-04)
+
+Query routing now uses **LLM-based routing via UnifiedRouter** (`backend/routing/unified_router.py`), replacing the old deterministic `ProviderRouter` and `keyword_matcher.py`. The LLM system prompt includes a provider capability matrix, and the UnifiedRouter makes the final routing decision. Key changes:
+
+- **LLM-based routing** replaced regex/keyword routing (Phases 1-4 of consolidation)
+- **Intent caching** for repeat queries (in-memory + Redis)
+- **Multi-round conversations** with Redis persistence via `ConversationManager`
+- **Performance**: ~4x faster cold queries, ~72x faster cached queries
+- **85% effective** sweep accuracy with 0 semantic failures
+
 ## Cleanup Status
 
 | Component | Status | Lines |
 |-----------|--------|-------|
 | ChromaDB code in vector_search.py | REMOVED | -165 |
-| indicator_selector.py | SIMPLIFIED to embed→LLM | 220 |
+| indicator_selector.py | SIMPLIFIED to embed->LLM | 220 |
 | embedding_retrieval.py | ACTIVE | 215 |
 | Old 4-stage selector code | REPLACED with 2-step | -280 |
-| semantic_provider_router.py | DEPRECATED, pending archive | 473 |
-| provider_router.py | DEPRECATED, pending migration | 988 |
+| semantic_provider_router.py | DEPRECATED (still in `backend/routing/`) | 473 |
+| provider_router.py | REMOVED | was 988 |
+| keyword_matcher.py | REMOVED | was 520 |
+| unified_router.py | ACTIVE (current routing) | ~460 |

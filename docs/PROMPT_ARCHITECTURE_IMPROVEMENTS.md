@@ -1,8 +1,10 @@
 # Query and Prompt Architecture Improvements
 
-**Status**: ✅ Completed and Tested
+> **SUPERSEDED (2026-04):** The `ProviderRouter` and `simplified_prompt.py` described below were replaced by `backend/routing/unified_router.py` (LLM-based routing) during the Phase 1-4 routing consolidation. `provider_router.py` and `keyword_matcher.py` have been deleted. See `docs/INDICATOR_RESOLUTION.md` for the current architecture.
+
+**Status**: Superseded by UnifiedRouter (LLM-based routing)
 **Date**: 2025-11-23
-**Test Results**: 47/47 tests passed (100% success rate)
+**Test Results**: 47/47 tests passed (100% success rate) -- historical
 
 ## Executive Summary
 

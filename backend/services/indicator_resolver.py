@@ -1759,7 +1759,11 @@ class IndicatorResolver:
             ):
                 confidence -= 0.50
 
-        confidence -= self._specialization_penalty(query_text, candidate_text_lower)
+        # Use name+code (not description) for specialization penalty.
+        # Descriptions contain definitional context (age ranges, methodology)
+        # that should not trigger demographic sub-series penalties.
+        name_code_lower = f"{name} {code}".lower()
+        confidence -= self._specialization_penalty(query_text, name_code_lower)
 
         # Guardrail: single-term lexical hits are often semantically ambiguous
         # (e.g., "custom indicator" matching "customs and trade ...").
@@ -1884,6 +1888,25 @@ class IndicatorResolver:
         countries: Optional[List[str]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], float]:
         """Select best search result using lexical + concept-aware scoring."""
+        # Build a set of all WorldBank codes in the candidate pool so we can
+        # detect when a variant code (e.g. SH.STA.MMRT.NE) competes with its
+        # shorter base code (SH.STA.MMRT). The standard/base code is preferred
+        # unless the user explicitly asks for a variant (national, female, etc.).
+        wb_candidate_codes: Set[str] = set()
+        for c in search_results:
+            if (c.get("provider") or "").upper() in ("WORLDBANK", "WORLD BANK"):
+                code_upper = (c.get("code") or "").upper()
+                if code_upper:
+                    wb_candidate_codes.add(code_upper)
+
+        # Check if user query explicitly requests a variant type
+        query_lower = (query or "").lower()
+        _variant_keywords = {
+            "national estimate", "national", "female", "male", "rural",
+            "urban", "youth", "poorest", "richest",
+        }
+        query_requests_variant = any(kw in query_lower for kw in _variant_keywords)
+
         best_result: Optional[Dict[str, Any]] = None
         best_confidence = 0.0
         best_tiebreak: tuple[float, float, int] = (-float("inf"), -float("inf"), -10**9)
@@ -1906,12 +1929,40 @@ class IndicatorResolver:
             if country_penalty > 0.0:
                 confidence -= country_penalty
 
+            # WorldBank standard-code preference (infrastructure fix).
+            # When a variant code and its direct base code are both in the
+            # candidate pool, penalize the variant. A "direct base" means
+            # removing exactly the last dot-segment yields a code that is
+            # also present (e.g. SH.STA.MMRT is the base for SH.STA.MMRT.NE,
+            # but SH.STA is NOT the base for SH.STA.MMRT — different series).
+            # This handles ALL WorldBank indicator families generically.
+            provider_upper = (candidate.get("provider") or "").upper()
+            code_upper = (candidate.get("code") or "").upper()
+            if (
+                provider_upper in ("WORLDBANK", "WORLD BANK")
+                and code_upper
+                and not query_requests_variant
+            ):
+                code_parts = code_upper.split(".")
+                if len(code_parts) >= 2:
+                    # Check only the direct parent (remove last segment)
+                    parent_code = ".".join(code_parts[:-1])
+                    if parent_code in wb_candidate_codes and parent_code != code_upper:
+                        # This candidate is a variant of a base code that is
+                        # also present — apply a confidence penalty.
+                        confidence -= 0.12
+
             confidence = max(0.0, min(1.0, confidence))
-            candidate_text = " ".join(
+            # Use name+code (not description) for specialization penalty.
+            # Descriptions often contain definitional context (age ranges,
+            # methodology notes) that are NOT demographic sub-series markers.
+            # E.g., "women aged 15-49" in a maternal mortality description
+            # is the standard WHO definition, not a demographic variant.
+            candidate_name_code = " ".join(
                 str(candidate.get(key) or "")
-                for key in ("name", "description", "code")
+                for key in ("name", "code")
             )
-            specialization_penalty = self._specialization_penalty(query, candidate_text)
+            specialization_penalty = self._specialization_penalty(query, candidate_name_code)
             semantic_similarity = float(candidate.get("_semantic_similarity") or 0.0)
             tiebreak = (-specialization_penalty, semantic_similarity, -idx)
 

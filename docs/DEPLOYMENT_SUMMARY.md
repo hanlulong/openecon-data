@@ -1,7 +1,9 @@
 # Deployment Summary: ProviderRouter Integration
 
+> **SUPERSEDED (2026-04):** The `ProviderRouter` described here has been removed. Routing is now handled by `backend/routing/unified_router.py` (LLM-based). See `docs/INDICATOR_RESOLUTION.md` for the current architecture.
+
 **Date**: 2025-11-23
-**Status**: ✅ SUCCESSFULLY DEPLOYED AND TESTED
+**Status**: Superseded -- ProviderRouter removed in favor of UnifiedRouter
 **Risk Level**: LOW (Phase 1 integration - no prompt changes)
 
 ## What Was Deployed

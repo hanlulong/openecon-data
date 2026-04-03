@@ -239,7 +239,10 @@ def is_excluded_term(term: str, concept_name: str) -> bool:
         return False
 
     exclusions = concept.get("explicit_exclusions", [])
-    term_lower = term.lower()
+    # Normalize underscores to spaces so "maternal_mortality" matches
+    # the exclusion "maternal mortality". LLM outputs often use
+    # underscores as word separators.
+    term_lower = term.lower().replace("_", " ")
 
     for exclusion in exclusions:
         exclusion_text = str(exclusion or "").strip().lower()

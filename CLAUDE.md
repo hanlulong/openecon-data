@@ -187,11 +187,15 @@ Apache2 serves frontend from `packages/frontend/dist` and proxies `/api/*` to ba
 
 1. **User Input** → Natural language query via `ChatPage.tsx`
 2. **API Request** → Frontend sends to `POST /api/query`
-3. **LLM Parsing** → OpenRouter parses intent into `ParsedIntent`
-4. **Data Fetching** → `QueryService` routes to appropriate provider
-5. **Normalization** → Data transformed to `NormalizedData` format
-6. **Caching** → Results cached in-memory with TTL
-7. **Response** → Frontend displays charts via `MessageChart.tsx`
+3. **Intent Cache Check** → Return cached intent for repeat queries (~72x speedup)
+4. **LLM Parsing** → OpenRouter parses intent into `ParsedIntent`
+5. **Routing** → `UnifiedRouter` selects provider (LLM-based, replaced old regex/keyword routing)
+6. **Indicator Resolution** → `IndicatorSelector` resolves indicator via catalog + embeddings + LLM
+7. **Data Fetching** → Provider fetches and normalizes data
+8. **Caching** → Results cached in-memory + Redis with TTL
+9. **Response** → Frontend displays charts via `MessageChart.tsx`
+
+Multi-round conversations are persisted via Redis (`ConversationManager`).
 
 ### Backend Structure (`backend/`)
 
@@ -202,7 +206,11 @@ Apache2 serves frontend from `packages/frontend/dist` and proxies `/api/*` to ba
 | `models.py` | `ParsedIntent`, `NormalizedData`, request/response models |
 | `services/query.py` | Main orchestration layer |
 | `services/openrouter.py` | LLM API calls |
+| `routing/unified_router.py` | LLM-based provider routing (replaced `provider_router.py` and `keyword_matcher.py`) |
+| `services/indicator_selector.py` | Catalog + embedding + LLM indicator resolution |
+| `services/conversation.py` | Multi-round conversation context (Redis-backed) |
 | `services/cache.py` | In-memory TTL cache |
+| `services/redis_cache.py` | Redis distributed cache with fallback |
 | `services/code_executor.py` | Sandboxed Pro Mode execution |
 | `providers/*.py` | FRED, World Bank, IMF, etc. |
 

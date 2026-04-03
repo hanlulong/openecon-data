@@ -200,71 +200,9 @@ class OECDProvider(BaseProvider):
         "EUROPEAN UNION": "EU27_2020",
     }
 
-    # Region expansions - maps region names to lists of country codes
-    # This enables "Nordic countries", "G7", etc. in queries
-    REGION_EXPANSIONS: Dict[str, List[str]] = {
-        # Nordic countries
-        "NORDIC": ["SWE", "NOR", "DNK", "FIN", "ISL"],
-        "NORDIC_COUNTRIES": ["SWE", "NOR", "DNK", "FIN", "ISL"],
-        "NORDIC COUNTRIES": ["SWE", "NOR", "DNK", "FIN", "ISL"],
-        "SCANDINAVIA": ["SWE", "NOR", "DNK"],
-        "SCANDINAVIAN_COUNTRIES": ["SWE", "NOR", "DNK"],
-
-        # G7 (7 major economies)
-        "G7": ["USA", "GBR", "FRA", "DEU", "ITA", "CAN", "JPN"],
-        "G7_COUNTRIES": ["USA", "GBR", "FRA", "DEU", "ITA", "CAN", "JPN"],
-
-        # G20 (OECD members only - excludes non-OECD like China, Russia, etc.)
-        "G20": ["USA", "GBR", "FRA", "DEU", "ITA", "CAN", "JPN", "KOR", "AUS", "MEX",
-                "TUR", "AUT", "BEL", "NLD", "ESP"],
-
-        # BRICS (only those in OECD - limited overlap)
-        # Note: China, Russia, India are NOT OECD members
-
-        # European Union (OECD EU members)
-        "EU": ["AUT", "BEL", "CZE", "DNK", "EST", "FIN", "FRA", "DEU", "GRC", "HUN",
-               "IRL", "ITA", "LVA", "LTU", "LUX", "NLD", "POL", "PRT", "SVK", "SVN", "ESP", "SWE"],
-        "EUROPEAN_UNION": ["AUT", "BEL", "CZE", "DNK", "EST", "FIN", "FRA", "DEU", "GRC", "HUN",
-                          "IRL", "ITA", "LVA", "LTU", "LUX", "NLD", "POL", "PRT", "SVK", "SVN", "ESP", "SWE"],
-
-        # Eurozone (countries using Euro)
-        "EUROZONE": ["AUT", "BEL", "EST", "FIN", "FRA", "DEU", "GRC", "IRL", "ITA",
-                     "LVA", "LTU", "LUX", "NLD", "PRT", "SVK", "SVN", "ESP"],
-        "EURO_AREA": ["AUT", "BEL", "EST", "FIN", "FRA", "DEU", "GRC", "IRL", "ITA",
-                      "LVA", "LTU", "LUX", "NLD", "PRT", "SVK", "SVN", "ESP"],
-
-        # Asia-Pacific OECD members
-        "ASIA_PACIFIC": ["JPN", "KOR", "AUS", "NZL"],
-        "ASIA PACIFIC": ["JPN", "KOR", "AUS", "NZL"],
-        "APAC": ["JPN", "KOR", "AUS", "NZL"],
-
-        # Southern Europe
-        "SOUTHERN_EUROPE": ["ESP", "ITA", "GRC", "PRT"],
-        "SOUTHERN EUROPE": ["ESP", "ITA", "GRC", "PRT"],
-        "MEDITERRANEAN": ["ESP", "ITA", "GRC", "PRT"],
-
-        # Eastern Europe (OECD members)
-        "EASTERN_EUROPE": ["POL", "CZE", "HUN", "SVK", "SVN", "EST", "LVA", "LTU"],
-        "EASTERN EUROPE": ["POL", "CZE", "HUN", "SVK", "SVN", "EST", "LVA", "LTU"],
-
-        # English-speaking countries
-        "ANGLOSPHERE": ["USA", "GBR", "CAN", "AUS", "NZL", "IRL"],
-        "ENGLISH_SPEAKING": ["USA", "GBR", "CAN", "AUS", "NZL", "IRL"],
-
-        # ASEAN (for completeness - only OECD-adjacent countries have good data)
-        # Note: Not all ASEAN countries are OECD members, but we include for multi-country queries
-        "ASEAN": ["IDN", "THA", "MYS", "SGP", "PHL", "VNM", "MMR", "KHM", "LAO", "BRN"],
-        "ASEAN_COUNTRIES": ["IDN", "THA", "MYS", "SGP", "PHL", "VNM", "MMR", "KHM", "LAO", "BRN"],
-
-        # BRICS (limited OECD coverage - only Chile/Colombia overlap, data may be incomplete)
-        # Note: China, Russia, India, Brazil, South Africa are NOT OECD members
-        # Including for query compatibility - will use best-effort data
-        "BRICS": ["BRA", "RUS", "IND", "CHN", "ZAF"],
-        "BRICS_COUNTRIES": ["BRA", "RUS", "IND", "CHN", "ZAF"],
-
-        # BRICS+ (2024 expansion)
-        "BRICS_PLUS": ["BRA", "RUS", "IND", "CHN", "ZAF", "EGY", "ETH", "IRN", "ARE"],
-    }
+    # Region expansions removed - all region definitions now consolidated in
+    # CountryResolver (backend/routing/country_resolver.py) as the single source of truth.
+    # The expand_countries() method below uses CountryResolver.get_region_expansion().
 
     def __init__(self, metadata_search_service: Optional["MetadataSearchService"] = None) -> None:
         super().__init__(timeout=50.0)  # OECD SDMX API is slow
@@ -412,12 +350,6 @@ class OECDProvider(BaseProvider):
             if expanded:
                 logger.info(f"🌍 Matched region '{variant}' via CountryResolver → {len(expanded)} countries")
                 return expanded
-
-        # Fall back to OECD-specific region expansions (ANGLOSPHERE, SOUTHERN_EUROPE, etc.)
-        for region_key in [key, key.replace("_", " "), key.replace(" ", "_")]:
-            if region_key in self.REGION_EXPANSIONS:
-                logger.info(f"🌍 Expanding region '{country_or_region}' via OECD mappings → {len(self.REGION_EXPANSIONS[region_key])} countries")
-                return self.REGION_EXPANSIONS[region_key]
 
         # Single country - normalize and return as list
         return [self._country_code(country_or_region)]

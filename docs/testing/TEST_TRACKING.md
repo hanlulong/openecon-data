@@ -215,7 +215,7 @@ This session ran a comprehensive 100-query test suite with NEW unique queries fo
 
 ---
 
-#### Fix 6: Expanded BIS Banking Keywords (`keyword_matcher.py`)
+#### Fix 6: Expanded BIS Banking Keywords (`keyword_matcher.py` -- since removed)
 
 **Problem:** Banking category had only 50% effective rate - many banking terms not recognized.
 

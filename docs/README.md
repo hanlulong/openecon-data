@@ -131,8 +131,9 @@ Guides for developers contributing to OpenEcon Data.
 | [LLM Abstraction](development/LLM_ABSTRACTION.md) | LLM provider abstraction layer |
 | [Metadata System](development/METADATA_SYSTEM_IMPROVEMENTS.md) | RAG-based metadata search |
 | [FAISS vs ChromaDB](development/FAISS_VS_CHROMADB_DECISION.md) | Vector search architecture decision |
-| [Routing Improvements](development/ROUTING_IMPROVEMENTS.md) | Query routing logic |
-| [Prompt Architecture](PROMPT_ARCHITECTURE_IMPROVEMENTS.md) | LLM prompt design |
+| [Indicator Resolution](INDICATOR_RESOLUTION.md) | Indicator resolution pipeline (current) |
+| [Routing Improvements](development/ROUTING_IMPROVEMENTS.md) | Query routing logic (superseded by UnifiedRouter) |
+| [Prompt Architecture](PROMPT_ARCHITECTURE_IMPROVEMENTS.md) | LLM prompt design (superseded by UnifiedRouter) |
 
 ### Performance & Optimization
 
@@ -190,20 +191,24 @@ OpenEcon Data consists of:
 ### Data Flow
 
 ```
-User Query → LLM Parser → Provider Router → Data Provider → Normalizer → Response
-                ↓
-         Conversation Context
+User Query → LLM Parser → UnifiedRouter → Indicator Selector → Data Provider → Normalizer → Response
+                ↓                                                                    ↓
+     Conversation Context (Redis)                                          Intent Cache (Redis)
 ```
+
+LLM-based routing replaced the old deterministic `ProviderRouter` and `keyword_matcher.py` (Phases 1-4 of routing consolidation). The LLM prompt includes a provider capability matrix, and `UnifiedRouter` makes the final routing decision. Repeat queries hit an intent cache (~72x speedup).
 
 ### Key Components
 
 | Component | Location | Description |
 |-----------|----------|-------------|
 | Query Service | `backend/services/query.py` | Main orchestration layer |
+| UnifiedRouter | `backend/routing/unified_router.py` | LLM-assisted provider routing |
 | OpenRouter Service | `backend/services/openrouter.py` | LLM integration |
-| Providers | `backend/providers/` | Data source integrations |
-| Metadata Search | `backend/services/metadata_search.py` | RAG-based indicator discovery |
-| Cache | `backend/services/cache.py` | In-memory caching |
+| Indicator Selector | `backend/services/indicator_selector.py` | Catalog + embedding + LLM indicator resolution |
+| Providers | `backend/providers/` | Data source integrations (FRED, WorldBank, IMF, etc.) |
+| Conversation Manager | `backend/services/conversation.py` | Multi-round context with Redis persistence |
+| Cache | `backend/services/cache.py`, `redis_cache.py` | In-memory + Redis distributed caching |
 
 ---
 

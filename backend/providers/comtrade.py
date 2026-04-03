@@ -15,13 +15,10 @@ from ..models import DataPoint, Metadata, NormalizedData
 from .comtrade_metadata import (
     COUNTRY_CODE_MAPPINGS,
     HS_CODE_MAPPINGS,
-    EU27_COUNTRY_CODES,
-    REGION_EXPANSIONS,
-    G7_COUNTRY_CODES,
-    BRICS_COUNTRY_CODES,
-    ASEAN_COUNTRY_CODES,
-    NORDIC_COUNTRY_CODES,
 )
+# Country/region group definitions consolidated in CountryResolver (single source of truth).
+# Previously imported: EU27_COUNTRY_CODES, REGION_EXPANSIONS, G7_COUNTRY_CODES,
+# BRICS_COUNTRY_CODES, ASEAN_COUNTRY_CODES, NORDIC_COUNTRY_CODES
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
@@ -748,11 +745,6 @@ class ComtradeProvider(BaseProvider):
                     expanded_reporters.extend(region_codes)
                 else:
                     expanded_reporters.append(r)
-            # Fall back to Comtrade-specific REGION_EXPANSIONS (EU27_2020, etc.)
-            elif r_upper in REGION_EXPANSIONS:
-                region_codes = REGION_EXPANSIONS[r_upper]
-                logger.info(f"🌍 Expanding Comtrade region '{r}' via Comtrade mappings → {len(region_codes)} countries")
-                expanded_reporters.extend(region_codes)
             else:
                 expanded_reporters.append(r)
         reporter_list = expanded_reporters if expanded_reporters else reporter_list
@@ -861,17 +853,6 @@ class ComtradeProvider(BaseProvider):
                         partner_codes.extend(resolved_codes)
                         continue
 
-                # Fall back to Comtrade region mappings.
-                if partner_upper in REGION_EXPANSIONS:
-                    resolved_codes = [str(code) for code in REGION_EXPANSIONS[partner_upper]]
-                    logger.info(
-                        "🌍 Expanding Comtrade partner region '%s' via Comtrade mappings → %d countries",
-                        partner_raw,
-                        len(resolved_codes),
-                    )
-                    partner_codes.extend(resolved_codes)
-                    continue
-
                 partner_code = self._country_code(partner_raw)
                 if partner_code is None:
                     raise DataNotAvailableError(
@@ -882,11 +863,18 @@ class ComtradeProvider(BaseProvider):
                     )
 
                 if partner_code == "EU27_2020":
-                    logger.info(
-                        "Expanding EU partner query to %d individual EU member countries",
-                        len(EU27_COUNTRY_CODES),
-                    )
-                    partner_codes.extend(EU27_COUNTRY_CODES)
+                    # Expand EU27_2020 via CountryResolver (single source of truth)
+                    eu_codes = CountryResolver.get_region_expansion("EU27_2020", format="un_numeric")
+                    if eu_codes:
+                        eu_str_codes = [str(code) for code in eu_codes]
+                        logger.info(
+                            "Expanding EU partner query to %d individual EU member countries",
+                            len(eu_str_codes),
+                        )
+                        partner_codes.extend(eu_str_codes)
+                    else:
+                        logger.warning("EU27_2020 expansion via CountryResolver returned nothing")
+                        partner_codes.append(partner_code)
                 else:
                     partner_codes.append(partner_code)
 

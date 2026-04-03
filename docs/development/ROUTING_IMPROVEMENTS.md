@@ -1,5 +1,7 @@
 # LLM Provider Routing Logic Improvements
 
+> **SUPERSEDED (2026-04):** The prompt-based routing rules described here have been replaced by `backend/routing/unified_router.py` (LLM-based routing with provider capability matrix). The old `provider_router.py` and `keyword_matcher.py` have been deleted. See `docs/INDICATOR_RESOLUTION.md` for the current architecture.
+
 ## Overview
 
 Updated the LLM system prompt in `backend/services/openrouter.py` to implement a clear, hierarchical provider routing system that eliminates incorrect routing of queries to providers. This ensures:

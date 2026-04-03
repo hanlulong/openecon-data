@@ -1,5 +1,7 @@
 # Indicator Resolution System Analysis
 
+> **NOTE (2026-04):** This analysis describes the old pipeline. `provider_router.py` has been removed and replaced by `backend/routing/unified_router.py`. Indicator resolution now goes through `IndicatorSelector` (catalog + embeddings + LLM). The specific bug documented here may no longer apply.
+
 ## Executive Summary
 
 This document analyzes why the query "what is the productivity of china and us" failed with error:

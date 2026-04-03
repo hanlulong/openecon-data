@@ -1,8 +1,10 @@
 # openecon-data Routing System Consolidation Analysis
 
-**Document Version:** 1.1
-**Date:** 2025-12-25
-**Status:** Phase 1-2 IMPLEMENTED - Testing in Progress
+> **COMPLETED (2026-04):** Phases 1-4 of this consolidation are done. `provider_router.py` and `keyword_matcher.py` have been deleted. `unified_router.py` is the active routing system. Current results: 85% effective sweep accuracy, 0 semantic failures. See `docs/INDICATOR_RESOLUTION.md` for the current architecture.
+
+**Document Version:** 1.2
+**Date:** 2025-12-25 (updated 2026-04)
+**Status:** COMPLETED - UnifiedRouter is active, old routers removed
 
 ## Implementation Progress (Updated 2025-12-25)
 

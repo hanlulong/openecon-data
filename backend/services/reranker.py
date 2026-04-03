@@ -90,6 +90,19 @@ def rerank_candidates(
         # overriding critical quality preferences when candidates are semantically
         # near-identical (e.g., "maternal mortality ratio — modeled estimate" vs
         # "maternal mortality ratio — national estimate").
+
+        # Build a set of all WorldBank candidate codes for standard-code detection.
+        # When a base code (e.g., SH.STA.MMRT) and variant codes with additional
+        # suffixes (SH.STA.MMRT.NE, SH.STA.MMRT.FE) are both present, the base
+        # code is the standard/preferred indicator. Variants are demographic or
+        # methodological sub-series that should only be preferred when the user
+        # explicitly requests them.
+        wb_codes = set()
+        for r in results:
+            meta = r.get("meta", {})
+            if (meta.get("provider") or "").upper() in ("WORLDBANK", "WORLD BANK"):
+                wb_codes.add((meta.get("code") or "").upper())
+
         reranked = []
         for r in results:
             meta = r.get("meta", {})
@@ -99,7 +112,29 @@ def rerank_candidates(
             # typically in [0, 1] range.
             quality_score = meta.get("_score", 0)
             quality_bonus = min(max(quality_score / 500.0, -0.15), 0.15)
-            blended = ce_score + quality_bonus
+
+            # WorldBank standard-code preference: when a variant code (longer,
+            # with extra suffix segments) competes with its base/standard code,
+            # penalize the variant. This is a general infrastructure fix — it
+            # applies to ALL WorldBank indicator families, not specific queries.
+            # Examples: SH.STA.MMRT (standard) vs SH.STA.MMRT.NE (variant),
+            #           SP.DYN.LE00.IN (standard) vs SP.DYN.LE00.FE.IN (variant).
+            wb_variant_penalty = 0.0
+            provider_upper = (meta.get("provider") or "").upper()
+            code_upper = (meta.get("code") or "").upper()
+            if provider_upper in ("WORLDBANK", "WORLD BANK") and code_upper:
+                # Check if the direct parent code (last segment removed)
+                # exists among candidates. Only penalize variants that have
+                # a direct parent present — not arbitrary prefix matches.
+                code_parts = code_upper.split(".")
+                if len(code_parts) >= 2:
+                    parent_code = ".".join(code_parts[:-1])
+                    if parent_code in wb_codes and parent_code != code_upper:
+                        # This candidate is a variant of a base code
+                        # that is also present — penalize it.
+                        wb_variant_penalty = 0.03
+
+            blended = ce_score + quality_bonus - wb_variant_penalty
             reranked.append((meta, blended))
 
         reranked.sort(key=lambda x: x[1], reverse=True)
