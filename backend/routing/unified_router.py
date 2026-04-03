@@ -37,6 +37,10 @@ from .country_resolver import CountryResolver
 
 logger = logging.getLogger(__name__)
 
+# HS (Harmonized System) commodity code pattern — matches "HS 8542", "HS-2204",
+# "HS8703", etc.  Used to route queries with explicit HS codes to Comtrade.
+_HS_CODE_RE = re.compile(r'\bHS\s*[-]?\s*\d{4,6}\b', re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Inline helpers (lightweight, structural checks only)
@@ -246,6 +250,18 @@ class UnifiedRouter:
                 reasoning="Exchange rate query routed to ExchangeRate-API",
             )
 
+        # 2b. HS commodity code + trade verb → Comtrade (structural: HS codes are Comtrade-specific)
+        if self._is_hs_code_trade_query(query_lower):
+            hs_match = _HS_CODE_RE.search(query)
+            matched_code = hs_match.group(0) if hs_match else "HS code"
+            return self._create_decision(
+                provider="Comtrade",
+                confidence=0.92,
+                match_type="indicator",
+                matched_pattern=f"HS code: {matched_code}",
+                reasoning=f"Query contains HS commodity code ({matched_code}), routed to Comtrade",
+            )
+
         # 3. Bilateral trade → Comtrade (structural: only bilateral trade provider)
         if self._is_bilateral_trade_query(query_lower, query):
             return self._create_decision(
@@ -357,6 +373,31 @@ class UnifiedRouter:
             match_type=match_type,
             matched_pattern=matched_pattern,
         )
+
+    @staticmethod
+    def _is_hs_code_trade_query(query_lower: str) -> bool:
+        """Detect queries with explicit HS commodity codes combined with trade language.
+
+        HS (Harmonized System) codes are specific to trade classification and
+        uniquely served by Comtrade.  If the query contains an HS code AND
+        mentions imports/exports/trade, it's unambiguously a Comtrade query.
+
+        Examples:
+            "China imports of HS 8542 integrated circuits" → True
+            "France exports of HS 2204 wine" → True
+            "HS 8703 trade data for Germany" → True
+            "What is HS 8542?" → False (no trade verb)
+        """
+        if not _HS_CODE_RE.search(query_lower):
+            return False
+
+        trade_terms = [
+            "import", "imports", "importing",
+            "export", "exports", "exporting",
+            "trade", "trading", "trade flow", "trade data",
+            "shipment", "shipments",
+        ]
+        return any(term in query_lower for term in trade_terms)
 
     def _is_exchange_rate_query(self, query_lower: str, indicators: List[str]) -> bool:
         """Check if query is about exchange rates."""

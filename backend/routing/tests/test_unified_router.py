@@ -609,3 +609,76 @@ class TestProductionQueries:
         decision = router.route(query)
         assert decision.provider == expected_provider, \
             f"Query '{query}' routed to {decision.provider}, expected {expected_provider}"
+
+
+class TestHSCodeRouting:
+    """Tests for HS commodity code detection and routing to Comtrade."""
+
+    @pytest.fixture
+    def router(self):
+        return UnifiedRouter()
+
+    # HS code + trade verb → Comtrade
+    HS_CODE_TRADE_QUERIES = [
+        ("China imports of HS 8542 integrated circuits", "Comtrade"),
+        ("France exports of HS 2204 wine", "Comtrade"),
+        ("HS 8703 trade data for Germany", "Comtrade"),
+        ("Japan imports HS8471 computers", "Comtrade"),
+        ("US exports of HS-2709 crude petroleum", "Comtrade"),
+        ("India HS 6204 imports of women's clothing", "Comtrade"),
+        ("Brazil HS 0901 coffee exports 2020-2023", "Comtrade"),
+        ("HS 8517 telephone equipment trade flows", "Comtrade"),
+        ("South Korea HS 854231 semiconductor imports", "Comtrade"),
+    ]
+
+    @pytest.mark.parametrize("query,expected_provider", HS_CODE_TRADE_QUERIES)
+    def test_hs_code_trade_queries_route_to_comtrade(self, router, query, expected_provider):
+        """Queries with HS codes + trade language route to Comtrade."""
+        decision = router.route(query)
+        assert decision.provider == expected_provider, \
+            f"Query '{query}' routed to {decision.provider}, expected {expected_provider}"
+        assert decision.confidence >= 0.9
+        assert "HS" in decision.matched_pattern
+
+    def test_hs_code_without_trade_verb_does_not_route_to_comtrade(self, router):
+        """HS code without trade language should NOT force Comtrade routing."""
+        decision = router.route("What is HS 8542?")
+        # Without trade verbs, this should not match the HS code trade check
+        assert decision.provider != "Comtrade" or decision.match_type != "indicator"
+
+    def test_hs_code_match_type_is_indicator(self, router):
+        """HS code routing should have match_type='indicator'."""
+        decision = router.route("China imports of HS 8542")
+        assert decision.provider == "Comtrade"
+        assert decision.match_type == "indicator"
+
+    def test_hs_code_with_hyphen(self, router):
+        """HS codes with hyphen separator are recognized."""
+        decision = router.route("Germany exports of HS-8703 vehicles")
+        assert decision.provider == "Comtrade"
+
+    def test_hs_code_no_space(self, router):
+        """HS codes without space (e.g., HS8703) are recognized."""
+        decision = router.route("Mexico HS8703 automobile imports")
+        assert decision.provider == "Comtrade"
+
+    def test_hs_code_six_digit(self, router):
+        """Six-digit HS codes are recognized."""
+        decision = router.route("UK imports of HS 854231 semiconductors")
+        assert decision.provider == "Comtrade"
+
+    def test_hs_code_takes_priority_over_country_routing(self, router):
+        """HS code detection should override country-based routing.
+
+        Without HS code detection, 'China imports of HS 8542' would route
+        to WorldBank (non-OECD major economy). HS code should win.
+        """
+        decision = router.route("China imports of HS 8542 integrated circuits")
+        assert decision.provider == "Comtrade"
+        assert "HS" in decision.matched_pattern
+
+    def test_explicit_provider_overrides_hs_code(self, router):
+        """Explicit provider mention still takes highest priority over HS code."""
+        decision = router.route("HS 8542 imports from FRED")
+        assert decision.provider == "FRED"
+        assert decision.match_type == "explicit"
