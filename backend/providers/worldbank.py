@@ -614,12 +614,19 @@ class WorldBankProvider(BaseProvider):
         if date_param:
             params["date"] = date_param
 
+        # Track total fetch time to enforce a 20s budget for the entire operation.
+        # This prevents cascading timeouts (batch + fallback + alternatives)
+        # from pushing the total past 60s.
+        import time as _time
+        _fetch_start = _time.perf_counter()
+        _FETCH_BUDGET_S = 20.0  # Total time budget for all WB API calls
+
         # Single batched request for all countries
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
         try:
-            batch_response = await client.get(url, params=params, headers=headers, timeout=30.0)
+            batch_response = await client.get(url, params=params, headers=headers, timeout=15.0)
             logger.info(f"WorldBank API response: status={batch_response.status_code}, content_length={len(batch_response.content)}")
             batch_response.raise_for_status()
             payload = batch_response.json()
@@ -658,7 +665,10 @@ class WorldBankProvider(BaseProvider):
         # If batch request failed, fall back to parallel per-country fetch.
         # Accumulate ALL country records into a single payload so the
         # batch processing loop below handles all countries together.
-        if not payload:
+        # Skip fallback if time budget already exceeded (avoids cascading timeouts).
+        _elapsed_so_far = _time.perf_counter() - _fetch_start
+        if not payload and _elapsed_so_far < _FETCH_BUDGET_S:
+            remaining_budget = _FETCH_BUDGET_S - _elapsed_so_far
             accumulated_records = []
             fallback_meta = None
             wb_sem = asyncio.Semaphore(5)
@@ -668,7 +678,7 @@ class WorldBankProvider(BaseProvider):
                     try:
                         country_code = self._country_code(country_code_raw)
                         single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
-                        response = await client.get(single_url, params=params, headers=headers, timeout=20.0)
+                        response = await client.get(single_url, params=params, headers=headers, timeout=10.0)
                         response.raise_for_status()
                         single_payload = response.json()
                         if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
@@ -677,17 +687,31 @@ class WorldBankProvider(BaseProvider):
                         logger.warning(f"Error fetching {country_code_raw}: {e}. Skipping.")
                     return None
 
-            fallback_results = await asyncio.gather(
-                *[_fetch_single_country(c) for c in country_list],
-                return_exceptions=True,
+            try:
+                fallback_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_fetch_single_country(c) for c in country_list],
+                        return_exceptions=True,
+                    ),
+                    timeout=remaining_budget,
+                )
+                for fr in fallback_results:
+                    if isinstance(fr, list) and len(fr) >= 2 and fr[1]:
+                        accumulated_records.extend(fr[1])
+                        if not fallback_meta:
+                            fallback_meta = fr[0]
+                if accumulated_records and fallback_meta:
+                    payload = [fallback_meta, accumulated_records]
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "WorldBank per-country fallback timed out after %.1fs",
+                    _time.perf_counter() - _fetch_start,
+                )
+        elif not payload:
+            logger.info(
+                "WorldBank skipping per-country fallback: time budget exceeded (%.1fs)",
+                _elapsed_so_far,
             )
-            for fr in fallback_results:
-                if isinstance(fr, list) and len(fr) >= 2 and fr[1]:
-                    accumulated_records.extend(fr[1])
-                    if not fallback_meta:
-                        fallback_meta = fr[0]
-            if accumulated_records and fallback_meta:
-                payload = [fallback_meta, accumulated_records]
 
         # Process batched payload — group records by country
         # NOTE: Do NOT return early here — fall through to alternative indicator
@@ -793,8 +817,9 @@ class WorldBankProvider(BaseProvider):
             )
             results.append(normalized)
 
-        # If no results found, try income aggregate fallback
-        if not results:
+        # If no results found, try income aggregate fallback (only if time budget allows)
+        _results_elapsed = _time.perf_counter() - _fetch_start
+        if not results and _results_elapsed < _FETCH_BUDGET_S:
             # Check if any of the original countries were income aggregates with fallbacks
             income_aggregates_tried = [c for c in country_list if c in self.INCOME_AGGREGATE_FALLBACKS]
 
@@ -829,8 +854,10 @@ class WorldBankProvider(BaseProvider):
                     return fallback_results
 
             # INFRASTRUCTURE FIX: Try alternative indicators before giving up
-            # This handles archived/unavailable indicators by trying similar ones
-            if not _skip_alternatives:
+            # This handles archived/unavailable indicators by trying similar ones.
+            # Skip if time budget is already exhausted.
+            _alt_elapsed = _time.perf_counter() - _fetch_start
+            if not _skip_alternatives and _alt_elapsed < _FETCH_BUDGET_S:
                 alternatives = await self._get_alternative_indicators(indicator, indic, limit=3)
                 if alternatives:
                     logger.info(f"⚠️ Primary indicator {indic} failed. Trying {len(alternatives)} alternatives: {alternatives}")
@@ -862,7 +889,14 @@ class WorldBankProvider(BaseProvider):
         return results
 
     async def _resolve_indicator_code(self, indicator: str) -> str:
-        """Resolve WorldBank indicator code through IndicatorResolver (unified) or metadata search."""
+        """Resolve WorldBank indicator code through IndicatorResolver (unified) or metadata search.
+
+        Resolution priority:
+        1. Pre-resolved codes (contain dots, e.g., NY.GDP.MKTP.CD) -- instant
+        2. IndicatorResolver (FTS5 + catalog + translator) -- fast, local
+        3. Metadata search (SDMX + WB REST API + LLM) -- slow, network I/O
+           Only used as last resort with a 15s timeout cap.
+        """
         # Short-circuit: if indicator is already a valid WorldBank code
         # (contains dots like "NY.GDP.MKTP.CD" or "NV.IND.TOTL.KD.ZG"),
         # return it directly without re-resolving through the resolver.
@@ -893,11 +927,38 @@ class WorldBankProvider(BaseProvider):
                 f"WorldBank indicator '{indicator}' not recognized. Provide the official indicator code (e.g., NY.GDP.MKTP.CD) or enable metadata discovery."
             )
 
-        # Use hierarchical search: SDMX first, then WorldBank REST API
-        search_results = await self.metadata_search.search_with_sdmx_fallback(
-            provider="WorldBank",
-            indicator=indicator,
+        # Use hierarchical search: SDMX first, then WorldBank REST API.
+        # Cap total metadata search time to 15s to prevent 60s+ hangs when
+        # the WB indicator API is slow. The upstream pipeline
+        # (resolve_indicator_for_fetch) should have already resolved most
+        # indicators via the catalog or IndicatorSelector.
+        import time as _time
+        _meta_start = _time.perf_counter()
+        try:
+            search_results = await asyncio.wait_for(
+                self.metadata_search.search_with_sdmx_fallback(
+                    provider="WorldBank",
+                    indicator=indicator,
+                ),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            _meta_elapsed = _time.perf_counter() - _meta_start
+            logger.warning(
+                "WorldBank metadata search timed out after %.1fs for '%s'",
+                _meta_elapsed, indicator,
+            )
+            raise DataNotAvailableError(
+                f"WorldBank indicator '{indicator}' search timed out. "
+                f"Try providing the official indicator code (e.g., NY.GDP.MKTP.CD)."
+            )
+
+        _meta_elapsed = _time.perf_counter() - _meta_start
+        logger.info(
+            "WorldBank metadata search completed in %.1fs for '%s' (%d results)",
+            _meta_elapsed, indicator, len(search_results) if search_results else 0,
         )
+
         if not search_results:
             raise DataNotAvailableError(
                 f"WorldBank indicator '{indicator}' not found. Try another description or provide the official indicator code."

@@ -693,7 +693,7 @@ def apply_concept_provider_override(
         return provider, params
 
     try:
-        from .catalog_service import find_concept_by_term, get_best_provider, is_provider_available
+        from .catalog_service import find_concept_by_term, get_best_provider, get_variant_for_query, is_provider_available
 
         concept_name = None
         matched_query = ""
@@ -766,29 +766,56 @@ def apply_concept_provider_override(
                 code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
                 code_name = (code_meta.get("name", "") if code_meta else "")
                 if not svc._verify_semantic_discriminators(original_query, canonical_code, code_name):
-                    missing_discs = True  # Flag for downstream logic
-                    if missing_discs:
-                        # Try provider-agnostic resolution -- another provider
-                        # might have a code that matches the discriminators
-                        alt_provider, alt_code, alt_conf = get_best_provider(
-                            concept_name, countries_ctx
-                        )
-                        alt_normalized = _normalize_provider_name(alt_provider or "")
-                        if alt_normalized and alt_normalized != provider and alt_code:
-                            alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
-                            alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
-                            alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
-                            if not alt_missing or len(alt_missing) < len(missing_discs):
-                                logger.info(
-                                    "🔄 Switching provider %s → %s (code %s matches discriminators better)",
-                                    provider, alt_normalized, alt_code,
-                                )
-                                params = {**params, "indicator": alt_code}
-                                intent.parameters = params
-                                intent.indicators = [alt_code]
-                                intent.apiProvider = alt_normalized
-                                return alt_normalized, params
-                        return provider, params
+                    # Primary variant doesn't match query discriminators (e.g.,
+                    # user asked for "GDP per capita PPP" but primary is current US$).
+                    # Try named catalog variants (ppp, growth, constant, etc.)
+                    # BEFORE falling through to expensive IndicatorSelector/metadata search.
+                    variant_code, variant_conf = get_variant_for_query(
+                        concept_name, provider, original_query, countries_ctx,
+                    )
+                    if variant_code:
+                        # Verify the variant passes semantic discriminators
+                        var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
+                        var_name = (var_meta.get("name", "") if var_meta else "")
+                        if svc._verify_semantic_discriminators(original_query, variant_code, var_name):
+                            logger.info(
+                                "📋 Catalog variant resolved: %s → %s for %s (concept=%s)",
+                                canonical_code, variant_code, provider, concept_name,
+                            )
+                            params = {**params, "indicator": variant_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
+                            intent.parameters = params
+                            if not intent.indicators or len(intent.indicators) <= 1:
+                                intent.indicators = [variant_code]
+                            return provider, params
+                        else:
+                            logger.info(
+                                "📋 Catalog variant %s also failed discriminator check, continuing",
+                                variant_code,
+                            )
+
+                    # No matching variant found — try provider-agnostic resolution
+                    alt_provider, alt_code, alt_conf = get_best_provider(
+                        concept_name, countries_ctx
+                    )
+                    alt_normalized = _normalize_provider_name(alt_provider or "")
+                    if alt_normalized and alt_normalized != provider and alt_code:
+                        alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
+                        alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
+                        # Check discriminators from the original query
+                        disc_set = getattr(_resolver, '_semantic_discriminators', set())
+                        query_discs = {d for d in disc_set if d in original_query.lower()}
+                        alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
+                        if not alt_missing:
+                            logger.info(
+                                "🔄 Switching provider %s → %s (code %s matches discriminators better)",
+                                provider, alt_normalized, alt_code,
+                            )
+                            params = {**params, "indicator": alt_code}
+                            intent.parameters = params
+                            intent.indicators = [alt_code]
+                            intent.apiProvider = alt_normalized
+                            return alt_normalized, params
+                    return provider, params
 
                 params = {**params, "indicator": canonical_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
                 intent.parameters = params

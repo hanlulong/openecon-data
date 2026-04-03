@@ -634,6 +634,139 @@ def get_best_provider(
     return best_provider, best_code, best_confidence
 
 
+def get_variant_for_query(
+    concept_name: str,
+    provider: str,
+    query: str,
+    countries: Optional[List[str]] = None,
+) -> Tuple[Optional[str], float]:
+    """
+    Select the best catalog variant for a provider based on query discriminators.
+
+    When the user asks for e.g. "GDP per capita PPP", the primary indicator
+    (GDP per capita, current US$) doesn't match. This function looks through
+    named variants (ppp, growth, ppp_constant, etc.) in the catalog YAML
+    and returns the variant whose name/key best matches the query.
+
+    Args:
+        concept_name: The catalog concept (e.g., "gdp_per_capita")
+        provider: The provider name (e.g., "WorldBank")
+        query: The original user query (e.g., "GDP per capita PPP India")
+        countries: Optional country context for coverage checking
+
+    Returns:
+        Tuple of (indicator_code, confidence) or (None, 0.0) if no variant matches
+    """
+    concept = get_concept(concept_name)
+    if not concept:
+        return None, 0.0
+
+    providers = concept.get("providers", {})
+    not_available = concept.get("not_available", [])
+
+    # Case-insensitive provider lookup
+    providers_lower = {p.lower(): p for p in providers.keys()}
+    not_available_lower = [p.lower() for p in not_available]
+
+    prov_lower = provider.lower()
+    if prov_lower in not_available_lower or prov_lower not in providers_lower:
+        return None, 0.0
+
+    actual_name = providers_lower[prov_lower]
+    provider_info = providers[actual_name]
+    if not isinstance(provider_info, dict):
+        return None, 0.0
+
+    query_lower = query.lower()
+
+    # Discriminator keywords to match against variant keys and names.
+    # Maps query terms to variant key patterns.
+    _VARIANT_DISCRIMINATORS = {
+        "ppp": ["ppp"],
+        "purchasing power": ["ppp"],
+        "constant": ["constant", "real"],
+        "real": ["constant", "real"],
+        "nominal": ["nominal", "current"],
+        "growth": ["growth"],
+        "per capita": ["per_capita", "percapita"],
+        "net": ["net"],
+        "gross": ["gross"],
+        "total": ["total"],
+    }
+
+    # Get primary variant info to exclude discriminators that already
+    # appear in the primary. This prevents "per capita" from triggering
+    # variant selection when the primary is already "GDP per capita".
+    primary_info = provider_info.get("primary", {})
+    primary_name_lower = ""
+    primary_key_lower = "primary"
+    if isinstance(primary_info, dict):
+        primary_name_lower = (primary_info.get("name") or "").lower()
+
+    # Find which discriminators appear in the query but NOT in the primary
+    query_discs = []
+    for disc_term, variant_keys in _VARIANT_DISCRIMINATORS.items():
+        if disc_term not in query_lower:
+            continue
+        # Skip discriminators already satisfied by the primary variant
+        primary_combined = f"{primary_key_lower} {primary_name_lower}"
+        disc_in_primary = (
+            disc_term in primary_name_lower
+            or any(pat in primary_combined for pat in variant_keys)
+        )
+        if disc_in_primary:
+            continue
+        query_discs.append((disc_term, variant_keys))
+
+    if not query_discs:
+        return None, 0.0
+
+    # Score each variant (skip "primary" and non-dict entries like "alternatives")
+    best_code = None
+    best_confidence = 0.0
+    best_match_count = 0
+
+    for variant_key, variant_data in provider_info.items():
+        if variant_key == "primary":
+            continue
+        if not isinstance(variant_data, dict):
+            continue
+        code = variant_data.get("code")
+        if not code:
+            continue
+
+        # Check coverage
+        coverage = variant_data.get("coverage", "global")
+        if not _check_coverage(coverage, countries):
+            continue
+
+        # Score: how many query discriminators does this variant match?
+        variant_key_lower = variant_key.lower()
+        variant_name_lower = (variant_data.get("name") or "").lower()
+        combined = f"{variant_key_lower} {variant_name_lower}"
+
+        match_count = 0
+        for disc_term, variant_patterns in query_discs:
+            for pattern in variant_patterns:
+                if pattern in combined or disc_term in variant_name_lower:
+                    match_count += 1
+                    break
+
+        if match_count > best_match_count:
+            best_match_count = match_count
+            best_code = code
+            best_confidence = variant_data.get("confidence", 0.85)
+
+    if best_code:
+        logger.info(
+            "📋 Catalog variant match: concept=%s provider=%s variant_code=%s "
+            "(matched %d/%d discriminators)",
+            concept_name, provider, best_code, best_match_count, len(query_discs),
+        )
+
+    return best_code, best_confidence
+
+
 def get_fallback_providers(
     concept_name: str,
     exclude_provider: Optional[str] = None

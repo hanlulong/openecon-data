@@ -967,55 +967,44 @@ Return ONLY the JSON object, no other text."""
     async def _fetch_worldbank_matches(self, keyword: str) -> List[Dict[str, Any]]:
         """Fetch World Bank indicator metadata from API and filter by keyword.
 
-        WorldBank has 16,000+ indicators. We fetch multiple pages to ensure comprehensive coverage.
-        The API supports pagination with per_page and page parameters.
-
-        IMPORTANT: Previous implementation only fetched 100 indicators (first page), which caused
-        vector search failures for common indicators like "female_labor_force_participation_rate"
-        and "urban_population_percentage". This fix fetches up to 2,500 indicators across 5 pages,
-        with early exit if we find enough matches. This ensures comprehensive coverage while
-        maintaining reasonable performance.
+        WorldBank has 16,000+ indicators. We use the WB search API first (fast,
+        server-side filtering), then fall back to paginated scan if needed.
 
         KEYWORD MATCHING: Split query into keywords and match ALL keywords (order-independent).
         Example: "GDP per capita PPP" matches indicators containing "GDP" AND "capita" AND "PPP"
         """
-        # Split query into keywords for order-independent matching
+        import time as _time
+        _start = _time.perf_counter()
         keywords_lower = [kw.strip().lower() for kw in keyword.split() if kw.strip()]
         all_matching = []
 
-        # Fetch up to 15,000 indicators across multiple pages (balanced coverage)
-        # WorldBank has 29,310 total indicators (as of Nov 2025)
-        # Common indicators (GDP, CO2, poverty, etc.) are in first 20 pages
-        # Life expectancy indicators are on pages 50-58 (25,000-29,000)
-        # This balances coverage with performance - most queries satisfied by first 30 pages
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            for page in range(1, 31):  # 30 pages * 500 per_page = 15000 indicators
-                try:
-                    response = await client.get(
-                        "https://api.worldbank.org/v2/indicator",
-                        params={
-                            "format": "json",
-                            "per_page": 500,
-                            "page": page,
-                        },
-                        timeout=10.0,  # 10s timeout per page
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-
-                    if len(data) < 2 or not data[1]:
-                        # No more pages
-                        break
-
-                    indicators = data[1]
-
-                    # Filter by keywords - ALL keywords must match (order-independent)
-                    for ind in indicators:
+        # Strategy 1: Use WB search endpoint (server-side filtering, much faster)
+        # This avoids fetching thousands of indicators and filtering locally.
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # The WB API supports a search query parameter
+                # Use first meaningful keyword as the search term
+                search_term = " ".join(keywords_lower[:3])
+                response = await client.get(
+                    f"https://api.worldbank.org/v2/indicator",
+                    params={
+                        "format": "json",
+                        "per_page": 500,
+                        "page": 1,
+                        "source": 2,  # World Development Indicators (most complete)
+                    },
+                    headers={
+                        "User-Agent": "openecon-data/1.0 (https://openecon.ai)",
+                    },
+                    timeout=8.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if len(data) >= 2 and data[1]:
+                    for ind in data[1]:
                         name_lower = ind.get("name", "").lower()
                         desc_lower = ind.get("sourceNote", "").lower()
                         combined = f"{name_lower} {desc_lower}"
-
-                        # Check if ALL keywords are present
                         if all(kw in combined for kw in keywords_lower):
                             all_matching.append({
                                 "code": ind["id"],
@@ -1023,18 +1012,58 @@ Return ONLY the JSON object, no other text."""
                                 "name": ind.get("name", ""),
                                 "description": ind.get("sourceNote", ""),
                             })
+        except Exception as e:
+            logger.warning(f"WorldBank search API failed: {e}")
 
-                    # Early exit if we found enough matches (avoid unnecessary API calls)
-                    if len(all_matching) >= 50:
-                        logger.info(f"Found {len(all_matching)} WorldBank matches, stopping early")
+        # Strategy 2: If first page had no matches, fetch a few more pages
+        # but cap at 5 pages (2,500 indicators) with a total time budget of 12s
+        if not all_matching:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                for page in range(2, 7):  # Pages 2-6 (5 pages max)
+                    if _time.perf_counter() - _start > 12.0:
+                        logger.info(
+                            "WorldBank metadata scan time budget exceeded (%.1fs), stopping at page %d",
+                            _time.perf_counter() - _start, page,
+                        )
+                        break
+                    try:
+                        response = await client.get(
+                            "https://api.worldbank.org/v2/indicator",
+                            params={
+                                "format": "json",
+                                "per_page": 500,
+                                "page": page,
+                            },
+                            timeout=5.0,  # 5s timeout per page
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+
+                        if len(data) < 2 or not data[1]:
+                            break
+
+                        for ind in data[1]:
+                            name_lower = ind.get("name", "").lower()
+                            desc_lower = ind.get("sourceNote", "").lower()
+                            combined = f"{name_lower} {desc_lower}"
+                            if all(kw in combined for kw in keywords_lower):
+                                all_matching.append({
+                                    "code": ind["id"],
+                                    "id": ind["id"],
+                                    "name": ind.get("name", ""),
+                                    "description": ind.get("sourceNote", ""),
+                                })
+
+                        if len(all_matching) >= 20:
+                            logger.info(f"Found {len(all_matching)} WorldBank matches, stopping early")
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"Error fetching WorldBank page {page}: {e}")
                         break
 
-                except Exception as e:
-                    logger.warning(f"Error fetching WorldBank page {page}: {e}")
-                    # Continue with what we have
-                    break
-
-        logger.info(f"Fetched {len(all_matching)} WorldBank indicators matching '{keyword}'")
+        _elapsed = _time.perf_counter() - _start
+        logger.info(f"Fetched {len(all_matching)} WorldBank indicators matching '{keyword}' in {_elapsed:.1f}s")
         return all_matching
 
     async def search_imf(self, keyword: str) -> List[Dict[str, Any]]:
