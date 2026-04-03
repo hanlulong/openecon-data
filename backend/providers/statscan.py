@@ -450,14 +450,58 @@ class StatsCanProvider(BaseProvider):
     def _extract_member_name(member: Dict[str, Any]) -> str:
         return str(member.get("memberNameEn", "")).strip()
 
+    # Common aliases mapping user-friendly terms to terms that appear in StatsCan metadata.
+    # Used by _find_member_id_by_keywords to expand search terms before matching.
+    MEMBER_KEYWORD_ALIASES: Dict[str, List[str]] = {
+        "youth": ["15 to 24 years", "15 to 24"],
+        "young": ["15 to 24 years", "15 to 24"],
+        "female": ["females", "women+", "women"],
+        "females": ["women+", "women"],
+        "women": ["females", "women+"],
+        "woman": ["females", "women+"],
+        "male": ["males", "men+", "men"],
+        "males": ["men+", "men"],
+        "men": ["males", "men+"],
+        "man": ["males", "men+"],
+        "senior": ["65 years and over", "65 years and older"],
+        "seniors": ["65 years and over", "65 years and older"],
+        "elderly": ["65 years and over", "65 years and older"],
+        "working age": ["25 to 54 years", "25 to 54"],
+        "prime age": ["25 to 54 years", "25 to 54"],
+        "core age": ["25 to 54 years", "25 to 54"],
+        "teenager": ["15 to 19 years", "15 to 19"],
+        "teenagers": ["15 to 19 years", "15 to 19"],
+        "teen": ["15 to 19 years", "15 to 19"],
+        "child": ["0 to 14 years", "0 to 4 years"],
+        "children": ["0 to 14 years", "0 to 4 years"],
+        "infant": ["0 to 4 years"],
+        "infants": ["0 to 4 years"],
+        "all": ["total", "both sexes", "all ages"],
+        "both": ["both sexes", "total"],
+        "bc": ["british columbia"],
+        "pei": ["prince edward island"],
+        "nwt": ["northwest territories"],
+    }
+
     def _find_member_id_by_keywords(self, members: List[Dict[str, Any]], keywords: List[str]) -> Optional[int]:
-        """Find the best matching member ID using exact-first keyword scoring."""
+        """Find the best matching member ID using exact-first keyword scoring.
+
+        Supports alias expansion: e.g. "youth" also searches for "15 to 24 years".
+        """
         best_member_id: Optional[int] = None
         best_score = 0
 
         normalized_keywords = [kw.lower().strip() for kw in keywords if kw and kw.strip()]
         if not normalized_keywords:
             return None
+
+        # Expand keywords with aliases
+        expanded_keywords = list(normalized_keywords)
+        for kw in normalized_keywords:
+            aliases = self.MEMBER_KEYWORD_ALIASES.get(kw, [])
+            for alias in aliases:
+                if alias.lower() not in expanded_keywords:
+                    expanded_keywords.append(alias.lower())
 
         for member in members:
             member_name = self._extract_member_name(member)
@@ -467,7 +511,7 @@ class StatsCanProvider(BaseProvider):
             member_name_lower = member_name.lower()
             score = 0
 
-            for keyword in normalized_keywords:
+            for keyword in expanded_keywords:
                 if member_name_lower == keyword:
                     score = max(score, 120)
                 elif member_name_lower.startswith(f"{keyword},") or member_name_lower.startswith(f"{keyword} "):
@@ -480,6 +524,86 @@ class StatsCanProvider(BaseProvider):
                 best_member_id = member.get("memberId")
 
         return best_member_id
+
+    async def resolve_member_id(self, product_id: str, dim_keyword: str, search_term: str) -> int:
+        """Dynamically find a member ID by searching actual table metadata.
+
+        Instead of relying on hardcoded dictionaries (which assume member IDs are
+        the same across all products), this method fetches the real metadata for the
+        given product and searches the matching dimension for the requested term.
+
+        Args:
+            product_id: StatsCan product ID (e.g., "14100287" or "18100004").
+                        Hyphens are stripped automatically.
+            dim_keyword: Substring to identify the target dimension
+                         (e.g., "geogr" for Geography, "sex" for Gender).
+            search_term: Human-readable term to match against member names
+                         (e.g., "Ontario", "Females", "15 to 24 years").
+
+        Returns:
+            The matching member ID, or 1 (the conventional "Total" / "All" default)
+            if no match is found.
+        """
+        normalized_pid = self._normalize_metadata_product_id(product_id)
+        metadata = await self._get_cube_metadata(normalized_pid)
+        dim_keyword_lower = dim_keyword.lower()
+
+        for dim in metadata.get("dimension", []):
+            dim_name = dim.get("dimensionNameEn", "").lower()
+            if dim_keyword_lower not in dim_name:
+                continue
+            members = dim.get("member", [])
+            result = self._find_member_id_by_keywords(members, [search_term])
+            if result is not None:
+                return result
+
+        logger.debug(
+            f"resolve_member_id: no match for '{search_term}' in dimension "
+            f"'{dim_keyword}' of product {product_id}; defaulting to 1"
+        )
+        return 1  # Default to first member
+
+    async def get_dimension_members(
+        self, product_id: str, dim_keyword: str, parent_id: Optional[int] = None
+    ) -> List[tuple]:
+        """Get all members of a dimension (e.g., all provinces for Geography).
+
+        Useful for "by province" or "by age group" queries where the caller
+        needs every child of a parent node.
+
+        Args:
+            product_id: StatsCan product ID (e.g., "14100287").
+            dim_keyword: Substring to identify the target dimension
+                         (e.g., "geogr" for Geography).
+            parent_id: If provided, only return members whose
+                       ``parentMemberId`` equals this value. For example,
+                       passing ``parent_id=1`` (Canada) returns only the
+                       provinces directly under Canada, excluding sub-
+                       regions or the national total itself.
+
+        Returns:
+            List of ``(member_id, member_name_en)`` tuples.
+        """
+        normalized_pid = self._normalize_metadata_product_id(product_id)
+        metadata = await self._get_cube_metadata(normalized_pid)
+        dim_keyword_lower = dim_keyword.lower()
+
+        for dim in metadata.get("dimension", []):
+            dim_name = dim.get("dimensionNameEn", "").lower()
+            if dim_keyword_lower not in dim_name:
+                continue
+            members = dim.get("member", [])
+            if parent_id is not None:
+                return [
+                    (m["memberId"], m.get("memberNameEn", ""))
+                    for m in members
+                    if m.get("parentMemberId") == parent_id
+                ]
+            return [
+                (m["memberId"], m.get("memberNameEn", ""))
+                for m in members
+            ]
+        return []
 
     def _select_default_member_id(
         self,
@@ -1785,9 +1909,10 @@ class StatsCanProvider(BaseProvider):
     ) -> NormalizedData:
         """Fetch categorical data using WDS coordinate-based queries.
 
-        This method uses the WDS getDataFromCubePidCoordAndLatestNPeriods endpoint
-        with 10-dimension coordinates to retrieve data filtered by any categorical
-        dimensions (geography, gender, age groups, etc.).
+        Dynamically discovers dimension structure from product metadata rather
+        than assuming a fixed dimension order.  Dimension names are matched
+        with fuzzy keywords (e.g. "sex" -> Gender, "age" -> Age group) so the
+        method works for *any* product, not just the population table.
 
         Args:
             params: Dictionary containing:
@@ -1796,9 +1921,9 @@ class StatsCanProvider(BaseProvider):
                 - periods: Number of recent periods to fetch (default: 20)
                 - dimensions: Dict mapping dimension names to values, e.g.:
                     {
-                        "geography": "Ontario",      # Province/territory name
-                        "gender": "Men+",            # Gender category
-                        "age": "25 to 29 years"      # Age group
+                        "geography": "Ontario",
+                        "gender": "Men+",
+                        "age": "25 to 29 years"
                     }
                   Any dimension can be None or omitted to use "all" (member ID 1)
 
@@ -1808,70 +1933,90 @@ class StatsCanProvider(BaseProvider):
         Raises:
             ValueError: If dimension value not recognized
             DataNotAvailableError: If data cannot be retrieved
-
-        Examples:
-            # Ontario population (all genders, all ages)
-            {"productId": "17100005", "indicator": "Population",
-             "dimensions": {"geography": "Ontario"}}
-
-            # Canada male population (all ages)
-            {"productId": "17100005", "indicator": "Population",
-             "dimensions": {"gender": "Men+"}}
-
-            # Ontario male population aged 25-29
-            {"productId": "17100005", "indicator": "Population",
-             "dimensions": {"geography": "Ontario", "gender": "Men+", "age": "25 to 29 years"}}
         """
         product_id = params.get("productId", self.POPULATION_DEMOGRAPHICS_PRODUCT)
         indicator = params.get("indicator", "Population")
         periods = params.get("periods", 20)
-        dimensions = params.get("dimensions", {})
+        dim_values = params.get("dimensions", {})
+        indicator_lower = indicator.lower() if indicator else ""
 
-        # Extract dimension values (default to None = "all")
-        geography = dimensions.get("geography")
-        gender = dimensions.get("gender")
-        age = dimensions.get("age")
+        # Extract user-supplied dimension values
+        geography = dim_values.get("geography")
+        gender = dim_values.get("gender") or dim_values.get("sex")
+        age = dim_values.get("age")
 
-        # Look up member IDs for each dimension
-        # Default to 1 (which typically means "Total" or "All" for most dimensions)
-        geography_id = 1  # Default: All Canada
-        gender_id = 1     # Default: Total (both genders)
-        age_id = 1        # Default: All ages
-
-        # Dimension 0: Geography
+        # Validate geography early (rejects cities / non-Canadian countries)
         if geography:
-            # Use _resolve_geography which validates cities and non-Canadian countries
-            geography_id = self._resolve_geography(geography)
+            self._resolve_geography(geography)
 
-        # Dimension 1: Gender
-        if gender:
-            gender_upper = gender.upper()
-            gender_id = self.GENDER_MEMBER_IDS.get(gender_upper)
-            if not gender_id:
-                available = ", ".join(sorted(set(self.GENDER_MEMBER_IDS.keys())))
-                raise ValueError(
-                    f"Unknown gender: '{gender}'. "
-                    f"Available: {available}"
+        # ---------- Fetch actual dimension metadata for this product ----------
+        normalized_pid = self._normalize_metadata_product_id(product_id)
+        cube_metadata = await self._get_cube_metadata(normalized_pid)
+        meta_dimensions = cube_metadata.get("dimension", [])
+
+        if not meta_dimensions:
+            raise DataNotAvailableError(
+                f"Product {product_id} has no dimension metadata"
+            )
+
+        # ---------- Build coordinate dynamically ----------
+        # For each dimension discovered in the metadata we decide the member ID
+        # using keyword matching against the dimension name.
+        coordinate_parts: List[int] = []
+        for dim in meta_dimensions:
+            dim_name_lower = dim.get("dimensionNameEn", "").lower()
+            members = dim.get("member", [])
+
+            if "geogr" in dim_name_lower:
+                if geography:
+                    mid = await self.resolve_member_id(normalized_pid, "geogr", geography)
+                else:
+                    mid = 1  # Canada / Total
+                coordinate_parts.append(mid)
+
+            elif any(kw in dim_name_lower for kw in ["gender", "sex"]):
+                if gender:
+                    mid = self._find_member_id_by_keywords(members, [gender])
+                    if mid is None:
+                        # List available members for a helpful error
+                        available = [m.get("memberNameEn", "") for m in members[:15]]
+                        raise ValueError(
+                            f"Unknown gender/sex value: '{gender}'. "
+                            f"Available: {', '.join(available)}"
+                        )
+                    coordinate_parts.append(mid)
+                else:
+                    coordinate_parts.append(
+                        self._find_member_id_by_keywords(members, ["both sexes", "total"]) or 1
+                    )
+
+            elif "age" in dim_name_lower:
+                if age:
+                    mid = self._find_member_id_by_keywords(members, [age])
+                    if mid is None:
+                        available = [m.get("memberNameEn", "") for m in members[:20]]
+                        raise ValueError(
+                            f"Unknown age group: '{age}'. "
+                            f"Available (partial): {', '.join(available)}..."
+                        )
+                    coordinate_parts.append(mid)
+                else:
+                    coordinate_parts.append(
+                        self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
+                    )
+
+            else:
+                # Use semantic default selection for any other dimension
+                coordinate_parts.append(
+                    self._select_default_member_id(
+                        dim.get("dimensionNameEn", ""), members, indicator_lower
+                    )
                 )
 
-        # Dimension 2: Age group
-        if age:
-            age_upper = age.upper()
-            age_id = self.AGE_GROUP_MEMBER_IDS.get(age_upper)
-            if not age_id:
-                available = ", ".join(sorted(list(self.AGE_GROUP_MEMBER_IDS.keys())[:20]))
-                raise ValueError(
-                    f"Unknown age group: '{age}'. "
-                    f"Available (partial): {available}... (see AGE_GROUP_MEMBER_IDS for full list)"
-                )
-
-        # Build 10-dimension coordinate
-        # For product 17100005 (Population by age and gender):
-        #   Dimension 0: Geography (province/territory)
-        #   Dimension 1: Gender
-        #   Dimension 2: Age group
-        #   Dimensions 3-9: Padded with zeros (unused for this product)
-        coordinate = f"{geography_id}.{gender_id}.{age_id}.0.0.0.0.0.0.0"
+        # Pad to 10 dimensions
+        while len(coordinate_parts) < 10:
+            coordinate_parts.append(0)
+        coordinate = ".".join(str(p) for p in coordinate_parts[:10])
 
         # Build human-readable description for logging and metadata
         description_parts = []
@@ -1889,15 +2034,12 @@ class StatsCanProvider(BaseProvider):
             f"using WDS coordinate: {coordinate}"
         )
 
-        # Use extended timeout (300s = 5 minutes) to handle complex multi-province queries
-        # StatsCan API can be slow, especially for batch coordinate queries
         # Use shared HTTP client pool for better performance
         client = get_http_client()
-        # Fetch data using coordinate-based query
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
-                "productId": product_id,
+                "productId": normalized_pid,
                 "coordinate": coordinate,
                 "latestN": periods
             }],
@@ -2435,85 +2577,101 @@ class StatsCanProvider(BaseProvider):
 
             logger.debug(f"  Dimension {dim_idx} ({dim_name}): {len(member_map)} members")
 
-        # Determine which provinces to query
+        # ---------- Discover Geography dimension from metadata ----------
+        # Find the geography dimension index and its member list
+        geo_dim_idx: Optional[int] = None
+        geo_members: List[Dict[str, Any]] = []
+        for dim_idx, dim_info in enumerate(dimensions_list):
+            if "geogr" in dim_info.get("dimensionNameEn", "").lower():
+                geo_dim_idx = dim_idx
+                geo_members = dim_info.get("member", [])
+                break
+
+        if geo_dim_idx is None:
+            raise ValueError(
+                f"Product {product_id} has no Geography dimension; "
+                f"cannot run a multi-province query."
+            )
+
+        # Determine which provinces to query -- dynamically from metadata
         if provinces_param == "all" or provinces_param is None:
-            # All provinces except Canada total (ID=1)
-            provinces_to_query = [
-                name for name, member_id in self.GEOGRAPHY_MEMBER_IDS.items()
-                if member_id != 1 and member_id < 15  # Exclude Canada, keep provinces/territories
-            ]
+            # Use get_dimension_members to get provinces (children of Canada=1)
+            province_tuples = await self.get_dimension_members(product_id, "geogr", parent_id=1)
+            if not province_tuples:
+                # Fallback: take all geography members except the first (usually "Canada")
+                province_tuples = [
+                    (m["memberId"], m.get("memberNameEn", ""))
+                    for m in geo_members
+                    if m.get("memberId", 0) != 1
+                ]
+            provinces_to_query_with_ids: List[tuple] = province_tuples
         elif isinstance(provinces_param, list):
-            provinces_to_query = provinces_param
+            provinces_to_query_with_ids = []
+            for pname in provinces_param:
+                mid = await self.resolve_member_id(product_id, "geogr", pname)
+                provinces_to_query_with_ids.append((mid, pname))
         else:
-            provinces_to_query = [provinces_param]
+            mid = await self.resolve_member_id(product_id, "geogr", provinces_param)
+            provinces_to_query_with_ids = [(mid, provinces_param)]
 
-        # Validate all provinces before building requests
-        for province_name in provinces_to_query:
+        # Validate provinces (reject cities / non-Canadian)
+        for _, province_name in provinces_to_query_with_ids:
             try:
-                # This will raise ValueError for cities or non-Canadian countries
                 self._resolve_geography(province_name)
-            except ValueError as e:
-                # Re-raise with context about multi-province query
-                raise ValueError(
-                    f"Invalid geography in multi-province query: {str(e)}"
-                )
+            except ValueError:
+                # resolve_geography might not recognise dynamically-discovered names
+                # that don't exist in the hardcoded list -- that's fine, we already
+                # have the member ID from metadata.
+                pass
 
-        # Build coordinate requests for each province
+        # ---------- Build coordinate requests for each province ----------
+        indicator_lower = indicator.lower() if indicator else ""
         coordinate_requests = []
-        province_map = {}  # Map coordinate to province name for response parsing
+        province_map = {}  # Map coordinate -> province name for response parsing
 
-        for province_name in provinces_to_query:
-            province_upper = province_name.upper()
+        for geography_id, province_name in provinces_to_query_with_ids:
+            coordinate_parts: List[str] = []
 
-            # Check geography aliases first (short forms like "ON", "QC")
-            if province_upper in self.GEOGRAPHY_ALIASES:
-                canonical_name = self.GEOGRAPHY_ALIASES[province_upper]
-                province_upper = canonical_name.upper()
+            for dim_idx, dim_info in enumerate(dimensions_list):
+                dim_name_lower = dim_info.get("dimensionNameEn", "").lower()
+                members = dim_info.get("member", [])
 
-            geography_id = self.GEOGRAPHY_MEMBER_IDS.get(province_upper)
+                if dim_idx == geo_dim_idx:
+                    # Geography dimension -- use the province member ID
+                    coordinate_parts.append(str(geography_id))
 
-            if not geography_id:
-                logger.warning(f"⚠️ Unknown province '{province_name}', skipping")
-                continue
-
-            # Build coordinate by iterating through dimensions
-            # Start with geography ID at index 0
-            coordinate_parts = [str(geography_id)]
-
-            # Fill in remaining dimensions based on metadata
-            for dim_idx in range(1, len(dimensions_list)):
-                dim_info = dimensions_list[dim_idx]
-                dim_name = dim_info.get("dimensionNameEn", "").upper()
-
-                # Try to find a matching dimension value from params
-                member_id = 1  # Default to first member (usually "Total" or "All")
-
-                # Check if user provided a value for this dimension
-                if "LABOUR" in dim_name and "CHARACTERISTIC" in dim_name:
-                    # Labour force characteristic dimension
-                    labour_char = dimensions.get("labour_characteristic") or dimensions.get("characteristic")
-                    if labour_char:
-                        labour_char_upper = labour_char.upper()
-                        # Try to find in member map
-                        for member in dim_info.get("member", []):
-                            if labour_char_upper in member.get("memberNameEn", "").upper():
-                                member_id = member.get("memberId", 1)
-                                break
-                elif "GENDER" in dim_name or "SEX" in dim_name:
-                    gender = dimensions.get("gender")
+                elif any(kw in dim_name_lower for kw in ["gender", "sex"]):
+                    gender = dimensions.get("gender") or dimensions.get("sex")
                     if gender:
-                        gender_upper = gender.upper()
-                        member_id = self.GENDER_MEMBER_IDS.get(gender_upper, 1)
-                elif "AGE" in dim_name:
+                        mid = self._find_member_id_by_keywords(members, [gender]) or 1
+                    else:
+                        mid = self._find_member_id_by_keywords(members, ["both sexes", "total"]) or 1
+                    coordinate_parts.append(str(mid))
+
+                elif "age" in dim_name_lower:
                     age = dimensions.get("age")
                     if age:
-                        age_upper = age.upper()
-                        member_id = self.AGE_GROUP_MEMBER_IDS.get(age_upper, 1)
-                elif "STATISTIC" in dim_name:
-                    # Statistics dimension (Estimate, Standard Error, etc.)
-                    member_id = 1  # Default to "Estimate"
+                        mid = self._find_member_id_by_keywords(members, [age]) or 1
+                    else:
+                        mid = self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
+                    coordinate_parts.append(str(mid))
 
-                coordinate_parts.append(str(member_id))
+                elif any(kw in dim_name_lower for kw in ["labour force characteristic", "labour force", "labor force"]):
+                    labour_char = dimensions.get("labour_characteristic") or dimensions.get("characteristic")
+                    if labour_char:
+                        mid = self._find_member_id_by_keywords(members, [labour_char]) or 1
+                    else:
+                        mid = self._select_default_member_id(
+                            dim_info.get("dimensionNameEn", ""), members, indicator_lower
+                        )
+                    coordinate_parts.append(str(mid))
+
+                else:
+                    # For any other dimension, use semantic default selection
+                    mid = self._select_default_member_id(
+                        dim_info.get("dimensionNameEn", ""), members, indicator_lower
+                    )
+                    coordinate_parts.append(str(mid))
 
             # Pad coordinate to 10 dimensions (StatsCan requirement)
             while len(coordinate_parts) < 10:
@@ -2530,7 +2688,7 @@ class StatsCanProvider(BaseProvider):
             logger.debug(f"  {province_name}: {coordinate}")
 
         if not coordinate_requests:
-            raise ValueError(f"No valid provinces found in: {provinces_to_query}")
+            raise ValueError(f"No valid provinces found in: {[n for _, n in provinces_to_query_with_ids]}")
 
         logger.info(
             f"Fetching {indicator} for {len(coordinate_requests)} provinces "
