@@ -8929,7 +8929,6 @@ class QueryService:
                         return [series]
             if provider in {"EXCHANGERATE", "EXCHANGE_RATE", "FX"}:
                 return await self._fetch_exchange_rate_with_historical_fallback(intent, params)
-                return [series]
             if provider == "BIS":
                 indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "POLICY_RATE"))
                 # Add indicator to params for cache key differentiation
@@ -9807,7 +9806,6 @@ class QueryService:
         """
         from backend.agents import get_agent_graph, set_query_service_provider
         from backend.memory.state_manager import get_state_manager
-        from backend.memory.conversation_state import EntityContext
         from langchain_core.messages import HumanMessage, AIMessage
 
         logger.info("🔄 Using LangGraph agent orchestration")
