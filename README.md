@@ -149,10 +149,10 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 ```
   "Compare US and           ┌──────────────┐        ┌────────────────┐
-   Japan inflation"    ───▶ │  LLM Parser  │  ───▶  │  Smart Router  │
-                            │  (intent,    │        │  (67 curated   │
-                            │   countries, │        │   concepts +   │
-                            │   dates)     │        │   330K index)  │
+   Japan inflation"    ───▶ │  LLM Parser  │  ───▶  │  LLM Router    │
+                            │  (intent,    │        │  (semantic      │
+                            │   countries, │        │   routing +     │
+                            │   dates)     │        │   330K index)   │
                             └──────────────┘        └───────┬────────┘
                                                             │
                             ┌────────────┐          ┌───────▼────────┐
@@ -164,8 +164,8 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 ```
 
 1. **Parse** — An LLM extracts intent, countries, indicators, and date range from plain English
-2. **Route** — 67 curated economic concepts + 330K indicator index picks the best provider
-3. **Fetch** — Data retrieved from official APIs, normalized and aligned
+2. **Route** — Semantic routing picks the best provider and series from 330K+ indicators
+3. **Fetch** — Data retrieved from official APIs with automatic fallback if a source is down
 4. **Return** — Interactive chart, or structured data via MCP for your agent
 
 ## Features
@@ -176,13 +176,17 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **330K Indicator Discovery** — Full-text search across FRED, World Bank, IMF, Eurostat, BIS, and more. Ask "What trade data does Comtrade have?" and get a browsable list.
 
-**Conversational** — Follow up naturally: add countries, change time ranges, switch indicators. The system remembers context.
+**Multi-Round Conversations** — Follow up naturally: add countries, change time ranges, switch indicators. Context is preserved across turns, so "now add Germany" just works.
+
+**Smart Routing** — The system understands what you mean, not just what you type. It picks the right provider (FRED for US data, World Bank for global comparisons, Comtrade for trade flows) based on the meaning of your query.
 
 **Multi-Country Comparisons** — Say "G7", "BRICS", "EU", "ASEAN", "Nordic" or list specific countries. Auto-expands to all members.
 
-**67 Curated Concepts** — Hand-verified mappings ensure "US jobless claims" routes to FRED/ICSA, not a generic unemployment rate.
+**Fast** — Repeat queries return in ~0.1 seconds. First-time queries take ~4 seconds end-to-end.
 
-**Cross-Encoder Reranking** — FlashRank reranks search results so "GDP growth rate" matches the growth series, not raw GDP levels. Retrieve broadly, rerank precisely.
+**Resilient** — If one provider is down, the system automatically falls back to the next-best source. No manual retries needed.
+
+**Clarifies Ambiguity** — When a query could mean multiple things ("inflation" could be CPI, PCE, or GDP deflator), the system asks you to pick rather than guessing wrong.
 
 **Multi-Format Export** — CSV, JSON, DTA (Stata), and Python code. Every export includes source attribution.
 
@@ -190,20 +194,30 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Self-Hostable** — AGPL-3.0 licensed. Add new providers by implementing a single base class.
 
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| First query | ~4.3s end-to-end |
+| Repeat query (cached) | ~0.1s |
+| Indicator database | 330,000+ indexed series across 10 providers |
+
 ## Data Sources
+
+10 providers, 330K+ indexed indicators:
 
 | Provider | Coverage | Indicators | API Key |
 |----------|----------|-----------|---------|
-| **FRED** | US macroeconomic data | 90,000+ series | Free |
-| **World Bank** | Global development | 16,000+ indicators | None |
-| **IMF** | International financial statistics | Extensive | None |
-| **Eurostat** | EU member states | Extensive | None |
-| **UN Comtrade** | International trade flows | All HS codes | Free |
-| **BIS** | Central bank & financial stability | Curated | None |
-| **Statistics Canada** | Canadian economic data | 40,000+ tables | None |
-| **OECD** | OECD member countries | Extensive | None |
-| **ExchangeRate-API** | 160+ currencies | Live & historical | Free |
-| **CoinGecko** | Cryptocurrencies | 10,000+ coins | Free |
+| **FRED** | US macroeconomic data (GDP, CPI, employment, rates) | 90,000+ series | Free |
+| **World Bank** | Global development (200+ countries, poverty, health) | 16,000+ indicators | None |
+| **IMF** | Balance of payments, exchange rates, fiscal data | Extensive | None |
+| **Eurostat** | EU member states (HICP, labor, trade) | Extensive | None |
+| **UN Comtrade** | Bilateral trade flows by HS commodity code | All HS codes | Free |
+| **BIS** | Credit-to-GDP, property prices, debt securities | Curated | None |
+| **Statistics Canada** | Canadian economic tables (labor, trade, prices) | 40,000+ tables | None |
+| **OECD** | OECD member country statistics | Extensive | None |
+| **ExchangeRate-API** | 160+ currency pairs, live and historical | Live & historical | Free |
+| **CoinGecko** | Cryptocurrency prices and market data | 10,000+ coins | Free |
 
 ## Who Is This For?
 
@@ -222,15 +236,15 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 │  User / Agent   │────▶│  FastAPI Backend  │────▶│  Data Providers          │
 │                 │     │                  │     │                          │
 │  "US inflation" │     │  LLM Parser      │     │  FRED · World Bank · IMF │
-│                 │◀────│  Query Router    │◀────│  Eurostat · BIS · ...    │
-│  Chart + Data   │     │  Normalizer      │     │                          │
+│                 │◀────│  LLM Router      │◀────│  Eurostat · BIS · ...    │
+│  Chart + Data   │     │  330K Index      │     │                          │
 └─────────────────┘     └──────────────────┘     └──────────────────────────┘
         │                        │
    React Frontend          MCP Endpoint
    (Vite + Recharts)     (SSE Transport)
 ```
 
-**Stack:** Python · FastAPI · React · TypeScript · Vite · Recharts · FAISS · OpenRouter
+**Stack:** Python · FastAPI · React · TypeScript · Vite · Recharts · Redis · OpenRouter
 
 ## Contributing
 

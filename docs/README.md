@@ -72,21 +72,29 @@ OpenEcon Data integrates with 10+ economic data providers. Each provider has spe
 
 ## API Reference
 
-### Backend API Endpoints
-
-The OpenEcon Data backend exposes a REST API at `/api/*`. See [backend/README.md](../backend/README.md) for the full endpoint list.
+Full endpoint documentation: **[API Reference](reference/api.md)** -- request/response schemas, authentication, conversation flow, rate limiting, circuit breaker behavior.
 
 **Core Endpoints:**
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check with service status |
-| `/api/query` | POST | Process natural language query |
-| `/api/query/stream` | POST | Streaming query with real-time updates |
-| `/api/query/pro` | POST | Pro Mode (AI-generated code execution) |
-| `/api/export` | POST | Export data as CSV/JSON |
-| `/api/auth/register` | POST | User registration |
-| `/api/auth/login` | POST | User login |
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/health` | GET | No | Health check with service status |
+| `/api/query` | POST | Optional | Process natural language query |
+| `/api/query/stream` | POST | Optional | Streaming query (SSE) with real-time progress |
+| `/api/query/pro` | POST | Optional | Pro Mode (AI-generated code execution) |
+| `/api/query/pro/stream` | POST | Optional | Pro Mode with streaming |
+| `/api/export` | POST | No | Export data as CSV/JSON/Stata |
+| `/api/feedback` | POST | No | Submit user feedback |
+| `/api/auth/register` | POST | No | User registration |
+| `/api/auth/login` | POST | No | User login |
+| `/api/auth/me` | GET | Yes | Current user profile |
+| `/api/user/history` | GET | Yes | Query history |
+| `/api/user/history` | DELETE | Yes | Clear query history |
+| `/api/session/history` | GET | No | Anonymous session history |
+| `/api/cache/stats` | GET | Yes | Cache statistics |
+| `/api/cache/clear` | POST | Yes | Clear cache |
+| `/api/performance/metrics` | GET | No | Performance metrics |
+| `/api/performance/status` | GET | No | System status |
 
 ### MCP Server
 
