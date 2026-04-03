@@ -20,6 +20,8 @@ synonyms:
     - export value
     - outbound trade
     - export volume
+    - service exports
+    - service exports share of gdp
     - exports of goods and services as percent of gdp
     - exports of goods and services (% of gdp)
 
@@ -34,6 +36,14 @@ providers:
       code: NE.EXP.GNFS.ZS
       name: "Exports of goods and services (% of GDP)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: BX_GDP
+      name: "Exports of Goods and Services (% of GDP)"
+      confidence: 0.80
       coverage: global
       frequency: annual
 

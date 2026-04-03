@@ -20,6 +20,8 @@ synonyms:
     - import value
     - inbound trade
     - import volume
+    - service imports
+    - service imports share of gdp
     - imports of goods and services as percent of gdp
     - imports of goods and services (% of gdp)
 
@@ -34,6 +36,14 @@ providers:
       code: NE.IMP.GNFS.ZS
       name: "Imports of goods and services (% of GDP)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+
+  IMF:
+    primary:
+      code: BM_GDP
+      name: "Imports of Goods and Services (% of GDP)"
+      confidence: 0.80
       coverage: global
       frequency: annual
 

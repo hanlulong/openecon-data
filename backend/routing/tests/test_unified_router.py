@@ -578,6 +578,12 @@ class TestProductionQueries:
         ("Service imports share of GDP in UAE and Qatar", "WorldBank"),
         ("Import share of GDP in India vs Vietnam", "WorldBank"),
         ("Export share of GDP in Japan and South Korea", "WorldBank"),
+        # Exact sweep queries (Q031, Q032, Q036, Q037, Q039) — must route to WorldBank
+        ("Exports to GDP ratio in China and the UK since 2000", "WorldBank"),
+        ("Import share of GDP in China and the US since 2000", "WorldBank"),
+        ("Merchandise exports as share of GDP in Vietnam and Bangladesh", "WorldBank"),
+        ("Merchandise imports as share of GDP in Mexico and Brazil", "WorldBank"),
+        ("Service imports share of GDP in UAE and Qatar", "WorldBank"),
     ]
 
     # Financial queries

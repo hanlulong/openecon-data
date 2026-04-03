@@ -1423,7 +1423,7 @@ class QueryService:
                 if semantic_provider != routed_provider:
                     deterministic_locked = (
                         deterministic_confidence >= 0.88
-                        and deterministic_match_type in {"explicit", "us_only", "indicator"}
+                        and deterministic_match_type in {"explicit", "us_only", "indicator", "catalog"}
                     )
                     semantic_materially_stronger = semantic_confidence >= (deterministic_confidence + 0.05)
                     if deterministic_locked and not semantic_materially_stronger:
@@ -5088,16 +5088,17 @@ class QueryService:
                                     return alt_normalized, params
                             return provider, params
 
-                    params = {**params, "indicator": canonical_code, "__catalog_resolved": True}
+                    params = {**params, "indicator": canonical_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
                     intent.parameters = params
                     distinct_indicators = {str(value) for value in (intent.indicators or []) if value}
                     if not distinct_indicators or len(distinct_indicators) == 1:
                         intent.indicators = [canonical_code]
                     logger.info(
-                        "📋 Concept code override: %s -> %s for provider %s",
+                        "📋 Concept code override: %s -> %s for provider %s (concept=%s)",
                         matched_query,
                         canonical_code,
                         provider,
+                        concept_name,
                     )
 
                 if (
@@ -5151,7 +5152,7 @@ class QueryService:
             intent.apiProvider = alt_provider or provider
 
             if alt_code:
-                params = {**params, "indicator": alt_code, "__catalog_resolved": True}
+                params = {**params, "indicator": alt_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
                 intent.parameters = params
                 if not intent.indicators or len(intent.indicators) <= 1:
                     intent.indicators = [alt_code]
@@ -5663,6 +5664,11 @@ class QueryService:
 
         Uses LLM indicator text by default, but falls back to the original user
         query when semantic cues clearly mismatch.
+
+        IMPORTANT: If the indicator looks like a provider-specific code (e.g.,
+        NE.EXP.GNFS.ZS for WorldBank, EREER for IMF), prefer the original
+        query text or distilled indicator phrase. Provider codes are meaningless
+        to other providers during cross-provider fallback.
         """
         if not intent.indicators:
             return ""
@@ -5679,6 +5685,17 @@ class QueryService:
 
         def _fallback_to_original_or_distilled() -> str:
             return distilled_original or original_query
+
+        # If the indicator looks like a provider-specific code, never use it
+        # for cross-provider resolution — prefer the original query text.
+        provider = normalize_provider_name(intent.apiProvider or "")
+        if provider and self._looks_like_provider_indicator_code(provider, indicator_query):
+            logger.info(
+                "🔎 Indicator '%s' looks like a %s-specific code. Using original query for resolution.",
+                indicator_query,
+                provider,
+            )
+            return _fallback_to_original_or_distilled()
 
         indicator_lower = indicator_query.lower()
         if any(term in indicator_lower for term in ("discontinued", "deprecated", "legacy")):
@@ -6824,11 +6841,129 @@ class QueryService:
             original_indicators, fallback_result, target_countries, original_query,
         )
 
+    def _resolve_concept_for_fallback(
+        self,
+        intent: ParsedIntent,
+        primary_provider: str,
+    ) -> Optional[str]:
+        """Resolve a catalog concept name from the intent for cross-provider fallback.
+
+        Checks (in order):
+        1. Stored ``__catalog_concept`` parameter (set during catalog resolution)
+        2. Reverse lookup from provider-specific indicator code via catalog
+        3. Forward lookup from the original query text via ``find_concept_by_term``
+
+        Returns:
+            Catalog concept name (e.g., ``"exports_pct_gdp"``) or ``None``.
+        """
+        try:
+            from .catalog_service import find_concept_by_term, find_concepts_by_code
+
+            # 1. Check stored concept from prior catalog resolution
+            stored_concept = (intent.parameters or {}).get("__catalog_concept")
+            if stored_concept:
+                logger.debug("Fallback concept from __catalog_concept: %s", stored_concept)
+                return str(stored_concept)
+
+            # 2. Reverse lookup: provider code -> concept
+            for ind in (intent.indicators or []):
+                ind_str = str(ind or "").strip()
+                if ind_str and self._looks_like_provider_indicator_code(primary_provider, ind_str):
+                    concepts = find_concepts_by_code(primary_provider, ind_str)
+                    if concepts:
+                        logger.debug(
+                            "Fallback concept via reverse code lookup (%s/%s): %s",
+                            primary_provider, ind_str, concepts[0],
+                        )
+                        return concepts[0]
+
+            # Also check the 'indicator' parameter which may hold the resolved code
+            param_indicator = str((intent.parameters or {}).get("indicator", "")).strip()
+            if param_indicator and self._looks_like_provider_indicator_code(primary_provider, param_indicator):
+                concepts = find_concepts_by_code(primary_provider, param_indicator)
+                if concepts:
+                    logger.debug(
+                        "Fallback concept via param indicator reverse lookup (%s/%s): %s",
+                        primary_provider, param_indicator, concepts[0],
+                    )
+                    return concepts[0]
+
+            # 3. Forward lookup: original query text -> concept
+            original_query = str(intent.originalQuery or "").strip()
+            if original_query:
+                concept = find_concept_by_term(original_query)
+                if concept:
+                    logger.debug("Fallback concept via query text: %s", concept)
+                    return concept
+
+                # Try distilled query
+                distilled = self._build_distilled_indicator_query(original_query)
+                if distilled:
+                    concept = find_concept_by_term(distilled)
+                    if concept:
+                        logger.debug("Fallback concept via distilled query: %s", concept)
+                        return concept
+
+        except Exception as exc:
+            logger.debug("Concept resolution for fallback failed: %s", exc)
+
+        return None
+
+    def _resolve_indicator_for_fallback_provider(
+        self,
+        concept_name: Optional[str],
+        fallback_provider: str,
+        semantic_query: str,
+        countries: Optional[list],
+    ) -> list[str]:
+        """Resolve the indicator for a specific fallback provider.
+
+        Uses the catalog concept to get the correct provider-specific code.
+        Falls back to the semantic query string when catalog lookup fails.
+
+        Args:
+            concept_name: Catalog concept (e.g., ``"exports_pct_gdp"``).
+            fallback_provider: Target provider name.
+            semantic_query: Human-readable indicator phrase for fallback.
+            countries: Country context for coverage checks.
+
+        Returns:
+            List with one indicator string for the fallback provider.
+        """
+        if concept_name:
+            try:
+                from .catalog_service import get_best_provider
+
+                provider_name, code, confidence = get_best_provider(
+                    concept_name,
+                    countries,
+                    preferred_provider=fallback_provider,
+                )
+                provider_norm = normalize_provider_name(provider_name or "")
+                if provider_norm == fallback_provider and code and confidence >= 0.5:
+                    logger.info(
+                        "📋 Fallback indicator resolved via catalog: concept='%s' -> %s/%s (conf=%.2f)",
+                        concept_name, fallback_provider, code, confidence,
+                    )
+                    return [code]
+            except Exception as exc:
+                logger.debug("Catalog fallback indicator resolution failed: %s", exc)
+
+        # Fall back to semantic query string
+        if semantic_query:
+            return [semantic_query]
+        return []
+
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):
         """
         Try to fetch data from fallback providers when primary fails.
 
-        Attempts multiple fallback providers in order until one succeeds.
+        Uses concept names (not provider-specific codes) for cross-provider
+        indicator resolution. When falling back from provider A to provider B:
+        1. Resolve the catalog concept from the original query/indicator
+        2. Look up the correct indicator code for provider B via catalog
+        3. Fall back to human-readable query text if catalog lookup fails
+        4. NEVER pass provider A's codes (e.g., NE.EXP.GNFS.ZS) to provider B
 
         Args:
             intent: The parsed intent
@@ -6841,7 +6976,12 @@ class QueryService:
             Original error if all fallbacks fail
         """
         primary_provider = normalize_provider_name(intent.apiProvider)
+
+        # Resolve the concept name for cross-provider fallback.
+        concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
+
         # Use semantic indicator query (or original query) for smarter fallbacks.
+        # This is the human-readable phrase, never a provider-specific code.
         indicator = self._select_indicator_query_for_resolution(intent)
         if not indicator:
             indicator = str(intent.originalQuery or "").strip() or (
@@ -6859,6 +6999,11 @@ class QueryService:
         if not fallback_providers:
             raise primary_error
 
+        logger.info(
+            "🔄 Cross-provider fallback: concept=%s, semantic_query='%s', providers=%s",
+            concept_name, indicator, fallback_providers,
+        )
+
         last_error = primary_error
         for fallback_provider in fallback_providers:
             logger.warning(f"Attempting fallback from {primary_provider} to {fallback_provider}")
@@ -6871,17 +7016,31 @@ class QueryService:
             fallback_params.pop("seriesId", None)
             fallback_params.pop("series_id", None)
             fallback_params.pop("code", None)
+            # Remove stale catalog state from the primary provider
+            fallback_params.pop("__catalog_resolved", None)
+            fallback_params.pop("__catalog_concept", None)
 
-            fallback_indicators = list(intent.indicators or [])
-            fallback_indicator_query = self._select_indicator_query_for_resolution(intent)
-            if fallback_indicator_query:
-                if not fallback_indicators:
+            # Resolve indicator for THIS specific fallback provider.
+            # Uses catalog concept -> provider-specific code when available,
+            # falls back to semantic query string otherwise.
+            fallback_indicators = self._resolve_indicator_for_fallback_provider(
+                concept_name,
+                fallback_provider,
+                indicator or "",
+                target_countries,
+            )
+            if not fallback_indicators:
+                # Last resort: use the semantic indicator query
+                fallback_indicator_query = self._select_indicator_query_for_resolution(intent)
+                if fallback_indicator_query:
                     fallback_indicators = [fallback_indicator_query]
-                elif len(fallback_indicators) == 1:
-                    # Normalize to a semantic indicator phrase across providers.
-                    # This prevents provider-native source codes (for example IMF EREER)
-                    # from leaking into fallback providers with different code spaces.
-                    fallback_indicators = [fallback_indicator_query]
+                elif intent.indicators:
+                    # Only use original indicators if they are NOT provider-specific codes
+                    safe_indicators = [
+                        ind for ind in intent.indicators
+                        if not self._looks_like_provider_indicator_code(primary_provider, str(ind or ""))
+                    ]
+                    fallback_indicators = safe_indicators or [str(intent.originalQuery or indicator or "")]
 
             # Create a modified intent for the fallback provider
             fallback_intent = ParsedIntent(
@@ -7573,6 +7732,7 @@ class QueryService:
             # Remove stale catalog-resolved flag so the sub-intent goes
             # through proper indicator resolution for its specific indicator.
             params.pop("__catalog_resolved", None)
+            params.pop("__catalog_concept", None)
 
             single_provider = normalize_provider_name(intent.apiProvider)
             if explicit_provider:
@@ -7744,7 +7904,7 @@ class QueryService:
         if params.get("__catalog_resolved"):
             object.__setattr__(intent, "_catalog_resolved", True)
 
-        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__qualifier_checked", "__geo_split_child"}
+        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child"}
         if any(key in params for key in internal_param_keys):
             params = {k: v for k, v in params.items() if k not in internal_param_keys}
             intent.parameters = params

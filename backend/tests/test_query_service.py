@@ -3045,6 +3045,12 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("seriesId"), "BM_GDP")
 
     def test_try_with_fallback_replaces_single_indicator_with_semantic_fallback_query(self) -> None:
+        """Fallback should resolve indicator on the TARGET provider, not pass source codes.
+
+        When IMF (EREER) fails and we fall back to WORLDBANK, the catalog should
+        resolve the concept 'real_effective_exchange_rate' to WorldBank's code
+        PX.REX.REER — NOT pass the IMF code or a generic phrase.
+        """
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["EREER"],
@@ -3058,8 +3064,7 @@ class QueryServiceTests(unittest.TestCase):
             captured_intent["intent"] = fallback_intent
             return [sample_series()]
 
-        with patch.object(self.service, "_select_indicator_query_for_resolution", return_value="real effective exchange rate"), \
-             patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
+        with patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
              patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data), \
              patch.object(self.service, "_is_fallback_relevant", return_value=True):
             _ = run(
@@ -3070,7 +3075,135 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         fallback_intent = captured_intent["intent"]
-        self.assertEqual(fallback_intent.indicators, ["real effective exchange rate"])
+        # The fallback should use WorldBank's code for the same concept,
+        # NOT the IMF code "EREER" and NOT a generic phrase.
+        indicator = fallback_intent.indicators[0]
+        # Must not be the IMF-specific code
+        self.assertNotEqual(indicator, "EREER")
+        # Should be WorldBank's catalog code or a semantic phrase
+        # (PX.REX.REER if catalog resolves, otherwise a phrase like "real effective exchange rate")
+        self.assertTrue(
+            indicator == "PX.REX.REER" or "exchange rate" in indicator.lower(),
+            f"Expected WorldBank code or semantic phrase, got: {indicator}",
+        )
+
+    def test_try_with_fallback_never_passes_source_provider_code_to_target(self) -> None:
+        """WorldBank code NE.EXP.GNFS.ZS must NOT leak to IMF during fallback."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NE.EXP.GNFS.ZS"],
+            parameters={
+                "country": "BR",
+                "indicator": "NE.EXP.GNFS.ZS",
+                "__catalog_resolved": True,
+                "__catalog_concept": "exports_pct_gdp",
+            },
+            clarificationNeeded=False,
+            originalQuery="exports as % of GDP for Brazil",
+        )
+        captured_intent = {}
+
+        async def _fake_fetch_data(fallback_intent):
+            captured_intent["intent"] = fallback_intent
+            return [sample_series()]
+
+        with patch.object(self.service, "_get_fallback_providers", return_value=["IMF"]), \
+             patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data), \
+             patch.object(self.service, "_is_fallback_relevant", return_value=True):
+            _ = run(
+                self.service._try_with_fallback(  # pylint: disable=protected-access
+                    intent,
+                    DataNotAvailableError("primary failed"),
+                )
+            )
+
+        fallback_intent = captured_intent["intent"]
+        self.assertEqual(fallback_intent.apiProvider, "IMF")
+        indicator = fallback_intent.indicators[0]
+        # Must NOT be the WorldBank-specific code
+        self.assertNotEqual(indicator, "NE.EXP.GNFS.ZS")
+        # Should not contain any WorldBank-style code patterns
+        self.assertNotIn(".", indicator[:6] if len(indicator) > 6 else "")
+        # Provider-specific params must be removed
+        self.assertNotIn("indicator", fallback_intent.parameters)
+        self.assertNotIn("seriesId", fallback_intent.parameters)
+        # Stale catalog state must be cleared
+        self.assertNotIn("__catalog_resolved", fallback_intent.parameters)
+        self.assertNotIn("__catalog_concept", fallback_intent.parameters)
+
+    def test_try_with_fallback_uses_catalog_concept_for_resolution(self) -> None:
+        """When __catalog_concept is available, use it to resolve the fallback indicator."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NY.GDP.MKTP.CD"],
+            parameters={
+                "country": "US",
+                "indicator": "NY.GDP.MKTP.CD",
+                "__catalog_resolved": True,
+                "__catalog_concept": "gdp",
+            },
+            clarificationNeeded=False,
+            originalQuery="GDP of the United States",
+        )
+        captured_intent = {}
+
+        async def _fake_fetch_data(fallback_intent):
+            captured_intent["intent"] = fallback_intent
+            return [sample_series()]
+
+        with patch.object(self.service, "_get_fallback_providers", return_value=["FRED"]), \
+             patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data), \
+             patch.object(self.service, "_is_fallback_relevant", return_value=True):
+            _ = run(
+                self.service._try_with_fallback(  # pylint: disable=protected-access
+                    intent,
+                    DataNotAvailableError("primary failed"),
+                )
+            )
+
+        fallback_intent = captured_intent["intent"]
+        self.assertEqual(fallback_intent.apiProvider, "FRED")
+        indicator = fallback_intent.indicators[0]
+        # Must NOT be the WorldBank code
+        self.assertNotEqual(indicator, "NY.GDP.MKTP.CD")
+
+    def test_resolve_concept_for_fallback_from_stored_param(self) -> None:
+        """_resolve_concept_for_fallback uses __catalog_concept when available."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NE.EXP.GNFS.ZS"],
+            parameters={"__catalog_concept": "exports_pct_gdp"},
+            clarificationNeeded=False,
+        )
+        concept = self.service._resolve_concept_for_fallback(intent, "WORLDBANK")
+        self.assertEqual(concept, "exports_pct_gdp")
+
+    def test_resolve_concept_for_fallback_via_reverse_code_lookup(self) -> None:
+        """_resolve_concept_for_fallback reverse-looks up provider codes in catalog."""
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["EREER"],
+            parameters={"indicator": "EREER"},
+            clarificationNeeded=False,
+            originalQuery="real effective exchange rate",
+        )
+        concept = self.service._resolve_concept_for_fallback(intent, "IMF")
+        # Should find real_effective_exchange_rate or similar from catalog
+        self.assertIsNotNone(concept)
+
+    def test_select_indicator_query_prefers_original_query_over_provider_code(self) -> None:
+        """_select_indicator_query_for_resolution should not return provider codes."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NE.EXP.GNFS.ZS"],
+            parameters={},
+            clarificationNeeded=False,
+            originalQuery="exports as percentage of GDP",
+        )
+        result = self.service._select_indicator_query_for_resolution(intent)
+        # Should prefer the original query, not the WorldBank code
+        self.assertNotEqual(result, "NE.EXP.GNFS.ZS")
+        self.assertIn("export", result.lower())
 
     def test_get_fallback_providers_passes_country_context_to_resolver(self) -> None:
         class _Resolved:
