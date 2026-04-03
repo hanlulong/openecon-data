@@ -58,7 +58,7 @@ providers:
 
   StatsCan:
     primary:
-      code: "14100287"
+      code: "UNEMPLOYMENT_RATE"
       name: "Labour force characteristics, monthly, seasonally adjusted and trend-cycle"
       confidence: 0.95
       coverage: [CA]

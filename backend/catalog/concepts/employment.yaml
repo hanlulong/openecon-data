@@ -60,7 +60,7 @@ providers:
 
   StatsCan:
     primary:
-      code: "14100287"
+      code: "EMPLOYMENT"
       name: "Labour force characteristics"
       confidence: 0.90
       coverage: [CA]
