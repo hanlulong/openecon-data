@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -8,6 +10,66 @@ from typing import Any, Dict, List, Optional
 
 from ..models import ParsedIntent
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Synchronous Redis helper (lazy singleton)
+# ---------------------------------------------------------------------------
+
+_sync_redis_client = None
+_sync_redis_init_attempted = False
+_sync_redis_lock = threading.Lock()
+
+
+def _get_sync_redis():
+    """Return a synchronous redis.Redis client, or None if unavailable."""
+    global _sync_redis_client, _sync_redis_init_attempted
+
+    if _sync_redis_init_attempted:
+        return _sync_redis_client
+
+    with _sync_redis_lock:
+        if _sync_redis_init_attempted:
+            return _sync_redis_client
+        _sync_redis_init_attempted = True
+        try:
+            import redis as _redis
+
+            # Use the same URL resolution strategy as redis_cache.py
+            redis_url = "redis://localhost:6379/0"
+            try:
+                from ..config import get_settings
+                settings = get_settings()
+                redis_url = (
+                    getattr(settings, "redis_url", None)
+                    or getattr(settings, "REDIS_URL", None)
+                    or redis_url
+                )
+            except Exception:
+                pass
+
+            client = _redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
+            client.ping()
+            _sync_redis_client = client
+            logger.info("ConversationManager: connected to Redis for persistence")
+        except Exception as exc:
+            logger.warning(
+                "ConversationManager: Redis unavailable (%s), using in-memory only",
+                exc,
+            )
+            _sync_redis_client = None
+
+    return _sync_redis_client
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 @dataclass
 class ConversationMessage:
@@ -27,13 +89,118 @@ class ConversationContext:
     pending_semantic_clarification: Optional[Dict[str, Any]] = None
 
 
+# ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+_REDIS_KEY_PREFIX = "conv:"
+_REDIS_TTL_SECONDS = 24 * 3600  # 24 hours
+
+
+def _serialize_context(ctx: ConversationContext) -> str:
+    """Serialize a ConversationContext to a JSON string for Redis storage."""
+    data: Dict[str, Any] = {
+        "id": ctx.id,
+        "created_at": ctx.created_at.isoformat(),
+        "updated_at": ctx.updated_at.isoformat(),
+        "messages": [
+            {
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.timestamp.isoformat(),
+            }
+            for m in ctx.messages
+        ],
+        "last_intent": ctx.last_intent.model_dump(mode="json") if ctx.last_intent else None,
+        "pending_indicator_options": ctx.pending_indicator_options,
+        "pending_semantic_clarification": ctx.pending_semantic_clarification,
+    }
+    return json.dumps(data)
+
+
+def _deserialize_context(raw: str) -> ConversationContext:
+    """Deserialize a JSON string from Redis into a ConversationContext."""
+    data = json.loads(raw)
+    messages = [
+        ConversationMessage(
+            role=m["role"],
+            content=m["content"],
+            timestamp=datetime.fromisoformat(m["timestamp"]),
+        )
+        for m in data.get("messages", [])
+    ]
+    last_intent = None
+    if data.get("last_intent"):
+        try:
+            last_intent = ParsedIntent.model_validate(data["last_intent"])
+        except Exception:
+            logger.debug("Failed to deserialize last_intent from Redis, ignoring")
+
+    return ConversationContext(
+        id=data["id"],
+        messages=messages,
+        created_at=datetime.fromisoformat(data["created_at"]),
+        updated_at=datetime.fromisoformat(data["updated_at"]),
+        last_intent=last_intent,
+        pending_indicator_options=data.get("pending_indicator_options"),
+        pending_semantic_clarification=data.get("pending_semantic_clarification"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Manager
+# ---------------------------------------------------------------------------
+
 class ConversationManager:
-    MAX_AGE = timedelta(hours=1)
+    MAX_AGE = timedelta(hours=24)
     MAX_MESSAGES = 200  # Cap messages per conversation to prevent memory leaks
 
     def __init__(self) -> None:
         self._conversations: Dict[str, ConversationContext] = {}
         self._lock = threading.RLock()  # Reentrant lock for future-proofing
+
+    # ── Redis helpers (best-effort, never raise) ─────────────────────
+
+    def _redis_save(self, ctx: ConversationContext) -> None:
+        """Write-through: persist context to Redis. Fails silently."""
+        try:
+            client = _get_sync_redis()
+            if client is None:
+                return
+            key = f"{_REDIS_KEY_PREFIX}{ctx.id}"
+            client.setex(key, _REDIS_TTL_SECONDS, _serialize_context(ctx))
+        except Exception as exc:
+            logger.debug("Redis save failed for %s: %s", ctx.id, exc)
+
+    def _redis_load(self, conversation_id: str) -> Optional[ConversationContext]:
+        """Try to load a conversation from Redis. Returns None on miss/error."""
+        try:
+            client = _get_sync_redis()
+            if client is None:
+                return None
+            raw = client.get(f"{_REDIS_KEY_PREFIX}{conversation_id}")
+            if raw is None:
+                return None
+            ctx = _deserialize_context(raw)
+            # Check TTL/expiration at application level too
+            if self._is_expired(ctx):
+                self._redis_delete(conversation_id)
+                return None
+            return ctx
+        except Exception as exc:
+            logger.debug("Redis load failed for %s: %s", conversation_id, exc)
+            return None
+
+    def _redis_delete(self, conversation_id: str) -> None:
+        """Delete a conversation from Redis. Fails silently."""
+        try:
+            client = _get_sync_redis()
+            if client is not None:
+                client.delete(f"{_REDIS_KEY_PREFIX}{conversation_id}")
+        except Exception as exc:
+            logger.debug("Redis delete failed for %s: %s", conversation_id, exc)
+
+    # ── Core helpers ─────────────────────────────────────────────────
 
     @staticmethod
     def _now() -> datetime:
@@ -45,18 +212,32 @@ class ConversationManager:
         return check_time - conversation.updated_at > self.MAX_AGE
 
     def _get_locked(self, conversation_id: str) -> Optional[ConversationContext]:
+        """Get conversation from in-memory cache, falling back to Redis.
+
+        Must be called while holding self._lock.
+        """
         conversation = self._conversations.get(conversation_id)
+
+        # If not in memory, try Redis (handles server restart case)
+        if conversation is None:
+            conversation = self._redis_load(conversation_id)
+            if conversation is not None:
+                self._conversations[conversation_id] = conversation
+
         if not conversation:
             return None
         if self._is_expired(conversation):
             self._conversations.pop(conversation_id, None)
+            self._redis_delete(conversation_id)
             return None
         return conversation
 
     def create_conversation(self) -> str:
         conversation_id = str(uuid.uuid4())
         with self._lock:
-            self._conversations[conversation_id] = ConversationContext(id=conversation_id)
+            ctx = ConversationContext(id=conversation_id)
+            self._conversations[conversation_id] = ctx
+            self._redis_save(ctx)
         return conversation_id
 
     def _get(self, conversation_id: str) -> Optional[ConversationContext]:
@@ -79,6 +260,7 @@ class ConversationManager:
             if intent:
                 conversation.last_intent = intent
             conversation.updated_at = now
+            self._redis_save(conversation)
 
     def add_message_safe(
         self,
@@ -104,8 +286,6 @@ class ConversationManager:
             return conversation_id
         except ValueError:
             # Conversation expired - create new one
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Conversation {conversation_id} expired, creating new one")
             new_id = self.create_conversation()
             self.add_message(new_id, role, content, intent=intent)
@@ -154,6 +334,7 @@ class ConversationManager:
                 return
             conversation.pending_indicator_options = None
             conversation.pending_semantic_clarification = None
+            self._redis_save(conversation)
 
     def set_pending_indicator_options(self, conversation_id: str, payload: Dict[str, Any]) -> None:
         """Persist pending indicator-choice clarification options for a conversation.
@@ -168,6 +349,7 @@ class ConversationManager:
             conversation.pending_indicator_options = dict(payload or {})
             conversation.pending_semantic_clarification = None  # mutual exclusion
             conversation.updated_at = self._now()
+            self._redis_save(conversation)
 
     def get_pending_indicator_options(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get pending indicator-choice clarification payload if present."""
@@ -186,6 +368,7 @@ class ConversationManager:
                 return
             conversation.pending_indicator_options = None
             conversation.updated_at = self._now()
+            self._redis_save(conversation)
 
     def set_pending_semantic_clarification(self, conversation_id: str, payload: Dict[str, Any]) -> None:
         """Persist pending semantic clarification state for a conversation.
@@ -200,6 +383,7 @@ class ConversationManager:
             conversation.pending_semantic_clarification = dict(payload or {})
             conversation.pending_indicator_options = None  # mutual exclusion
             conversation.updated_at = self._now()
+            self._redis_save(conversation)
 
     def get_pending_semantic_clarification(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get pending semantic clarification payload if present."""
@@ -218,6 +402,7 @@ class ConversationManager:
                 return
             conversation.pending_semantic_clarification = None
             conversation.updated_at = self._now()
+            self._redis_save(conversation)
 
     def get_or_create(self, conversation_id: Optional[str]) -> str:
         """
@@ -227,6 +412,9 @@ class ConversationManager:
         we create a conversation WITH THE PROVIDED ID (not a new UUID).
         This is critical for Pro Mode session storage continuity.
 
+        On server restart, conversations are recovered from Redis transparently
+        via _get_locked().
+
         Args:
             conversation_id: Optional conversation ID
 
@@ -234,12 +422,14 @@ class ConversationManager:
             Conversation ID (existing or new)
         """
         if conversation_id:
-            # Check if conversation exists
+            # Check if conversation exists (in-memory or Redis)
             if self._get(conversation_id):
                 return conversation_id
             # Create conversation with the provided ID (don't generate new UUID)
             with self._lock:
-                self._conversations[conversation_id] = ConversationContext(id=conversation_id)
+                ctx = ConversationContext(id=conversation_id)
+                self._conversations[conversation_id] = ctx
+                self._redis_save(ctx)
             return conversation_id
         # No ID provided - generate new one
         return self.create_conversation()
@@ -254,6 +444,7 @@ class ConversationManager:
             ]
             for cid in expired:
                 self._conversations.pop(cid, None)
+                self._redis_delete(cid)
 
 
 conversation_manager = ConversationManager()

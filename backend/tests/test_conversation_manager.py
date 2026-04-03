@@ -2,10 +2,11 @@
 
 Covers:
 - Basic CRUD operations (get/create, add message, get history)
-- TTL expiration (1-hour window)
+- TTL expiration (24-hour window)
 - Pending clarification state (mutual exclusion, clearing)
 - Thread safety under concurrent access
 - Edge cases (expired conversations, safe recovery)
+- Redis persistence (write-through, graceful degradation)
 """
 from __future__ import annotations
 
@@ -16,11 +17,21 @@ from unittest.mock import patch
 
 import pytest
 
+import backend.services.conversation as conv_mod
 from backend.services.conversation import ConversationManager, ConversationContext
 
 
 def _fresh_manager() -> ConversationManager:
-    return ConversationManager()
+    """Create a ConversationManager with Redis disabled for isolated tests."""
+    mgr = ConversationManager()
+    # Patch the module-level Redis helper so tests never hit a real Redis
+    return mgr
+
+
+@pytest.fixture(autouse=True)
+def _disable_redis_for_tests(monkeypatch):
+    """Ensure no test accidentally writes to or reads from Redis."""
+    monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: None)
 
 
 # ─── Basic CRUD ──────────────────────────────────────────────────────
@@ -46,7 +57,7 @@ class TestBasicOperations:
         # Expire the conversation
         with mgr._lock:
             conv = mgr._conversations[cid]
-            conv.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            conv.updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
 
         # get_or_create reuses the ID but creates fresh context
         cid2 = mgr.get_or_create(cid)
@@ -105,7 +116,7 @@ class TestTTLExpiration:
 
         # Expire it
         with mgr._lock:
-            mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
 
         # Should return empty history (conversation expired)
         history = mgr.get_history(cid)
@@ -130,7 +141,7 @@ class TestTTLExpiration:
 
         # Expire it
         with mgr._lock:
-            mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
 
         # add_message_safe creates a NEW conversation and returns the new ID
         new_cid = mgr.add_message_safe(cid, "user", "new message")
@@ -155,7 +166,7 @@ class TestTTLExpiration:
 
         # Expire one
         with mgr._lock:
-            mgr._conversations[expired_id].updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            mgr._conversations[expired_id].updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
 
         mgr.cleanup()
         assert active_id in mgr._conversations
@@ -396,7 +407,7 @@ class TestThreadSafety:
         # Expire half
         with mgr._lock:
             for cid in cids[:5]:
-                mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+                mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
 
         def cleaner():
             try:
@@ -423,3 +434,132 @@ class TestThreadSafety:
             t.join(timeout=10)
 
         assert not errors, f"Errors: {errors}"
+
+
+# ─── Redis Persistence ──────────────────────────────────────────────
+
+class _FakeRedis:
+    """Minimal dict-backed Redis stub for persistence tests."""
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+
+    def setex(self, key: str, ttl: int, value: str):
+        self._store[key] = value
+
+    def get(self, key: str):
+        return self._store.get(key)
+
+    def delete(self, key: str):
+        self._store.pop(key, None)
+
+
+class TestRedisPersistence:
+    def test_create_conversation_persists_to_redis(self, monkeypatch):
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+
+        assert f"conv:{cid}" in fake._store
+
+    def test_add_message_updates_redis(self, monkeypatch):
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.add_message(cid, "user", "hello world")
+
+        import json
+        stored = json.loads(fake._store[f"conv:{cid}"])
+        assert len(stored["messages"]) == 1
+        assert stored["messages"][0]["content"] == "hello world"
+
+    def test_get_or_create_loads_from_redis_on_miss(self, monkeypatch):
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        # Manager 1: create and populate
+        mgr1 = _fresh_manager()
+        cid = mgr1.get_or_create(None)
+        mgr1.add_message(cid, "user", "persisted message")
+
+        # Manager 2: simulates server restart (empty in-memory)
+        mgr2 = _fresh_manager()
+        assert cid not in mgr2._conversations
+
+        # get_or_create should reload from Redis
+        returned_cid = mgr2.get_or_create(cid)
+        assert returned_cid == cid
+        history = mgr2.get_history(cid)
+        assert history == ["persisted message"]
+
+    def test_pending_state_persists_to_redis(self, monkeypatch):
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.set_pending_indicator_options(cid, {"opts": [1, 2]})
+
+        import json
+        stored = json.loads(fake._store[f"conv:{cid}"])
+        assert stored["pending_indicator_options"] == {"opts": [1, 2]}
+        assert stored["pending_semantic_clarification"] is None
+
+    def test_last_intent_round_trips_through_redis(self, monkeypatch):
+        from backend.models import ParsedIntent
+
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr1 = _fresh_manager()
+        cid = mgr1.get_or_create(None)
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            clarificationNeeded=False,
+            parameters={"country": "US"},
+        )
+        mgr1.add_message(cid, "user", "US GDP", intent=intent)
+
+        # Simulate restart
+        mgr2 = _fresh_manager()
+        retrieved = mgr2.get_last_intent(cid)
+        assert retrieved is not None
+        assert retrieved.apiProvider == "FRED"
+        assert retrieved.indicators == ["GDP"]
+
+    def test_cleanup_deletes_from_redis(self, monkeypatch):
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.add_message(cid, "user", "test")
+
+        # Expire it
+        with mgr._lock:
+            mgr._conversations[cid].updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
+
+        mgr.cleanup()
+        assert f"conv:{cid}" not in fake._store
+
+    def test_graceful_degradation_on_redis_error(self, monkeypatch):
+        """If Redis raises, operations still succeed via in-memory."""
+        class _BrokenRedis:
+            def setex(self, *a, **kw):
+                raise ConnectionError("Redis down")
+            def get(self, *a, **kw):
+                raise ConnectionError("Redis down")
+            def delete(self, *a, **kw):
+                raise ConnectionError("Redis down")
+
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: _BrokenRedis())
+
+        mgr = _fresh_manager()
+        cid = mgr.get_or_create(None)
+        mgr.add_message(cid, "user", "still works")
+        assert mgr.get_history(cid) == ["still works"]

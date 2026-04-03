@@ -892,6 +892,196 @@ class QueryService:
             return f"{distilled_indicator} {new_scope}"
         return None
 
+    # ── Structured context injection & follow-up detection ──────────────
+
+    def _build_conversation_context_prefix(
+        self,
+        query: str,
+        last_intent: ParsedIntent,
+    ) -> str:
+        """Build a structured context prefix that's prepended to the user message
+        before sending to the LLM for intent parsing.
+
+        This gives the LLM awareness of the previous conversation turn so it can
+        correctly resolve pronouns and implicit references in follow-up queries.
+
+        Returns:
+            A context-enriched query string to replace the raw user query.
+        """
+        params = last_intent.parameters or {}
+
+        # Gather country/countries from prior intent
+        prior_country = params.get("country", "")
+        prior_countries_list = params.get("countries")
+        if prior_countries_list and isinstance(prior_countries_list, list):
+            country_str = ", ".join(str(c) for c in prior_countries_list)
+        elif prior_country:
+            country_str = str(prior_country)
+        else:
+            country_str = "not specified"
+
+        prior_indicator = ", ".join(last_intent.indicators) if last_intent.indicators else "not specified"
+        prior_provider = last_intent.apiProvider or "not specified"
+        prior_start = params.get("startDate", "not specified")
+        prior_end = params.get("endDate", "not specified")
+        prior_query = last_intent.originalQuery or "not specified"
+
+        context_prefix = (
+            "[CONVERSATION CONTEXT]\n"
+            f'Previous query: "{prior_query}"\n'
+            f"Previous indicator: {prior_indicator}\n"
+            f"Previous country/countries: {country_str}\n"
+            f"Previous provider: {prior_provider}\n"
+            f"Previous time period: {prior_start} to {prior_end}\n"
+            "\n"
+            f'Current user message: "{query}"\n'
+            "\n"
+            "If the user's message references previous context (e.g., "
+            '"same for Germany", "what about unemployment", "show me GDP instead"), '
+            "preserve unchanged parameters from the previous query and only update "
+            "what the user explicitly changes.\n"
+        )
+        return context_prefix
+
+    # ── Patterns for _detect_follow_up ────────────────────────────────
+
+    # Country-change patterns: "now for Germany", "same for Japan", "what about France"
+    _COUNTRY_CHANGE_RE = re.compile(
+        r"^(?:now\s+)?(?:(?:same|that|this|it)\s+)?(?:for|in)\s+(.+)$",
+        re.IGNORECASE,
+    )
+    _WHAT_ABOUT_COUNTRY_RE = re.compile(
+        r"^what\s+about\s+(.+?)(?:\?|$)",
+        re.IGNORECASE,
+    )
+
+    # Time-change patterns: "from 2020", "last 10 years", "since 2015"
+    _TIME_CHANGE_RE = re.compile(
+        r"^(?:from|since|last|past|starting|between)\s+.+$",
+        re.IGNORECASE,
+    )
+
+    # Pronoun/sameness patterns: "show me the same", "that one", "this indicator"
+    _PRONOUN_REUSE_RE = re.compile(
+        r"^(?:show\s+(?:me\s+)?)?(?:the\s+same|that\s+(?:one|data|indicator|metric|series)"
+        r"|this\s+(?:one|data|indicator|metric|series))(?:\s+(?:again|please))?[.!?]?$",
+        re.IGNORECASE,
+    )
+
+    def _detect_follow_up(
+        self,
+        query: str,
+        last_intent: ParsedIntent,
+    ) -> Optional[str]:
+        """Detect follow-up patterns and rewrite the query to be explicit.
+
+        When a user says something like "same for Germany" after querying US GDP,
+        this method returns an explicit rewritten query like "GDP Germany" that the
+        normal parsing pipeline can handle without ambiguity.
+
+        Returns:
+            Rewritten explicit query string, or None if no follow-up detected.
+        """
+        if not last_intent or last_intent.clarificationNeeded:
+            return None
+
+        query_text = str(query or "").strip()
+        if not query_text:
+            return None
+
+        query_lower = query_text.lower().strip()
+
+        # Skip numeric responses — handled by clarification system
+        if re.match(r"^(?:option\s+)?\d+$", query_lower):
+            return None
+
+        # Skip long queries — these are likely new independent queries
+        if len(query_lower) > 80:
+            return None
+
+        # Gather prior context
+        prior_indicators = last_intent.indicators or []
+        prior_params = last_intent.parameters or {}
+        prior_countries = self._collect_target_countries(prior_params)
+        prior_start = prior_params.get("startDate", "")
+        prior_end = prior_params.get("endDate", "")
+        indicator_text = " and ".join(prior_indicators) if prior_indicators else ""
+
+        if not indicator_text:
+            return None
+
+        # ─── Pattern 1: Pronoun/sameness reuse ───────────────────────
+        if self._PRONOUN_REUSE_RE.match(query_text):
+            # Reuse everything from prior intent
+            country_part = ""
+            if prior_countries:
+                country_part = f" in {prior_countries[0]}" if len(prior_countries) == 1 else f" across {', '.join(prior_countries)}"
+            time_part = ""
+            if prior_start and prior_end:
+                time_part = f" {prior_start[:4]}-{prior_end[:4]}"
+            rewritten = f"{indicator_text}{country_part}{time_part}"
+            logger.info(
+                "🔄 Follow-up (pronoun reuse): '%s' → '%s'",
+                query_text, rewritten,
+            )
+            return rewritten
+
+        # ─── Pattern 2: Country change ───────────────────────────────
+        # "now for Germany", "same for Japan", "for France", "in Brazil"
+        country_match = self._COUNTRY_CHANGE_RE.match(query_text)
+        if not country_match:
+            # Also try "what about <country>" when the term is NOT a known indicator
+            country_match = self._WHAT_ABOUT_COUNTRY_RE.match(query_text)
+
+        if country_match:
+            candidate = country_match.group(1).strip().rstrip("?").strip()
+            # Verify the candidate is a country, not an indicator
+            extracted = self._extract_countries_from_query(candidate)
+            # Also check indicator terms to avoid misclassifying "what about inflation"
+            candidate_lower = candidate.lower()
+            is_indicator = any(
+                term == candidate_lower or candidate_lower.startswith(term + " ")
+                for term in self._INDICATOR_SWITCH_TERMS
+            )
+            if extracted and not is_indicator:
+                country_str = (
+                    f"in {extracted[0]}" if len(extracted) == 1
+                    else f"across {', '.join(extracted)}"
+                )
+                time_part = ""
+                if prior_start and prior_end:
+                    time_part = f" {prior_start[:4]}-{prior_end[:4]}"
+                rewritten = f"{indicator_text} {country_str}{time_part}"
+                logger.info(
+                    "🔄 Follow-up (country change): '%s' → '%s'",
+                    query_text, rewritten,
+                )
+                return rewritten
+
+        # ─── Pattern 3: Time change ──────────────────────────────────
+        # "from 2020", "last 10 years", "since 2015"
+        # Only trigger if no country or indicator terms are present
+        if self._TIME_CHANGE_RE.match(query_text):
+            extracted_countries = self._extract_countries_from_query(query_text)
+            has_indicator = any(term in query_lower for term in self._INDICATOR_SWITCH_TERMS)
+            if not extracted_countries and not has_indicator:
+                country_part = ""
+                if prior_countries:
+                    country_part = (
+                        f" in {prior_countries[0]}" if len(prior_countries) == 1
+                        else f" across {', '.join(prior_countries)}"
+                    )
+                # Append the time expression as-is so the LLM can parse the dates
+                rewritten = f"{indicator_text}{country_part} {query_text}"
+                logger.info(
+                    "🔄 Follow-up (time change): '%s' → '%s'",
+                    query_text, rewritten,
+                )
+                return rewritten
+
+        # No follow-up pattern matched
+        return None
+
     # Known indicator terms for detecting indicator-switch follow-ups
     _INDICATOR_SWITCH_TERMS = {
         "gdp", "gdp growth", "gdp per capita", "real gdp",
@@ -8078,6 +8268,23 @@ class QueryService:
                     tracker=tracker,
                 )
 
+            # ── Follow-up detection (general) ──────────────────────────
+            # The specific handlers above (contextual_follow_up for country,
+            # indicator_switch for metric) build full intents deterministically.
+            # This general detector catches remaining patterns (pronoun reuse,
+            # time changes, country changes the specific handler missed) by
+            # rewriting the query to be explicit, then letting the normal LLM
+            # pipeline parse the rewritten text.
+            last_intent = conversation_manager.get_last_intent(conv_id)
+            if last_intent and not last_intent.clarificationNeeded:
+                rewritten = self._detect_follow_up(query, last_intent)
+                if rewritten:
+                    logger.info(
+                        "🔄 Follow-up rewrite: '%s' → '%s'",
+                        query, rewritten,
+                    )
+                    query = rewritten
+
             # CONSOLIDATED: Semantic ambiguity and group scope checks now run
             # ONLY after LLM parse (in _build_post_parse_clarification) where
             # they have full intent context.  Pre-parse checks with intent=None
@@ -8117,11 +8324,30 @@ class QueryService:
                 logger.info("🚀 Auto-switching to Pro Mode (detected: %s)", early_complexity['complexity_factors'])
                 return await self._execute_pro_mode(query, conv_id)
 
+            # ── Structured context injection for LLM ─────────────────
+            # When conversation has prior context, build a context-enriched
+            # query so the LLM can resolve implicit references.  The raw
+            # query is preserved as `original_raw_query` for downstream use
+            # (originalQuery on intent, etc.).
+            llm_query = query
+            if last_intent is None:
+                # Re-fetch in case variable was not set above (no follow-up branch)
+                last_intent = conversation_manager.get_last_intent(conv_id)
+            if last_intent and not last_intent.clarificationNeeded:
+                llm_query = self._build_conversation_context_prefix(query, last_intent)
+                logger.info(
+                    "📎 Injected conversation context for LLM parse (prior: %s / %s)",
+                    last_intent.indicators, last_intent.apiProvider,
+                )
+
             logger.info("Parsing query with LLM: %s", query)
 
             with tracker.track("parsing_query", "🤖 Understanding your question...") as update_parse_metadata:
-                parse_result = await self.pipeline.parse_and_route(query, history)
+                parse_result = await self.pipeline.parse_and_route(llm_query, history)
                 intent = parse_result.intent
+                # Ensure originalQuery stores the user's raw query, not the
+                # context-enriched version sent to the LLM.
+                intent.originalQuery = query
                 logger.debug("Parsed intent: %s", intent.model_dump())
                 update_parse_metadata({
                     "provider": intent.apiProvider,
