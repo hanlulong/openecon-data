@@ -1050,8 +1050,8 @@ class QueryServiceTests(unittest.TestCase):
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
 
-    def test_build_semantic_ambiguity_clarification_for_broad_employment_single_country(self) -> None:
-        """Semantic ambiguity should fire for single-country broad employment queries."""
+    def test_build_semantic_ambiguity_clarification_always_returns_none(self) -> None:
+        """After Phase 2 LLM refactor, semantic ambiguity is handled by the LLM prompt."""
         conv_id = conversation_manager.get_or_create("conv-semantic-employment")
         conversation_manager.clear_pending_semantic_clarification(conv_id)
         intent = ParsedIntent(
@@ -1070,22 +1070,8 @@ class QueryServiceTests(unittest.TestCase):
             processing_steps=None,
         )
 
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        self.assertIsNotNone(clarification.clarificationOptions)
-        options = clarification.clarificationOptions or []
-        self.assertEqual(
-            [option.label for option in options],
-            [
-                "number employed",
-                "employment rate",
-                "employment-to-population ratio",
-            ],
-        )
-        self.assertEqual(options[1].value, "employment rate in US")
-        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
-        self.assertIsNotNone(pending)
+        # After Phase 2 refactor, this always returns None — LLM handles ambiguity
+        self.assertIsNone(clarification)
 
     def test_build_group_scope_clarification_for_region_query(self) -> None:
         """Group scope clarification should fire for vague queries without specific indicators."""
@@ -1179,51 +1165,8 @@ class QueryServiceTests(unittest.TestCase):
         )
         self.assertIsNone(clarification)
 
-    def test_semantic_clarifier_does_not_repeat_for_number_employed_query(self) -> None:
-        self.assertIsNone(self.service.semantic_clarifier.detect("number employed in Canada"))
-
-    def test_semantic_clarifier_bypasses_informational_employment_query(self) -> None:
-        """Informational queries about available data should bypass semantic clarification."""
-        self.assertIsNone(self.service.semantic_clarifier.detect(
-            "What employment series does World Bank have?"
-        ))
-
-    def test_semantic_clarifier_bypasses_informational_list_query(self) -> None:
-        self.assertIsNone(self.service.semantic_clarifier.detect(
-            "List available trade indicators"
-        ))
-
-    def test_semantic_clarifier_bypasses_informational_does_have_query(self) -> None:
-        self.assertIsNone(self.service.semantic_clarifier.detect(
-            "Does FRED have interest rate data?"
-        ))
-
-    def test_semantic_clarifier_still_fires_for_broad_data_query(self) -> None:
-        """Non-informational broad queries should still trigger clarification."""
-        result = self.service.semantic_clarifier.detect("total employment in Canada")
-        self.assertIsNotNone(result)
-
-    def test_semantic_clarifier_detects_broad_economic_concept(self) -> None:
-        """'show me economic data for France' should trigger structured clarification."""
-        result = self.service.semantic_clarifier.detect("show me economic data for France")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["kind"], "broad_economic_concept")
-        options = result.get("options") or []
-        labels = [o["label"] for o in options]
-        self.assertIn("GDP (economic output)", labels)
-        self.assertIn("inflation rate (price stability)", labels)
-
-    def test_semantic_clarifier_detects_economy_doing(self) -> None:
-        """'how is the US economy doing' should trigger structured clarification."""
-        result = self.service.semantic_clarifier.detect("how is the US economy doing")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["kind"], "broad_economic_concept")
-
-    def test_semantic_clarifier_skips_broad_when_specific_indicator(self) -> None:
-        """'GDP of France' should NOT trigger broad economic concept clarification."""
-        result = self.service.semantic_clarifier.detect("GDP of France")
-        # Should be None (GDP is specific enough) — the block_pattern for 'gdp' fires
-        self.assertIsNone(result)
+    # NOTE: SemanticClarifier tests removed in Phase 2 LLM refactor.
+    # Ambiguity detection is now handled by the LLM prompt's clarificationNeeded field.
 
     def test_build_prefetch_indicator_choice_clarification_when_primary_resolution_is_implausible(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-prefetch-choice")
@@ -2069,21 +2012,15 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options_payload[0].provider, "IMF")
         self.assertEqual(options_payload[1].provider, "WORLDBANK")
 
-    def test_semantic_clarification_detects_broad_employment_query(self) -> None:
-        """Semantic clarification should detect broad employment queries."""
-        # Consolidated: semantic check now runs post-parse only.
-        # Test detection method directly.
+    def test_semantic_clarification_always_returns_none_after_llm_refactor(self) -> None:
+        """After Phase 2 LLM refactor, semantic ambiguity detection always returns None."""
         clarification = self.service._build_semantic_ambiguity_clarification(
             conversation_id="conv-semantic-direct",
             query="total employment in Canada",
             intent=None,
             is_multi_indicator=False,
         )
-        self.assertIsNotNone(clarification)
-        self.assertTrue(clarification.clarificationNeeded)
-        options = clarification.clarificationOptions or []
-        self.assertEqual(options[0].label, "number employed")
-        self.assertEqual(options[1].value, "employment rate in Canada")
+        self.assertIsNone(clarification)
 
     def test_process_query_skips_group_scope_clarification_for_specific_indicator(self) -> None:
         """Queries with specific indicators + group name should NOT ask for group scope."""
@@ -3701,9 +3638,6 @@ class InformationalQueryTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.service = QueryService.__new__(QueryService)
-        self.service.semantic_clarifier = __import__(
-            "backend.services.semantic_clarifier", fromlist=["SemanticClarifier"]
-        ).SemanticClarifier()
 
     def test_handle_informational_intent_with_provider(self) -> None:
         """Informational intent with specific provider returns indicator list."""

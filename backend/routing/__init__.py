@@ -9,30 +9,29 @@ It consolidates the logic from:
 
 Components:
 - CountryResolver: Country normalization and region membership
-- KeywordMatcher: Pattern detection for explicit provider mentions
 - UnifiedRouter: Main routing entry point
 """
 
 from .country_resolver import CountryResolver
-from .keyword_matcher import KeywordMatcher
 from .semantic_provider_router import SemanticProviderRouter
 from .unified_router import (
     UnifiedRouter,
     RoutingDecision,
     route_provider,
     detect_explicit_provider,
+    detect_explicit_provider_match,
     correct_coingecko_misrouting,
     validate_routing,
 )
 
 __all__ = [
     "CountryResolver",
-    "KeywordMatcher",
     "SemanticProviderRouter",
     "UnifiedRouter",
     "RoutingDecision",
     "route_provider",
     "detect_explicit_provider",
+    "detect_explicit_provider_match",
     "correct_coingecko_misrouting",
     "validate_routing",
 ]

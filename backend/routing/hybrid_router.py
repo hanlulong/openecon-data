@@ -11,8 +11,12 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from .keyword_matcher import KeywordMatcher
-from .unified_router import RoutingDecision, UnifiedRouter
+from .unified_router import (
+    RoutingDecision,
+    UnifiedRouter,
+    detect_explicit_provider_match,
+    _correct_coingecko,
+)
 from ..services.catalog_service import (
     find_concept_by_term,
     get_available_providers,
@@ -98,17 +102,13 @@ class HybridRouter:
         for idx, fb in enumerate(baseline.fallbacks):
             boost(fb, max(0.0, 60.0 - (idx * 7.0)))
 
-        explicit = KeywordMatcher.detect_explicit_provider(query)
-        if explicit and explicit.provider:
-            boost(explicit.provider, 200.0)
+        explicit = detect_explicit_provider_match(query)
+        if explicit:
+            boost(explicit[0], 200.0)
 
-        indicator_match = KeywordMatcher.detect_indicator_provider(query, indicators)
-        if indicator_match and indicator_match.provider:
-            boost(indicator_match.provider, 45.0)
-
-        regional_match = KeywordMatcher.detect_regional_provider(query)
-        if regional_match and regional_match.provider:
-            boost(regional_match.provider, 35.0)
+        # NOTE: indicator keyword and regional keyword boosting were removed
+        # in the Phase 2 LLM refactor.  The baseline deterministic router
+        # already incorporates catalog, country, and special-case signals.
 
         boost(llm_provider_hint, 35.0)
 
@@ -282,14 +282,14 @@ class HybridRouter:
             )
             return baseline
 
-        explicit = KeywordMatcher.detect_explicit_provider(query)
-        if explicit and explicit.provider:
-            explicit_provider = self._normalize_provider(explicit.provider)
+        explicit = detect_explicit_provider_match(query)
+        if explicit:
+            explicit_provider = self._normalize_provider(explicit[0])
             if explicit_provider:
                 selected = explicit_provider
 
         # Apply critical anti-misrouting guardrail.
-        selected, _ = KeywordMatcher.correct_coingecko_misrouting(
+        selected, _ = _correct_coingecko(
             selected,
             query,
             indicators,

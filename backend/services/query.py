@@ -53,7 +53,9 @@ from ..utils.geographies import normalize_canadian_region_list
 from ..utils.retry import retry_async, DataNotAvailableError
 # rate_limiter import removed — was unused
 from ..services.time_range_defaults import apply_default_time_range
-from ..services.semantic_clarifier import SemanticClarifier
+# SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
+# clarificationNeeded field + ambiguity policy now handles broad-concept
+# detection.  See simplified_prompt.py.
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -234,7 +236,6 @@ class QueryService:
 
         # Semantic provider router (default): semantic-router + LiteLLM fallback.
         self.semantic_provider_router: Optional[SemanticProviderRouter] = None
-        self.semantic_clarifier = SemanticClarifier()
         self.indicator_translator = IndicatorTranslator()
         if self.settings.use_semantic_provider_router:
             self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
@@ -267,17 +268,10 @@ class QueryService:
         Returns provider name if found, None otherwise.
 
         This ensures user's explicit choice is always honored, regardless of LLM interpretation.
-
-        Delegates to KeywordMatcher.detect_explicit_provider() — the single source
-        of truth for explicit provider detection.  Maintaining a separate keyword
-        dictionary here caused drift (e.g., bare "imf"/"bis" false positives that
-        the KeywordMatcher had already fixed).
         """
-        from ..routing.keyword_matcher import KeywordMatcher
-        match = KeywordMatcher.detect_explicit_provider(query)
-        if match and match.provider:
-            return match.provider
-        return None
+        from ..routing.unified_router import detect_explicit_provider_match
+        match = detect_explicit_provider_match(query)
+        return match[0] if match else None
 
     def _extract_countries_from_query(self, query: str) -> List[str]:
         """
@@ -2889,7 +2883,10 @@ class QueryService:
                 )
 
             if len(text.split()) <= 6:
-                refined_query = str(self.semantic_clarifier.build_custom_query(pending, text) or "").strip()
+                # Previously delegated to SemanticClarifier.build_custom_query.
+                # Now just use the user's text directly as the refined query
+                # when it looks like a specific metric name (short phrase).
+                refined_query = text
 
             if not refined_query:
                 if len(text.split()) >= 3:
@@ -3795,36 +3792,11 @@ class QueryService:
         """
         Auto-rewrite broad concepts to their default metric for region queries.
 
-        When a multi-country region is detected and the query uses a broad
-        concept (e.g. "employment"), we auto-select the most common metric
-        (e.g. "employment rate") to avoid wrong indicator resolution.
-
-        Returns the rewritten query, or the original if no rewrite is needed.
+        Previously used SemanticClarifier to detect broad concepts and auto-select
+        the first option.  Now the LLM handles ambiguity via clarificationNeeded,
+        so this method simply returns the original query unchanged.
         """
-        regions = CountryResolver.detect_regions_in_query(query)
-        if not regions:
-            return query
-        expanded = CountryResolver.expand_regions_in_query(query)
-        if len(expanded) < 2:
-            return query
-
-        plan = self.semantic_clarifier.detect(query)
-        if not plan:
-            return query
-
-        options = plan.get("options") or []
-        if not options:
-            return query
-
-        default_value = str(options[0].get("value") or "").strip()
-        if not default_value or default_value == query:
-            return query
-
-        logger.info(
-            "🔄 Auto-resolved broad concept for region query: '%s' -> '%s'",
-            query, default_value,
-        )
-        return default_value
+        return query
 
     def _build_semantic_ambiguity_clarification(
         self,
@@ -3835,111 +3807,13 @@ class QueryService:
         processing_steps: Optional[List[Any]] = None,
     ) -> Optional[QueryResponse]:
         """
-        Ask for a more precise metric when the query uses a broad concept.
+        Previously detected broad economic concepts and asked clarification.
 
-        This runs before fetch, so the system avoids silently picking one
-        provider-specific series for an underspecified concept like employment,
-        trade, debt, interest rates, productivity, or wages.
+        Removed in Phase 2 LLM refactor.  The LLM prompt now sets
+        clarificationNeeded=true when the query is genuinely ambiguous.
+        Always returns None so the pipeline proceeds to data fetch.
         """
-        if is_multi_indicator:
-            return None
-        if intent and intent.indicators and len(intent.indicators) > 1:
-            return None
-
-        plan = self.semantic_clarifier.detect(query)
-        if not plan:
-            return None
-
-        # Skip semantic ambiguity when query uses a specific metric phrase
-        # (not a broad concept).  "unemployment rate" is specific;
-        # "employment" is broad.  "trade deficit" is specific; "trade" is broad.
-        _specific_metric_patterns = [
-            r"\bunemployment\s+rate\b", r"\bemployment\s+rate\b",
-            r"\btrade\s+balance\b", r"\btrade\s+deficit\b", r"\btrade\s+surplus\b",
-            r"\btrade\s+openness\b", r"\bcurrent\s+account\b",
-            r"\bbond\s+yield\b", r"\bpolicy\s+rate\b", r"\blending\s+rate\b",
-            r"\binflation\s+rate\b", r"\bgdp\s+growth\b", r"\bgdp\s+per\s+capita\b",
-            r"\binterest\s+rate\b", r"\bexchange\s+rate\b",
-            r"\bdebt\s+to\s+gdp\b", r"\bdebt.to.gdp\b",
-            r"\blabor\s+force\s+participation\b", r"\bpoverty\s+rate\b",
-            r"\bmortality\s+rate\b", r"\bliteracy\s+rate\b",
-            r"\bfertility\s+rate\b", r"\bbirth\s+rate\b",
-            r"\blife\s+expectancy\b", r"\bgini\s+coefficient\b",
-        ]
-        query_lower_check = str(query or "").lower()
-        if any(re.search(p, query_lower_check) for p in _specific_metric_patterns):
-            logger.info(
-                "⏭️ Skipping semantic ambiguity — query has specific metric: '%s'",
-                query[:60],
-            )
-            return None
-
-        # For multi-country region queries, auto-select the default metric
-        # instead of asking.  The user's primary intent is clear (compare
-        # countries) so we pick the most common interpretation of the broad
-        # concept and rewrite the query transparently.
-        regions = CountryResolver.detect_regions_in_query(query)
-        if regions:
-            expanded = CountryResolver.expand_regions_in_query(query)
-            if len(expanded) >= 2:
-                logger.info(
-                    "⏭️ Skipping semantic ambiguity clarification for multi-country "
-                    "region query (region=%s, %d countries)",
-                    regions, len(expanded),
-                )
-                return None
-
-        # Skip semantic ambiguity when query has BOTH a clear country AND
-        # a specific time reference.  "US unemployment during 2020" has
-        # enough context — the user knows what they want.
-        query_lower = str(query or "").lower()
-        has_country = bool(CountryResolver.detect_all_countries_in_query(query))
-        has_time = bool(re.search(r"\b(20\d{2}|19\d{2}|last|since|during|after|before)\b", query_lower))
-        if has_country and has_time:
-            logger.info(
-                "⏭️ Skipping semantic ambiguity clarification — query has clear "
-                "country + time context: '%s'",
-                query[:60],
-            )
-            return None
-
-        options = [
-            ClarificationOption(
-                id=str(idx),
-                label=str(option.get("label") or "").strip(),
-                value=str(option.get("value") or "").strip(),
-            )
-            for idx, option in enumerate(plan.get("options") or [], start=1)
-            if str(option.get("label") or "").strip() and str(option.get("value") or "").strip()
-        ]
-        if len(options) < 2:
-            return None
-
-        clarification_questions = list(plan.get("question_lines") or [])
-        clarification_questions.extend(
-            f"{option.id}. {option.label}" for option in options
-        )
-        clarification_questions.append(
-            "Reply with the option number, or type a different metric."
-        )
-
-        payload = {
-            "kind": plan.get("kind"),
-            "concept_label": plan.get("concept_label"),
-            "original_query": str(plan.get("original_query") or query or "").strip(),
-            "question_lines": clarification_questions,
-            "options": [option.model_dump() for option in options],
-        }
-        self._store_pending_semantic_clarification(conversation_id, payload)
-
-        return QueryResponse(
-            conversationId=conversation_id,
-            intent=intent,
-            clarificationNeeded=True,
-            clarificationQuestions=clarification_questions,
-            clarificationOptions=options,
-            processingSteps=processing_steps,
-        )
+        return None
 
     @staticmethod
     def _humanize_region_name(region: str) -> str:

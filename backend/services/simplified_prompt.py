@@ -75,8 +75,18 @@ Important constraints:
   - "to GDP ratio"
 
 Ambiguity policy:
-- If the requested metric is truly ambiguous, set clarificationNeeded=true and provide 1-3 concrete clarificationQuestions.
-- If the user clearly names metric + geography, set clarificationNeeded=false.
+- If the query is genuinely ambiguous (e.g., "trade in China" could mean exports, imports,
+  or trade balance; "employment" could mean employment rate, number employed, or
+  employment-to-population ratio), set clarificationNeeded=true and provide 1-3 concrete
+  clarificationQuestions listing the plausible interpretations.
+- If the query has a clear default interpretation, do NOT ask for clarification.
+  Examples of clear queries that should NOT trigger clarification:
+  - "US GDP" -> GDP level (clear)
+  - "unemployment rate Germany" -> unemployment rate (specific metric named)
+  - "trade balance China" -> trade balance (specific metric named)
+  - "inflation in France 2020-2023" -> inflation rate (specific + time + country)
+- Only ask for clarification when the query uses a genuinely broad/underspecified concept
+  AND there is no clear default.  Err on the side of fetching data rather than asking.
 
 Date handling:
 - Today is {today}.

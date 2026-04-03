@@ -387,13 +387,12 @@ class RouterAgent:
         """Extract context for standard data fetch query"""
         context = {"data_fetch_mode": True}
 
-        # Delegate explicit provider detection to the single source of truth
-        # (KeywordMatcher) to avoid drift between duplicate keyword dicts.
-        from ..routing.keyword_matcher import KeywordMatcher
-        match = KeywordMatcher.detect_explicit_provider(query)
-        if match and match.provider:
+        # Detect explicit provider using the inline helper in unified_router.
+        from ..routing.unified_router import detect_explicit_provider_match
+        match = detect_explicit_provider_match(query)
+        if match:
             from ..services.query import normalize_provider_name
-            context["explicit_provider"] = normalize_provider_name(match.provider)
+            context["explicit_provider"] = normalize_provider_name(match[0])
 
         return context
 

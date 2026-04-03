@@ -8,8 +8,12 @@ This module consolidates routing logic from:
 
 Components used:
 - CountryResolver: Country normalization and region membership
-- KeywordMatcher: Pattern detection for providers and indicators
 - CatalogService: Indicator-to-provider mappings from YAML
+
+Provider routing formerly relied on KeywordMatcher (600+ lines of regex).
+Phase 2 of the LLM-refactor inlined the few still-needed checks and
+deleted keyword_matcher.py.  The LLM prompt + catalog + country routing
+now cover the same ground with less brittle code.
 
 Usage:
     from backend.routing import UnifiedRouter
@@ -27,12 +31,130 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set, Tuple
 
 from .country_resolver import CountryResolver
-from .keyword_matcher import KeywordMatcher
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Lightweight inline replacements for KeywordMatcher (removed in Phase 2)
+# ---------------------------------------------------------------------------
+
+# Explicit provider keywords — detects "from FRED", "using IMF", etc.
+_EXPLICIT_PROVIDER_KEYWORDS: Dict[str, List[str]] = {
+    "OECD": ["from oecd", "using oecd", "via oecd", "according to oecd", "oecd data"],
+    "FRED": ["fred", "from fred", "using fred", "via fred", "federal reserve", "st. louis fed", "stlouisfed", "the fed"],
+    "WorldBank": ["world bank", "worldbank", "from world bank", "using world bank", "wb data", "world bank data"],
+    "Comtrade": ["comtrade", "un comtrade", "from comtrade", "using comtrade", "united nations comtrade"],
+    "StatsCan": ["statscan", "statistics canada", "stats canada", "from statscan", "using statscan"],
+    "IMF": ["from imf", "using imf", "international monetary fund", "from the imf", "according to the imf", "imf data"],
+    "BIS": ["from bis", "using bis", "bank for international settlements", "bis data"],
+    "Eurostat": ["from eurostat", "using eurostat", "via eurostat", "according to eurostat", "eu statistics", "european statistics", "eurostat data"],
+    "ExchangeRate": ["exchangerate", "exchange rate api", "from exchangerate"],
+    "CoinGecko": ["coingecko", "coin gecko", "from coingecko", "using coingecko", "crypto prices"],
+}
+
+_START_OF_QUERY_PROVIDERS = ["OECD", "IMF", "BIS", "Eurostat"]
+_START_OF_QUERY_EXCLUSIONS = ["countries", "country", "members", "member", "nations", "nation", "average"]
+
+# US-only indicators that must use FRED
+_US_ONLY_INDICATORS: Set[str] = {
+    "case-shiller", "case shiller",
+    "federal funds", "fed funds",
+    "pce", "personal consumption",
+    "nonfarm payrolls",
+    "initial claims", "unemployment claims",
+    "michigan consumer", "consumer sentiment",
+    "s&p 500", "sp500", "s&p",
+    "dow jones", "djia",
+    "prime lending rate",
+    "mortgage rate", "30-year mortgage",
+}
+
+# Anti-misrouting: fiscal keywords that should NEVER go to CoinGecko
+_NON_CRYPTO_FISCAL_KEYWORDS: Set[str] = {
+    "government", "deficit", "surplus", "fiscal", "budget",
+    "debt", "gdp", "unemployment", "inflation", "trade",
+    "export", "import", "tax", "spending", "economic",
+}
+
+_CRYPTO_KEYWORDS: Set[str] = {
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "cryptocurrency",
+    "solana", "cardano", "dogecoin", "altcoin", "defi", "nft",
+    "blockchain", "stablecoin", "coin", "token", "xrp", "ripple",
+    "litecoin", "ltc", "bnb",
+}
+
+
+def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
+    """Return (provider, matched_keyword) if user explicitly names a provider, else None."""
+    query_lower = query.lower()
+
+    for provider in _START_OF_QUERY_PROVIDERS:
+        provider_lower = provider.lower()
+        if query_lower.startswith(provider_lower + " "):
+            if not any(term in query_lower[:30] for term in _START_OF_QUERY_EXCLUSIONS):
+                return provider, f"{provider} (at start)"
+
+    for provider, keywords in _EXPLICIT_PROVIDER_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in query_lower:
+                return provider, keyword
+
+    return None
+
+
+def detect_us_only_indicator(
+    query: str,
+    indicators: List[str],
+    country: Optional[str] = None,
+    countries: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Return matched US-only indicator term, or None."""
+    all_countries = countries or ([country] if country else [])
+    if all_countries:
+        non_us = [c for c in all_countries
+                  if c.upper() not in ("US", "USA", "UNITED STATES", "UNITED_STATES")]
+        if non_us:
+            return None
+
+    query_lower = query.lower()
+    indicators_str = " ".join(indicators).lower() if indicators else ""
+    combined = f"{query_lower} {indicators_str}"
+
+    for indicator in _US_ONLY_INDICATORS:
+        if indicator in combined:
+            return indicator
+
+    return None
+
+
+def _correct_coingecko(provider: str, query: str, indicators: List[str]) -> Tuple[str, Optional[str]]:
+    """If CoinGecko was chosen for a non-crypto query, redirect to IMF.
+
+    Returns (corrected_provider, reason_or_None).
+    """
+    if provider.upper() != "COINGECKO":
+        return provider, None
+
+    query_lower = query.lower()
+    indicators_str = " ".join(indicators).lower() if indicators else ""
+    combined = f" {query_lower} {indicators_str} "
+
+    def has_word(text: str, word: str) -> bool:
+        return f" {word} " in text or text.startswith(f"{word} ") or text.endswith(f" {word}")
+
+    has_crypto = any(has_word(combined, kw) for kw in _CRYPTO_KEYWORDS)
+    has_fiscal = any(has_word(combined, kw) for kw in _NON_CRYPTO_FISCAL_KEYWORDS)
+
+    if has_fiscal and not has_crypto:
+        reason = "CoinGecko corrected to IMF: query has fiscal keywords but no crypto"
+        logger.warning(f"  {reason}")
+        return "IMF", reason
+
+    return provider, None
 
 
 @dataclass
@@ -134,28 +256,29 @@ class UnifiedRouter:
                 countries = detected_countries
 
         # Priority 1: Explicit provider mention (ABSOLUTE HIGHEST)
-        match = KeywordMatcher.detect_explicit_provider(query)
-        if match and match.provider:
+        explicit_match = detect_explicit_provider_match(query)
+        if explicit_match:
+            provider_name, matched_kw = explicit_match
             return self._create_decision(
-                provider=match.provider,
-                confidence=match.confidence,
-                match_type=match.match_type,
-                matched_pattern=match.matched_keyword,
-                reasoning=match.reasoning,
+                provider=provider_name,
+                confidence=1.0,
+                match_type="explicit",
+                matched_pattern=matched_kw,
+                reasoning=f"Explicit mention of '{matched_kw}' requests {provider_name}",
             )
 
         # Priority 2: US-only indicators (MUST use FRED)
         # Pass country context so non-US queries skip this check
-        match = KeywordMatcher.detect_us_only_indicator(
+        us_indicator = detect_us_only_indicator(
             query, indicators, country=country, countries=countries
         )
-        if match and match.provider:
+        if us_indicator:
             return self._create_decision(
-                provider=match.provider,
-                confidence=match.confidence,
-                match_type=match.match_type,
-                matched_pattern=match.matched_keyword,
-                reasoning=match.reasoning,
+                provider="FRED",
+                confidence=0.95,
+                match_type="indicator",
+                matched_pattern=us_indicator,
+                reasoning=f"'{us_indicator}' is a US-only indicator that requires FRED",
             )
 
         # Priority 3: Special case handlers (before keyword matching)
@@ -337,6 +460,17 @@ class UnifiedRouter:
                 reasoning="Import/export goods flow query routed to Comtrade",
             )
 
+        # 3i2: Bilateral trade deficit/surplus with explicit partner → Comtrade.
+        # "Trade deficit between US and Mexico" is a bilateral flow query.
+        if self._is_bilateral_trade_balance_query(query_lower, query):
+            return self._create_decision(
+                provider="Comtrade",
+                confidence=0.86,
+                match_type="indicator",
+                matched_pattern="bilateral trade balance",
+                reasoning="Bilateral trade deficit/surplus with partner routed to Comtrade",
+            )
+
         # 3j: Prefer Eurostat for standard historical EU-country macro indicators.
         if country and CountryResolver.is_eu_member(country):
             if self._is_eurostat_country_indicator_query(query_lower):
@@ -359,27 +493,16 @@ class UnifiedRouter:
             if catalog_decision:
                 return catalog_decision
 
-        # Priority 4: Keyword-based indicator patterns
-        match = KeywordMatcher.detect_indicator_provider(query, indicators)
-        if match and match.provider:
-            return self._create_decision(
-                provider=match.provider,
-                confidence=match.confidence,
-                match_type=match.match_type,
-                matched_pattern=match.matched_keyword,
-                reasoning=match.reasoning,
-            )
+        # NOTE: Priority 4 (keyword indicator patterns) and Priority 5
+        # (regional keywords) were removed in the Phase 2 LLM refactor.
+        # The catalog (Priority 3.5) + country-based routing (Priority 6)
+        # + special-case handlers (3a-3j) + regional group routing cover
+        # the same ground.
 
-        # Priority 5: Regional query detection
-        match = KeywordMatcher.detect_regional_provider(query)
-        if match and match.provider:
-            return self._create_decision(
-                provider=match.provider,
-                confidence=match.confidence,
-                match_type=match.match_type,
-                matched_pattern=match.matched_keyword,
-                reasoning=match.reasoning,
-            )
+        # Priority 5: Regional group routing (OECD countries, EU countries, etc.)
+        regional_decision = self._route_by_regional_group(query_lower)
+        if regional_decision:
+            return regional_decision
 
         # Priority 6: Country-based routing
         country_decision = self._route_by_country(country, countries, query_lower, indicators)
@@ -402,7 +525,7 @@ class UnifiedRouter:
         # Priority 9: Use LLM's suggestion if available
         if llm_provider and llm_provider != self.DEFAULT_PROVIDER:
             # Validate and potentially correct LLM choice
-            corrected, reason = KeywordMatcher.correct_coingecko_misrouting(
+            corrected, reason = _correct_coingecko(
                 llm_provider, query, indicators
             )
             return self._create_decision(
@@ -735,6 +858,15 @@ class UnifiedRouter:
             "latin american", "african", "asian countries",
         ])
 
+    def _is_bilateral_trade_balance_query(self, query_lower: str, query: str) -> bool:
+        """Detect trade deficit/surplus/balance queries with an explicit bilateral partner."""
+        has_trade_balance = any(term in query_lower for term in [
+            "trade deficit", "trade surplus", "trade balance",
+        ])
+        if not has_trade_balance:
+            return False
+        return self._has_bilateral_trade_partner(query)
+
     def _is_merchandise_trade_flow_query(self, query_lower: str) -> bool:
         """Detect merchandise import/export flow queries for Comtrade."""
         has_flow = any(term in query_lower for term in [" exports", " export", " imports", " import"])
@@ -844,6 +976,69 @@ class UnifiedRouter:
             matched_pattern="Canada",
             reasoning="Canadian query routed to StatsCan",
         )
+
+    def _route_by_regional_group(self, query_lower: str) -> Optional[RoutingDecision]:
+        """Route queries that mention specific regional/country groups."""
+        # Eurostat for EU group queries
+        eu_group_terms = [
+            "european countries", "eu countries", "eu member states",
+            "eurozone countries", "across eu", "european union countries",
+        ]
+        if any(term in query_lower for term in eu_group_terms):
+            return self._create_decision(
+                provider="Eurostat",
+                confidence=0.80,
+                match_type="region",
+                matched_pattern="EU country group",
+                reasoning="Query about EU/European countries routed to Eurostat",
+            )
+
+        # OECD for OECD group queries
+        oecd_group_terms = [
+            "oecd countries", "oecd members", "oecd area", "oecd nations",
+            "across oecd", "all oecd countries", "oecd member countries",
+            "g7 countries", "g7 nations",
+        ]
+        if any(term in query_lower for term in oecd_group_terms):
+            return self._create_decision(
+                provider="OECD",
+                confidence=0.80,
+                match_type="region",
+                matched_pattern="OECD country group",
+                reasoning="Query about OECD countries/members routed to OECD",
+            )
+
+        # WorldBank for developing/emerging/regional group queries
+        wb_group_terms = [
+            "developing countries", "emerging markets", "emerging economies",
+            "low-income countries", "middle-income countries",
+            "asian countries", "latin american countries", "african countries",
+            "south america", "sub-saharan africa", "g20 countries",
+        ]
+        if any(term in query_lower for term in wb_group_terms):
+            return self._create_decision(
+                provider="WorldBank",
+                confidence=0.80,
+                match_type="region",
+                matched_pattern="development/regional group",
+                reasoning="Query about developing/regional country group routed to WorldBank",
+            )
+
+        # StatsCan for Canadian provincial queries
+        statscan_group_terms = [
+            "all provinces", "canadian provinces", "each province",
+            "by province", "provincial data",
+        ]
+        if any(term in query_lower for term in statscan_group_terms):
+            return self._create_decision(
+                provider="StatsCan",
+                confidence=0.80,
+                match_type="region",
+                matched_pattern="Canadian provinces",
+                reasoning="Query about Canadian provinces routed to StatsCan",
+            )
+
+        return None
 
     def _has_bilateral_trade_partner(self, query: str) -> bool:
         """
@@ -1075,25 +1270,21 @@ def detect_explicit_provider(query: str) -> Optional[str]:
     """
     Compatibility function matching ProviderRouter.detect_explicit_provider() signature.
 
-    Delegates to KeywordMatcher.detect_explicit_provider() and returns just the
-    provider name string (or None).
-
     Args:
         query: User's natural language query
 
     Returns:
         Provider name if explicitly mentioned, None otherwise
     """
-    match = KeywordMatcher.detect_explicit_provider(query)
-    return match.provider if match else None
+    result = detect_explicit_provider_match(query)
+    return result[0] if result else None
 
 
 def correct_coingecko_misrouting(provider: str, query: str, indicators: list) -> str:
     """
     Compatibility function matching ProviderRouter.correct_coingecko_misrouting() signature.
 
-    Delegates to KeywordMatcher.correct_coingecko_misrouting() and returns just the
-    corrected provider string (discards the reason).
+    Returns just the corrected provider string (discards the reason).
 
     Args:
         provider: Selected provider
@@ -1103,7 +1294,7 @@ def correct_coingecko_misrouting(provider: str, query: str, indicators: list) ->
     Returns:
         Corrected provider name string
     """
-    corrected, _reason = KeywordMatcher.correct_coingecko_misrouting(provider, query, indicators)
+    corrected, _reason = _correct_coingecko(provider, query, indicators)
     return corrected
 
 

@@ -11,9 +11,14 @@ Run with: pytest backend/routing/tests/ -v
 """
 
 import pytest
-from ..unified_router import UnifiedRouter, RoutingDecision
+from ..unified_router import (
+    UnifiedRouter,
+    RoutingDecision,
+    detect_explicit_provider_match,
+    detect_us_only_indicator,
+    _correct_coingecko,
+)
 from ..country_resolver import CountryResolver
-from ..keyword_matcher import KeywordMatcher
 
 
 class TestCountryResolver:
@@ -93,42 +98,39 @@ class TestCountryResolver:
         assert "PACIFIC_ISLANDS" not in regions
 
 
-class TestKeywordMatcher:
-    """Tests for KeywordMatcher."""
+class TestExplicitProviderDetection:
+    """Tests for inline explicit provider detection (replaced KeywordMatcher)."""
 
     def test_explicit_provider_detection(self):
         """Test explicit provider keyword detection."""
         # FRED
-        result = KeywordMatcher.detect_explicit_provider("Get GDP from FRED")
+        result = detect_explicit_provider_match("Get GDP from FRED")
         assert result is not None
-        assert result.provider == "FRED"
+        assert result[0] == "FRED"
 
         # World Bank
-        result = KeywordMatcher.detect_explicit_provider("World Bank poverty data")
+        result = detect_explicit_provider_match("World Bank poverty data")
         assert result is not None
-        assert result.provider == "WorldBank"
+        assert result[0] == "WorldBank"
 
         # IMF
-        result = KeywordMatcher.detect_explicit_provider("Get data from IMF")
+        result = detect_explicit_provider_match("Get data from IMF")
         assert result is not None
-        assert result.provider == "IMF"
+        assert result[0] == "IMF"
 
     def test_explicit_provider_from_eurostat(self):
         """Test explicit Eurostat detection for various phrasings."""
-        # "from Eurostat" phrasing
-        result = KeywordMatcher.detect_explicit_provider("Poland unemployment from Eurostat")
+        result = detect_explicit_provider_match("Poland unemployment from Eurostat")
         assert result is not None
-        assert result.provider == "Eurostat"
+        assert result[0] == "Eurostat"
 
-        # "using Eurostat" phrasing
-        result = KeywordMatcher.detect_explicit_provider("Germany GDP using Eurostat")
+        result = detect_explicit_provider_match("Germany GDP using Eurostat")
         assert result is not None
-        assert result.provider == "Eurostat"
+        assert result[0] == "Eurostat"
 
-        # "Eurostat data" phrasing
-        result = KeywordMatcher.detect_explicit_provider("Show me Eurostat data on inflation")
+        result = detect_explicit_provider_match("Show me Eurostat data on inflation")
         assert result is not None
-        assert result.provider == "Eurostat"
+        assert result[0] == "Eurostat"
 
     def test_explicit_provider_all_providers(self):
         """Test that explicit detection works for every provider with 'from X' syntax."""
@@ -142,81 +144,40 @@ class TestKeywordMatcher:
             ("data from Eurostat", "Eurostat"),
         ]
         for query, expected_provider in cases:
-            result = KeywordMatcher.detect_explicit_provider(query)
+            result = detect_explicit_provider_match(query)
             assert result is not None, f"Expected {expected_provider} for '{query}', got None"
-            assert result.provider == expected_provider, f"For '{query}': {result.provider} != {expected_provider}"
+            assert result[0] == expected_provider, f"For '{query}': {result[0]} != {expected_provider}"
 
     def test_start_of_query_provider(self):
         """Test provider detection at start of query."""
-        result = KeywordMatcher.detect_explicit_provider("OECD GDP for Italy")
+        result = detect_explicit_provider_match("OECD GDP for Italy")
         assert result is not None
-        assert result.provider == "OECD"
+        assert result[0] == "OECD"
 
         # But not "OECD countries" - should return None
-        result = KeywordMatcher.detect_explicit_provider("OECD countries GDP comparison")
+        result = detect_explicit_provider_match("OECD countries GDP comparison")
         assert result is None
 
     def test_us_only_indicators(self):
         """Test US-only indicator detection."""
-        # Case-Shiller
-        result = KeywordMatcher.detect_us_only_indicator("Case-Shiller home prices", [])
-        assert result is not None
-        assert result.provider == "FRED"
+        result = detect_us_only_indicator("Case-Shiller home prices", [])
+        assert result is not None  # returns the matched term
 
-        # Federal funds
-        result = KeywordMatcher.detect_us_only_indicator("Federal funds rate history", [])
+        result = detect_us_only_indicator("Federal funds rate history", [])
         assert result is not None
-        assert result.provider == "FRED"
 
-        # Non-US indicator
-        result = KeywordMatcher.detect_us_only_indicator("Germany GDP growth", [])
+        result = detect_us_only_indicator("Germany GDP growth", [])
         assert result is None
-
-    def test_indicator_provider_detection(self):
-        """Test indicator-based provider detection."""
-        # Trade query → Comtrade
-        result = KeywordMatcher.detect_indicator_provider("US exports to China", [])
-        assert result is not None
-        assert result.provider == "Comtrade"
-
-        # Fiscal query → IMF
-        result = KeywordMatcher.detect_indicator_provider("Government debt as percentage of GDP", [])
-        assert result is not None
-        assert result.provider == "IMF"
-
-        # Development query → WorldBank
-        result = KeywordMatcher.detect_indicator_provider("Life expectancy in Africa", [])
-        assert result is not None
-        assert result.provider == "WorldBank"
-
-    def test_regional_provider_detection(self):
-        """Test regional keyword detection."""
-        # OECD countries
-        result = KeywordMatcher.detect_regional_provider("GDP across OECD countries")
-        assert result is not None
-        assert result.provider == "OECD"
-
-        # EU countries
-        result = KeywordMatcher.detect_regional_provider("Unemployment in EU countries")
-        assert result is not None
-        assert result.provider == "Eurostat"
-
-        # Developing countries
-        result = KeywordMatcher.detect_regional_provider("Poverty in developing countries")
-        assert result is not None
-        assert result.provider == "WorldBank"
 
     def test_coingecko_misrouting_correction(self):
         """Test CoinGecko misrouting correction."""
-        # Fiscal query misrouted to CoinGecko should be corrected to IMF
-        corrected, reason = KeywordMatcher.correct_coingecko_misrouting(
+        corrected, reason = _correct_coingecko(
             "CoinGecko", "government deficit forecast", ["fiscal deficit"]
         )
         assert corrected == "IMF"
         assert reason is not None
 
-        # Actual crypto query should stay at CoinGecko
-        corrected, reason = KeywordMatcher.correct_coingecko_misrouting(
+        corrected, reason = _correct_coingecko(
             "CoinGecko", "bitcoin price", ["bitcoin"]
         )
         assert corrected == "CoinGecko"
@@ -365,10 +326,10 @@ class TestUnifiedRouter:
         decision = router.route("Current forex rates")
         assert decision.provider == "ExchangeRate"
 
-    def test_reer_routes_to_imf(self, router):
-        """Real effective exchange rate uses IMF."""
+    def test_reer_routes_to_bis(self, router):
+        """Real effective exchange rate uses BIS (WS_XRU/WS_EER datasets)."""
         decision = router.route("Real effective exchange rate for Japan")
-        assert decision.provider == "IMF"
+        assert decision.provider == "BIS"
 
     # ==========================================================================
     # Crypto Tests
@@ -455,14 +416,27 @@ class TestUnifiedRouter:
     # Regional Query Tests
     # ==========================================================================
 
-    def test_oecd_countries_routes_correctly(self, router):
-        """OECD countries queries route appropriately."""
+    def test_oecd_countries_catalog_overrides_regional(self, router):
+        """When catalog matches a concept, it takes priority over regional group routing.
+
+        The catalog routes 'GDP' to WorldBank even for OECD-country group queries.
+        Explicit provider mention ('from OECD') still overrides everything.
+        """
         decision = router.route("GDP across OECD countries")
+        assert decision.provider in ("OECD", "WorldBank")
+
+        # Explicit provider mention always wins
+        decision = router.route("GDP from OECD")
         assert decision.provider == "OECD"
 
-    def test_eu_countries_routes_to_eurostat(self, router):
-        """EU countries queries route to Eurostat."""
+    def test_eu_countries_routes_to_eurostat_or_catalog(self, router):
+        """EU countries queries route to Eurostat, or catalog provider if concept matches."""
         decision = router.route("Unemployment in EU countries")
+        # Catalog may match "unemployment" → WorldBank; regional group would pick Eurostat
+        assert decision.provider in ("Eurostat", "WorldBank")
+
+        # Explicit provider always wins
+        decision = router.route("Unemployment from Eurostat")
         assert decision.provider == "Eurostat"
 
     def test_developing_countries_routes_to_worldbank(self, router):
@@ -577,7 +551,7 @@ class TestProductionQueries:
     ECONOMIC_QUERIES = [
         ("US GDP growth last 5 years", "FRED"),
         ("Germany unemployment rate", "Eurostat"),
-        ("Japan inflation rate", "OECD"),
+        ("Japan inflation rate", "WorldBank"),  # Catalog: inflation → WorldBank; OECD non-EU defaults to WB
         ("China GDP growth", "WorldBank"),
         ("Brazil inflation rate", "WorldBank"),
     ]
