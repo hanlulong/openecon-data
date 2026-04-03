@@ -457,6 +457,38 @@ class TestUnifiedRouter:
         decision = router.route("Canada total exports")
         assert decision.provider == "StatsCan"
 
+    def test_canada_gdp_routes_to_statscan(self, router):
+        """Canadian GDP uses StatsCan (catalog-driven: StatsCan has GDP for CA)."""
+        decision = router.route("Canada GDP")
+        assert decision.provider == "StatsCan"
+        assert decision.match_type == "catalog"
+
+    def test_canada_cpi_monthly_routes_to_statscan(self, router):
+        """Canadian CPI uses StatsCan (catalog-driven: StatsCan has inflation for CA)."""
+        decision = router.route("Canada CPI monthly")
+        assert decision.provider == "StatsCan"
+        assert decision.match_type == "catalog"
+
+    def test_canada_inflation_routes_to_statscan(self, router):
+        """Canadian inflation rate uses StatsCan."""
+        decision = router.route("Canada inflation rate")
+        assert decision.provider == "StatsCan"
+
+    def test_canada_gdp_growth_routes_to_worldbank_or_imf(self, router):
+        """Canada GDP growth: StatsCan not available for growth rate, uses global provider."""
+        decision = router.route("Canada GDP growth")
+        assert decision.provider in ("WorldBank", "IMF")
+
+    def test_canada_population_routes_to_statscan(self, router):
+        """Canadian population uses StatsCan (catalog: StatsCan has population for CA)."""
+        decision = router.route("Canada population")
+        assert decision.provider == "StatsCan"
+
+    def test_canada_life_expectancy_routes_to_worldbank(self, router):
+        """Canada life expectancy: StatsCan not available, uses WorldBank."""
+        decision = router.route("Canada life expectancy")
+        assert decision.provider == "WorldBank"
+
     def test_canada_residential_property_routes_to_bis(self, router):
         """Canadian residential property market queries use BIS."""
         decision = router.route("Canada residential property prices 2015-2024")

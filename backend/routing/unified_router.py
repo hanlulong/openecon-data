@@ -476,7 +476,19 @@ class UnifiedRouter:
         indicators: List[str],
         country: Optional[str],
     ) -> RoutingDecision:
-        """Handle Canadian-specific routing (structural: StatsCan is Canada-only)."""
+        """Handle Canadian-specific routing (structural: StatsCan is Canada-only).
+
+        Routing priority for Canada queries:
+        1. Property market → BIS (structural: BIS has cross-country property data)
+        2. Bilateral trade → Comtrade (structural: only bilateral trade provider)
+        3. Non-bilateral trade → StatsCan
+        4. Catalog-aware routing: if the catalog concept lists StatsCan as a
+           provider with coverage [CA], prefer StatsCan (country-specific source
+           with higher frequency/timeliness). Otherwise fall back to the best
+           global provider from the catalog.
+        5. Development-only indicators (no StatsCan coverage) → WorldBank
+        6. Default → StatsCan
+        """
         query_lower = query.lower()
         indicators_str = " ".join(indicators).lower()
         combined = f"{query_lower} {indicators_str}"
@@ -514,20 +526,32 @@ class UnifiedRouter:
                 reasoning="Canadian trade (no partner) → StatsCan",
             )
 
-        # Global indicators → WorldBank (broader coverage than StatsCan)
-        global_indicators = [
-            "population", "life expectancy", "fertility", "mortality",
-            "gdp", "gdp per capita", "gdp growth",
+        # Catalog-aware routing: check if StatsCan covers the concept.
+        # This replaces the old hardcoded global_indicators list with a
+        # data-driven approach. The catalog YAML files are the source of
+        # truth for which providers cover which concepts and countries.
+        if self._use_catalog and self._catalog_service:
+            catalog_decision = self._route_canada_by_catalog(
+                indicators, query, combined,
+            )
+            if catalog_decision:
+                return catalog_decision
+
+        # Development-only indicators unlikely to be in StatsCan — route to
+        # WorldBank. These are structural: StatsCan is a national statistics
+        # office and does not track global development metrics.
+        _DEVELOPMENT_ONLY = [
+            "life expectancy", "fertility", "mortality",
             "co2", "emissions", "forest", "renewable energy",
-            "literacy", "education", "poverty",
+            "literacy", "poverty",
         ]
-        if any(term in combined for term in global_indicators):
+        if any(term in combined for term in _DEVELOPMENT_ONLY):
             return self._create_decision(
                 provider="WorldBank",
                 confidence=0.80,
                 match_type="indicator",
-                matched_pattern="Canada global indicator",
-                reasoning="Canadian query with global indicator → WorldBank (broader coverage)",
+                matched_pattern="Canada development indicator",
+                reasoning="Canadian query with development indicator → WorldBank",
             )
 
         # Default for Canadian queries → StatsCan
@@ -538,6 +562,85 @@ class UnifiedRouter:
             matched_pattern="Canada",
             reasoning="Canadian query routed to StatsCan",
         )
+
+    def _route_canada_by_catalog(
+        self,
+        indicators: List[str],
+        query: str,
+        combined: str,
+    ) -> Optional[RoutingDecision]:
+        """Use the catalog to decide between StatsCan and global providers for Canada.
+
+        For each indicator/query term, find the catalog concept. If the concept
+        lists StatsCan as a provider (meaning it has Canada-specific data),
+        prefer StatsCan. Otherwise, use the catalog's best provider for CA.
+
+        This is a FRAMEWORK solution: as new concepts are added to catalog YAML
+        files with StatsCan entries, they automatically route correctly without
+        any code changes.
+        """
+        if not self._catalog_service:
+            return None
+
+        # Build candidate terms: parsed indicators + raw query
+        terms_to_check = list(indicators) if indicators else []
+        query_clean = query.strip()
+        if query_clean and query_clean not in terms_to_check:
+            terms_to_check.append(query_clean)
+
+        if not terms_to_check:
+            return None
+
+        for term in terms_to_check:
+            concept_name = self._catalog_service.find_concept_by_term(term)
+            if not concept_name:
+                continue
+
+            # Check if StatsCan is listed as a provider for this concept
+            statscan_available = self._catalog_service.is_provider_available(
+                concept_name, "StatsCan"
+            )
+
+            if statscan_available:
+                # StatsCan has this concept — prefer it for Canada queries
+                code = self._catalog_service.get_indicator_code(
+                    concept_name, "StatsCan", "primary"
+                )
+                logger.info(
+                    f"📚 Canada catalog match: {term} → {concept_name} → StatsCan"
+                    f" (code: {code})"
+                )
+                return self._create_decision(
+                    provider="StatsCan",
+                    confidence=0.88,
+                    match_type="catalog",
+                    matched_pattern=f"catalog:{concept_name}:StatsCan",
+                    reasoning=(
+                        f"Catalog lookup: Canada + {concept_name} → StatsCan "
+                        f"(country-specific source, code: {code})"
+                    ),
+                )
+
+            # Concept exists but StatsCan doesn't have it — use catalog's
+            # best provider for CA context
+            provider, code, confidence = self._catalog_service.get_best_provider(
+                concept_name, countries=["CA"],
+            )
+            if provider and confidence > 0.5:
+                logger.info(
+                    f"📚 Canada catalog match: {term} → {concept_name} → "
+                    f"{provider} (StatsCan unavailable)"
+                )
+                return self._create_decision(
+                    provider=provider,
+                    confidence=confidence,
+                    match_type="catalog",
+                    matched_pattern=f"catalog:{concept_name}",
+                    reasoning=(
+                        f"Catalog lookup: Canada + {concept_name} → {provider} "
+                        f"(StatsCan not available, code: {code})"
+                    ),
+                )
 
     def _route_by_regional_group(self, query_lower: str) -> Optional[RoutingDecision]:
         """Route queries that mention specific regional/country groups."""
