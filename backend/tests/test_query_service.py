@@ -3515,6 +3515,217 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(historical_mock.call_args.kwargs.get("metric"), "volume")
         self.assertEqual(historical_mock.call_args.kwargs.get("days"), 90)
 
+    # ── Issue 1: Follow-up after unanswered clarification ──────────────
+
+    def test_prompt_clarification_section_allows_ignoring(self) -> None:
+        """The prompt should tell the LLM that the user may ignore the
+        clarification and send a completely new query."""
+        from backend.services.simplified_prompt import SimplifiedPrompt
+
+        ctx = {
+            "indicator": "employment",
+            "country": "CA",
+            "provider": "StatsCan",
+            "startDate": "not specified",
+            "endDate": "not specified",
+            "originalQuery": "employment data Canada",
+            "pendingClarification": True,
+            "clarificationQuestion": "Which specific employment indicator?",
+            "clarificationOptions": "employment rate, unemployment rate",
+        }
+        prompt = SimplifiedPrompt.generate(ctx)
+
+        # The prompt must contain guidance about the user ignoring the clarification
+        self.assertIn("IGNORING", prompt)
+        self.assertIn("new independent query", prompt.lower())
+        self.assertIn("isFollowUp=false", prompt)
+
+    def test_contextual_follow_up_skipped_during_clarification(self) -> None:
+        """When last_intent has clarificationNeeded=True, the deterministic
+        follow-up detector correctly skips (returning None), so the query
+        falls through to the LLM which has the updated prompt guidance."""
+        conv_id = conversation_manager.get_or_create("conv-clarification-ignore")
+        # Store a clarification intent
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "employment data Canada",
+            intent=ParsedIntent(
+                apiProvider="StatsCan",
+                indicators=["employment"],
+                parameters={"country": "CA"},
+                clarificationNeeded=True,
+                clarificationQuestions=["Which specific employment indicator?"],
+                originalQuery="employment data Canada",
+            ),
+        )
+
+        # The contextual follow-up detector should return None because
+        # clarificationNeeded=True on the last intent.
+        result = self.service._build_intent_from_contextual_follow_up(
+            query="show me the same for US",
+            conversation_id=conv_id,
+        )
+        self.assertIsNone(result)
+
+        # The indicator switch detector should also return None.
+        result2 = self.service._build_intent_from_indicator_switch(
+            query="what about inflation",
+            conversation_id=conv_id,
+        )
+        self.assertIsNone(result2)
+
+    # ── Issue 2: Province follow-up prompt guidance ──────────────────
+
+    def test_prompt_follow_up_section_has_province_guidance(self) -> None:
+        """The follow-up section should include province/state handling
+        guidance so the LLM knows to use decomposition for sub-national regions."""
+        from backend.services.simplified_prompt import SimplifiedPrompt
+
+        ctx = {
+            "indicator": "unemployment rate",
+            "country": "CA",
+            "provider": "StatsCan",
+            "startDate": "not specified",
+            "endDate": "not specified",
+            "originalQuery": "Canada unemployment rate",
+        }
+        prompt = SimplifiedPrompt.generate(ctx)
+
+        # Province guidance must be present
+        self.assertIn("Province/state follow-up handling", prompt)
+        self.assertIn("Ontario", prompt)
+        self.assertIn("decompositionType", prompt)
+        self.assertIn("StatsCan", prompt)
+        self.assertIn("NOT a country", prompt)
+
+    def test_prompt_clarification_section_omits_province_guidance(self) -> None:
+        """The clarification section (pendingClarification=True) should NOT include
+        the province follow-up section (it's for the non-clarification follow-up path)."""
+        from backend.services.simplified_prompt import SimplifiedPrompt
+
+        ctx = {
+            "indicator": "employment",
+            "country": "CA",
+            "provider": "StatsCan",
+            "startDate": "not specified",
+            "endDate": "not specified",
+            "originalQuery": "employment data Canada",
+            "pendingClarification": True,
+            "clarificationQuestion": "Which?",
+            "clarificationOptions": "a, b",
+        }
+        prompt = SimplifiedPrompt.generate(ctx)
+
+        # Province guidance should NOT be in the clarification section
+        self.assertNotIn("Province/state follow-up handling", prompt)
+
+    # ── Issue 3: Provider change to unavailable data ─────────────────
+
+    def test_no_data_for_provider_change_gives_helpful_message(self) -> None:
+        """When a provider_change follow-up results in no data, the error message
+        should mention the provider doesn't have the data and suggest alternatives."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["housing starts"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="housing starts in Canada from World Bank",
+            isFollowUp=True,
+            followUpType="provider_change",
+            resolvedQuery="housing starts in Canada from World Bank",
+        )
+
+        conv_id = conversation_manager.get_or_create("conv-provider-change-nodata")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "show from World Bank instead",
+            intent=intent,
+        )
+
+        # Simulate the no-data path after provider_change follow-up
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="WORLDBANK",
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_valid=True,
+            is_multi_indicator=False,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
+             patch.object(self.service, "_fetch_data", AsyncMock(return_value=[])), \
+             patch.object(self.service, "_try_with_fallback", AsyncMock(side_effect=Exception("no fallback"))), \
+             patch.object(self.service, "_maybe_recover_from_empty_data", AsyncMock(return_value=None)), \
+             patch.object(self.service, "_build_no_data_indicator_clarification", return_value=None):
+
+            response = run(self.service.process_query(
+                "show from World Bank instead",
+                conversation_id=conv_id,
+            ))
+
+        # The response should contain helpful provider-specific message
+        self.assertIsNotNone(response.message)
+        self.assertIn("doesn't appear to have", response.message)
+        self.assertIn("housing starts", response.message)
+        self.assertEqual(response.error, "no_data_found")
+
+    def test_no_data_non_provider_change_gives_generic_message(self) -> None:
+        """Non-provider-change queries that return no data should NOT get the
+        provider-change-specific message."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["housing starts"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="housing starts in Canada",
+            isFollowUp=False,
+        )
+
+        conv_id = conversation_manager.get_or_create("conv-non-provider-change-nodata")
+
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="WORLDBANK",
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_valid=True,
+            is_multi_indicator=False,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
+             patch.object(self.service, "_fetch_data", AsyncMock(return_value=[])), \
+             patch.object(self.service, "_try_with_fallback", AsyncMock(side_effect=Exception("no fallback"))), \
+             patch.object(self.service, "_maybe_recover_from_empty_data", AsyncMock(return_value=None)), \
+             patch.object(self.service, "_build_no_data_indicator_clarification", return_value=None):
+
+            response = run(self.service.process_query(
+                "housing starts in Canada",
+                conversation_id=conv_id,
+            ))
+
+        # Should get generic no-data message, not provider-change message
+        self.assertIsNotNone(response.message)
+        self.assertNotIn("doesn't appear to have", response.message)
+        self.assertIn("No Data Available", response.message)
+
 
 class InformationalQueryTests(unittest.TestCase):
     """Tests for LLM-based informational/metadata query handling."""

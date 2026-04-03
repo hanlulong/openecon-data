@@ -2855,6 +2855,41 @@ class QueryService:
             fallback_providers_fn=self._get_fallback_providers,
         )
 
+    def _build_provider_change_unavailable_response(
+        self,
+        conv_id: str,
+        intent: ParsedIntent,
+        tracker: Optional['ProcessingTracker'] = None,
+        error_code: str = "data_not_available",
+    ) -> Optional[QueryResponse]:
+        """Build a helpful response when a provider_change follow-up fails.
+
+        Returns None if the intent is not a provider_change follow-up.
+        """
+        if not intent or not intent.isFollowUp or intent.followUpType != "provider_change":
+            return None
+
+        provider_name = intent.apiProvider
+        indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
+        fallback_providers = self._get_fallback_providers(normalize_provider_name(provider_name))
+        available_hint = ""
+        if fallback_providers:
+            available_hint = f" This data may be available from: **{', '.join(fallback_providers)}**."
+        return QueryResponse(
+            conversationId=conv_id,
+            intent=intent,
+            data=None,
+            clarificationNeeded=False,
+            error=error_code,
+            message=(
+                f"**{provider_name}** doesn't appear to have **{indicators}** data."
+                f"{available_hint}"
+                f"\n\nTry asking for this data without specifying a provider, "
+                f"and the system will route to the best available source."
+            ),
+            processingSteps=tracker.to_list() if tracker else None,
+        )
+
     def _is_fallback_relevant(
         self,
         original_indicators: List[str],
@@ -3609,6 +3644,13 @@ class QueryService:
                     error_details.append(f"for **{country}**")
                 error_details.append(f"from **{provider_name}**.")
 
+                # Provider-change follow-up: give explicit message about unavailability
+                provider_change_response = self._build_provider_change_unavailable_response(
+                    conv_id, intent, tracker, error_code="no_data_found",
+                )
+                if provider_change_response:
+                    return provider_change_response
+
                 # Add provider-specific suggestions
                 suggestions = self._get_no_data_suggestions(provider_name, intent)
 
@@ -3705,6 +3747,14 @@ class QueryService:
                         processingSteps=tracker.to_list(),
                     )
 
+            # Provider-change follow-up: give explicit message about unavailability
+            if "intent" in locals() and intent:
+                provider_change_response = self._build_provider_change_unavailable_response(
+                    conv_id, intent, tracker,
+                )
+                if provider_change_response:
+                    return provider_change_response
+
             clarification_response = self._build_no_data_indicator_clarification(
                 conversation_id=conv_id,
                 query=query,
@@ -3753,6 +3803,14 @@ class QueryService:
                         )
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
+
+            # Provider-change follow-up: give explicit message about unavailability
+            if "intent" in locals() and intent:
+                provider_change_response = self._build_provider_change_unavailable_response(
+                    conv_id, intent, tracker,
+                )
+                if provider_change_response:
+                    return provider_change_response
 
             # Format error message with helpful context
             formatted_message = QueryComplexityAnalyzer.format_error_message(

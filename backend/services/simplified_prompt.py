@@ -248,20 +248,36 @@ IMPORTANT — The previous turn asked the user a clarification question:
 - Clarification question: "{clarification_question}"
 - Options presented: {clarification_options}
 
-The user's current message is answering that clarification question.
-You MUST:
+The user's current message MAY be answering that clarification, OR it may be a completely new/different query that ignores the clarification.
+
+STEP 1 — Determine if the user is answering the clarification or ignoring it:
+- ANSWERING: short reply, picks an option, or directly addresses the clarification topic.
+  Examples: "exports", "1", "compare member countries", "the second one"
+- IGNORING (new query): introduces a new topic, new country, new indicator unrelated to the
+  clarification, or is a full sentence query on a different subject.
+  Examples: "show me US GDP", "what is inflation in Japan", "show me the same for US"
+
+STEP 2a — If the user IS answering the clarification:
 1. Interpret the user's response as an answer to the clarification question above.
 2. Combine the answer with ALL context from the original query (country, time period, provider).
 3. Output a complete, self-contained intent with clarificationNeeded=false.
 4. Set isFollowUp=true and followUpType="clarification_answer".
 5. Set resolvedQuery to the full explicit query combining the original context with the user's answer.
 
+STEP 2b — If the user is IGNORING the clarification (new independent query):
+1. Treat the message as a brand new query. Ignore the pending clarification entirely.
+2. Set isFollowUp=false, followUpType=null, resolvedQuery=null.
+3. Parse the query from scratch with no assumptions from the previous turn.
+
 Examples:
-- Original query: "trade data China" → Clarification: "exports, imports, or trade balance?"
-  User says: "exports" → resolvedQuery: "exports in China", indicators: ["exports"], country: "China"
-- Original query: "employment G7" → Clarification: "compare members or group value?"
-  User says: "compare member countries" → resolvedQuery: "employment rate G7 member countries",
+- Original query: "trade data China" -> Clarification: "exports, imports, or trade balance?"
+  User says: "exports" -> resolvedQuery: "exports in China", indicators: ["exports"], country: "China"
+- Original query: "employment G7" -> Clarification: "compare members or group value?"
+  User says: "compare member countries" -> resolvedQuery: "employment rate G7 member countries",
   indicators: ["employment rate"], countries: ["US", "UK", "France", "Germany", "Italy", "Canada", "Japan"]
+- Original query: "employment data Canada" -> Clarification: "Which specific employment indicator?"
+  User says: "show me US GDP" -> This IGNORES the clarification. Treat as new query:
+  isFollowUp=false, indicators: ["GDP"], country: "US"
 """
         else:
             section += """
@@ -280,13 +296,31 @@ Follow-up detection rules:
 - Set resolvedQuery to an explicit, self-contained rewrite of the query.
 
 Follow-up examples (previous query: "GDP in Canada from 2020 to 2024"):
-  - "now for Japan" → country_change, resolvedQuery="GDP in Japan from 2020 to 2024"
-  - "what about inflation" → indicator_switch, resolvedQuery="inflation in Canada from 2020 to 2024"
-  - "show me last 20 years" → time_change, resolvedQuery="GDP in Canada last 20 years"
-  - "use FRED instead" → provider_change, resolvedQuery="GDP in Canada from 2020 to 2024 from FRED"
-  - "show me the same" → pronoun_reuse, resolvedQuery="GDP in Canada from 2020 to 2024"
+  - "now for Japan" -> country_change, resolvedQuery="GDP in Japan from 2020 to 2024"
+  - "what about inflation" -> indicator_switch, resolvedQuery="inflation in Canada from 2020 to 2024"
+  - "show me last 20 years" -> time_change, resolvedQuery="GDP in Canada last 20 years"
+  - "use FRED instead" -> provider_change, resolvedQuery="GDP in Canada from 2020 to 2024 from FRED"
+  - "show me the same" -> pronoun_reuse, resolvedQuery="GDP in Canada from 2020 to 2024"
 - If the message is NOT a follow-up (i.e., a completely new independent query),
   set isFollowUp=false, followUpType=null, resolvedQuery=null.
+
+Province/state follow-up handling:
+- When the previous query was about a COUNTRY (e.g., "unemployment rate in Canada") and the
+  user asks about a sub-national region (province, state, territory), this is a DECOMPOSITION
+  request, NOT a country change.
+- Canadian provinces/territories: Ontario, Quebec, British Columbia, Alberta, Manitoba,
+  Saskatchewan, Nova Scotia, New Brunswick, Newfoundland, PEI, NWT, Yukon, Nunavut.
+- Example (previous: "unemployment rate in Canada"):
+  - "what about Ontario specifically" -> isFollowUp=true, followUpType="country_change",
+    resolvedQuery="unemployment rate in Ontario Canada",
+    apiProvider="StatsCan", parameters.country="CA",
+    needsDecomposition=true, decompositionType="provinces", decompositionEntities=["Ontario"]
+  - "show me by province" -> isFollowUp=true, followUpType="country_change",
+    resolvedQuery="unemployment rate for all Canadian provinces",
+    apiProvider="StatsCan", parameters.country="CA",
+    needsDecomposition=true, decompositionType="provinces"
+- US states: similar pattern with decompositionType="states", apiProvider="FRED".
+- IMPORTANT: Do NOT treat a province/state name as a country name. Ontario is NOT a country.
 """
 
         section += """
