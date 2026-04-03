@@ -623,13 +623,18 @@ class WorldBankProvider(BaseProvider):
         _fetch_start = _time.perf_counter()
         _FETCH_BUDGET_S = 30.0  # Total time budget for all WB API calls
 
-        # Single batched request for all countries
+        # Single batched request for all countries (with 502 retry — WB API is intermittent)
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
         try:
-            batch_response = await client.get(url, params=params, headers=headers, timeout=25.0)
-            logger.info(f"WorldBank API response: status={batch_response.status_code}, content_length={len(batch_response.content)}")
+            for _attempt in range(3):
+                batch_response = await client.get(url, params=params, headers=headers, timeout=25.0)
+                logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
+                if batch_response.status_code != 502:
+                    break
+                logger.warning(f"WorldBank 502 Bad Gateway (attempt {_attempt+1}/3), retrying...")
+                await asyncio.sleep(1.0)
             batch_response.raise_for_status()
             payload = batch_response.json()
 
