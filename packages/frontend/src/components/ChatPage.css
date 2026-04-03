@@ -538,6 +538,15 @@
   display: none;
 }
 
+/* Processing Time Display */
+.processing-time {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  margin-top: 0.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Typing Indicator */
 .loading-status {
   font-size: 0.875rem;

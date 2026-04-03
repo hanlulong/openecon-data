@@ -345,6 +345,7 @@ export function ChatPage() {
               content: displayMessage,
               timestamp: new Date(),
               processingSteps: response.processingSteps,
+              processingTimeMs: response.processingTimeMs || elapsed,
               isError: true,
             }])
             return
@@ -357,6 +358,7 @@ export function ChatPage() {
               clarificationOptions: response.clarificationOptions,
               timestamp: new Date(),
               processingSteps: response.processingSteps,
+              processingTimeMs: response.processingTimeMs || elapsed,
             }])
             return
           }
@@ -374,6 +376,7 @@ export function ChatPage() {
               codeExecution: response.codeExecution,
               isProMode: response.isProMode,
               processingSteps: response.processingSteps,
+              processingTimeMs: response.processingTimeMs || elapsed,
             }])
 
             // Reload history for both authenticated and anonymous users
@@ -1109,6 +1112,14 @@ print(f"\\nData source: ${sourceUrl}")
                     onExport={(format) => handleExport(msg.data!, format)}
                     onShare={() => handleShareQuery(i)}
                   />
+                )}
+
+                {msg.role === 'assistant' && msg.processingTimeMs != null && (
+                  <div className="processing-time">
+                    Completed in {msg.processingTimeMs >= 1000
+                      ? `${(msg.processingTimeMs / 1000).toFixed(1)}s`
+                      : `${Math.round(msg.processingTimeMs)}ms`}
+                  </div>
                 )}
               </div>
               )

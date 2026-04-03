@@ -65,6 +65,7 @@ export interface QueryResponse {
   codeExecution?: CodeExecutionResult;
   isProMode?: boolean;
   processingSteps?: ProcessingStep[];
+  processingTimeMs?: number;
 }
 
 export interface GeneratedFile {
@@ -91,6 +92,8 @@ export interface Message {
   codeExecution?: CodeExecutionResult;
   isProMode?: boolean;
   processingSteps?: ProcessingStep[];
+  processingTimeMs?: number;
+  isError?: boolean;
 }
 
 export interface ExportFormat {
