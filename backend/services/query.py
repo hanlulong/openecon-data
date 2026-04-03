@@ -85,6 +85,7 @@ from ..services.provider_fallback import (
     provider_covers_country_list as _pf_provider_covers_country_list,
 )
 from ..services.indicator_resolution import (
+    _effective_original_query as _ir_effective_original_query,
     code_semantic_hint as _ir_code_semantic_hint,
     score_resolved_indicator_relevance as _ir_score_resolved_indicator_relevance,
     minimum_resolved_relevance_threshold as _ir_minimum_resolved_relevance_threshold,
@@ -1684,6 +1685,11 @@ class QueryService:
     def _code_semantic_hint(self, provider: str, code: str) -> str:
         """Delegates to :func:`indicator_resolution.code_semantic_hint`."""
         return _ir_code_semantic_hint(provider, code)
+
+    @staticmethod
+    def _effective_original_query(intent) -> str:
+        """Delegates to :func:`indicator_resolution._effective_original_query`."""
+        return _ir_effective_original_query(intent)
 
     def _minimum_resolved_relevance_threshold(self, indicator_query: str) -> float:
         """Delegates to :func:`indicator_resolution.minimum_resolved_relevance_threshold`."""
@@ -5667,15 +5673,22 @@ class QueryService:
                         ind for ind in intent.indicators
                         if not self._looks_like_provider_indicator_code(primary_provider, str(ind or ""))
                     ]
-                    fallback_indicators = safe_indicators or [str(intent.originalQuery or indicator or "")]
+                    fallback_indicators = safe_indicators or [self._effective_original_query(intent) or indicator or ""]
 
-            # Create a modified intent for the fallback provider
+            # Create a modified intent for the fallback provider.
+            # For follow-ups, propagate resolvedQuery and isFollowUp so that
+            # indicator resolution in the fallback path uses the resolved query
+            # (e.g. "GDP per capita India") instead of the raw follow-up text.
+            effective_oq = self._effective_original_query(intent)
             fallback_intent = ParsedIntent(
                 apiProvider=fallback_provider,
                 indicators=fallback_indicators,
                 parameters=fallback_params,
                 clarificationNeeded=False,
-                originalQuery=intent.originalQuery,
+                originalQuery=effective_oq or intent.originalQuery,
+                isFollowUp=intent.isFollowUp,
+                followUpType=intent.followUpType,
+                resolvedQuery=intent.resolvedQuery,
             )
 
             try:
