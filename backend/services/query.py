@@ -77,6 +77,13 @@ from ..services.relevance_scorer import (
     rerank_data_by_query_relevance as _rs_rerank_data_by_query_relevance,
     extract_ranking_value as _rs_extract_ranking_value,
 )
+from ..services.provider_fallback import (
+    get_fallback_providers as _pf_get_fallback_providers,
+    get_no_data_suggestions as _pf_get_no_data_suggestions,
+    is_fallback_relevant as _pf_is_fallback_relevant,
+    normalize_country_to_iso2 as _pf_normalize_country_to_iso2,
+    provider_covers_country_list as _pf_provider_covers_country_list,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -2482,34 +2489,11 @@ class QueryService:
         return True
 
     def _provider_covers_country_list(self, provider: str, countries: Optional[List[str]]) -> bool:
-        """Check whether a provider can plausibly cover all requested countries."""
-        if not countries:
-            return True
+        """Check whether a provider can plausibly cover all requested countries.
 
-        provider_upper = normalize_provider_name(provider)
-        normalized_iso2 = [
-            self._normalize_country_to_iso2(country) or str(country).upper()
-            for country in countries
-            if country
-        ]
-        if not normalized_iso2:
-            return True
-
-        if provider_upper in {"STATSCAN", "STATISTICS CANADA"}:
-            return all(code == "CA" for code in normalized_iso2)
-        if provider_upper == "FRED":
-            return all(code == "US" for code in normalized_iso2)
-        if provider_upper == "EUROSTAT":
-            return all(
-                code in {"EU", "EA", "EA19", "EA20", "EU27_2020"} or CountryResolver.is_eu_member(code)
-                for code in normalized_iso2
-            )
-        if provider_upper == "OECD":
-            return all(
-                CountryResolver.is_oecd_member(code)
-                for code in normalized_iso2
-            )
-        return True
+        Delegates to :func:`provider_fallback.provider_covers_country_list`.
+        """
+        return _pf_provider_covers_country_list(provider, countries)
 
     def _provider_supports_requested_scope(
         self,
@@ -6469,24 +6453,181 @@ class QueryService:
 
     @staticmethod
     def _normalize_country_to_iso2(country: Optional[str]) -> Optional[str]:
-        """Normalize country identifiers/names to ISO2 codes when possible."""
-        if not country:
+        """Normalize country identifiers/names to ISO2 codes when possible.
+
+        Delegates to :func:`provider_fallback.normalize_country_to_iso2`.
+        """
+        return _pf_normalize_country_to_iso2(country)
+
+    # ------------------------------------------------------------------
+    # Pre-flight geographic split
+    # ------------------------------------------------------------------
+    # Providers like FRED (US-only), StatsCan (Canada-only), and Eurostat
+    # (EU-only) cannot serve data for countries outside their scope.  When
+    # a query targets multiple countries that span provider boundaries
+    # (e.g. "PPI for US and Germany"), a single-provider fetch will either
+    # fail or return partial data.
+    #
+    # This pre-flight check detects that situation *before* the fetch,
+    # splits the query into per-provider sub-queries, fetches in parallel,
+    # and merges the results.  It is a framework-level fix that benefits
+    # every multi-country query — not a query-specific patch.
+
+    # Map from country-specific provider to the ISO2 codes it covers.
+    # "None" means global (covers everything) — used as a sentinel.
+    _PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
+        "FRED": {"US"},
+        "STATSCAN": {"CA"},
+        # Eurostat and OECD are handled dynamically via CountryResolver
+    }
+
+    def _get_provider_for_single_country(
+        self,
+        iso2: str,
+        concept_query: str,
+        original_provider: str,
+    ) -> Tuple[str, Optional[str]]:
+        """Return (provider, indicator_code) best suited for *one* country.
+
+        Uses the catalog to find the best provider that covers the given
+        country, falling back to the original provider when the catalog
+        has no opinion.
+        """
+        from .catalog_service import find_concept_by_term, get_best_provider
+
+        concept = find_concept_by_term(concept_query)
+        if concept:
+            prov, code, conf = get_best_provider(concept, countries=[iso2])
+            if prov and conf > 0.0:
+                return normalize_provider_name(prov), code
+
+        # If the original provider actually covers this country, keep it.
+        if self._provider_covers_country_list(original_provider, [iso2]):
+            return original_provider, None
+
+        # Last resort: WorldBank has global coverage.
+        return "WORLDBANK", None
+
+    async def _preflight_geographic_split(
+        self,
+        intent: ParsedIntent,
+    ) -> Optional[List[NormalizedData]]:
+        """Split a multi-country query across providers when no single provider covers all.
+
+        Returns None when splitting is unnecessary (single country, or the
+        current provider already covers everything).  Otherwise returns the
+        merged result list.
+        """
+        params = intent.parameters or {}
+        provider = normalize_provider_name(intent.apiProvider)
+
+        # Collect all target countries as ISO2 codes.
+        raw_countries = self._collect_target_countries(params)
+        if len(raw_countries) < 2:
+            return None  # Nothing to split
+
+        iso2_map: "OrderedDict[str, str]" = OrderedDict()
+        for raw in raw_countries:
+            iso2 = self._normalize_country_to_iso2(raw)
+            if iso2:
+                iso2_map.setdefault(iso2, raw)
+        if len(iso2_map) < 2:
             return None
 
-        country_text = str(country).strip()
-        if not country_text:
+        # If the current provider already covers all countries, no split needed.
+        if self._provider_covers_country_list(provider, list(iso2_map.keys())):
             return None
 
-        normalized = CountryResolver.normalize(country_text)
-        if normalized:
-            return normalized
+        # Determine best provider for each country.
+        concept_query = self._select_indicator_query_for_resolution(intent)
+        if not concept_query:
+            concept_query = " ".join(str(ind) for ind in intent.indicators if ind)
 
-        # Allow ISO3 inputs (e.g., GBR) and normalize to ISO2 when known.
-        iso2 = CountryResolver.to_iso2(country_text.upper())
-        if iso2:
-            return iso2
+        # Group countries by their best provider.
+        provider_groups: Dict[str, List[str]] = {}  # provider -> [iso2, ...]
+        provider_codes: Dict[str, Optional[str]] = {}  # provider -> indicator code (if catalog knows)
+        for iso2 in iso2_map:
+            best_prov, best_code = self._get_provider_for_single_country(
+                iso2, concept_query, provider,
+            )
+            provider_groups.setdefault(best_prov, []).append(iso2)
+            # Keep the first code suggestion per provider.
+            if best_prov not in provider_codes:
+                provider_codes[best_prov] = best_code
 
-        return None
+        # If everything landed on the same provider, no split needed.
+        if len(provider_groups) == 1:
+            return None
+
+        logger.info(
+            "🌐 Geographic pre-flight split: query '%s' → %s",
+            intent.originalQuery or concept_query,
+            {prov: countries for prov, countries in provider_groups.items()},
+        )
+
+        # Build and execute per-provider sub-intents in parallel.
+        async def _fetch_for_group(group_provider: str, group_iso2s: List[str]) -> List[NormalizedData]:
+            sub_params = dict(params)
+            # Replace multi-country params with the group's countries.
+            sub_params.pop("country", None)
+            if len(group_iso2s) == 1:
+                sub_params["country"] = group_iso2s[0]
+                sub_params.pop("countries", None)
+            else:
+                sub_params["countries"] = group_iso2s
+                sub_params.pop("country", None)
+
+            # Use catalog-resolved code for this provider when available.
+            catalog_code = provider_codes.get(group_provider)
+            if catalog_code:
+                sub_params["indicator"] = catalog_code
+            else:
+                # Remove prior provider-specific indicator so resolver picks fresh.
+                sub_params.pop("indicator", None)
+                sub_params.pop("seriesId", None)
+                sub_params.pop("series_id", None)
+                sub_params.pop("code", None)
+
+            # Recursion guard: mark this sub-intent so _fetch_data doesn't
+            # attempt another geographic split on it.
+            sub_params["__geo_split_child"] = True
+
+            sub_intent = ParsedIntent(
+                apiProvider=group_provider,
+                indicators=[catalog_code] if catalog_code else list(intent.indicators or []),
+                parameters=sub_params,
+                clarificationNeeded=False,
+                originalQuery=intent.originalQuery,
+            )
+
+            try:
+                return await self._fetch_data(sub_intent)
+            except Exception as exc:
+                logger.warning(
+                    "🌐 Geographic split: fetch from %s for %s failed: %s",
+                    group_provider, group_iso2s, exc,
+                )
+                return []
+
+        tasks = [
+            _fetch_for_group(prov, countries)
+            for prov, countries in provider_groups.items()
+        ]
+        results = await asyncio.gather(*tasks)
+
+        merged: List[NormalizedData] = []
+        for result_list in results:
+            if result_list:
+                merged.extend(result_list)
+
+        if not merged:
+            return None  # All sub-fetches failed; let caller try fallback
+
+        logger.info(
+            "🌐 Geographic split: merged %d series from %d providers",
+            len(merged), len(provider_groups),
+        )
+        return merged
 
     def _assess_country_coverage(
         self,
@@ -6643,223 +6784,30 @@ class QueryService:
         country: Optional[str] = None,
         countries: Optional[List[str]] = None,
     ) -> List[str]:
+        """Get ordered list of fallback providers for a given primary provider.
+
+        Delegates to :func:`provider_fallback.get_fallback_providers`.
         """
-        Get ordered list of fallback providers for a given primary provider.
-
-        INFRASTRUCTURE FIX: This method now uses THREE sources for smarter fallbacks:
-        1. IndicatorResolver database search (330K+ indicators) - HIGHEST priority
-        2. Catalog-based fallbacks (YAML concept definitions)
-        3. General fallback chains (provider relationships)
-
-        The IndicatorResolver search finds which providers ACTUALLY have the indicator,
-        rather than relying on static mappings.
-
-        Args:
-            primary_provider: The primary provider that failed
-            indicator: Optional indicator name for smarter fallbacks
-            country: Optional single-country context
-            countries: Optional multi-country context
-
-        Returns:
-            List of fallback provider names to try in order
-        """
-        primary_upper = primary_provider.upper()
-        cache_key: Optional[Tuple[str, str, Tuple[str, ...]]] = None
-        if indicator:
-            normalized_geo = tuple(
-                sorted({
-                    self._normalize_country_to_iso2(str(c)) or str(c).strip().upper()
-                    for c in [*(countries or []), country]
-                    if c
-                })
-            )
-            cache_key = (
-                primary_upper,
-                str(indicator).strip().lower(),
-                normalized_geo,
-            )
-            cached = self._fallback_provider_cache.get(cache_key)
-            if cached:
-                # LRU refresh on read.
-                self._fallback_provider_cache.move_to_end(cache_key)
-                return list(cached)
-
-        fallback_list = []
-        try:
-            fallback_list = [
-                normalize_provider_name(provider_name)
-                for provider_name in self.unified_router.get_fallbacks(primary_upper)
-            ]
-        except Exception as exc:
-            logger.debug("UnifiedRouter fallback lookup failed for %s: %s", primary_upper, exc)
-
-        # Ensure deterministic fallback list has no duplicates and excludes primary.
-        fallback_list = [
-            provider_name
-            for provider_name in dict.fromkeys(fallback_list)
-            if provider_name and provider_name != primary_upper
-        ]
-
-        context_countries = [str(c) for c in (countries or []) if c]
-        if country and str(country) not in context_countries:
-            context_countries.append(str(country))
-
-        # INFRASTRUCTURE FIX: Use IndicatorResolver to find providers that have this indicator
-        # This searches the 330K+ indicator database for actual matches
-        if indicator:
-            try:
-                from .indicator_resolver import get_indicator_resolver
-                resolver = get_indicator_resolver()
-
-                # Search for this indicator across ALL providers
-                all_providers = ["WORLDBANK", "IMF", "FRED", "EUROSTAT", "OECD", "BIS", "STATSCAN"]
-                indicator_fallbacks = []
-
-                for provider in all_providers:
-                    if provider == primary_upper:
-                        continue  # Skip the provider that failed
-                    if context_countries and not self._provider_covers_country_list(provider, context_countries):
-                        continue
-
-                    # Check if this provider has the indicator
-                    resolved = resolver.resolve(
-                        indicator,
-                        provider=provider,
-                        country=country,
-                        countries=context_countries or None,
-                        use_cache=False,
-                    )
-                    if resolved and resolved.confidence >= 0.6:
-                        indicator_fallbacks.append((provider, resolved.confidence))
-                        logger.debug(f"IndicatorResolver found '{indicator}' in {provider} (conf: {resolved.confidence:.2f})")
-
-                # Sort by confidence and take providers
-                if indicator_fallbacks:
-                    indicator_fallbacks.sort(key=lambda x: x[1], reverse=True)
-                    resolver_providers = [p for p, _ in indicator_fallbacks]
-                    # Merge: resolver-based first, then general fallbacks
-                    combined = resolver_providers + [p for p in fallback_list if p not in resolver_providers]
-                    logger.info(f"🔍 Smart fallback for '{indicator}': {combined[:5]}")
-                    result = combined[:5]  # Limit to 5 fallbacks
-                    if cache_key:
-                        self._fallback_provider_cache[cache_key] = result
-                        self._fallback_provider_cache.move_to_end(cache_key)
-                        while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
-                            self._fallback_provider_cache.popitem(last=False)
-                    return result
-
-            except Exception as e:
-                logger.debug(f"IndicatorResolver fallback search failed: {e}")
-
-        # Fallback to catalog-based compatibility
-        if indicator:
-            try:
-                from .catalog_service import get_fallback_providers as get_compat_fallbacks
-                compat_fallbacks = get_compat_fallbacks(indicator, primary_upper)
-                if compat_fallbacks:
-                    compat_providers = [p for p, _, _ in compat_fallbacks]
-                    combined = compat_providers + [p for p in fallback_list if p not in compat_providers]
-                    logger.debug(f"Using catalog fallbacks for '{indicator}': {combined}")
-                    if cache_key:
-                        self._fallback_provider_cache[cache_key] = combined
-                        self._fallback_provider_cache.move_to_end(cache_key)
-                        while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
-                            self._fallback_provider_cache.popitem(last=False)
-                    return combined
-            except Exception as e:
-                logger.debug(f"Could not get catalog-based fallbacks: {e}")
-
-        if cache_key:
-            self._fallback_provider_cache[cache_key] = fallback_list
-            self._fallback_provider_cache.move_to_end(cache_key)
-            while len(self._fallback_provider_cache) > self.MAX_FALLBACK_CACHE_ENTRIES:
-                self._fallback_provider_cache.popitem(last=False)
-        return fallback_list
+        return _pf_get_fallback_providers(
+            primary_provider,
+            self.unified_router,
+            self._fallback_provider_cache,
+            indicator=indicator,
+            country=country,
+            countries=countries,
+            max_cache_entries=self.MAX_FALLBACK_CACHE_ENTRIES,
+        )
 
     def _get_no_data_suggestions(self, provider: str, intent: ParsedIntent) -> str:
+        """Generate helpful suggestions when no data is found.
+
+        Delegates to :func:`provider_fallback.get_no_data_suggestions`.
         """
-        Generate helpful suggestions when no data is found.
-
-        Args:
-            provider: The provider that returned no data
-            intent: The parsed intent with query details
-
-        Returns:
-            String with helpful suggestions for the user
-        """
-        provider_upper = normalize_provider_name(provider)
-        suggestions = []
-
-        # Provider-specific suggestions
-        provider_suggestions = {
-            "IMF": [
-                "**Try alternative providers**: World Bank or OECD may have similar data.",
-                "**Check country coverage**: IMF may not have data for all countries.",
-                "**Historical data**: IMF primarily provides recent economic indicators."
-            ],
-            "BIS": [
-                "**Try alternative providers**: World Bank or FRED may have property/credit data.",
-                "**Check coverage**: BIS focuses on property prices, credit, and banking data.",
-                "**Supported countries**: BIS covers ~60 major economies."
-            ],
-            "OECD": [
-                "**Try alternative providers**: World Bank has broader country coverage.",
-                "**OECD members only**: OECD data primarily covers member countries.",
-                "**Check indicator name**: OECD uses specific indicator codes."
-            ],
-            "EUROSTAT": [
-                "**EU countries only**: Eurostat covers EU member states.",
-                "**Try World Bank**: For broader European or global data.",
-                "**Check indicator**: Eurostat uses specific dataset codes."
-            ],
-            "COMTRADE": [
-                "**Check country codes**: UN Comtrade uses ISO3 country codes.",
-                "**Trade data availability**: Recent years may not be available yet.",
-                "**Partner regions**: Some regions like 'Asia' or 'Africa' need individual countries."
-            ],
-            "STATSCAN": [
-                "**Canada only**: Statistics Canada covers Canadian data.",
-                "**Try World Bank**: For Canadian data with global comparison.",
-                "**Check indicator**: StatsCan uses specific table/vector IDs."
-            ],
-            "WORLDBANK": [
-                "**Check indicator code**: World Bank uses specific indicator codes (e.g., NY.GDP.MKTP.CD).",
-                "**Regional data**: Try using region names like 'South Asia' or 'Sub-Saharan Africa'.",
-                "**Data lag**: Some indicators have 1-2 year reporting delays."
-            ],
-            "FRED": [
-                "**US data focus**: FRED primarily covers US economic data.",
-                "**Try World Bank**: For non-US countries.",
-                "**Series ID**: Check if the FRED series ID is correct."
-            ],
-            "COINGECKO": [
-                "**Check coin ID**: Use correct cryptocurrency IDs (e.g., 'bitcoin', 'ethereum').",
-                "**Historical data**: Some coins may have limited history.",
-                "**Try alternative coins**: Check CoinGecko for available cryptocurrencies."
-            ],
-            "EXCHANGERATE": [
-                "**Currency codes**: Use ISO currency codes (e.g., USD, EUR, GBP).",
-                "**Supported currencies**: Covers 161 major currencies.",
-                "**Try FRED**: For major currency pairs with longer history."
-            ]
-        }
-
-        base_suggestions = provider_suggestions.get(provider_upper, [
-            "**Try a different provider**: The data may be available from another source.",
-            "**Check spelling**: Ensure country and indicator names are correct.",
-            "**Simplify query**: Try a more specific or simpler query."
-        ])
-
-        suggestions.append("**Suggestions:**")
-        for i, s in enumerate(base_suggestions[:3], 1):
-            suggestions.append(f"{i}. {s}")
-
-        # Add fallback provider hint
-        fallbacks = self._get_fallback_providers(provider_upper)
-        if fallbacks:
-            suggestions.append(f"\n**Alternative providers to try**: {', '.join(fallbacks)}")
-
-        return "\n".join(suggestions)
+        return _pf_get_no_data_suggestions(
+            provider,
+            intent,
+            fallback_providers_fn=self._get_fallback_providers,
+        )
 
     def _is_fallback_relevant(
         self,
@@ -6868,305 +6816,13 @@ class QueryService:
         target_countries: Optional[List[str]] = None,
         original_query: Optional[str] = None,
     ) -> bool:
+        """Check if fallback result is semantically related to the original query.
+
+        Delegates to :func:`provider_fallback.is_fallback_relevant`.
         """
-        Check if fallback result is semantically related to the original query.
-
-        This prevents returning completely unrelated data when fallback providers
-        find something with vaguely similar keywords but different meaning.
-
-        The check separates SUBJECT entities (corporations, government, households)
-        from METRIC types (assets, debt, income). If the original query specifies
-        a subject, the result must match that subject - not just any overlapping term.
-
-        INFRASTRUCTURE FIX: Now also validates COUNTRY matching to prevent returning
-        data for a different country than requested.
-
-        Args:
-            original_indicators: Original indicator names from user query
-            fallback_result: Data returned from fallback provider
-            target_countries: Optional countries the query is targeting
-
-        Returns:
-            True if fallback data is relevant, False otherwise
-        """
-        if not fallback_result or not original_indicators:
-            return False
-
-        # Country validation (generalized): enforce match for known ISO2 country contexts.
-        requested_iso2 = {
-            iso2
-            for iso2 in (
-                self._normalize_country_to_iso2(country)
-                for country in (target_countries or [])
-            )
-            if iso2
-        }
-        if requested_iso2:
-            saw_normalized_country = False
-            matched_requested_country = False
-            returned_iso2: set[str] = set()
-            for data in fallback_result:
-                if not data.metadata or not data.metadata.country:
-                    continue
-
-                result_country = data.metadata.country
-                result_iso2 = self._normalize_country_to_iso2(result_country)
-                if not result_iso2:
-                    continue
-
-                saw_normalized_country = True
-                returned_iso2.add(result_iso2)
-                if result_iso2 in requested_iso2:
-                    matched_requested_country = True
-                    continue
-
-                logger.warning(
-                    "Fallback rejected: country mismatch - requested=%s got=%s",
-                    sorted(requested_iso2),
-                    result_country,
-                )
-                return False
-
-            if saw_normalized_country and not matched_requested_country:
-                logger.warning(
-                    "Fallback rejected: none of the fallback result countries matched requested=%s",
-                    sorted(requested_iso2),
-                )
-                return False
-
-            if len(requested_iso2) >= 2 and saw_normalized_country:
-                missing_iso2 = requested_iso2 - returned_iso2
-                if missing_iso2:
-                    logger.warning(
-                        "Fallback rejected: incomplete country coverage requested=%s returned=%s missing=%s",
-                        sorted(requested_iso2),
-                        sorted(returned_iso2),
-                        sorted(missing_iso2),
-                    )
-                    return False
-
-        # Define subject entities (who/what the data is about)
-        subject_entities = {
-            'corporation', 'corporations', 'corporate', 'company', 'companies',
-            'nonfinancial', 'nonfin', 'nfc',  # non-financial corporations
-            'government', 'public', 'fiscal', 'general',
-            'household', 'households', 'consumer', 'consumers',
-            'bank', 'banks', 'banking', 'financial', 'mfi',
-            'business', 'businesses', 'enterprise', 'enterprises',
-            'private', 'sector'
-        }
-
-        # Define metric types (what is being measured)
-        metric_types = {
-            'assets', 'liabilities', 'debt', 'income', 'expenditure',
-            'revenue', 'expense', 'expenses', 'balance', 'equity',
-            'gdp', 'gnp', 'unemployment', 'inflation', 'cpi', 'ppi',
-            'trade', 'exports', 'imports', 'deficit', 'surplus',
-            'investment', 'consumption', 'savings', 'production',
-            'employment', 'wages', 'salaries', 'output', 'growth'
-        }
-
-        # Metric qualifiers that change meaning
-        metric_qualifiers = {
-            'fixed', 'current', 'liquid', 'tangible', 'intangible',
-            'gross', 'net', 'total', 'real', 'nominal'
-        }
-
-        # Geography/context words should not dominate semantic relevance checks.
-        geo_terms: set[str] = set()
-        for alias in CountryResolver.COUNTRY_ALIASES.keys():
-            for token in re.findall(r"[a-z0-9]+", str(alias or "").lower()):
-                if len(token) >= 2:
-                    geo_terms.add(token)
-        for code in CountryResolver.COUNTRY_ALIASES.values():
-            token = str(code or "").strip().lower()
-            if token:
-                geo_terms.add(token)
-
-        # Extract key terms from text
-        def extract_key_terms(text: str) -> set:
-            stop_words = {
-                'data', 'statistics', 'annual', 'quarterly', 'monthly',
-                'index', 'rate', 'by', 'and', 'the', 'of', 'for', 'in', 'to',
-                'a', 'an', 'all', 'from', 'with', 'as', 'at', 'show', 'plot',
-                'get', 'find', 'display', 'chart', 'graph', 'value', 'values',
-                'economic', 'activity', 'activities',
-                'trend', 'trends', 'historical', 'history', 'before', 'after',
-                'between', 'versus', 'vs', 'across', 'compare', 'comparison',
-                'contrast', 'since', 'last', 'past', 'latest',
-            }
-            terms = set()
-            # Use regex tokenization so dotted/underscored provider codes
-            # (for example PX.REX.REER) preserve informative sub-tokens.
-            for clean in re.findall(r"[a-z0-9]+", text.lower().replace('-', ' ').replace('_', ' ')):
-                if not clean:
-                    continue
-                if clean.isdigit():
-                    continue
-                if re.fullmatch(r"(19|20)\d{2}", clean):
-                    continue
-                if clean in geo_terms:
-                    continue
-                if len(clean) > 2 and clean not in stop_words:
-                    terms.add(clean)
-            return terms
-
-        # Get terms from original indicators + query text (when available)
-        # so generic parsed indicators like "trade" still preserve directionality
-        # from the original user phrasing ("imports", "exports", etc.).
-        original_text = " ".join(
-            part for part in [
-                ' '.join(original_indicators).lower(),
-                str(original_query or "").lower(),
-            ] if part
+        return _pf_is_fallback_relevant(
+            original_indicators, fallback_result, target_countries, original_query,
         )
-        original_terms = extract_key_terms(original_text)
-        original_cues = self._extract_indicator_cues(original_text)
-        high_signal_original_cues = {
-            cue for cue in original_cues
-            if cue not in {"gdp", "tenor_2y", "tenor_10y", "tenor_30y", "discontinued"}
-        }
-
-        if not original_terms:
-            return True  # Can't validate, accept fallback
-
-        # High-signal cue guardrail: fallback must preserve at least one key cue
-        # (for example, debt_gdp_ratio, bond_yield, import/export direction).
-        if high_signal_original_cues:
-            cue_overlap_found = False
-            for data in fallback_result:
-                if not data.metadata:
-                    continue
-                candidate_text = " ".join(
-                    [
-                        str(data.metadata.indicator or ""),
-                        str(data.metadata.seriesId or ""),
-                        str(data.metadata.description or ""),
-                    ]
-                )
-                candidate_cues = self._extract_indicator_cues(candidate_text)
-                if high_signal_original_cues & candidate_cues:
-                    cue_overlap_found = True
-                    break
-            if not cue_overlap_found:
-                logger.warning(
-                    "Fallback rejected: high-signal cue mismatch original=%s",
-                    sorted(high_signal_original_cues),
-                )
-                return False
-
-        # Extract subjects and metrics from original
-        original_subjects = original_terms & subject_entities
-        original_metrics = original_terms & metric_types
-        original_qualifiers = original_terms & metric_qualifiers
-
-        # Check each result for relevance
-        for data in fallback_result:
-            if not data.metadata:
-                continue
-
-            result_text = (data.metadata.indicator or "").lower()
-            result_text = " ".join(
-                [
-                    result_text,
-                    str(data.metadata.seriesId or "").lower(),
-                    str(data.metadata.description or "").lower(),
-                ]
-            ).strip()
-            result_terms = extract_key_terms(result_text)
-
-            # Extract subjects and metrics from result
-            result_subjects = result_terms & subject_entities
-            result_metrics = result_terms & metric_types
-            result_qualifiers = result_terms & metric_qualifiers
-
-            # CRITICAL CHECK 1: Subject entity matching
-            # If original specifies a subject (e.g., corporations), result MUST have same subject
-            if original_subjects:
-                # Map related terms to canonical subjects
-                def get_canonical_subject(terms: set) -> set:
-                    canonical = set()
-                    if terms & {'corporation', 'corporations', 'corporate', 'company', 'companies', 'nfc'}:
-                        canonical.add('corporation')
-                    if terms & {'government', 'public', 'fiscal', 'general'}:
-                        canonical.add('government')
-                    if terms & {'household', 'households', 'consumer', 'consumers'}:
-                        canonical.add('household')
-                    if terms & {'bank', 'banks', 'banking', 'mfi'}:
-                        canonical.add('bank')
-                    if terms & {'nonfinancial', 'nonfin'}:
-                        canonical.add('nonfinancial')
-                    if terms & {'financial'} and 'nonfinancial' not in terms and 'non' not in terms:
-                        canonical.add('financial')
-                    return canonical
-
-                orig_canonical = get_canonical_subject(original_subjects)
-                result_canonical = get_canonical_subject(result_subjects)
-
-                # If original has specific subject but result doesn't match, reject
-                if orig_canonical and not (orig_canonical & result_canonical):
-                    # Special case: if result has NO subject at all, it might be aggregate data
-                    if result_subjects:
-                        logger.warning(
-                            f"Fallback rejected: original subject {orig_canonical} != result subject {result_canonical}"
-                        )
-                        return False
-                    else:
-                        # Result has no specific subject - might be too generic
-                        logger.warning(
-                            f"Fallback rejected: original has subject {orig_canonical} but result has no specific subject"
-                        )
-                        return False
-
-            # CRITICAL CHECK 2: Metric type matching with qualifier awareness
-            # "total assets" vs "fixed assets" are different concepts
-            if original_metrics and result_metrics:
-                overlap_metrics = original_metrics & result_metrics
-                if not overlap_metrics:
-                    trade_family = {'trade', 'imports', 'exports', 'deficit', 'surplus', 'balance'}
-                    if not ((original_metrics & trade_family) and (result_metrics & trade_family)):
-                        logger.warning(
-                            f"Fallback rejected: metrics don't match - original={original_metrics}, result={result_metrics}"
-                        )
-                        return False
-                # Preserve import/export direction when explicitly present.
-                if 'imports' in original_metrics and 'imports' not in result_metrics and 'trade' not in result_metrics:
-                    logger.warning(
-                        "Fallback rejected: requested imports but result metric set was %s",
-                        result_metrics,
-                    )
-                    return False
-                if 'exports' in original_metrics and 'exports' not in result_metrics and 'trade' not in result_metrics:
-                    logger.warning(
-                        "Fallback rejected: requested exports but result metric set was %s",
-                        result_metrics,
-                    )
-                    return False
-
-                # If both have same metric but different qualifiers, be cautious
-                # e.g., "total assets" vs "fixed assets"
-                if original_qualifiers and result_qualifiers:
-                    if original_qualifiers != result_qualifiers:
-                        # Different qualifiers might mean different things
-                        # Check if it's a significant difference
-                        significant_diff = {'fixed', 'current', 'tangible', 'intangible'}
-                        if (original_qualifiers & significant_diff) != (result_qualifiers & significant_diff):
-                            logger.warning(
-                                f"Fallback rejected: metric qualifiers differ significantly - "
-                                f"original={original_qualifiers}, result={result_qualifiers}"
-                            )
-                            return False
-
-            # If we get here, check general term overlap
-            overlap = original_terms & result_terms
-            min_required = max(1, len(original_terms) * 0.3)  # At least 30% overlap
-            if len(overlap) >= min_required:
-                logger.info(f"Fallback accepted: sufficient overlap - {overlap}")
-                return True
-
-        # Default: reject if no result passed the checks
-        logger.warning("Fallback rejected: no result passed relevance checks")
-        return False
 
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):
         """
@@ -8042,6 +7698,21 @@ class QueryService:
                 data=[],
             )]
         params = intent.parameters or {}
+
+        # ── Pre-flight geographic split ──────────────────────────────
+        # If this is a multi-country query and the chosen provider cannot
+        # cover all countries, split into per-provider sub-queries, fetch
+        # in parallel, and merge.  The internal flag prevents recursion
+        # (sub-intents created by the split set it to True).
+        if not params.get("__geo_split_child"):
+            split_result = await self._preflight_geographic_split(intent)
+            if split_result is not None:
+                return split_result
+        # Strip the recursion guard before downstream code sees it.
+        if "__geo_split_child" in params:
+            params = {k: v for k, v in params.items() if k != "__geo_split_child"}
+            intent.parameters = params
+
         fallback_excluded_providers = {
             normalize_provider_name(str(candidate))
             for candidate in (params.get("__fallback_excluded_providers") or [])
@@ -8073,7 +7744,7 @@ class QueryService:
         if params.get("__catalog_resolved"):
             object.__setattr__(intent, "_catalog_resolved", True)
 
-        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__qualifier_checked"}
+        internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__qualifier_checked", "__geo_split_child"}
         if any(key in params for key in internal_param_keys):
             params = {k: v for k, v in params.items() if k not in internal_param_keys}
             intent.parameters = params

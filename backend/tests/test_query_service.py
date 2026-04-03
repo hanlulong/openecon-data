@@ -3494,5 +3494,173 @@ class InformationalQueryTests(unittest.TestCase):
         self.assertIn("UNRATE", message)
 
 
+    # ------------------------------------------------------------------
+    # Pre-flight geographic split tests
+    # ------------------------------------------------------------------
+
+    def test_preflight_geographic_split_returns_none_for_single_country(self) -> None:
+        """Single-country queries should not trigger a split."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["producer price index"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="producer price index in US",
+        )
+        result = run(self.service._preflight_geographic_split(intent))
+        self.assertIsNone(result)
+
+    def test_preflight_geographic_split_returns_none_when_provider_covers_all(self) -> None:
+        """WorldBank covers US + DE so no split should happen."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP growth"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="GDP growth in US and Germany",
+        )
+        result = run(self.service._preflight_geographic_split(intent))
+        self.assertIsNone(result)
+
+    def test_preflight_geographic_split_detects_fred_mismatch(self) -> None:
+        """FRED cannot cover Germany -- split should fire."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["producer price index"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="producer price inflation US and Germany",
+        )
+
+        us_series = NormalizedData.model_validate({
+            "metadata": {
+                "source": "FRED",
+                "indicator": "PPI",
+                "country": "US",
+                "frequency": "monthly",
+                "unit": "Index",
+                "lastUpdated": "2024-01-01",
+            },
+            "data": [{"date": "2024-01-01", "value": 100.0}],
+        })
+        de_series = NormalizedData.model_validate({
+            "metadata": {
+                "source": "Eurostat",
+                "indicator": "PPI",
+                "country": "DE",
+                "frequency": "monthly",
+                "unit": "Index",
+                "lastUpdated": "2024-01-01",
+            },
+            "data": [{"date": "2024-01-01", "value": 105.0}],
+        })
+
+        original_fetch = self.service._fetch_data
+
+        async def mock_fetch(sub_intent):
+            prov = sub_intent.apiProvider.upper()
+            params = sub_intent.parameters or {}
+            # Detect recursion guard
+            if not params.get("__geo_split_child"):
+                # Should not happen -- preflight sets the flag
+                return await original_fetch(sub_intent)
+            country = params.get("country", "")
+            if prov == "FRED" or country == "US":
+                return [us_series]
+            return [de_series]
+
+        with patch.object(self.service, "_fetch_data", side_effect=mock_fetch), \
+             patch("backend.services.catalog_service.find_concept_by_term", return_value="producer_price_inflation"), \
+             patch("backend.services.catalog_service.get_best_provider", side_effect=lambda concept, countries=None: (
+                 ("FRED", "PPIFIS", 0.9) if countries == ["US"] else
+                 ("Eurostat", "STS_INPP_M", 0.9) if countries and countries[0] == "DE" else
+                 ("WORLDBANK", None, 0.5)
+             )):
+            result = run(self.service._preflight_geographic_split(intent))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 2)
+        countries_returned = {s.metadata.country for s in result}
+        self.assertIn("US", countries_returned)
+        self.assertIn("DE", countries_returned)
+
+    def test_preflight_geographic_split_returns_none_when_all_same_provider(self) -> None:
+        """When catalog maps all countries to the same provider, no split is needed."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["producer price index"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="producer price inflation US and Germany",
+        )
+
+        with patch("backend.services.catalog_service.find_concept_by_term", return_value="producer_price_inflation"), \
+             patch("backend.services.catalog_service.get_best_provider", return_value=("WORLDBANK", "FP.WPI.TOTL", 0.8)):
+            result = run(self.service._preflight_geographic_split(intent))
+
+        # All countries → WORLDBANK, no split needed
+        self.assertIsNone(result)
+
+    def test_preflight_geographic_split_handles_sub_fetch_failure(self) -> None:
+        """If one sub-fetch fails, partial results should still be returned."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["producer price index"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="producer price inflation US and Germany",
+        )
+
+        us_series = NormalizedData.model_validate({
+            "metadata": {
+                "source": "FRED",
+                "indicator": "PPI",
+                "country": "US",
+                "frequency": "monthly",
+                "unit": "Index",
+                "lastUpdated": "2024-01-01",
+            },
+            "data": [{"date": "2024-01-01", "value": 100.0}],
+        })
+
+        async def mock_fetch(sub_intent):
+            params = sub_intent.parameters or {}
+            country = params.get("country", "")
+            if country == "US":
+                return [us_series]
+            raise DataNotAvailableError("Eurostat failed")
+
+        with patch.object(self.service, "_fetch_data", side_effect=mock_fetch), \
+             patch("backend.services.catalog_service.find_concept_by_term", return_value="producer_price_inflation"), \
+             patch("backend.services.catalog_service.get_best_provider", side_effect=lambda concept, countries=None: (
+                 ("FRED", "PPIFIS", 0.9) if countries == ["US"] else
+                 ("Eurostat", "STS_INPP_M", 0.9)
+             )):
+            result = run(self.service._preflight_geographic_split(intent))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "US")
+
+    def test_get_provider_for_single_country_uses_catalog(self) -> None:
+        """Catalog-based per-country provider selection."""
+        with patch("backend.services.catalog_service.find_concept_by_term", return_value="gdp"), \
+             patch("backend.services.catalog_service.get_best_provider", return_value=("FRED", "GDP", 0.95)):
+            prov, code = self.service._get_provider_for_single_country(
+                "US", "gdp", "WORLDBANK",
+            )
+        self.assertEqual(prov, "FRED")
+        self.assertEqual(code, "GDP")
+
+    def test_get_provider_for_single_country_falls_back_to_worldbank(self) -> None:
+        """When catalog returns nothing and provider doesn't cover country, use WorldBank."""
+        with patch("backend.services.catalog_service.find_concept_by_term", return_value=None):
+            prov, code = self.service._get_provider_for_single_country(
+                "DE", "gdp", "FRED",
+            )
+        self.assertEqual(prov, "WORLDBANK")
+        self.assertIsNone(code)
+
+
 if __name__ == "__main__":
     unittest.main()
