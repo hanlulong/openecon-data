@@ -17,6 +17,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── WorldBank API health status cache ──────────────────────────────
+# Tracks recent 502/timeout failures. When the API is down, skip it
+# and go straight to fallback providers (IMF, Eurostat, OECD).
+import time as _time_mod
+
+_WB_HEALTH: dict = {"failures": 0, "last_failure": 0.0, "circuit_open": False}
+_WB_CIRCUIT_THRESHOLD = 3      # consecutive failures to open circuit
+_WB_CIRCUIT_COOLDOWN_S = 300   # 5 minutes before retrying
+
+
+def _wb_record_failure():
+    _WB_HEALTH["failures"] += 1
+    _WB_HEALTH["last_failure"] = _time_mod.time()
+    if _WB_HEALTH["failures"] >= _WB_CIRCUIT_THRESHOLD:
+        _WB_HEALTH["circuit_open"] = True
+        logger.warning("⚡ WorldBank circuit breaker OPEN — skipping WB for %ds", _WB_CIRCUIT_COOLDOWN_S)
+
+
+def _wb_record_success():
+    _WB_HEALTH["failures"] = 0
+    _WB_HEALTH["circuit_open"] = False
+
+
+def _wb_is_available() -> bool:
+    if not _WB_HEALTH["circuit_open"]:
+        return True
+    elapsed = _time_mod.time() - _WB_HEALTH["last_failure"]
+    if elapsed >= _WB_CIRCUIT_COOLDOWN_S:
+        logger.info("⚡ WorldBank circuit breaker HALF-OPEN — retrying after %ds cooldown", int(elapsed))
+        _WB_HEALTH["circuit_open"] = False
+        _WB_HEALTH["failures"] = 0
+        return True
+    return False
+
 
 class WorldBankProvider(BaseProvider):
     """World Bank data provider.
@@ -535,6 +569,12 @@ class WorldBankProvider(BaseProvider):
         end_date: Optional[str] = None,
         _skip_alternatives: bool = False,  # Internal flag to prevent recursion
     ) -> List[NormalizedData]:
+        # Circuit breaker: skip WB entirely when API is confirmed down
+        if not _wb_is_available():
+            raise DataNotAvailableError(
+                f"WorldBank API is temporarily unavailable (circuit breaker open). "
+                f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
+            )
         indic = await self._resolve_indicator_code(indicator)
         country_list = countries or [country or "USA"]
 
@@ -824,8 +864,9 @@ class WorldBankProvider(BaseProvider):
             )
             results.append(normalized)
 
-        # If we got results, return them.
+        # If we got results, record success and return.
         if results:
+            _wb_record_success()
             return results
 
         # No results — try fallbacks in order of priority.
@@ -894,6 +935,7 @@ class WorldBankProvider(BaseProvider):
         # list which the query service treated as "no data" rather than an error,
         # silently skipping the WB provider without triggering fallback chains.
         _total_elapsed = _time.perf_counter() - _fetch_start
+        _wb_record_failure()
         logger.warning(
             "WorldBank fetch failed for indicator %s after %.1fs (budget=%.0fs)",
             indic, _total_elapsed, _FETCH_BUDGET_S,
