@@ -322,6 +322,20 @@ class ConversationManager:
                 return None
             return conversation.last_intent.model_copy(deep=True)
 
+    def restore_last_intent(self, conversation_id: str, intent: Optional[ParsedIntent]) -> None:
+        """Restore last_intent to a previous value (e.g. after a processing error).
+
+        This prevents failed queries from corrupting conversation state.
+        When a round fails, the previous successful intent is restored so
+        that subsequent follow-ups can still reference it correctly.
+        """
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return
+            conversation.last_intent = intent
+            self._redis_save(conversation)
+
     def get_pending_clarification_context(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Return pending clarification details for LLM context building.
 

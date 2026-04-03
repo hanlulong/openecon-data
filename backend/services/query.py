@@ -3409,6 +3409,7 @@ class QueryService:
                     indicators=intent.indicators or [],
                     llm_provider=intent.apiProvider,
                     country=intent.parameters.get("country") if intent.parameters else None,
+                    countries=intent.parameters.get("countries") if intent.parameters else None,
                 )
                 if router_decision and router_decision.provider:
                     routed = normalize_provider_name(router_decision.provider)
@@ -3460,6 +3461,12 @@ class QueryService:
                     )
                     return informational_response
 
+            # Snapshot the previous successful intent so we can restore it if
+            # this round fails (error / no-data).  Clarification intents are
+            # intentionally saved so the next turn can resolve them via
+            # conversation context, but processing errors should NOT overwrite
+            # the last good state.
+            _prev_good_intent = conversation_manager.get_last_intent(conv_id)
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
 
             if intent.clarificationNeeded:
@@ -3654,6 +3661,9 @@ class QueryService:
                 # Add provider-specific suggestions
                 suggestions = self._get_no_data_suggestions(provider_name, intent)
 
+                # No data: restore previous good intent so follow-ups aren't corrupted
+                if '_prev_good_intent' in locals() and _prev_good_intent is not None:
+                    conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
                 return QueryResponse(
                     conversationId=conv_id,
                     intent=intent,
@@ -3768,6 +3778,9 @@ class QueryService:
             formatted_message = QueryComplexityAnalyzer.format_error_message(
                 str(exc), query, intent if 'intent' in locals() else None
             )
+            # Error: restore previous good intent so follow-ups aren't corrupted
+            if '_prev_good_intent' in locals() and _prev_good_intent is not None:
+                conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
             return QueryResponse(
                 conversationId=conv_id,
                 intent=intent if "intent" in locals() else None,
@@ -3816,6 +3829,9 @@ class QueryService:
             formatted_message = QueryComplexityAnalyzer.format_error_message(
                 str(exc), query, intent if 'intent' in locals() else None
             )
+            # Error: restore previous good intent so follow-ups aren't corrupted
+            if '_prev_good_intent' in locals() and _prev_good_intent is not None:
+                conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
             return QueryResponse(
                 conversationId=conv_id,
                 clarificationNeeded=False,

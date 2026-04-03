@@ -283,11 +283,13 @@ class UnifiedRouter:
             return regional_decision
 
         # 6. Catalog concept match (data-driven YAML lookups)
-        #    Pass detected region so coverage-specific providers are preferred.
+        #    Pass detected region AND countries so coverage-specific providers
+        #    are preferred (e.g. StatsCan for CA, Eurostat for EU).
         if self._use_catalog and self._catalog_service:
             catalog_decision = self._route_by_catalog(
                 indicators, country, query=query,
                 region_context=detected_region,
+                countries=countries,
             )
             if catalog_decision:
                 return catalog_decision
@@ -810,6 +812,7 @@ class UnifiedRouter:
         country: Optional[str],
         query: Optional[str] = None,
         region_context: Optional[str] = None,
+        countries: Optional[List[str]] = None,
     ) -> Optional[RoutingDecision]:
         """Route using CatalogService YAML mappings (data-driven, not rules)."""
         if not self._catalog_service:
@@ -828,7 +831,16 @@ class UnifiedRouter:
         for term in terms_to_check:
             concept_name = self._catalog_service.find_concept_by_term(term)
             if concept_name:
-                countries_list = [country] if country else None
+                # Merge single country and countries list into one list
+                # so the catalog can apply coverage bonuses for ALL detected
+                # countries (e.g. StatsCan for CA, Eurostat for EU).
+                countries_list: Optional[List[str]] = None
+                if country:
+                    countries_list = [country]
+                if countries:
+                    countries_list = list(dict.fromkeys(
+                        (countries_list or []) + list(countries)
+                    ))
 
                 # If no explicit country but a region was detected, use a
                 # representative country so the catalog applies coverage bonuses
