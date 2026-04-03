@@ -5946,7 +5946,34 @@ class QueryService:
                 "per capita", "per person", "per 1000", "per 100",
                 "ppp", "constant", "real", "nominal", "net", "gross",
             }
-            has_variant = any(q in original_query for q in variant_qualifiers)
+            matched_qualifiers = {q for q in variant_qualifiers if q in original_query}
+
+            # If qualifiers are found, check whether the catalog-resolved
+            # indicator's name already contains them.  When the resolved name
+            # includes the qualifier (e.g. "gross" in "General government gross
+            # debt", "net" in "Net exports"), the catalog captured the correct
+            # specific variant and we should NOT override it.
+            if matched_qualifiers:
+                resolved_name_lower = ""
+                try:
+                    _lookup = get_indicator_resolver().lookup
+                    _meta = _lookup.get(provider, existing_indicator)
+                    if _meta:
+                        resolved_name_lower = (_meta.get("name") or "").lower()
+                except Exception:
+                    pass
+                # Also include the indicator text from the LLM parse for
+                # cases where the DB lookup returns nothing.
+                if not resolved_name_lower and intent.indicators:
+                    resolved_name_lower = str(intent.indicators[0] or "").lower()
+                # Remove qualifiers whose text already appears in the resolved
+                # indicator name — these are part of the concept, not variants.
+                unresolved_qualifiers = {
+                    q for q in matched_qualifiers if q not in resolved_name_lower
+                }
+                matched_qualifiers = unresolved_qualifiers
+
+            has_variant = bool(matched_qualifiers)
             if not has_variant:
                 logger.info(
                     "🔒 Keeping catalog-resolved %s indicator: %s",
@@ -5957,8 +5984,8 @@ class QueryService:
                 return params
             else:
                 logger.info(
-                    "🔓 Catalog resolved %s but query has variant qualifiers — letting IndicatorSelector refine",
-                    existing_indicator,
+                    "🔓 Catalog resolved %s but query has variant qualifiers %s — letting IndicatorSelector refine",
+                    existing_indicator, matched_qualifiers,
                 )
                 # Clear catalog lock so IndicatorSelector can run
                 has_explicit_code = False
