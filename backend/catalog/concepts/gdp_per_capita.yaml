@@ -16,6 +16,8 @@ synonyms:
     - real gdp per capita
     - gross domestic product per capita
     - gdp per head
+    - gdp per capita ppp
+    - gdp per capita purchasing power parity
 
 explicit_exclusions:
   - gdp growth
@@ -28,6 +30,24 @@ providers:
       code: NY.GDP.PCAP.CD
       name: "GDP per capita (current US$)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+    ppp:
+      code: NY.GDP.PCAP.PP.CD
+      name: "GDP per capita, PPP (current international $)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    ppp_constant:
+      code: NY.GDP.PCAP.PP.KD
+      name: "GDP per capita, PPP (constant 2021 international $)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+    growth:
+      code: NY.GDP.PCAP.KD.ZG
+      name: "GDP per capita growth (annual %)"
+      confidence: 0.90
       coverage: global
       frequency: annual
 

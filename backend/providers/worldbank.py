@@ -514,6 +514,18 @@ class WorldBankProvider(BaseProvider):
             logger.debug(f"Could not get alternative indicators: {e}")
             return []
 
+    # Reverse mapping: sets of ISO2 country codes that correspond to
+    # WorldBank aggregate region codes.  When the query service expands
+    # a region like "Sub-Saharan Africa" into individual countries, we
+    # can detect this and use the aggregate code instead — one API call
+    # returning an aggregate statistic instead of 20+ individual calls.
+    _REGION_COUNTRY_SETS: Dict[str, frozenset] = {
+        "SSF": frozenset({
+            "AO", "BW", "CM", "CI", "CD", "ET", "GH", "KE", "MG", "MW",
+            "ML", "MZ", "NA", "NE", "NG", "RW", "SN", "ZA", "TZ", "UG", "ZM", "ZW",
+        }),
+    }
+
     async def fetch_indicator(
         self,
         indicator: str,
@@ -525,6 +537,25 @@ class WorldBankProvider(BaseProvider):
     ) -> List[NormalizedData]:
         indic = await self._resolve_indicator_code(indicator)
         country_list = countries or [country or "USA"]
+
+        # Detect when the country list represents a known WB aggregate region.
+        # When the query service has pre-expanded "Sub-Saharan Africa" into
+        # individual ISO2 codes, use the WB region code instead for efficiency
+        # and to get the proper aggregate statistic.
+        if len(country_list) >= 5:
+            country_set = frozenset(c.upper() for c in country_list)
+            for region_code, region_members in self._REGION_COUNTRY_SETS.items():
+                # Check if the country set is a subset of the region members
+                # (allows partial matches when query service uses a subset)
+                if country_set <= region_members or region_members <= country_set:
+                    overlap = len(country_set & region_members)
+                    if overlap >= min(len(region_members), len(country_set)) * 0.7:
+                        logger.info(
+                            "🌍 Detected region aggregate: %d/%d countries match %s — using region code",
+                            overlap, len(country_set), region_code,
+                        )
+                        country_list = [region_code]
+                        break
 
         # Expand country groups (e.g., "G7" → ["USA", "GBR", "FRA", ...])
         # ALWAYS expand groups to individual countries - region codes often fail

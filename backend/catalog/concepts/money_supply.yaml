@@ -72,6 +72,18 @@ providers:
       confidence: 0.90
       coverage: global
       frequency: annual
+    growth:
+      code: FM.LBL.BMNY.ZG
+      name: "Broad money growth (annual %)"
+      confidence: 0.90
+      coverage: global
+      frequency: annual
+    broad_money_pct_gdp:
+      code: FM.LBL.BMNY.GD.ZS
+      name: "Broad money (% of GDP)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
     alternates:
       - code: FM.LBL.BMNY.GD.ZS
         name: "Broad money (% of GDP)"

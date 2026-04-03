@@ -304,24 +304,67 @@ class IndicatorResolver:
                             if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
                             if disc == "growth" and ("annual %" in text or "percent change" in text): return True
                             if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
+                            if disc == "purchasing power" and ("ppp" in text or "international $" in text): return True
+                            if disc == "per capita" and ("per person" in text or "per inhabitant" in text): return True
                             return False
 
                         missing = {d for d in q_discs if not _dp(d, res_name_lower) and not _dp(d, (result.code or "").lower())}
                         if missing:
-                            logger.info(
-                                "🔬 Provider-agnostic result '%s' missing discriminators %s — trying next candidate",
-                                result.code, missing,
-                            )
-                            catalog_fallback = catalog_fallback or result
-                            result = None
-                            continue  # Try next concept candidate
+                            # Before giving up, try variant codes from the same
+                            # concept/provider that DO match the discriminators.
+                            variant_found = False
+                            if best_provider and concept_name:
+                                all_codes = get_indicator_codes(concept_name, best_provider)
+                                current_code_norm = self._normalize_code(best_code)
+                                for alt_code in all_codes:
+                                    if self._normalize_code(alt_code) == current_code_norm:
+                                        continue
+                                    alt_meta = self.lookup.get(best_provider, alt_code)
+                                    if not alt_meta:
+                                        alt_meta = self._get_catalog_metadata(
+                                            concept_name=concept_name,
+                                            provider=best_provider,
+                                            code=alt_code,
+                                        )
+                                    alt_name = (alt_meta.get("name") or "").lower()
+                                    alt_desc = (alt_meta.get("description") or "").lower()[:500]
+                                    alt_missing = {
+                                        d for d in missing
+                                        if not _dp(d, alt_name)
+                                        and not _dp(d, alt_code.lower())
+                                        and not _dp(d, alt_desc)
+                                    }
+                                    if not alt_missing:
+                                        logger.info(
+                                            "🔬 Provider-agnostic variant '%s' (%s) matches discriminators %s",
+                                            alt_code, alt_name[:40], missing,
+                                        )
+                                        result = ResolvedIndicator(
+                                            code=alt_code,
+                                            provider=best_provider,
+                                            name=alt_meta.get("name", query),
+                                            confidence=max(0.85, best_confidence),
+                                            source=source,
+                                            metadata=alt_meta,
+                                        )
+                                        variant_found = True
+                                        break
+
+                            if not variant_found:
+                                logger.info(
+                                    "🔬 Provider-agnostic result '%s' missing discriminators %s — trying next candidate",
+                                    result.code, missing,
+                                )
+                                catalog_fallback = catalog_fallback or result
+                                result = None
+                                continue  # Try next concept candidate
 
                         logger.debug(
                             "Provider-agnostic %s concept match: %s -> %s:%s",
                             source,
                             query,
                             best_provider,
-                            best_code,
+                            best_code if not result else result.code,
                         )
                         break
             except Exception as e:
@@ -338,10 +381,10 @@ class IndicatorResolver:
             )
 
         # 3a. Semantic verification — if catalog returned a code but query has
-        # semantic discriminators that the resolved name doesn't match, demote
-        # to allow FTS to find a better match.  This prevents "GDP growth rate"
-        # resolving to a GDP level series just because the catalog maps
-        # "gdp_growth" to a level code for that provider.
+        # semantic discriminators that the resolved name doesn't match, try
+        # OTHER catalog variant codes first before demoting to FTS.
+        # This handles "GDP per capita PPP" → catalog has PPP variant,
+        # "broad money growth" → catalog has growth variant, etc.
         if result and result.source in ("database", "catalog"):
             query_lower = query.lower()
             result_name_lower = (result.name or "").lower()
@@ -359,6 +402,8 @@ class IndicatorResolver:
                     return True
                 if disc == "purchasing power" and ("ppp" in text or "international $" in text):
                     return True
+                if disc == "per capita" and ("per person" in text or "per inhabitant" in text):
+                    return True
                 return False
 
             # Also check description for discriminator presence
@@ -372,15 +417,53 @@ class IndicatorResolver:
                 and not _disc_present(d, result_desc_lower)
             }
             if missing_discs:
-                logger.info(
-                    "🔬 Catalog result '%s' (%s) missing semantic discriminators %s "
-                    "from query '%s' — demoting to allow FTS fallback",
-                    result.code, result.name[:40] if result.name else "?",
-                    missing_discs, query,
-                )
-                # Keep as fallback but allow FTS to potentially override
-                catalog_fallback = result
-                result = None
+                # Before demoting to FTS, try OTHER catalog variant codes that
+                # DO match the missing discriminators.  This is the key fix:
+                # when catalog has variant codes (ppp, growth, per_capita),
+                # prefer those over FTS fallback which may find wrong codes.
+                variant_found = False
+                if provider and query_concept and preferred_catalog_codes:
+                    current_code = self._normalize_code(result.code)
+                    other_codes = {c for c in preferred_catalog_codes if c != current_code}
+                    for alt_code in sorted(other_codes):
+                        alt_meta = self.lookup.get(provider, alt_code)
+                        if not alt_meta:
+                            alt_meta = {"code": alt_code, "provider": provider, "name": ""}
+                        alt_name = (alt_meta.get("name") or "").lower()
+                        alt_desc = (alt_meta.get("description") or "").lower()[:500]
+                        alt_missing = {
+                            d for d in missing_discs
+                            if not _disc_present(d, alt_name)
+                            and not _disc_present(d, alt_code.lower())
+                            and not _disc_present(d, alt_desc)
+                        }
+                        if not alt_missing:
+                            logger.info(
+                                "🔬 Catalog variant '%s' (%s) matches discriminators %s — using instead of '%s'",
+                                alt_code, alt_name[:40], missing_discs, result.code,
+                            )
+                            catalog_fallback = result
+                            result = ResolvedIndicator(
+                                code=alt_meta.get("code", alt_code),
+                                provider=alt_meta.get("provider", provider),
+                                name=alt_meta.get("name", query),
+                                confidence=max(0.85, result.confidence),
+                                source="catalog",
+                                metadata=alt_meta,
+                            )
+                            variant_found = True
+                            break
+
+                if not variant_found:
+                    logger.info(
+                        "🔬 Catalog result '%s' (%s) missing semantic discriminators %s "
+                        "from query '%s' — demoting to allow FTS fallback",
+                        result.code, result.name[:40] if result.name else "?",
+                        missing_discs, query,
+                    )
+                    # Keep as fallback but allow FTS to potentially override
+                    catalog_fallback = result
+                    result = None
 
         # 3b. Some concepts intentionally use dynamic provider-side discovery
         # (e.g., CoinGecko/Comtrade). Prefer this catalog signal over low-quality

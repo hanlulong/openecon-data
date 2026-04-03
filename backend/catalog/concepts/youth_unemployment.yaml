@@ -24,8 +24,8 @@ explicit_exclusions:
 providers:
   WorldBank:
     primary:
-      code: JI.UEM.1524.ZS
-      name: "Youth unemployment rate, aged 15-24, total (% of total youth labor force)"
+      code: SL.UEM.1524.ZS
+      name: "Unemployment, youth total (% of total labor force ages 15-24) (modeled ILO estimate)"
       confidence: 0.95
       coverage: global
       frequency: annual

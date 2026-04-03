@@ -89,7 +89,7 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.provider, "WorldBank")
-        self.assertEqual(result.code, "JI.UEM.1524.ZS")
+        self.assertEqual(result.code, "SL.UEM.1524.ZS")
         self.assertEqual(result.source, "catalog")
 
     def test_provider_agnostic_catalog_concept_preserves_effective_exchange_rate(self):
@@ -533,7 +533,7 @@ class IndicatorResolverTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result.code, "JI.UEM.1524.ZS")
+        self.assertEqual(result.code, "SL.UEM.1524.ZS")
         self.assertEqual(result.source, "catalog")
 
     def test_resolves_gdp_per_capita_in_pps_via_catalog(self):

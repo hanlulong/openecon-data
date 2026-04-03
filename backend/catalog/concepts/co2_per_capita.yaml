@@ -8,6 +8,7 @@ description: |
 synonyms:
   primary:
     - CO2 per capita
+    - CO2 emissions per capita
     - carbon emissions per capita
     - CO2 emissions per person
     - carbon per capita
@@ -15,6 +16,8 @@ synonyms:
     - emissions per capita
     - carbon footprint per capita
     - greenhouse gas per capita
+    - per capita CO2
+    - per capita carbon emissions
 
 not_available:
   - FRED
@@ -27,8 +30,14 @@ not_available:
 providers:
   WorldBank:
     primary:
-      code: EN.GHG.CO2.PC.CE.AR5
-      name: "Carbon dioxide (CO2) emissions excluding LULUCF per capita"
+      code: EN.ATM.CO2E.PC
+      name: "CO2 emissions (metric tons per capita)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+    ghg_ar5:
+      code: EN.GHG.CO2.PC.CE.AR5
+      name: "Carbon dioxide (CO2) emissions excluding LULUCF per capita (AR5)"
+      confidence: 0.85
       coverage: global
       frequency: annual

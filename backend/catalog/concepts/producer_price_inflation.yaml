@@ -33,12 +33,20 @@ providers:
       coverage: [US]
       frequency: monthly
 
+  Eurostat:
+    primary:
+      code: STS_INPPD_A
+      name: "Producer prices in industry, domestic market"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
   WorldBank:
     primary:
       code: FP.WPI.TOTL.ZG
       name: "Inflation, wholesale prices (annual %)"
-      confidence: 0.70
-      coverage: global
+      confidence: 0.60
+      coverage: partial_global
       frequency: annual
 
   OECD:

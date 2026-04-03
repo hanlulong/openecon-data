@@ -14,20 +14,34 @@ synonyms:
   secondary:
     - greenhouse gas
     - ghg emissions
-    - emissions per capita
     - carbon footprint
 
 explicit_exclusions:
   - air pollution
   - particulate matter
   - methane emissions
+  - co2 emissions per capita
+  - carbon emissions per capita
+  - emissions per capita
 
 providers:
   WorldBank:
     primary:
-      code: EN.GHG.CO2.PC.CE.AR5
+      code: EN.ATM.CO2E.PC
       name: "CO2 emissions (metric tons per capita)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+    total_kt:
+      code: EN.ATM.CO2E.KT
+      name: "CO2 emissions (kt)"
+      confidence: 0.85
+      coverage: global
+      frequency: annual
+    ghg_ar5:
+      code: EN.GHG.CO2.PC.CE.AR5
+      name: "Carbon dioxide (CO2) emissions excluding LULUCF per capita (AR5)"
+      confidence: 0.80
       coverage: global
       frequency: annual
 
