@@ -51,7 +51,8 @@ Task:
 Important constraints:
 - Do not do provider routing strategy in prompt logic. Code handles routing.
 - Only set a specific provider when user explicitly requests one (for example: "from IMF").
-- If no provider is explicitly requested, set apiProvider to "WorldBank" as a neutral placeholder.
+- If no provider is explicitly requested, set apiProvider to "WorldBank" as default for global coverage.
+  The deterministic routing layer may override this based on catalog or country context.
 - Do not invent indicator codes. Use natural-language indicator names unless user explicitly gives a code.
 - Keep compound concepts as ONE indicator, not split into multiple:
   - "average wages and earnings" → ["average wages and earnings"] (one item, NOT two)
@@ -161,6 +162,11 @@ Required formatting rules:
 - clarificationQuestions: array (empty when clarificationNeeded=false)
 - confidence: float from 0.0 to 1.0
 - recommendedChartType: one of "line", "bar", "scatter", "table"
+- useProMode: boolean (default false). Set to true only when:
+  - Query requires calculation/correlation ("calculate correlation between X and Y")
+  - Query needs custom visualization ("heatmap of trade flows")
+  - Query asks for code execution ("write Python to analyze...")
+  Otherwise always set to false.
 - isFollowUp: boolean — true when the query references a previous conversation turn
 - followUpType: one of "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse", "clarification_answer", or null
 - resolvedQuery: string — if isFollowUp is true, the fully explicit rewritten query combining previous context with the new request; null otherwise
@@ -272,8 +278,13 @@ Follow-up detection rules:
   - "provider_change": user requests a different data source (e.g., "use FRED instead")
   - "pronoun_reuse": user refers to prior data without changes (e.g., "show me the same")
 - Set resolvedQuery to an explicit, self-contained rewrite of the query.
-  Example: if previous was "GDP in Canada" and user says "show me last 20 years",
-  resolvedQuery should be "GDP in Canada last 20 years".
+
+Follow-up examples (previous query: "GDP in Canada from 2020 to 2024"):
+  - "now for Japan" → country_change, resolvedQuery="GDP in Japan from 2020 to 2024"
+  - "what about inflation" → indicator_switch, resolvedQuery="inflation in Canada from 2020 to 2024"
+  - "show me last 20 years" → time_change, resolvedQuery="GDP in Canada last 20 years"
+  - "use FRED instead" → provider_change, resolvedQuery="GDP in Canada from 2020 to 2024 from FRED"
+  - "show me the same" → pronoun_reuse, resolvedQuery="GDP in Canada from 2020 to 2024"
 - If the message is NOT a follow-up (i.e., a completely new independent query),
   set isFollowUp=false, followUpType=null, resolvedQuery=null.
 """
@@ -310,8 +321,8 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
   government deficit/debt for EU member states and candidate countries.
   Best for: EU-specific data, HICP, Eurozone aggregates.
 - Comtrade: Bilateral trade flows — exports/imports between specific countries by
-  HS commodity code, trade values and quantities.
-  Best for: "exports from X to Y", specific commodity trade flows.
+  HS commodity code, trade values and quantities. The ONLY provider for bilateral trade.
+  Best for: "exports from X to Y", HS commodity code queries (HS 8542, HS 2204).
 - ExchangeRate: Currency conversion — spot exchange rates between any two currencies,
   historical rates.
   Best for: currency conversion, exchange rate queries.
@@ -319,8 +330,8 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
   thousands of other coins/tokens.
   Best for: crypto prices, market data.
 - StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade for Canada
-  and Canadian provinces.
-  Best for: Canada-specific data, provincial breakdowns.
+  and Canadian provinces. The ONLY Canada-specific provider with monthly/quarterly data.
+  Best for: Canada-specific data, provincial breakdowns, Canadian CPI/employment.
 - OECD: OECD member country statistics — composite leading indicators, productivity,
   education, health. LOW PRIORITY — rate limited at 60 req/hour, prefer alternatives
   (WorldBank, Eurostat, IMF) when possible.
