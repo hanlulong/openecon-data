@@ -10,7 +10,40 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     assert len(prompt.splitlines()) < 260
     assert "Return JSON only" in prompt
     assert "Do not do provider routing strategy" in prompt
+    # Provider matrix should always be included
+    assert "PROVIDER CAPABILITIES" in prompt
+    assert "FRED" in prompt
+    assert "WorldBank" in prompt
 
+
+def test_simplified_prompt_with_conversation_context() -> None:
+    ctx = {
+        "indicator": "GDP",
+        "country": "United States",
+        "provider": "FRED",
+        "startDate": "2020-01-01",
+        "endDate": "2024-12-31",
+        "originalQuery": "GDP in US from 2020 to 2024",
+    }
+    prompt = SimplifiedPrompt.generate(conversation_context=ctx)
+
+    # Should include follow-up section
+    assert "CONVERSATION CONTEXT" in prompt
+    assert "isFollowUp" in prompt
+    assert "followUpType" in prompt
+    assert "resolvedQuery" in prompt
+    assert "GDP" in prompt
+    assert "United States" in prompt
+    assert "FRED" in prompt
+
+    # Guardrail: even with context, prompt should remain under limit
+    assert len(prompt.splitlines()) < 300
+
+
+def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:
+    prompt = SimplifiedPrompt.generate()
+    assert "CONVERSATION CONTEXT" not in prompt
+    assert "followUpType" not in prompt
 
 
 def test_simplified_prompt_avoids_hardcoded_provider_routing_rules() -> None:

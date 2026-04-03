@@ -11,7 +11,7 @@ class _OpenRouterStub:
     def __init__(self, intent: ParsedIntent):
         self._intent = intent
 
-    async def parse_query(self, query: str, history=None) -> ParsedIntent:
+    async def parse_query(self, query: str, history=None, conversation_context=None) -> ParsedIntent:
         return self._intent.model_copy(deep=True)
 
 

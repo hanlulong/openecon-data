@@ -9,6 +9,7 @@ Design goal:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 
 class SimplifiedPrompt:
@@ -20,8 +21,22 @@ class SimplifiedPrompt:
         return target.date().isoformat()
 
     @classmethod
-    def generate(cls) -> str:
-        """Return system prompt for parsing economic data queries into JSON."""
+    def generate(cls, conversation_context: Optional[dict] = None) -> str:
+        """Return system prompt for parsing economic data queries into JSON.
+
+        Args:
+            conversation_context: Optional dict with previous turn info for follow-up detection.
+                Keys: indicator, country, provider, startDate, endDate, originalQuery
+        """
+        prompt = cls._base_prompt()
+        if conversation_context:
+            prompt += cls._follow_up_section(conversation_context)
+        prompt += cls._provider_matrix()
+        return prompt
+
+    @classmethod
+    def _base_prompt(cls) -> str:
+        """Core extraction prompt (~175 lines)."""
         today = datetime.now(timezone.utc).date().isoformat()
         five_years_ago = cls._years_ago(5)
 
@@ -172,4 +187,99 @@ Return JSON only. No prose.
 Reference date defaults for relative time understanding:
 - today: {today}
 - 5 years ago: {five_years_ago}
+"""
+
+    @classmethod
+    def _follow_up_section(cls, ctx: dict) -> str:
+        """Build follow-up context section (~40 lines) that tells the LLM about the previous turn.
+
+        Args:
+            ctx: dict with keys: indicator, country, provider, startDate, endDate, originalQuery
+        """
+        indicator = ctx.get("indicator", "not specified")
+        country = ctx.get("country", "not specified")
+        provider = ctx.get("provider", "not specified")
+        start_date = ctx.get("startDate", "not specified")
+        end_date = ctx.get("endDate", "not specified")
+        original_query = ctx.get("originalQuery", "not specified")
+
+        return f"""
+
+--- CONVERSATION CONTEXT (follow-up detection) ---
+
+The user's previous query was: "{original_query}"
+Previous intent details:
+- Indicator: {indicator}
+- Country/countries: {country}
+- Provider: {provider}
+- Time period: {start_date} to {end_date}
+
+Follow-up detection rules:
+- If this new message references the previous context (e.g., "same for Germany",
+  "show me last 20 years", "what about unemployment", "use FRED instead",
+  "show me the same"), set isFollowUp=true.
+- Preserve unchanged parameters from the previous query and only update what the
+  user explicitly changes.
+- Set followUpType to one of:
+  - "country_change": user changes country but keeps indicator/time (e.g., "now for Japan")
+  - "indicator_switch": user changes indicator but keeps country/time (e.g., "what about inflation")
+  - "time_change": user changes time period but keeps indicator/country (e.g., "last 20 years")
+  - "provider_change": user requests a different data source (e.g., "use FRED instead")
+  - "pronoun_reuse": user refers to prior data without changes (e.g., "show me the same")
+- Set resolvedQuery to an explicit, self-contained rewrite of the query.
+  Example: if previous was "GDP in Canada" and user says "show me last 20 years",
+  resolvedQuery should be "GDP in Canada last 20 years".
+- If the message is NOT a follow-up (i.e., a completely new independent query),
+  set isFollowUp=false, followUpType=null, resolvedQuery=null.
+
+Additional output fields for follow-ups:
+  "isFollowUp": true/false,
+  "followUpType": "country_change" | "indicator_switch" | "time_change" | "provider_change" | "pronoun_reuse" | null,
+  "resolvedQuery": "explicit rewritten query" | null
+"""
+
+    @classmethod
+    def _provider_matrix(cls) -> str:
+        """Static provider capability table (~60 lines) for provider selection hints."""
+        return """
+
+--- PROVIDER CAPABILITIES (use this to inform apiProvider selection) ---
+
+Provider capabilities (use this to select apiProvider when no explicit provider is requested):
+- FRED: US economic data — GDP, employment, interest rates, housing, inflation, consumer prices,
+  money supply, federal funds rate, treasury yields, industrial production (90K+ series).
+  Best for: any US-specific macro/financial data.
+- WorldBank: Global development data — 190+ countries, GDP, poverty, education, health,
+  population, trade, CO2 emissions, life expectancy, inequality (16K+ indicators).
+  Best for: cross-country comparisons, developing country data, global aggregates.
+- IMF: International macro/financial — debt/GDP, fiscal balance, current account,
+  balance of payments, exchange rates, government finance, WEO forecasts.
+  Best for: sovereign debt, fiscal policy, balance of payments, IMF forecasts.
+- BIS: Central bank data — policy rates, residential property prices, credit to GDP,
+  effective exchange rates (REER/NEER), debt service ratios, credit aggregates.
+  Best for: central bank policy rates, property prices, credit/debt statistics.
+- Eurostat: EU/EEA statistics — HICP inflation, employment, trade, industrial production,
+  government deficit/debt for EU member states and candidate countries.
+  Best for: EU-specific data, HICP, Eurozone aggregates.
+- Comtrade: Bilateral trade flows — exports/imports between specific countries by
+  HS commodity code, trade values and quantities.
+  Best for: "exports from X to Y", specific commodity trade flows.
+- ExchangeRate: Currency conversion — spot exchange rates between any two currencies,
+  historical rates.
+  Best for: currency conversion, exchange rate queries.
+- CoinGecko: Cryptocurrency — prices, market cap, volume for Bitcoin, Ethereum, and
+  thousands of other coins/tokens.
+  Best for: crypto prices, market data.
+- StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade for Canada
+  and Canadian provinces.
+  Best for: Canada-specific data, provincial breakdowns.
+- OECD: OECD member country statistics — composite leading indicators, productivity,
+  education, health. LOW PRIORITY — rate limited at 60 req/hour, prefer alternatives
+  (WorldBank, Eurostat, IMF) when possible.
+
+Selection rules:
+- If user explicitly names a provider ("from FRED", "World Bank data"), use that provider.
+- If no provider is specified, set apiProvider to "WorldBank" as a neutral placeholder.
+  Deterministic routing code downstream will select the optimal provider.
+- Do NOT guess providers — let the routing layer handle it.
 """

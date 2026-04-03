@@ -111,14 +111,17 @@ class OpenRouterService:
         target = datetime.now(timezone.utc) - timedelta(days=365 * years)
         return target.date().isoformat()
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, conversation_context: Optional[dict] = None) -> str:
         """
         Generate system prompt using SimplifiedPrompt.
 
         This replaces the old 1,300-line prompt with a concise 200-line version.
         Provider routing is now handled by ProviderRouter (deterministic code).
+
+        Args:
+            conversation_context: Optional dict with previous turn info for follow-up detection.
         """
-        return SimplifiedPrompt.generate()
+        return SimplifiedPrompt.generate(conversation_context=conversation_context)
 
     @staticmethod
     def _validate_format(parsed: dict) -> tuple[bool, Optional[str]]:
@@ -147,7 +150,10 @@ class OpenRouterService:
         return True, None
 
     async def parse_query(
-        self, query: str, conversation_history: Optional[List[str]] = None
+        self,
+        query: str,
+        conversation_history: Optional[List[str]] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ParsedIntent:
         """
         Parse a natural language query into structured intent.
@@ -158,6 +164,8 @@ class OpenRouterService:
         Args:
             query: Natural language query from user
             conversation_history: Previous messages for context
+            conversation_context: Optional dict with previous turn info for follow-up detection.
+                Keys: indicator, country, provider, startDate, endDate, originalQuery
 
         Returns:
             ParsedIntent with extracted intent structure
@@ -168,18 +176,21 @@ class OpenRouterService:
         # Primary path: Instructor-based structured output
         if self.instructor_client:
             try:
-                return await self._parse_with_instructor(query, conversation_history)
+                return await self._parse_with_instructor(query, conversation_history, conversation_context)
             except Exception as e:
                 logger.warning(f"Instructor parsing failed, falling back to manual: {e}")
 
         # Fallback: manual JSON parsing
         if self.llm_provider:
-            return await self._parse_with_provider(query, conversation_history)
+            return await self._parse_with_provider(query, conversation_history, conversation_context)
         else:
-            return await self._parse_direct(query, conversation_history)
+            return await self._parse_direct(query, conversation_history, conversation_context)
 
     async def _parse_with_instructor(
-        self, query: str, conversation_history: Optional[List[str]] = None
+        self,
+        query: str,
+        conversation_history: Optional[List[str]] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ParsedIntent:
         """Parse query using Instructor for Pydantic-validated structured output.
 
@@ -188,7 +199,7 @@ class OpenRouterService:
         - Retries with corrective prompts on validation failure
         - Handles JSON extraction from raw text
         """
-        system_prompt = self._system_prompt()
+        system_prompt = self._system_prompt(conversation_context=conversation_context)
 
         # Build messages
         messages = [{"role": "system", "content": system_prompt}]
@@ -216,11 +227,14 @@ class OpenRouterService:
         return intent
 
     async def _parse_with_provider(
-        self, query: str, conversation_history: Optional[List[str]] = None
+        self,
+        query: str,
+        conversation_history: Optional[List[str]] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ParsedIntent:
         """Parse query using LLM provider abstraction (manual JSON fallback)"""
 
-        system_prompt = self._system_prompt()
+        system_prompt = self._system_prompt(conversation_context=conversation_context)
         max_retries = 3
         last_error = None
 
@@ -286,11 +300,14 @@ class OpenRouterService:
         raise RuntimeError(f"LLM failed after {max_retries} attempts. Last error: {last_error}")
 
     async def _parse_direct(
-        self, query: str, conversation_history: Optional[List[str]] = None
+        self,
+        query: str,
+        conversation_history: Optional[List[str]] = None,
+        conversation_context: Optional[dict] = None,
     ) -> ParsedIntent:
         """Fallback: Parse query using direct OpenRouter API calls"""
 
-        messages: List[dict[str, Any]] = [{"role": "system", "content": self._system_prompt()}]
+        messages: List[dict[str, Any]] = [{"role": "system", "content": self._system_prompt(conversation_context=conversation_context)}]
         if conversation_history:
             for index, content in enumerate(conversation_history):
                 role = "user" if index % 2 == 0 else "assistant"

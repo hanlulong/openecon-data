@@ -50,14 +50,22 @@ class QueryPipeline:
         self,
         query: str,
         history: Optional[List[str]] = None,
+        conversation_context: Optional[Dict[str, Any]] = None,
     ) -> ParseRouteResult:
         """
         Parse user query and apply deterministic routing guardrails.
 
+        Args:
+            query: The user query (or context-enriched query).
+            history: Previous conversation messages.
+            conversation_context: Optional dict with previous turn info for LLM follow-up detection.
+
         Returns:
             ParseRouteResult with routed intent and optional routing warning.
         """
-        parsed_intent = await self.query_service.openrouter.parse_query(query, history or [])
+        parsed_intent = await self.query_service.openrouter.parse_query(
+            query, history or [], conversation_context=conversation_context
+        )
         parsed_intent.originalQuery = query
 
         # Geography override is deterministic and should always be applied post-parse.

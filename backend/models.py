@@ -93,6 +93,11 @@ class ParsedIntent(BaseModel):
     # Original query text for downstream processing (e.g., time period extraction)
     originalQuery: Optional[str] = None
 
+    # Follow-up detection fields (populated by LLM when conversation context is provided)
+    isFollowUp: bool = False
+    followUpType: Optional[str] = None  # "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse"
+    resolvedQuery: Optional[str] = None  # The explicit rewritten query if follow-up
+
     # Query decomposition for "all provinces", "each state", etc.
     needsDecomposition: Optional[bool] = False
     decompositionType: Optional[str] = None  # "provinces", "states", "regions", "countries"
