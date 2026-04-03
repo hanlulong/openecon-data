@@ -26,8 +26,8 @@ explicit_exclusions:
 providers:
   BIS:
     primary:
-      code: WS_XRU
-      name: "Effective exchange rates (REER/NEER, BIS dataflow WS_XRU)"
+      code: WS_EER
+      name: "Real effective exchange rate index (BIS WS_EER, dimension R=Real, B=Broad)"
       confidence: 0.95
       coverage: global
       frequency: monthly

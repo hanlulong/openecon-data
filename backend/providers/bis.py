@@ -498,7 +498,7 @@ class BISProvider(BaseProvider):
         # BIS indicators have specific data frequencies that MUST be matched:
         # - Monthly only: WS_CBPOL (policy rates), WS_LONG_CPI (consumer prices), WS_XRU (exchange rates)
         # - Quarterly only: WS_TC (credit), WS_SPP (property prices), WS_DSR (debt service), etc.
-        if indicator_code in ["WS_CBPOL", "WS_LONG_CPI", "WS_XRU"]:
+        if indicator_code in ["WS_CBPOL", "WS_LONG_CPI", "WS_XRU", "WS_EER"]:
             frequency = "M"  # Force monthly for these indicators
             logger.info(f"BIS: Forced monthly frequency for {indicator_code}")
         elif indicator_code in ["WS_TC", "WS_SPP", "WS_CPP", "WS_DPP", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
@@ -538,7 +538,12 @@ class BISProvider(BaseProvider):
                     country_codes_to_try.append("XM")
 
                 for current_country_code in country_codes_to_try:
-                    sdmx_key = f"{frequency}.{current_country_code}"
+                    # WS_EER (Effective Exchange Rates) uses a different key structure:
+                    # FREQ.EER_TYPE.EER_BASKET.REF_AREA where EER_TYPE=R (real) or N (nominal)
+                    if indicator_code == "WS_EER":
+                        sdmx_key = f"{frequency}.R.B.{current_country_code}"
+                    else:
+                        sdmx_key = f"{frequency}.{current_country_code}"
                     url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
 
                     try:
@@ -646,7 +651,7 @@ class BISProvider(BaseProvider):
                             unit = "percent"
                         elif indicator_code in ["WS_LONG_CPI", "WS_CPP"]:
                             unit = "index"
-                        elif indicator_code == "WS_XRU":
+                        elif indicator_code in ["WS_XRU", "WS_EER"]:
                             unit = "index"
                         elif indicator_code == "WS_TC":
                             unit = "percent of GDP"
@@ -675,6 +680,7 @@ class BISProvider(BaseProvider):
                             "WS_TC": "TOTAL_CREDIT",
                             "WS_SPP": "RPP",
                             "WS_XRU": "EER",
+                            "WS_EER": "EER",
                             "WS_LONG_CPI": "CPI",
                             "WS_GLI": "GLI",
                             "WS_DSR": "DSR",
@@ -693,7 +699,7 @@ class BISProvider(BaseProvider):
 
                         if indicator_code == "WS_CBPOL":
                             data_type = "Rate"
-                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_SPP"]:
+                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_EER", "WS_SPP"]:
                             data_type = "Index"
                         elif indicator_code in ["WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
                             data_type = "Level"
@@ -985,11 +991,7 @@ class BISProvider(BaseProvider):
         # Step 2: Allow users to supply raw BIS dataflow codes directly (e.g. WS_CBPOL)
         # BIS dataflow codes always start with "WS_"
         if indicator and indicator.upper().startswith("WS_"):
-            code = indicator.upper()
-            # Normalize aliases: WS_EER is served via WS_XRU in BIS API
-            bis_aliases = {"WS_EER": "WS_XRU"}
-            code = bis_aliases.get(code, code)
-            return code, None
+            return indicator.upper(), None
 
         # Step 3: Try cross-provider indicator translator (handles IMF codes, common names, etc.)
         translator = get_indicator_translator()

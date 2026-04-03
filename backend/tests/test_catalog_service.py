@@ -105,7 +105,7 @@ def test_get_best_provider_prefers_bis_for_real_effective_exchange_rate():
     reload_catalog()
     provider, code, _ = get_best_provider("real_effective_exchange_rate", countries=["JP"])
     assert provider == "BIS"
-    assert code == "WS_XRU"
+    assert code == "WS_EER"
 
 
 def test_get_best_provider_prefers_global_coverage_without_country_context():
