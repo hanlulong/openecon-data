@@ -850,11 +850,59 @@ class QueryService:
             else:
                 return None
 
+        # ── Dimension-modifier preservation for StatsCan follow-ups ──
+        # When the previous query was a StatsCan dimension query (e.g., "CPI food"),
+        # and the follow-up term (e.g., "energy") is a dimension modifier of the
+        # SAME base indicator (not a truly different indicator), preserve the base
+        # indicator and treat the term as a dimension change.
+        # Example: "CPI food" → "what about energy" → "CPI energy" (NOT just "energy")
+        effective_indicator = matched_indicator
+        prior_provider_norm = normalize_provider_name(last_intent.apiProvider or "")
+        if prior_provider_norm in ("STATSCAN", "STATISTICS CANADA"):
+            prior_base_indicators = [
+                ind.upper().replace(" ", "_").replace("-", "_")
+                for ind in (last_intent.indicators or [])
+            ]
+            # Known StatsCan base indicators that have dimension sub-categories
+            _dimension_capable_bases = {
+                "CPI", "CONSUMER_PRICE_INDEX", "PRICE_INDEX",
+                "INFLATION", "INFLATION_RATE", "CPI_INFLATION",
+                "UNEMPLOYMENT_RATE", "UNEMPLOYMENT", "EMPLOYMENT",
+                "EMPLOYMENT_RATE", "RETAIL_SALES", "RETAIL_TRADE",
+            }
+            prior_base = None
+            prior_base_label = None
+            for ind in prior_base_indicators:
+                if ind in _dimension_capable_bases:
+                    prior_base = ind
+                    # Extract human-readable label from the original query or indicator
+                    prior_base_label = ind.lower().replace("_", " ")
+                    break
+
+            if prior_base and matched_indicator.upper().replace(" ", "_") != prior_base:
+                # The follow-up term differs from the base indicator.
+                # Check if it's a dimension modifier by seeing if the matched term
+                # is NOT itself a StatsCan base indicator (in which case it's a true switch).
+                matched_upper = matched_indicator.upper().replace(" ", "_").replace("-", "_")
+                from ..providers.statscan import StatsCanProvider
+                _is_base_indicator = (
+                    matched_upper in StatsCanProvider.VECTOR_MAPPINGS
+                    or matched_upper in StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS
+                )
+                if not _is_base_indicator:
+                    # The matched term is NOT a base indicator — treat as dimension
+                    # modifier change: prepend the previous base indicator.
+                    effective_indicator = f"{prior_base_label} {matched_indicator}"
+                    logger.info(
+                        "🔄 Dimension modifier follow-up: preserving base '%s' + modifier '%s' → '%s'",
+                        prior_base_label, matched_indicator, effective_indicator,
+                    )
+
         # Build new query: "indicator in country(ies)"
         if len(prior_countries) == 1:
-            refined_query = f"{matched_indicator} in {prior_countries[0]}"
+            refined_query = f"{effective_indicator} in {prior_countries[0]}"
         else:
-            refined_query = f"{matched_indicator} across {', '.join(prior_countries)}"
+            refined_query = f"{effective_indicator} across {', '.join(prior_countries)}"
 
         # Preserve time period from prior intent
         params = dict(last_intent.parameters or {})
@@ -868,10 +916,11 @@ class QueryService:
             query, refined_query, prior_countries,
         )
 
-        # Route the new query
+        # Route the new query — use the effective indicator (which preserves
+        # the base indicator for dimension modifier follow-ups)
         routing_decision = self.unified_router.route(
             query=refined_query,
-            indicators=[matched_indicator],
+            indicators=[effective_indicator],
             country=prior_countries[0] if len(prior_countries) == 1 else None,
             countries=prior_countries if len(prior_countries) > 1 else None,
         )
@@ -888,9 +937,19 @@ class QueryService:
         else:
             new_params["countries"] = prior_countries
 
+        # When a dimension modifier is preserved, use the prior base indicator
+        # (e.g., "CPI") in the indicators list so the provider can resolve it.
+        # The modifier ("energy") is extracted from originalQuery by
+        # extract_dimension_modifiers downstream.
+        intent_indicators = (
+            last_intent.indicators
+            if effective_indicator != matched_indicator and last_intent.indicators
+            else [effective_indicator]
+        )
+
         intent = ParsedIntent(
             apiProvider=api_provider,
-            indicators=[matched_indicator],
+            indicators=intent_indicators,
             parameters=new_params,
             clarificationNeeded=False,
             originalQuery=refined_query,

@@ -615,6 +615,9 @@ class StatsCanProvider(BaseProvider):
         if not members:
             return 1
 
+        # Normalize underscores to spaces so "unemployment_rate" matches "unemployment rate"
+        indicator_lower = indicator_lower.replace("_", " ")
+
         dimension_name_lower = dimension_name.lower()
 
         if "geogr" in dimension_name_lower:
@@ -1940,7 +1943,7 @@ class StatsCanProvider(BaseProvider):
         indicator = params.get("indicator", "Population")
         periods = params.get("periods", 20)
         dim_values = params.get("dimensions", {})
-        indicator_lower = indicator.lower() if indicator else ""
+        indicator_lower = indicator.lower().replace("_", " ") if indicator else ""
 
         # Extract user-supplied dimension values
         geography = dim_values.get("geography")
@@ -2310,7 +2313,7 @@ class StatsCanProvider(BaseProvider):
 
         # Extract available dimensions from metadata
         dimensions = metadata.get("dimension", [])
-        indicator_lower = indicator.lower() if indicator else ""
+        indicator_lower = indicator.lower().replace("_", " ") if indicator else ""
 
         # Build coordinate by finding member IDs for each dimension
         # Use intelligent dimension matching based on indicator context
@@ -2996,7 +2999,7 @@ class StatsCanProvider(BaseProvider):
                 pass
 
         # ---------- Build coordinate requests for each province ----------
-        indicator_lower = indicator.lower() if indicator else ""
+        indicator_lower = indicator.lower().replace("_", " ") if indicator else ""
         coordinate_requests = []
         province_map = {}  # Map coordinate -> province name for response parsing
 

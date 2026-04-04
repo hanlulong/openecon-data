@@ -321,6 +321,24 @@ Province/state follow-up handling:
     needsDecomposition=true, decompositionType="provinces"
 - US states: similar pattern with decompositionType="states", apiProvider="FRED".
 - IMPORTANT: Do NOT treat a province/state name as a country name. Ontario is NOT a country.
+
+Dimension modifier follow-ups:
+- When the previous query used a base indicator with a sub-category (e.g., "CPI food",
+  "unemployment rate male", "employment rate youth"), and the user changes only the
+  sub-category, PRESERVE the base indicator in the resolvedQuery.
+- Examples (previous: "CPI food in Canada"):
+  - "what about energy" -> indicator_switch, resolvedQuery="CPI energy in Canada",
+    indicators=["CPI"]. The base indicator CPI is preserved; only the modifier changes.
+  - "what about shelter" -> indicator_switch, resolvedQuery="CPI shelter in Canada",
+    indicators=["CPI"]. Same pattern.
+- Examples (previous: "employment rate in Canada"):
+  - "female only" -> indicator_switch, resolvedQuery="employment rate female in Canada",
+    indicators=["employment rate"]. The modifier "female" is added to the base indicator.
+  - "what about youth" -> indicator_switch, resolvedQuery="employment rate youth in Canada",
+    indicators=["employment rate"]. The modifier "youth" is added.
+- Key rule: if the user's follow-up word (energy, shelter, female, youth, etc.) is a
+  MODIFIER/sub-category of the previous indicator, keep the base indicator and add the
+  modifier. Do NOT replace the entire indicator with just the modifier word.
 """
 
         section += """

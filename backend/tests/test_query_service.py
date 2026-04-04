@@ -1679,6 +1679,69 @@ class QueryServiceTests(unittest.TestCase):
         result = self.service._looks_like_country_follow_up("Also include Japan", ["JP"])
         self.assertTrue(result)
 
+    def test_indicator_switch_preserves_base_indicator_for_dimension_follow_up(self) -> None:
+        """'what about energy' after 'CPI food in Canada' should produce 'cpi energy'
+        not just 'energy', preserving the CPI base indicator."""
+        conv_id = conversation_manager.get_or_create("conv-dim-follow-up")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "CPI food in Canada",
+            intent=ParsedIntent(
+                apiProvider="STATSCAN",
+                indicators=["CPI"],
+                parameters={"country": "CA"},
+                clarificationNeeded=False,
+                originalQuery="CPI food in Canada",
+            ),
+        )
+
+        result = self.service._build_intent_from_indicator_switch(  # pylint: disable=protected-access
+            query="what about energy",
+            conversation_id=conv_id,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        refined_query, intent, _ = result
+        # The resolved query should contain both the base indicator (CPI) and the new modifier (energy)
+        self.assertIn("cpi", refined_query.lower())
+        self.assertIn("energy", refined_query.lower())
+        # The indicators list should preserve the base indicator for provider resolution
+        self.assertTrue(
+            any("CPI" in ind.upper() for ind in intent.indicators),
+            f"Expected CPI in indicators, got {intent.indicators}",
+        )
+
+    def test_indicator_switch_does_not_preserve_base_for_true_indicator_change(self) -> None:
+        """'what about unemployment' after 'CPI food' should switch to unemployment,
+        not produce 'cpi unemployment'."""
+        conv_id = conversation_manager.get_or_create("conv-true-switch")
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "CPI food in Canada",
+            intent=ParsedIntent(
+                apiProvider="STATSCAN",
+                indicators=["CPI"],
+                parameters={"country": "CA"},
+                clarificationNeeded=False,
+                originalQuery="CPI food in Canada",
+            ),
+        )
+
+        result = self.service._build_intent_from_indicator_switch(  # pylint: disable=protected-access
+            query="what about unemployment",
+            conversation_id=conv_id,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        refined_query, intent, _ = result
+        # This is a true indicator switch — should NOT contain CPI
+        self.assertNotIn("cpi", refined_query.lower())
+        self.assertIn("unemployment", refined_query.lower())
+
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
             "[IMF] Trade Balance (% of GDP) (BT_GDP)",

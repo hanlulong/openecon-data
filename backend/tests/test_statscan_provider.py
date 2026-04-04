@@ -90,6 +90,33 @@ def test_select_default_member_id_prefers_employment_rate_member(statscan_provid
     assert member == expected_member
 
 
+def test_select_default_member_id_handles_underscored_indicator(statscan_provider):
+    """When indicator has underscores (e.g., 'unemployment_rate'), it should still
+    match 'Unemployment rate' member, not 'Unemployment' (count)."""
+    metadata = statscan_provider._statscan_metadata_service.get_local_cube_metadata("14100287")
+    labour_dimension = next(
+        dim for dim in metadata["dimension"] if dim["dimensionNameEn"] == "Labour force characteristics"
+    )
+
+    # With underscored indicator (as comes from VECTOR_MAPPINGS keys)
+    member_underscored = statscan_provider._select_default_member_id(
+        labour_dimension["dimensionNameEn"],
+        labour_dimension["member"],
+        "unemployment_rate",
+    )
+    # Should select "Unemployment rate" (member 7), NOT "Unemployment" (member 6)
+    assert member_underscored == 7
+
+    # Same for employment_rate
+    member_emp = statscan_provider._select_default_member_id(
+        labour_dimension["dimensionNameEn"],
+        labour_dimension["member"],
+        "employment_rate",
+    )
+    # Should select "Employment rate" (member 9), NOT "Employment" (member 3)
+    assert member_emp == 9
+
+
 def test_select_default_member_id_prefers_total_retail_all_stores(statscan_provider):
     metadata = statscan_provider._statscan_metadata_service.get_local_cube_metadata("20100031")
     dimensions = metadata["dimension"]
