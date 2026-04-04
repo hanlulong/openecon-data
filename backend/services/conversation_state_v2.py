@@ -411,13 +411,24 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
                 _cached_pid = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec)
                 if _cached_pid:
                     statscan_product_id = str(_cached_pid)[:8]
-            # Try reading cube metadata from provider's in-memory cache
-            if statscan_product_id and statscan_provider:
+            # Try reading cube metadata from:
+            # 1. Provider's in-memory cache (populated during fetch)
+            # 2. Local metadata service file cache (always available)
+            if statscan_product_id:
                 try:
-                    _norm_pid = statscan_provider._normalize_metadata_product_id(statscan_product_id)
-                    _cached_cube = statscan_provider._cube_metadata_cache.get(_norm_pid)
-                    if _cached_cube:
-                        statscan_cube_metadata_val = _cached_cube
+                    if statscan_provider:
+                        _norm_pid = statscan_provider._normalize_metadata_product_id(statscan_product_id)
+                        # Check in-memory cache first
+                        _cached_cube = statscan_provider._cube_metadata_cache.get(_norm_pid)
+                        if _cached_cube:
+                            statscan_cube_metadata_val = _cached_cube
+                        # Fall back to local file cache (sync, no API call)
+                        elif hasattr(statscan_provider, '_statscan_metadata_service') and statscan_provider._statscan_metadata_service:
+                            _local = statscan_provider._statscan_metadata_service.get_local_cube_metadata(_norm_pid)
+                            if _local:
+                                statscan_cube_metadata_val = _local
+                                # Also populate the in-memory cache for next time
+                                statscan_provider._cube_metadata_cache[_norm_pid] = _local
                 except Exception:
                     pass
         except Exception:
