@@ -327,7 +327,7 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
 # extract_state_from_intent  (for dual-write migration)
 # ---------------------------------------------------------------------------
 
-def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
+def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> ConversationState:
     """Build a ConversationState from a ParsedIntent (backward-compat helper).
 
     Used during the dual-write migration phase: after every successful query
@@ -395,9 +395,11 @@ def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
         if not base_indicator and params.get("__base_indicator"):
             base_indicator = params["__base_indicator"]
 
-    # Pre-resolve StatsCan product ID for dimension-capable indicators.
-    # This avoids async metadata lookups in the delta extractor.
+    # Pre-resolve StatsCan product ID and cube metadata for dimension follow-ups.
+    # Also try to read the provider's in-memory cube metadata cache (populated
+    # during R1's data fetch). This avoids async API calls in the delta extractor.
     statscan_product_id: Optional[str] = None
+    statscan_cube_metadata_val: Optional[Dict[str, Any]] = None
     if base_indicator:
         try:
             from ..providers.statscan import StatsCanProvider
@@ -409,6 +411,15 @@ def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
                 _cached_pid = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec)
                 if _cached_pid:
                     statscan_product_id = str(_cached_pid)[:8]
+            # Try reading cube metadata from provider's in-memory cache
+            if statscan_product_id and statscan_provider:
+                try:
+                    _norm_pid = statscan_provider._normalize_metadata_product_id(statscan_product_id)
+                    _cached_cube = statscan_provider._cube_metadata_cache.get(_norm_pid)
+                    if _cached_cube:
+                        statscan_cube_metadata_val = _cached_cube
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -416,6 +427,7 @@ def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
         indicator=indicator,
         base_indicator=base_indicator,
         statscan_product_id=statscan_product_id,
+        statscan_cube_metadata=statscan_cube_metadata_val,
         country=country,
         countries=countries,
         provider=intent.apiProvider,

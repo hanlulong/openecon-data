@@ -1846,7 +1846,7 @@ class QueryService:
 
         # Dual-write: update ConversationState alongside last_intent
         try:
-            _new_state = extract_state_from_intent(intent)
+            _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
             _existing_state = conversation_manager.get_conversation_state(conv_id)
             if _existing_state:
                 _new_state.turn_number = _existing_state.turn_number + 1
@@ -3645,7 +3645,7 @@ class QueryService:
 
             # Dual-write: update ConversationState alongside last_intent
             try:
-                _new_conv_state = extract_state_from_intent(intent)
+                _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                 if _prev_good_state:
                     _new_conv_state.turn_number = _prev_good_state.turn_number + 1
                 conversation_manager.set_conversation_state(conv_id, _new_conv_state)
@@ -4254,31 +4254,7 @@ class QueryService:
         """
         fetch_error: Optional[Exception] = None
 
-        # Dual-write: save conversation state for delta extraction on follow-ups.
-        # This mirrors the dual-write in _execute_resolved_intent but covers the
-        # standard pipeline path (which is used for most first-round queries).
         conv_id = conversation_id
-        try:
-            _new_state = extract_state_from_intent(intent)
-            _existing = conversation_manager.get_conversation_state(conv_id)
-            if _existing:
-                _new_state.turn_number = _existing.turn_number + 1
-            # Pre-cache StatsCan cube metadata for dimension follow-ups
-            if (_new_state.statscan_product_id
-                    and _new_state.provider
-                    and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}
-                    and not _new_state.statscan_cube_metadata):
-                try:
-                    _cube = await self.statscan_provider._get_cube_metadata(
-                        _new_state.statscan_product_id
-                    )
-                    if _cube:
-                        _new_state.statscan_cube_metadata = _cube
-                except Exception:
-                    pass
-            conversation_manager.set_conversation_state(conv_id, _new_state)
-        except Exception as _sw_err:
-            logger.debug("Standard pipeline dual-write failed: %s", _sw_err)
 
         # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
         # and use the parallel multi-indicator fetch path.
@@ -4319,6 +4295,18 @@ class QueryService:
                         f"Data fetched: {intent.apiProvider}",
                         intent=intent,
                     )
+                    # Dual-write: save conversation state AFTER fetch (so cube
+                    # metadata is cached in the provider's in-memory cache)
+                    try:
+                        _new_state = extract_state_from_intent(
+                            intent, statscan_provider=self.statscan_provider
+                        )
+                        _existing = conversation_manager.get_conversation_state(conv_id)
+                        if _existing:
+                            _new_state.turn_number = _existing.turn_number + 1
+                        conversation_manager.set_conversation_state(conv_id, _new_state)
+                    except Exception:
+                        pass
                     return QueryResponse(
                         conversationId=conversation_id,
                         intent=intent,
