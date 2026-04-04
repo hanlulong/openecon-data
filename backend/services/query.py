@@ -4295,8 +4295,7 @@ class QueryService:
                         f"Data fetched: {intent.apiProvider}",
                         intent=intent,
                     )
-                    # Dual-write: save conversation state AFTER fetch (so cube
-                    # metadata is cached in the provider's in-memory cache)
+                    # Dual-write: save conversation state AFTER fetch
                     try:
                         _new_state = extract_state_from_intent(
                             intent, statscan_provider=self.statscan_provider
@@ -4304,6 +4303,21 @@ class QueryService:
                         _existing = conversation_manager.get_conversation_state(conv_id)
                         if _existing:
                             _new_state.turn_number = _existing.turn_number + 1
+                        # Explicitly fetch cube metadata for StatsCan dimension follow-ups.
+                        # Vector-based fetches don't call _get_cube_metadata, so the
+                        # provider's cache may be empty. We fetch it here so R2 has it.
+                        if (_new_state.statscan_product_id
+                                and not _new_state.statscan_cube_metadata
+                                and _new_state.provider
+                                and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}):
+                            try:
+                                _cube = await self.statscan_provider._get_cube_metadata(
+                                    _new_state.statscan_product_id
+                                )
+                                if _cube:
+                                    _new_state.statscan_cube_metadata = _cube
+                            except Exception:
+                                pass
                         conversation_manager.set_conversation_state(conv_id, _new_state)
                     except Exception:
                         pass
