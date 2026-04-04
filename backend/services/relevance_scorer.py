@@ -201,13 +201,10 @@ def extract_indicator_cues(text: str) -> set[str]:
     cues: set[str] = set()
     for cue, phrases in _CUE_MAP.items():
         for phrase in phrases:
-            # Short acronyms (<=3 chars) need word-boundary matching
-            # to avoid "ppi" matching inside "philippines"
-            if len(phrase) <= 3:
-                if re.search(rf"\b{re.escape(phrase)}\b", search_text):
-                    cues.add(cue)
-                    break
-            elif phrase in search_text:
+            # Use word-boundary matching for ALL phrases to avoid
+            # "employment rate" matching inside "unemployment rate".
+            # Allow trailing 's' for plurals (e.g., "policy rates" matches "policy rate").
+            if re.search(rf"(?<![a-z]){re.escape(phrase)}s?(?![a-z])", search_text):
                 cues.add(cue)
                 break
 
@@ -310,7 +307,7 @@ def series_text_for_relevance(series: Any) -> str:
 def labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> float:
     """Penalize near-miss labour-rate candidates for generic rate queries."""
     query_lower = str(query_text or "").lower()
-    candidate_lower = str(candidate_text or "").lower()
+    candidate_lower = str(candidate_text or "").lower().replace("_", " ")
     if not query_lower or not candidate_lower:
         return 0.0
 

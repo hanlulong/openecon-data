@@ -368,6 +368,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     coin_ids = params.get("coinIds")
     vs_currency = params.get("vsCurrency")
 
+    # Dimensions (from delta/merge path via __dimensions)
+    dimensions = params.get("__dimensions")
+
     # Decomposition
     decomposition: Optional[Dict[str, Any]] = None
     if intent.needsDecomposition and intent.decompositionType:
@@ -437,6 +440,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     return ConversationState(
         indicator=indicator,
         base_indicator=base_indicator,
+        dimensions=dimensions,
         statscan_product_id=statscan_product_id,
         statscan_cube_metadata=statscan_cube_metadata_val,
         country=country,
