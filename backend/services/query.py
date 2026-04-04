@@ -61,8 +61,6 @@ from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import normalize_canadian_region_list
 from ..utils.retry import retry_async, DataNotAvailableError
-# rate_limiter import removed — was unused
-from ..services.time_range_defaults import apply_default_time_range
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
 # detection.  See simplified_prompt.py.
@@ -177,21 +175,6 @@ logger = logging.getLogger(__name__)
 # Year extraction – matches 4-digit years in the 1900–2099 range.
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 
-# Currency pair parsing – "USD TO EUR", "EUR/GBP", "JPY-USD", "USD VS EUR"
-_CURRENCY_TO_RE = re.compile(r"\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b")
-_CURRENCY_SLASH_RE = re.compile(r"\b([A-Z]{3})[/\-]([A-Z]{3})\b")
-_CURRENCY_VS_RE = re.compile(r"\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b")
-_CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
-
-# Top-N detection – "top 10", "top 5", etc.
-_TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
-
-# Option label parsing – strips leading "[PROVIDER] " prefix and trailing "(CODE)".
-_OPTION_PROVIDER_PREFIX_RE = re.compile(r"^\[[^\]]+\]\s*")
-_OPTION_TRAILING_PARENS_RE = re.compile(r"\s*\([^()]+\)\s*$")
-_OPTION_TRAILING_PARENS_ALT_RE = re.compile(r"\([^()]*\)\s*$")
-_OPTION_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-
 
 # ---------------------------------------------------------------------------
 # Intent cache — avoids re-parsing identical queries via LLM (saves 4-6s)
@@ -227,62 +210,8 @@ def _put_cached_parse_result(query_hash: str, result: Any) -> None:
     _intent_cache[query_hash] = (result, time.time())
 
 
-# Provider name aliases to normalize LLM outputs to canonical names
-PROVIDER_ALIASES = {
-    # Comtrade variations
-    "un comtrade": "COMTRADE",
-    "un_comtrade": "COMTRADE",
-    "comtrade": "COMTRADE",
-    "un": "COMTRADE",
-    # World Bank variations
-    "world bank": "WORLDBANK",
-    "worldbank": "WORLDBANK",
-    "wb": "WORLDBANK",
-    # Statistics Canada variations
-    "statistics canada": "STATSCAN",
-    "stats canada": "STATSCAN",
-    "statcan": "STATSCAN",
-    "statscan": "STATSCAN",
-    # Exchange rate variations
-    "exchangerate": "EXCHANGERATE",
-    "exchange rate": "EXCHANGERATE",
-    "exchangerate-api": "EXCHANGERATE",
-    "exchange-rate": "EXCHANGERATE",
-    "exchange rate api": "EXCHANGERATE",
-    # FRED variations (handle LLM adding extra text)
-    "fred": "FRED",
-    "fred (federal reserve)": "FRED",
-    "federal reserve": "FRED",
-    # Other providers
-    "imf": "IMF",
-    "international monetary fund": "IMF",
-    "bis": "BIS",
-    "bank for international settlements": "BIS",
-    "eurostat": "EUROSTAT",
-    "oecd": "OECD",
-    "coingecko": "COINGECKO",
-    "coin gecko": "COINGECKO",
-    # Special sentinel for catalog concepts with no available provider
-    "not_available": "NOT_AVAILABLE",
-}
-
-
-def normalize_provider_name(provider: str) -> str:
-    """Normalize provider name to canonical form.
-
-    Handles variations like 'UN COMTRADE', 'UN Comtrade', 'World Bank', etc.
-    Returns uppercase canonical name like 'COMTRADE', 'WORLDBANK', etc.
-    """
-    if not provider:
-        return provider
-
-    # Try exact match first (case-insensitive)
-    normalized = PROVIDER_ALIASES.get(provider.lower().strip())
-    if normalized:
-        return normalized
-
-    # Fallback: just uppercase the original
-    return provider.upper().strip()
+# Provider normalization — single source of truth
+from ..utils.providers import PROVIDER_ALIASES, normalize_provider_name  # noqa: F401
 
 
 def _filter_valid_data(data: List[NormalizedData]) -> List[NormalizedData]:

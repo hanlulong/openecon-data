@@ -71,11 +71,8 @@ _OPTION_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_provider_name(provider: str) -> str:
-    """Normalize provider name to uppercase canonical form.
-
-    This is a local import to avoid circular dependencies at module level.
-    """
-    from ..services.query import normalize_provider_name as _npn
+    """Normalize provider name to uppercase canonical form."""
+    from ..utils.providers import normalize_provider_name as _npn
     return _npn(provider)
 
 

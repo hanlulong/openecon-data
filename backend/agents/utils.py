@@ -15,24 +15,8 @@ if TYPE_CHECKING:
     from ..models import NormalizedData, ParsedIntent, QueryResponse
 
 
-# Standard provider name mappings used across agents
-PROVIDER_NAMES = {
-    # Standard names
-    "eurostat": "EUROSTAT",
-    "fred": "FRED",
-    "worldbank": "WORLDBANK",
-    "world bank": "WORLDBANK",
-    "imf": "IMF",
-    "oecd": "OECD",
-    "bis": "BIS",
-    "statscan": "STATSCAN",
-    "statistics canada": "STATSCAN",
-    "comtrade": "COMTRADE",
-    "un comtrade": "COMTRADE",
-    "exchangerate": "EXCHANGERATE",
-    "exchange rate": "EXCHANGERATE",
-    "coingecko": "COINGECKO",
-}
+# Provider normalization — single source of truth
+from ..utils.providers import PROVIDER_ALIASES as PROVIDER_NAMES, normalize_provider_name  # noqa: F401
 
 # Provider patterns for query matching
 PROVIDER_QUERY_PATTERNS = {
@@ -51,22 +35,6 @@ PROVIDER_QUERY_PATTERNS = {
     "world bank data": "WORLDBANK",
     "imf data": "IMF",
 }
-
-
-def normalize_provider_name(provider: str) -> str:
-    """
-    Normalize a provider name to its standard uppercase form.
-
-    Args:
-        provider: Provider name in any case/format
-
-    Returns:
-        Standardized provider name (e.g., "FRED", "WORLDBANK")
-    """
-    if not provider:
-        return "UNKNOWN"
-    lower = provider.lower().strip()
-    return PROVIDER_NAMES.get(lower, provider.upper())
 
 
 def extract_provider_from_query(query: str) -> Optional[str]:

@@ -53,11 +53,11 @@ _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
 
 
 # ---------------------------------------------------------------------------
-# Helper — import normalize_provider_name lazily to avoid circular imports
+# Provider name normalization (shared utility — no circular imports)
 # ---------------------------------------------------------------------------
 
 def _normalize_provider_name(provider: str) -> str:
-    from .query import normalize_provider_name
+    from ..utils.providers import normalize_provider_name
     return normalize_provider_name(provider)
 
 
