@@ -1802,7 +1802,7 @@ class QueryService:
                         pass  # Non-critical — delta extractor has fallback
                 conversation_manager.set_conversation_state(conv_id, _new_state)
             except Exception as _sw_err:
-                logger.debug("Dual-write conversation_state failed: %s", _sw_err)
+                logger.warning("Dual-write conversation_state failed: %s", _sw_err, exc_info=True)
 
         if intent.clarificationNeeded:
             conversation_manager.clear_pending_indicator_options(conv_id)
@@ -3260,7 +3260,7 @@ class QueryService:
                             query, _current_conv_state,
                         )
                     except Exception as _llm_err:
-                        logger.debug("LLM delta extraction error: %s", _llm_err)
+                        logger.warning("LLM delta extraction error: %s", _llm_err)
                 if _delta is not None:
                     _merged_state = merge_state(_current_conv_state, _delta)
                     _delta_intent = materialize_intent(_merged_state)

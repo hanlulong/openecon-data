@@ -692,8 +692,10 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
             if _existing:
                 _state.turn_number = _existing.turn_number + 1
             conversation_manager.set_conversation_state(result.conversationId, _state)
-        except Exception:
-            pass
+            logger.info("State saved for %s: indicator=%s, provider=%s",
+                        result.conversationId, _state.indicator, _state.provider)
+        except Exception as _save_err:
+            logger.error("FAILED to save conversation state for %s: %s", result.conversationId, _save_err, exc_info=True)
 
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
@@ -839,7 +841,6 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 return
 
             # Guaranteed post-query conversation state save (streaming path).
-            # Mirrors the non-streaming endpoint's save at query_endpoint().
             if result.data and result.intent and result.conversationId:
                 try:
                     from backend.services.conversation_state_v2 import extract_state_from_intent as _extract_state
@@ -848,8 +849,9 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                     if _existing:
                         _state.turn_number = _existing.turn_number + 1
                     conversation_manager.set_conversation_state(result.conversationId, _state)
-                except Exception:
-                    pass
+                    logger.info("Stream state saved for %s: indicator=%s", result.conversationId, _state.indicator)
+                except Exception as _save_err:
+                    logger.error("FAILED to save stream conversation state: %s", _save_err, exc_info=True)
 
             # Save to user history if authenticated
             if user and result.data:

@@ -155,9 +155,9 @@ class DeltaExtractor:
             return None
 
         # Get the Instructor client from the query service's openrouter
-        openrouter = getattr(self._qs, "openrouter_service", None)
+        openrouter = getattr(self._qs, "openrouter", None)
         if openrouter is None:
-            logger.debug("LLM delta: no openrouter_service available")
+            logger.debug("LLM delta: no openrouter available")
             return None
 
         instructor_client = getattr(openrouter, "instructor_client", None)
