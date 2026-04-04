@@ -1179,21 +1179,33 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
             params.get("indicator"), provider, params.get("__dimensions"),
         )
     elif _is_delta_resolved:
-        # Delta follow-up (time change, country change, etc.): the indicator
-        # name is correct but may need code resolution (e.g., "GDP" → "NY.GDP.MKTP.CD").
-        # Override originalQuery so the resolution search uses the indicator name,
-        # NOT the raw follow-up query ("last 20 years") which would match wrong indicators.
+        # Delta follow-up: check if the indicator actually changed.
+        # If indicator is UNCHANGED (time change, country add, etc.) → skip
+        # resolution entirely. The code from the prior turn is already correct.
+        # If indicator DID change (indicator switch, provider change) → resolve
+        # the new indicator name using itself as the search query.
         _indicator_name = intent.indicators[0] if intent.indicators else ""
-        _saved_query = intent.originalQuery
-        intent.originalQuery = _indicator_name
-        logger.info(
-            "Delta-resolved follow-up: resolving indicator '%s' (query='%s' overridden to '%s')",
-            _indicator_name, _saved_query, _indicator_name,
-        )
-        provider, params = svc._apply_concept_provider_override(provider, intent, params)
-        intent.parameters = params
-        params = await svc._resolve_indicator_for_fetch(provider, intent, params)
-        intent.originalQuery = _saved_query  # Restore for downstream use
+        _indicator_changed = bool(params.get("__delta_indicator_changed"))
+        if not _indicator_changed:
+            # Indicator preserved from prior turn — use as-is, no resolution
+            params["indicator"] = _indicator_name
+            intent.parameters = params
+            logger.info(
+                "Delta-resolved: indicator unchanged, using '%s' directly",
+                _indicator_name,
+            )
+        else:
+            # New indicator — resolve using indicator name as query
+            _saved_query = intent.originalQuery
+            intent.originalQuery = _indicator_name
+            logger.info(
+                "Delta-resolved: indicator changed to '%s', resolving (query overridden from '%s')",
+                _indicator_name, _saved_query,
+            )
+            provider, params = svc._apply_concept_provider_override(provider, intent, params)
+            intent.parameters = params
+            params = await svc._resolve_indicator_for_fetch(provider, intent, params)
+            intent.originalQuery = _saved_query
     else:
         provider, params = svc._apply_concept_provider_override(provider, intent, params)
         intent.parameters = params
@@ -1210,7 +1222,7 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
     if params.get("__catalog_resolved"):
         object.__setattr__(intent, "_catalog_resolved", True)
 
-    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved"}
+    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved", "__delta_indicator_changed"}
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params

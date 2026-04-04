@@ -3292,13 +3292,13 @@ class QueryService:
                     _merged_state.routed_provider = _delta_intent.apiProvider
                     _merged_state.last_indicators_resolved = _delta_intent.indicators
 
-                    # Mark intent as delta-resolved so data_fetcher skips
-                    # indicator re-resolution (the delta already determined
-                    # the correct indicator; re-resolving against the raw
-                    # follow-up query would match wrong indicators).
+                    # Mark intent as delta-resolved. Pass whether the indicator
+                    # changed so the data_fetcher knows whether to re-resolve.
                     if _delta_intent.parameters is None:
                         _delta_intent.parameters = {}
+                    _indicator_changed = _delta.changed_indicator is not None
                     _delta_intent.parameters["__delta_resolved"] = True
+                    _delta_intent.parameters["__delta_indicator_changed"] = _indicator_changed
 
                     # Build a ParseRouteResult for _execute_resolved_intent
                     _delta_parse_result = ParseRouteResult(
