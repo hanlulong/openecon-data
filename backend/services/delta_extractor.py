@@ -267,7 +267,16 @@ Output the query_type and any changed fields as JSON."""
                 max_tokens=500,
             )
 
-            # Validate: at least one field must be non-None
+            # For non-parameter_delta classifications (pro_mode, new_query,
+            # informational, clarification_answer), return the delta even
+            # with no changed fields — the query_type is the important signal.
+            if delta.query_type and delta.query_type != "parameter_delta":
+                delta.raw_query = query_text
+                logger.info("LLM classification: query_type=%s for: %s",
+                            delta.query_type, query_text[:50])
+                return delta
+
+            # For parameter_delta: at least one field must be non-None
             has_change = any(
                 getattr(delta, f) is not None
                 for f in [
