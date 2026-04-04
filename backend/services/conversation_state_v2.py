@@ -160,6 +160,20 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.last_indicators_resolved = None
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
+        # Auto-detect crypto indicator switches and update coin_ids/provider
+        _crypto_map = {
+            "bitcoin": "bitcoin", "btc": "bitcoin",
+            "ethereum": "ethereum", "eth": "ethereum",
+            "dogecoin": "dogecoin", "doge": "dogecoin",
+            "solana": "solana", "sol": "solana",
+            "cardano": "cardano", "ada": "cardano",
+            "ripple": "ripple", "xrp": "ripple",
+        }
+        _coin = _crypto_map.get(delta.changed_indicator.lower())
+        if _coin:
+            merged.coin_ids = [_coin]
+            merged.provider = "COINGECKO"
+            merged.routed_provider = "COINGECKO"
 
     # --- Country ---
     if delta.changed_country:
