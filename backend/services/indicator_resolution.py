@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
 
+# GDP ratio patterns — used by 5 functions to detect "X as % of GDP" style queries.
+# Hoisted to module level to eliminate duplication (was copy-pasted 5 times).
+_GDP_RATIO_PATTERNS = (
+    "% of gdp",
+    "as % of gdp",
+    "as percent of gdp",
+    "as percentage of gdp",
+    "share of gdp",
+    "to gdp ratio",
+    "ratio to gdp",
+    "as share of gdp",
+)
+
+# Indicator cues that require strict precision matching (no fuzzy fallback).
+_STRICT_PRECISION_CUES = {
+    "import", "export", "trade_balance", "trade_openness",
+    "debt_gdp_ratio", "public_debt", "gdp_deflator", "hicp",
+    "producer_price", "real_effective_exchange_rate",
+    "bond_yield", "money_supply", "policy_rate", "house_prices",
+}
+
 
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
@@ -236,35 +257,10 @@ def minimum_resolved_relevance_threshold(indicator_query: str) -> float:
     """
     normalized_query = str(indicator_query or "").strip().lower()
     cue_set = extract_indicator_cues(normalized_query)
-    ratio_patterns = (
-        "% of gdp",
-        "as % of gdp",
-        "as percent of gdp",
-        "as percentage of gdp",
-        "share of gdp",
-        "to gdp ratio",
-        "ratio to gdp",
-        "as share of gdp",
-    )
-    has_ratio_query = any(pattern in normalized_query for pattern in ratio_patterns)
+    has_ratio_query = any(pattern in normalized_query for pattern in _GDP_RATIO_PATTERNS)
 
     threshold = -0.40
-    strict_precision_cues = {
-        "import",
-        "export",
-        "trade_balance",
-        "trade_openness",
-        "debt_gdp_ratio",
-        "public_debt",
-        "gdp_deflator",
-        "hicp",
-        "producer_price",
-        "real_effective_exchange_rate",
-        "bond_yield",
-        "money_supply",
-        "policy_rate",
-        "house_prices",
-    }
+    strict_precision_cues = _STRICT_PRECISION_CUES
     high_precision_cues = {
         "trade_openness",
         "gdp_deflator",
@@ -312,33 +308,8 @@ def indicator_resolution_threshold(indicator_query: str, resolved_source: str) -
     threshold = 0.68
     normalized_query = str(indicator_query or "").strip().lower()
     cue_set = extract_indicator_cues(normalized_query)
-    ratio_patterns = (
-        "% of gdp",
-        "as % of gdp",
-        "as percent of gdp",
-        "as percentage of gdp",
-        "share of gdp",
-        "to gdp ratio",
-        "ratio to gdp",
-        "as share of gdp",
-    )
-    has_ratio_query = any(pattern in normalized_query for pattern in ratio_patterns)
-    strict_precision_cues = {
-        "import",
-        "export",
-        "trade_balance",
-        "trade_openness",
-        "debt_gdp_ratio",
-        "public_debt",
-        "gdp_deflator",
-        "hicp",
-        "producer_price",
-        "real_effective_exchange_rate",
-        "bond_yield",
-        "money_supply",
-        "policy_rate",
-        "house_prices",
-    }
+    has_ratio_query = any(pattern in normalized_query for pattern in _GDP_RATIO_PATTERNS)
+    strict_precision_cues = _STRICT_PRECISION_CUES
     high_precision_cues = {
         "trade_openness",
         "gdp_deflator",
@@ -410,17 +381,7 @@ def is_resolved_indicator_plausible(
     if "hicp" in query_cues and provider_upper in {"WORLDBANK", "IMF", "FRED", "STATSCAN", "STATISTICS CANADA"}:
         return False
 
-    ratio_patterns = [
-        "% of gdp",
-        "as % of gdp",
-        "as percent of gdp",
-        "as percentage of gdp",
-        "share of gdp",
-        "to gdp ratio",
-        "ratio to gdp",
-        "as share of gdp",
-    ]
-    has_ratio_query = any(pattern in query_lower for pattern in ratio_patterns)
+    has_ratio_query = any(pattern in query_lower for pattern in _GDP_RATIO_PATTERNS)
 
     if "current_account" in query_cues and not any(
         token in code_upper for token in ("BCA", "CAB", "CURRENT", "CURR")
@@ -1369,19 +1330,9 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         logger.info("🔎 Parsed indicator appears deprecated/discontinued. Using original query.")
         return _fallback_to_original_or_distilled()
 
-    ratio_patterns = [
-        "% of gdp",
-        "as % of gdp",
-        "as percent of gdp",
-        "as percentage of gdp",
-        "share of gdp",
-        "to gdp ratio",
-        "ratio to gdp",
-        "as share of gdp",
-    ]
     original_lower = original_query.lower()
-    has_ratio_original = any(pattern in original_lower for pattern in ratio_patterns)
-    has_ratio_indicator = any(pattern in indicator_lower for pattern in ratio_patterns)
+    has_ratio_original = any(pattern in original_lower for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio_indicator = any(pattern in indicator_lower for pattern in _GDP_RATIO_PATTERNS)
     if has_ratio_original and not has_ratio_indicator:
         logger.info(
             "🔎 Indicator dropped GDP-ratio context. Using original query for resolution."
@@ -1516,17 +1467,7 @@ def build_distilled_indicator_query(svc: Any, query: str) -> str:
     if not cues:
         return ""
 
-    ratio_patterns = [
-        "% of gdp",
-        "as % of gdp",
-        "as percent of gdp",
-        "as percentage of gdp",
-        "share of gdp",
-        "to gdp ratio",
-        "ratio to gdp",
-        "as share of gdp",
-    ]
-    has_ratio = any(pattern in query_lower for pattern in ratio_patterns)
+    has_ratio = any(pattern in query_lower for pattern in _GDP_RATIO_PATTERNS)
 
     if (
         "trade_openness" in cues
