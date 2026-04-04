@@ -681,9 +681,8 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     # data fetch has already completed.
     if result.data and result.intent and result.conversationId:
         try:
-            from backend.services.conversation_state_v2 import extract_state_from_intent
-            from backend.services.conversation import conversation_manager
-            _state = extract_state_from_intent(result.intent, statscan_provider=query_service.statscan_provider)
+            from .services.conversation_state_v2 import extract_state_from_intent as _extract_state
+            _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
             _existing = conversation_manager.get_conversation_state(result.conversationId)
             if _existing:
                 _state.turn_number = _existing.turn_number + 1
