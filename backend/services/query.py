@@ -4275,12 +4275,18 @@ class QueryService:
                 if isinstance(result, QueryResponse):
                     if not result.conversationId:
                         result.conversationId = conversation_id
-                    # Ensure intent is always present in the response
                     if not result.intent:
                         result.intent = intent
-                    # Add alternative series if not already present
                     if result.data and not result.alternativeSeries:
                         result.alternativeSeries = self._build_alternative_series(intent, result.data)
+                    # Dual-write conversation state (QueryResponse branch)
+                    try:
+                        _qs = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+                        _ex = conversation_manager.get_conversation_state(conv_id)
+                        if _ex: _qs.turn_number = _ex.turn_number + 1
+                        conversation_manager.set_conversation_state(conv_id, _qs)
+                    except Exception:
+                        pass
                     return result
                 elif isinstance(result, list):
                     # Rerank and project before returning
