@@ -4254,6 +4254,32 @@ class QueryService:
         """
         fetch_error: Optional[Exception] = None
 
+        # Dual-write: save conversation state for delta extraction on follow-ups.
+        # This mirrors the dual-write in _execute_resolved_intent but covers the
+        # standard pipeline path (which is used for most first-round queries).
+        conv_id = conversation_id
+        try:
+            _new_state = extract_state_from_intent(intent)
+            _existing = conversation_manager.get_conversation_state(conv_id)
+            if _existing:
+                _new_state.turn_number = _existing.turn_number + 1
+            # Pre-cache StatsCan cube metadata for dimension follow-ups
+            if (_new_state.statscan_product_id
+                    and _new_state.provider
+                    and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}
+                    and not _new_state.statscan_cube_metadata):
+                try:
+                    _cube = await self.statscan_provider._get_cube_metadata(
+                        _new_state.statscan_product_id
+                    )
+                    if _cube:
+                        _new_state.statscan_cube_metadata = _cube
+                except Exception:
+                    pass
+            conversation_manager.set_conversation_state(conv_id, _new_state)
+        except Exception as _sw_err:
+            logger.debug("Standard pipeline dual-write failed: %s", _sw_err)
+
         # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
         # and use the parallel multi-indicator fetch path.
         is_multi_indicator = bool(intent.indicators and len(intent.indicators) > 1)
