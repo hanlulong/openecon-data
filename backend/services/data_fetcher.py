@@ -1133,6 +1133,12 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
         intent.parameters = params
         logger.info(f"ExchangeRate: Cache params after currency extraction: baseCurrency={params.get('baseCurrency')}, targetCurrency={params.get('targetCurrency')}")
 
+    # Include originalQuery in params for cache key differentiation.
+    # This ensures "CPI shelter Canada" and "CPI energy Canada" get
+    # separate cache entries even though both resolve to indicator=CPI.
+    if intent.originalQuery and "__original_query" not in params:
+        params["__original_query"] = intent.originalQuery
+
     cached = await svc._get_from_cache(provider, params)
     if cached:
         logger.info("Cache hit for %s", provider)

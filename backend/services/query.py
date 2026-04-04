@@ -2366,10 +2366,23 @@ class QueryService:
 
         This decouples cache validity from implementation details and allows safe,
         global invalidation when routing/fetch semantics change.
+
+        For providers that use dimension modifiers (e.g., StatsCan with "shelter",
+        "male", "youth"), the originalQuery is included so different modifier
+        queries don't share the same cache entry.
         """
         cache_params = dict(params or {})
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION
         cache_params["_provider"] = normalize_provider_name(provider)
+        # Include original query hash for dimension-aware caching.
+        # "CPI shelter Canada" and "CPI energy Canada" both resolve to
+        # indicator=CPI but need different cache entries because the
+        # dimension modifiers are extracted from the query text at fetch time.
+        oq = params.get("__original_query") or params.get("originalQuery")
+        if oq:
+            cache_params["_query_hash"] = hashlib.sha256(
+                oq.strip().lower().encode("utf-8")
+            ).hexdigest()[:16]
         return cache_params
 
     def _serialize_cache_query(self, cache_params: dict) -> str:
