@@ -87,6 +87,8 @@ class ConversationContext:
     last_intent: Optional[ParsedIntent] = None
     pending_indicator_options: Optional[Dict[str, Any]] = None
     pending_semantic_clarification: Optional[Dict[str, Any]] = None
+    # Phase 1 dual-write: ConversationState stored alongside last_intent
+    conversation_state: Optional[Any] = None  # ConversationState (avoid circular import at class level)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +101,14 @@ _REDIS_TTL_SECONDS = 24 * 3600  # 24 hours
 
 def _serialize_context(ctx: ConversationContext) -> str:
     """Serialize a ConversationContext to a JSON string for Redis storage."""
+    # Serialize conversation_state (ConversationState pydantic model)
+    conv_state_data = None
+    if ctx.conversation_state is not None:
+        try:
+            conv_state_data = ctx.conversation_state.model_dump(mode="json")
+        except Exception:
+            logger.debug("Failed to serialize conversation_state, skipping")
+
     data: Dict[str, Any] = {
         "id": ctx.id,
         "created_at": ctx.created_at.isoformat(),
@@ -114,6 +124,7 @@ def _serialize_context(ctx: ConversationContext) -> str:
         "last_intent": ctx.last_intent.model_dump(mode="json") if ctx.last_intent else None,
         "pending_indicator_options": ctx.pending_indicator_options,
         "pending_semantic_clarification": ctx.pending_semantic_clarification,
+        "conversation_state": conv_state_data,
     }
     return json.dumps(data)
 
@@ -136,6 +147,16 @@ def _deserialize_context(raw: str) -> ConversationContext:
         except Exception:
             logger.debug("Failed to deserialize last_intent from Redis, ignoring")
 
+    # Deserialize conversation_state (backward-compatible: may be absent)
+    conversation_state = None
+    raw_state = data.get("conversation_state")
+    if raw_state:
+        try:
+            from .conversation_state_v2 import ConversationState
+            conversation_state = ConversationState.model_validate(raw_state)
+        except Exception:
+            logger.debug("Failed to deserialize conversation_state from Redis, ignoring")
+
     return ConversationContext(
         id=data["id"],
         messages=messages,
@@ -144,6 +165,7 @@ def _deserialize_context(raw: str) -> ConversationContext:
         last_intent=last_intent,
         pending_indicator_options=data.get("pending_indicator_options"),
         pending_semantic_clarification=data.get("pending_semantic_clarification"),
+        conversation_state=conversation_state,
     )
 
 
@@ -334,6 +356,47 @@ class ConversationManager:
             if not conversation:
                 return
             conversation.last_intent = intent
+            self._redis_save(conversation)
+
+    # ── Conversation State (v2 architecture) ─────────────────────────
+
+    def get_conversation_state(self, conversation_id: str):
+        """Return the ConversationState for a conversation, or None."""
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation or conversation.conversation_state is None:
+                return None
+            # Return a deep copy to prevent external mutation
+            return conversation.conversation_state.model_copy(deep=True)
+
+    def set_conversation_state(self, conversation_id: str, state) -> None:
+        """Persist a ConversationState for a conversation.
+
+        Parameters
+        ----------
+        conversation_id : str
+            The conversation to update.
+        state : ConversationState
+            The new conversation state to store.
+        """
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return
+            conversation.conversation_state = state
+            conversation.updated_at = self._now()
+            self._redis_save(conversation)
+
+    def restore_conversation_state(self, conversation_id: str, state) -> None:
+        """Restore conversation_state to a previous value after a failure.
+
+        Mirrors :meth:`restore_last_intent` for the v2 state model.
+        """
+        with self._lock:
+            conversation = self._get_locked(conversation_id)
+            if not conversation:
+                return
+            conversation.conversation_state = state
             self._redis_save(conversation)
 
     def get_pending_clarification_context(self, conversation_id: str) -> Optional[Dict[str, Any]]:

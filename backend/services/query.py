@@ -25,6 +25,14 @@ from ..config import Settings
 from ..services.cache import cache_service
 from ..services.redis_cache import get_redis_cache
 from ..services.conversation import conversation_manager
+from ..services.conversation_state_v2 import (
+    ConversationState,
+    FollowUpDelta,
+    extract_state_from_intent,
+    materialize_intent,
+    merge_state,
+)
+from ..services.delta_extractor import DeltaExtractor
 from ..services.openrouter import OpenRouterService
 from ..services.query_complexity import QueryComplexityAnalyzer
 from ..services.parameter_validator import ParameterValidator
@@ -1836,6 +1844,16 @@ class QueryService:
         """Run validation, clarification guardrails, and fetch for an already-built intent."""
         conv_id = conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
 
+        # Dual-write: update ConversationState alongside last_intent
+        try:
+            _new_state = extract_state_from_intent(intent)
+            _existing_state = conversation_manager.get_conversation_state(conv_id)
+            if _existing_state:
+                _new_state.turn_number = _existing_state.turn_number + 1
+            conversation_manager.set_conversation_state(conv_id, _new_state)
+        except Exception as _sw_err:
+            logger.debug("Dual-write conversation_state failed: %s", _sw_err)
+
         if intent.clarificationNeeded:
             conversation_manager.clear_pending_indicator_options(conv_id)
             conversation_manager.clear_pending_semantic_clarification(conv_id)
@@ -3272,6 +3290,64 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
+            # ── Phase: FollowUpDelta + Merge (v2 conversation state) ─────
+            # Try deterministic delta extraction BEFORE existing handlers.
+            # If a delta is found, merge it into the accumulated
+            # ConversationState and materialize a ParsedIntent.
+            # If no delta, fall through to existing handlers (backward compat).
+            _current_conv_state = conversation_manager.get_conversation_state(conv_id)
+            if _current_conv_state is not None:
+                _delta_extractor = DeltaExtractor(self)
+                _delta = _delta_extractor.extract(query, _current_conv_state)
+                if _delta is not None:
+                    _merged_state = merge_state(_current_conv_state, _delta)
+                    _delta_intent = materialize_intent(_merged_state)
+
+                    # Route the materialized intent through UnifiedRouter
+                    try:
+                        _delta_routing = self.unified_router.route(
+                            query=_delta_intent.originalQuery or query,
+                            indicators=_delta_intent.indicators or [],
+                            llm_provider=_delta_intent.apiProvider,
+                            country=_delta_intent.parameters.get("country"),
+                            countries=_delta_intent.parameters.get("countries"),
+                        )
+                        if _delta_routing and _delta_routing.provider:
+                            _delta_intent.apiProvider = normalize_provider_name(_delta_routing.provider)
+                    except Exception as _route_err:
+                        logger.debug("Delta routing failed: %s", _route_err)
+
+                    _merged_state.routed_provider = _delta_intent.apiProvider
+                    _merged_state.last_indicators_resolved = _delta_intent.indicators
+
+                    # Build a ParseRouteResult for _execute_resolved_intent
+                    _delta_parse_result = ParseRouteResult(
+                        intent=_delta_intent,
+                        explicit_provider=None,
+                        routed_provider=_delta_intent.apiProvider,
+                        validation_warning=None,
+                    )
+
+                    logger.info(
+                        "v2 Delta path: type=%s, indicator=%s, country=%s/%s",
+                        _delta.delta_type,
+                        _merged_state.indicator,
+                        _merged_state.country,
+                        _merged_state.countries,
+                    )
+
+                    # Persist the merged state
+                    conversation_manager.set_conversation_state(conv_id, _merged_state)
+
+                    return await self._execute_resolved_intent(
+                        query=_delta_intent.originalQuery or query,
+                        skip_prefetch_clarification=True,
+                        conversation_id=conv_id,
+                        intent=_delta_intent,
+                        parse_result=_delta_parse_result,
+                        tracker=tracker,
+                    )
+
             # ── Phase 4: LLM-based clarification resolution ───────────
             # Semantic clarifications and country follow-ups are now
             # handled by the LLM via enhanced conversation context.
@@ -3539,7 +3615,17 @@ class QueryService:
             # conversation context, but processing errors should NOT overwrite
             # the last good state.
             _prev_good_intent = conversation_manager.get_last_intent(conv_id)
+            _prev_good_state = conversation_manager.get_conversation_state(conv_id)
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
+
+            # Dual-write: update ConversationState alongside last_intent
+            try:
+                _new_conv_state = extract_state_from_intent(intent)
+                if _prev_good_state:
+                    _new_conv_state.turn_number = _prev_good_state.turn_number + 1
+                conversation_manager.set_conversation_state(conv_id, _new_conv_state)
+            except Exception as _sw_err:
+                logger.debug("Dual-write conversation_state failed in process_query: %s", _sw_err)
 
             if intent.clarificationNeeded:
                 conversation_manager.clear_pending_indicator_options(conv_id)
@@ -3736,6 +3822,8 @@ class QueryService:
                 # No data: restore previous good intent so follow-ups aren't corrupted
                 if '_prev_good_intent' in locals() and _prev_good_intent is not None:
                     conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                if '_prev_good_state' in locals() and _prev_good_state is not None:
+                    conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
                 return QueryResponse(
                     conversationId=conv_id,
                     intent=intent,
@@ -3853,6 +3941,8 @@ class QueryService:
             # Error: restore previous good intent so follow-ups aren't corrupted
             if '_prev_good_intent' in locals() and _prev_good_intent is not None:
                 conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+            if '_prev_good_state' in locals() and _prev_good_state is not None:
+                conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
             return QueryResponse(
                 conversationId=conv_id,
                 intent=intent if "intent" in locals() else None,
@@ -3904,6 +3994,8 @@ class QueryService:
             # Error: restore previous good intent so follow-ups aren't corrupted
             if '_prev_good_intent' in locals() and _prev_good_intent is not None:
                 conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+            if '_prev_good_state' in locals() and _prev_good_state is not None:
+                conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
             return QueryResponse(
                 conversationId=conv_id,
                 clarificationNeeded=False,
