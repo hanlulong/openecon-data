@@ -695,7 +695,8 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
             logger.info("State saved for %s: indicator=%s, provider=%s",
                         result.conversationId, _state.indicator, _state.provider)
         except Exception as _save_err:
-            logger.error("FAILED to save conversation state for %s: %s", result.conversationId, _save_err, exc_info=True)
+            logger.error("FAILED to save conversation state for %s: %s",
+                         result.conversationId, _save_err, exc_info=True)
 
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
