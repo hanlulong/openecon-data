@@ -674,6 +674,23 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     auto_pro = settings.promode_enabled
     result = await query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro)
 
+    # Guaranteed post-query conversation state save.
+    # This ensures the v2 ConversationState is ALWAYS saved after a successful
+    # query, regardless of which execution path was taken. The cube metadata
+    # from StatsCan's _get_cube_metadata cache is available here because the
+    # data fetch has already completed.
+    if result.data and result.intent and result.conversationId:
+        try:
+            from backend.services.conversation_state_v2 import extract_state_from_intent
+            from backend.services.conversation import conversation_manager
+            _state = extract_state_from_intent(result.intent, statscan_provider=query_service.statscan_provider)
+            _existing = conversation_manager.get_conversation_state(result.conversationId)
+            if _existing:
+                _state.turn_number = _existing.turn_number + 1
+            conversation_manager.set_conversation_state(result.conversationId, _state)
+        except Exception:
+            pass
+
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
         try:
