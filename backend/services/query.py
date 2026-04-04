@@ -3245,14 +3245,22 @@ class QueryService:
                 return pending_choice_response
 
             # ── Phase: FollowUpDelta + Merge (v2 conversation state) ─────
-            # Try deterministic delta extraction BEFORE existing handlers.
-            # If a delta is found, merge it into the accumulated
-            # ConversationState and materialize a ParsedIntent.
-            # If no delta, fall through to existing handlers (backward compat).
+            # Two-tier extraction:
+            # 1. Fast deterministic regex for structurally unambiguous patterns
+            # 2. LLM-based extraction for natural language / compound changes
+            # Both produce a FollowUpDelta → merge → materialize → execute.
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
             if _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
                 _delta = _delta_extractor.extract(query, _current_conv_state)
+                # Tier 2: LLM delta extraction when regex can't parse
+                if _delta is None:
+                    try:
+                        _delta = await _delta_extractor.extract_with_llm(
+                            query, _current_conv_state,
+                        )
+                    except Exception as _llm_err:
+                        logger.debug("LLM delta extraction error: %s", _llm_err)
                 if _delta is not None:
                     _merged_state = merge_state(_current_conv_state, _delta)
                     _delta_intent = materialize_intent(_merged_state)

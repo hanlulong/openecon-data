@@ -1620,7 +1620,9 @@ async def submit_feedback(request: FeedbackRequest):
 @app.get("/api/debug/conversation-state/{conversation_id}")
 async def debug_conversation_state(conversation_id: str):
     """Debug endpoint: inspect conversation state for a given ID. Dev-only."""
-    if settings.environment == "production":
+    # Only available when ALLOW_TEST_USER is set (development/testing)
+    import os as _os
+    if not _os.getenv("ALLOW_TEST_USER"):
         return JSONResponse(status_code=404, content={"error": "Not found"})
     ctx = conversation_manager._get(conversation_id)
     if not ctx:

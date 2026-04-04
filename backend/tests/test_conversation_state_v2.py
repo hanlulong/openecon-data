@@ -475,34 +475,27 @@ class TestDeltaExtractor:
         assert delta.delta_type == "country_change"
         assert delta.changed_countries == ["US", "DE"]
 
-    def test_indicator_switch_with_marker(self, extractor):
+    def test_indicator_switch_deferred_to_llm(self, extractor):
+        """Indicator switches are now handled by LLM (extract_with_llm), not regex."""
         state = ConversationState(indicator="GDP", country="US")
+        # Regex extract returns None — LLM tier handles indicator switches
         delta = extractor.extract("what about inflation", state)
-        assert delta is not None
-        assert delta.delta_type == "indicator_switch"
-        assert delta.changed_indicator == "inflation"
+        assert delta is None  # Deferred to LLM
 
-    def test_bare_indicator_short(self, extractor):
+    def test_bare_indicator_deferred_to_llm(self, extractor):
+        """Bare indicator names are now handled by LLM, not regex."""
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract("unemployment", state)
-        assert delta is not None
-        assert delta.delta_type == "indicator_switch"
-        assert delta.changed_indicator == "unemployment"
+        assert delta is None  # Deferred to LLM
 
-    def test_same_indicator_not_switch(self, extractor):
-        state = ConversationState(indicator="gdp", country="US")
-        delta = extractor.extract("gdp", state)
-        # Should return None since the indicator hasn't changed
-        assert delta is None
-
-    def test_long_query_not_indicator_switch(self, extractor):
+    def test_long_query_not_matched(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract(
             "I want to see a detailed analysis of the inflation rate trends "
             "across all OECD countries over the past two decades",
             state,
         )
-        assert delta is None  # Too long for deterministic detection
+        assert delta is None  # Too complex for regex, deferred to LLM
 
     def test_country_in_query_not_indicator_switch(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
@@ -623,14 +616,13 @@ class TestDeltaExtractorDimensionModifier:
             statscan_product_id="14100287",
             statscan_cube_metadata=_cube,
         )
+        # Dimension detection is now handled by LLM (extract_with_llm),
+        # not regex. The sync extract() returns None for these.
         delta = extractor.extract("show female", state)
-        assert delta is not None
-        assert delta.delta_type == "dimension_change"
-        assert delta.added_dimensions == {"sex": "female"}
-        assert delta.changed_indicator is None
+        assert delta is None  # Deferred to LLM
 
-    def test_shelter_after_cpi_is_dimension(self, _build_extractor):
-        """'show shelter' after CPI → dimension modifier for product category."""
+    def test_shelter_after_cpi_deferred_to_llm(self, _build_extractor):
+        """Dimension modifiers are now handled by LLM, not regex."""
         _cube = {"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"CPI": 41690973},
@@ -647,19 +639,16 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show shelter", state)
-        assert delta is not None
-        assert delta.delta_type == "dimension_change"
-        assert delta.added_dimensions == {"products": "Shelter"}
-        assert delta.changed_indicator is None
+        assert delta is None  # Deferred to LLM
 
-    def test_inflation_after_unemployment_is_indicator_switch(self, _build_extractor):
-        """'show inflation' after unemployment → true indicator switch (no dimension match)."""
+    def test_inflation_after_unemployment_deferred_to_llm(self, _build_extractor):
+        """Indicator switches are now handled by LLM, not regex."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
             product_id_cache={2062815: "1410028702"},
             cube_metadata=_cube,
-            extracted_modifiers={},  # No dimension match for "inflation"
+            extracted_modifiers={},
         )
         state = ConversationState(
             indicator="unemployment rate",
@@ -670,27 +659,21 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show inflation", state)
-        # Should NOT be dimension_change; should fall through to indicator switch
-        assert delta is not None
-        assert delta.delta_type == "indicator_switch"
-        assert delta.changed_indicator == "inflation"
+        assert delta is None  # Deferred to LLM
 
-    def test_non_statscan_provider_skips_dimension_check(self, _build_extractor):
-        """Non-StatsCan provider should not attempt dimension modifier detection."""
+    def test_non_statscan_provider_deferred_to_llm(self, _build_extractor):
+        """Non-structural follow-ups are now handled by LLM."""
         extractor = _build_extractor()
         state = ConversationState(
             indicator="GDP",
             provider="FRED",
             country="US",
         )
-        # "female" is a valid dimension term but should not be checked for FRED
         delta = extractor.extract("female", state)
-        assert delta is not None
-        assert delta.delta_type == "indicator_switch"
-        assert delta.changed_indicator == "female"
+        assert delta is None  # Deferred to LLM
 
-    def test_dimension_modifier_sets_is_dimension_flag(self, _build_extractor):
-        """Dimension modifier delta must set is_dimension_modifier_change=True."""
+    def test_dimension_modifier_deferred_to_llm(self, _build_extractor):
+        """Dimension modifiers are now handled by LLM."""
         _cube = {"dimension": []}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -707,11 +690,10 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show youth", state)
-        assert delta is not None
-        assert delta.is_dimension_modifier_change is True
+        assert delta is None  # Deferred to LLM
 
-    def test_coordinate_mapping_indicator(self, _build_extractor):
-        """Indicators using COORDINATE_PRODUCT_MAPPINGS should also work."""
+    def test_coordinate_mapping_deferred_to_llm(self, _build_extractor):
+        """Province-based follow-ups are now handled by LLM."""
         _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
         extractor = _build_extractor(
             coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
@@ -727,12 +709,7 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show Ontario", state)
-        # "Ontario" is also a geography term that the country handler might catch,
-        # but the country handler returns None because "Ontario" is a province, not a country ISO2.
-        # The dimension handler should catch it.
-        assert delta is not None
-        assert delta.delta_type == "dimension_change"
-        assert delta.added_dimensions == {"geography": "Ontario"}
+        assert delta is None  # Deferred to LLM
 
 
 # ─── materialize_intent with dimensions ─────────────────────────────

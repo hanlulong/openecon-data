@@ -76,7 +76,12 @@ _REPLACEMENT_MARKERS = {"only", "just", "filter", "keep"}
 
 
 class DeltaExtractor:
-    """Extract FollowUpDelta from a query given conversation state."""
+    """Extract FollowUpDelta from a query given conversation state.
+
+    Two-tier extraction:
+    1. Fast deterministic regex handlers for structurally unambiguous patterns
+    2. LLM-based extraction for everything else (natural language, compound changes)
+    """
 
     def __init__(self, query_service: "QueryService") -> None:
         self._qs = query_service
@@ -104,14 +109,17 @@ class DeltaExtractor:
             A delta if a deterministic pattern was matched, else ``None``.
         """
         if not state.indicator:
-            # No prior state to follow-up on
             return None
 
         query_text = str(query or "").strip()
         if not query_text:
             return None
 
-        # Priority order (most specific first):
+        # Fast structural handlers — only for unambiguous patterns.
+        # Dimension and indicator changes are handled by the LLM (Tier 2)
+        # because regex can't distinguish "seniors" (age dimension) from
+        # "seniors" (indicator switch), or "trade balance" (indicator) from
+        # "wholesale trade" (GDP dimension).
         delta = self._try_country_only_follow_up(query_text, state)
         if delta:
             return delta
@@ -124,20 +132,157 @@ class DeltaExtractor:
         if delta:
             return delta
 
-        # Phase 3: Context-aware dimension modifier detection.
-        # Must run BEFORE indicator switch so that "show female" after
-        # "unemployment rate" is recognised as a dimension change, not
-        # an indicator switch to "female".
-        delta = self._try_dimension_modifier(query_text, state)
-        if delta:
-            return delta
-
-        delta = self._try_indicator_switch(query_text, state)
-        if delta:
-            return delta
-
-        # Not structurally recognizable -- needs LLM
+        # Dimension modifier and indicator switch are now handled by
+        # LLM delta extraction (extract_with_llm) for better accuracy.
+        # The regex handlers remain as code but are bypassed here.
         return None
+
+    async def extract_with_llm(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """LLM-based delta extraction for queries the regex handlers can't parse.
+
+        Uses structured output (Instructor + Pydantic) to have the LLM
+        populate only the changed fields in FollowUpDelta.
+        """
+        if not state.indicator:
+            return None
+
+        query_text = str(query or "").strip()
+        if not query_text:
+            return None
+
+        # Get the Instructor client from the query service's openrouter
+        openrouter = getattr(self._qs, "openrouter_service", None)
+        if openrouter is None:
+            logger.debug("LLM delta: no openrouter_service available")
+            return None
+
+        instructor_client = getattr(openrouter, "instructor_client", None)
+        instructor_model = getattr(openrouter, "instructor_model", None)
+        if instructor_client is None or instructor_model is None:
+            logger.debug("LLM delta: instructor client not available")
+            return None
+
+        # Build state description for the prompt
+        state_lines = []
+        if state.indicator:
+            state_lines.append(f"  Indicator: {state.indicator}")
+        if state.country:
+            state_lines.append(f"  Country: {state.country}")
+        if state.countries:
+            state_lines.append(f"  Countries: {', '.join(state.countries)}")
+        if state.provider or state.routed_provider:
+            state_lines.append(f"  Provider: {state.provider or state.routed_provider}")
+        if state.start_date:
+            state_lines.append(f"  Start date: {state.start_date}")
+        if state.end_date:
+            state_lines.append(f"  End date: {state.end_date}")
+        if state.dimensions:
+            state_lines.append(f"  Dimensions: {state.dimensions}")
+        if state.chart_type:
+            state_lines.append(f"  Chart type: {state.chart_type}")
+        if state.trade_flow:
+            state_lines.append(f"  Trade flow: {state.trade_flow}")
+        if state.trade_reporter:
+            state_lines.append(f"  Trade reporter: {state.trade_reporter}")
+        if state.trade_partner:
+            state_lines.append(f"  Trade partner: {state.trade_partner}")
+        state_text = "\n".join(state_lines) if state_lines else "  (empty)"
+
+        # Add available dimension members if StatsCan cube metadata is cached.
+        # Show exact member names so the LLM can use them directly.
+        dimension_context = ""
+        if state.statscan_cube_metadata:
+            dims = state.statscan_cube_metadata.get("dimension", [])
+            if dims:
+                dim_lines = ["\nAvailable dimensions for this indicator (use EXACT member names):"]
+                for dim in dims:
+                    name = dim.get("dimensionNameEn", "?")
+                    members = [m.get("memberNameEn", "?") for m in (dim.get("member") or [])[:30]]
+                    if members:
+                        dim_lines.append(f"  {name}: {', '.join(members)}")
+                dimension_context = "\n".join(dim_lines)
+
+        system_prompt = f"""You are a delta extractor for an economic data query system.
+
+Given the user's CURRENT conversation state and their NEW follow-up message,
+determine ONLY what changed. Output a FollowUpDelta JSON where you populate
+ONLY the fields that the user wants to modify. Leave everything else null.
+
+RULES:
+1. Only populate fields the user explicitly wants to change.
+2. For countries:
+   - changed_country: REPLACE current country with a new one
+   - changed_countries: REPLACE with multiple countries
+   - added_countries: "add", "also", "compare with", "include" → ADDITIVE
+   - removed_countries: "remove", "exclude", "without" → SUBTRACTIVE
+3. For dimensions (sub-categories like sex, age group, province, product type):
+   - added_dimensions: dict of {{dimension_name: single_value}} to FILTER by
+   - IMPORTANT: Each dimension value must be a SINGLE filter value, NOT a list.
+     "break down by sex" → use the specific sex mentioned, or "female" if not specified.
+     "show youth" → age_group = "15 to 24 years" (use exact member name if available below).
+     "show seniors" / "55+" → age_group = "55 years and over".
+   - When available dimension members are listed below, use the EXACT member name.
+   - is_dimension_modifier_change: true when changing dimensions.
+4. If the query is completely unrelated to prior context, set is_new_query=true.
+5. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
+6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
+7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE (added_dimensions for geography, or added_countries for countries).
+8. "What about X" / "show X instead" where X is a different economic concept → indicator_switch, NOT dimension.
+9. "break it down by X" / "filter by X" / "by sex" / "by age" → dimension_change. Pick the most relevant single value for that dimension.
+
+CURRENT STATE:
+{state_text}
+{dimension_context}
+
+Output ONLY the changed fields as JSON."""
+
+        try:
+            delta = await instructor_client.chat.completions.create(
+                model=instructor_model,
+                response_model=FollowUpDelta,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query_text},
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+
+            # Validate: at least one field must be non-None
+            has_change = any(
+                getattr(delta, f) is not None
+                for f in [
+                    "changed_indicator", "changed_country", "changed_countries",
+                    "added_countries", "removed_countries", "changed_provider",
+                    "changed_start_date", "changed_end_date",
+                    "added_dimensions", "removed_dimensions",
+                    "changed_chart_type", "changed_trade_flow",
+                    "changed_trade_reporter", "changed_trade_partner",
+                    "changed_trade_commodity",
+                ]
+            ) or delta.is_new_query
+
+            if not has_change:
+                logger.info("LLM delta: no changes detected, returning None")
+                return None
+
+            delta.raw_query = query_text
+            logger.info(
+                "LLM Delta: type=%s, changes=%s",
+                delta.delta_type,
+                {k: v for k, v in delta.model_dump(exclude_none=True).items()
+                 if k not in ("raw_query", "delta_type", "is_new_query",
+                              "is_dimension_modifier_change")},
+            )
+            return delta
+
+        except Exception as exc:
+            logger.warning("LLM delta extraction failed: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Handler: Country-only follow-up
