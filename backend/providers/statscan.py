@@ -621,14 +621,16 @@ class StatsCanProvider(BaseProvider):
             return self._find_member_id_by_keywords(members, ["canada", "total"]) or 1
 
         if any(term in dimension_name_lower for term in ["labour force characteristic", "labour force", "labor force"]):
+            # IMPORTANT: Check "unemployment rate" BEFORE "employment rate" because
+            # "unemployment rate" contains "employment rate" as a substring.
+            if "unemployment rate" in indicator_lower:
+                return self._find_member_id_by_keywords(members, ["unemployment rate"]) or 1
             if "employment rate" in indicator_lower:
                 return self._find_member_id_by_keywords(members, ["employment rate"]) or 1
             if "employment-to-population" in indicator_lower or "employment to population" in indicator_lower:
                 return self._find_member_id_by_keywords(members, ["employment rate", "employment-to-population ratio"]) or 1
             if "participation rate" in indicator_lower:
                 return self._find_member_id_by_keywords(members, ["participation rate"]) or 1
-            if "unemployment rate" in indicator_lower:
-                return self._find_member_id_by_keywords(members, ["unemployment rate"]) or 1
             if "unemployment" in indicator_lower:
                 return self._find_member_id_by_keywords(members, ["unemployment"]) or 1
             if "full-time" in indicator_lower:
@@ -2492,6 +2494,375 @@ class StatsCanProvider(BaseProvider):
         )
 
         return NormalizedData(metadata=metadata_obj, data=data_points)
+
+    # ------------------------------------------------------------------
+    # Dimension-modifier-aware fetch
+    # ------------------------------------------------------------------
+
+    async def fetch_with_dimensions(
+        self,
+        base_indicator: str,
+        modifiers: Dict[str, str],
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        periods: int = 240,
+    ) -> NormalizedData:
+        """Fetch data with specific dimension values discovered from table metadata.
+
+        This is the GENERAL mechanism for handling dimension modifiers like
+        "male", "youth", "Ontario", "food" etc.  No modifier list is hardcoded;
+        instead, the table's own metadata is fetched and each dimension's member
+        list is searched for a match.
+
+        Args:
+            base_indicator: Vector mapping key (e.g., "UNEMPLOYMENT_RATE", "CPI",
+                            "EMPLOYMENT").  Must resolve to a known vector or
+                            coordinate-based indicator so we can find the product ID.
+            modifiers: Mapping of *dimension hint* -> *search term*.
+                       The hint is a loose keyword used to identify the right
+                       dimension (e.g., "geography", "sex", "age", "product",
+                       "industry").  The search term is the user-facing value
+                       (e.g., "Ontario", "male", "youth", "food").
+                       If a hint does not match any dimension name the entry is
+                       silently ignored.
+            start_year: Optional start year for date filtering.
+            end_year: Optional end year for date filtering.
+            periods: Number of most-recent periods to request.
+
+        Returns:
+            NormalizedData with the dimension-filtered data.
+        """
+        indicator_key = base_indicator.upper().replace(" ", "_").replace("-", "_")
+
+        # 1. Resolve product ID from VECTOR_MAPPINGS or COORDINATE_PRODUCT_MAPPINGS
+        product_id: Optional[str] = None
+        vector_id: Optional[int] = self.VECTOR_MAPPINGS.get(indicator_key)
+        coord_mapping = self.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
+
+        if coord_mapping:
+            product_id = self._normalize_metadata_product_id(coord_mapping[0])
+        elif vector_id is not None:
+            cached_pid = self.PRODUCT_ID_CACHE.get(vector_id)
+            if cached_pid:
+                product_id = self._normalize_metadata_product_id(cached_pid)
+            else:
+                try:
+                    product_id = self._normalize_metadata_product_id(
+                        await self._get_product_id_from_vector(vector_id)
+                    )
+                except Exception:
+                    product_id = None
+
+        if not product_id:
+            raise DataNotAvailableError(
+                f"Cannot determine Statistics Canada product for '{base_indicator}'. "
+                f"Dimension modifiers require a known base indicator."
+            )
+
+        # 2. Fetch metadata for the product
+        metadata = await self._get_cube_metadata(product_id)
+        dimensions = metadata.get("dimension", [])
+        if not dimensions:
+            raise DataNotAvailableError(
+                f"Product {product_id} has no dimension metadata"
+            )
+
+        indicator_lower = base_indicator.lower().replace("_", " ")
+
+        # 3. Build coordinate by matching modifiers to dimensions
+        coordinate_parts: list[int] = []
+        matched_descriptions: list[str] = []
+
+        for dim in dimensions:
+            dim_name = dim.get("dimensionNameEn", "")
+            dim_name_lower = dim_name.lower()
+            members = dim.get("member", [])
+
+            # Try to find a modifier whose hint matches this dimension
+            matched = False
+            for hint, search_term in modifiers.items():
+                hint_lower = hint.lower()
+                # Flexible matching: the hint is a substring of the dimension name
+                # e.g., "geogr" matches "Geography", "sex"/"gender" matches "Sex"
+                if hint_lower in dim_name_lower or dim_name_lower in hint_lower:
+                    mid = self._find_member_id_by_keywords(members, [search_term])
+                    if mid is not None:
+                        coordinate_parts.append(mid)
+                        # Find the member name for description
+                        member_name = search_term
+                        for m in members:
+                            if m.get("memberId") == mid:
+                                member_name = m.get("memberNameEn", search_term)
+                                break
+                        matched_descriptions.append(member_name)
+                        matched = True
+                        break
+
+            if not matched:
+                # Use semantic default
+                coordinate_parts.append(
+                    self._select_default_member_id(dim_name, members, indicator_lower)
+                )
+
+        # Pad to 10 dimensions
+        while len(coordinate_parts) < 10:
+            coordinate_parts.append(0)
+        coordinate = ".".join(str(p) for p in coordinate_parts[:10])
+
+        logger.info(
+            f"📊 fetch_with_dimensions: {base_indicator} modifiers={modifiers} "
+            f"-> product={product_id} coordinate={coordinate}"
+        )
+
+        # 4. Fetch data
+        start_date = f"{start_year}-01-01" if start_year else None
+        end_date = f"{end_year}-12-31" if end_year else None
+
+        client = get_http_client()
+        response = await client.post(
+            f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            json=[{
+                "productId": product_id,
+                "coordinate": coordinate,
+                "latestN": periods,
+            }],
+            headers={"Content-Type": "application/json"},
+            timeout=300.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        if not payload or payload[0].get("status") != "SUCCESS":
+            error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
+            raise DataNotAvailableError(
+                f"StatsCan query failed for {base_indicator} with modifiers {modifiers}: {error_msg}"
+            )
+
+        data_object = payload[0]["object"]
+        vector_data = data_object.get("vectorDataPoint", [])
+        if not vector_data:
+            raise DataNotAvailableError(
+                f"No data found for {base_indicator} with modifiers {modifiers}"
+            )
+
+        freq_code = vector_data[0].get("frequencyCode", 6)
+        scalar_code = vector_data[0].get("scalarFactorCode", 0)
+        frequency = self._map_frequency(freq_code)
+        unit = self._get_unit_description(base_indicator, scalar_code)
+
+        data_points = [
+            {
+                "date": point["refPer"],
+                "value": point["value"] if point["value"] is not None else None,
+            }
+            for point in vector_data
+        ]
+
+        if start_date or end_date:
+            data_points = self._filter_by_date_range(data_points, start_date, end_date)
+
+        # Build descriptive indicator name
+        desc = ", ".join(matched_descriptions) if matched_descriptions else "Canada"
+        indicator_name = f"Canadian {base_indicator.replace('_', ' ').title()} - {desc}"
+
+        detailed_meta = self._extract_detailed_metadata(metadata, coordinate)
+        source_url = self._get_table_viewer_url(product_id)
+
+        indicator_upper = indicator_name.upper()
+        if "RATE" in indicator_upper or "PERCENT" in indicator_upper:
+            data_type = "Rate"
+        elif "INDEX" in indicator_upper:
+            data_type = "Index"
+        else:
+            data_type = detailed_meta.get("dataType", "Level")
+
+        metadata_obj = Metadata(
+            source="Statistics Canada",
+            indicator=indicator_name,
+            country="Canada",
+            frequency=frequency,
+            unit=unit,
+            lastUpdated=vector_data[-1].get("releaseTime", "") if vector_data else "",
+            seriesId=f"{product_id}:{coordinate}",
+            apiUrl=f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            sourceUrl=source_url,
+            seasonalAdjustment=detailed_meta.get("seasonalAdjustment"),
+            priceType=detailed_meta.get("priceType"),
+            dataType=data_type,
+            description=detailed_meta.get("description"),
+            scaleFactor=self._map_scalar_factor(scalar_code) if scalar_code else None,
+            startDate=data_points[0]["date"] if data_points else None,
+            endDate=data_points[-1]["date"] if data_points else None,
+        )
+
+        return NormalizedData(metadata=metadata_obj, data=data_points)
+
+    def extract_dimension_modifiers(
+        self,
+        query_text: str,
+        base_indicator: str,
+        product_id: Optional[str],
+        cube_metadata: Optional[Dict[str, Any]],
+    ) -> Dict[str, str]:
+        """Extract dimension modifiers from query text by matching against actual table metadata.
+
+        This is the GENERAL, non-hardcoded approach: we look at the table's
+        dimensions and their member names, then check whether any word/phrase
+        in the user's query matches a non-default member.
+
+        Args:
+            query_text: The raw user query (e.g., "unemployment rate male Ontario").
+            base_indicator: The resolved base indicator key (e.g., "UNEMPLOYMENT_RATE").
+            product_id: The StatsCan product ID (8-digit), or None.
+            cube_metadata: Pre-fetched cube metadata, or None (will skip if not available).
+
+        Returns:
+            Dict of dimension_hint -> matched_term, e.g.,
+            {"geography": "Ontario", "sex": "male"}.
+            Empty dict if no modifiers detected.
+        """
+        if not cube_metadata or not query_text:
+            return {}
+
+        query_lower = query_text.lower()
+        # Remove the base indicator words from the query to avoid false positives
+        indicator_words = set(base_indicator.lower().replace("_", " ").split())
+
+        # Also include words from all VECTOR_MAPPINGS keys that map to the
+        # same vector ID, so "consumer price index" is noise when base is "CPI".
+        indicator_key = base_indicator.upper().replace(" ", "_").replace("-", "_")
+        _base_vector = self.VECTOR_MAPPINGS.get(indicator_key)
+        if _base_vector is not None:
+            for alias_key, alias_vec in self.VECTOR_MAPPINGS.items():
+                if alias_vec == _base_vector:
+                    indicator_words |= set(alias_key.lower().replace("_", " ").split())
+
+        # Also remove common filler words
+        filler_words = {
+            "show", "me", "the", "for", "in", "of", "and", "a", "an",
+            "data", "canada", "canadian", "statistics", "statscan",
+            "rate", "index", "level", "last", "years", "year", "from",
+            "to", "since", "until", "recent", "latest", "please",
+            "get", "fetch", "what", "is", "are", "was", "were",
+        }
+        noise_words = indicator_words | filler_words
+
+        modifiers: Dict[str, str] = {}
+        dimensions = cube_metadata.get("dimension", [])
+
+        for dim in dimensions:
+            dim_name = dim.get("dimensionNameEn", "")
+            dim_name_lower = dim_name.lower()
+            members = dim.get("member", [])
+
+            if not members:
+                continue
+
+            # Skip dimensions that are purely structural (e.g., "Statistics", "Adjustments")
+            # We only want user-facing dimensions where the user might specify a value
+            structural_dims = {"statistic", "statistics", "estimate", "adjustment", "adjustments"}
+            if dim_name_lower in structural_dims:
+                continue
+
+            # Build a list of candidate member names
+            # Skip the first member if it is a "Total"/"All"/"Canada" aggregate
+            first_member_name = self._extract_member_name(members[0]).lower() if members else ""
+            is_first_aggregate = any(
+                tok in first_member_name
+                for tok in ["total", "all ", "all-", "both", "canada"]
+            ) or first_member_name.startswith("all")
+
+            best_match_score = 0
+            best_match_term: Optional[str] = None
+            best_dim_hint: Optional[str] = None
+
+            for member in members:
+                member_name = self._extract_member_name(member)
+                if not member_name:
+                    continue
+
+                member_name_lower = member_name.lower()
+                member_id = member.get("memberId")
+
+                # Skip aggregate/total first member (the one representing "All" or "Total")
+                if is_first_aggregate and member == members[0]:
+                    continue
+
+                # Skip members whose name substantially overlaps the base indicator.
+                # e.g., if base_indicator is "UNEMPLOYMENT_RATE", skip:
+                #   - "Unemployment rate" (exact match)
+                #   - "Unemployment" (subset of indicator words)
+                # These are handled by _select_default_member_id, not modifiers.
+                indicator_normalized = base_indicator.lower().replace("_", " ")
+                if member_name_lower == indicator_normalized or indicator_normalized == member_name_lower.rstrip("s"):
+                    continue
+                # Also skip if the member name consists entirely of indicator words
+                member_name_words = set(member_name_lower.replace(",", "").split())
+                if member_name_words and member_name_words.issubset(indicator_words):
+                    continue
+
+                # Check if any form of this member name appears in the query
+                # Strategy 1: exact member name match (word-boundary aware)
+                # Use regex word boundaries to avoid substring false positives
+                # e.g., "employment rate" must not match inside "unemployment rate"
+                if member_name_lower in query_lower:
+                    # Verify it's at a word boundary
+                    pattern = r'(?<![a-z])' + re.escape(member_name_lower) + r'(?![a-z])'
+                    if re.search(pattern, query_lower):
+                        # Guard: if the matched phrase is mostly noise/indicator words,
+                        # this is not a real modifier (e.g., "consumer price index" is
+                        # just the CPI indicator name, not a CPI sub-category).
+                        match_words = set(member_name_lower.replace(",", "").split())
+                        non_noise_match_words = match_words - noise_words - {"and", "or", "the", "of", "to"}
+                        if not non_noise_match_words:
+                            continue  # match is entirely noise/indicator words
+
+                        score = 100 + len(member_name_lower)
+                        if score > best_match_score:
+                            best_match_score = score
+                            best_match_term = member_name
+                            best_dim_hint = dim_name_lower.split()[0]  # e.g., "geography" from "Geography"
+                        continue
+
+                # Strategy 2: check if individual significant words from member name
+                # appear as query words (not just substrings)
+                member_words = set(member_name_lower.replace(",", "").split())
+                significant_member_words = member_words - noise_words - {"and", "or", "the", "of", "to"}
+                if not significant_member_words:
+                    continue
+
+                query_words = set(query_lower.replace(",", "").split())
+
+                for mw in significant_member_words:
+                    if len(mw) < 3:
+                        continue  # skip tiny words
+                    if mw in query_words:
+                        score = 50 + len(mw)
+                        if score > best_match_score:
+                            best_match_score = score
+                            best_match_term = member_name
+                            best_dim_hint = dim_name_lower.split()[0]
+
+                # Strategy 3: check aliases from MEMBER_KEYWORD_ALIASES
+                # Use word-boundary matching to avoid "men" matching inside "employment"
+                for alias_key, alias_values in self.MEMBER_KEYWORD_ALIASES.items():
+                    if alias_key in query_words:
+                        for alias_val in alias_values:
+                            alias_val_lower = alias_val.lower()
+                            # Use word-boundary-aware matching
+                            alias_pattern = r'(?<![a-z])' + re.escape(alias_val_lower) + r'(?![a-z])'
+                            if re.search(alias_pattern, member_name_lower):
+                                score = 80 + len(alias_key)
+                                if score > best_match_score:
+                                    best_match_score = score
+                                    best_match_term = alias_key  # Use the alias key as search term for _find_member_id_by_keywords
+                                    best_dim_hint = dim_name_lower.split()[0]
+                                break
+
+            if best_match_term and best_dim_hint:
+                modifiers[best_dim_hint] = best_match_term
+
+        return modifiers
 
     async def fetch_multi_province_data(
         self, params: Dict[str, any]

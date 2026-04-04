@@ -366,6 +366,14 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
 - StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade for Canada
   and Canadian provinces. The ONLY Canada-specific provider with monthly/quarterly data.
   Best for: Canada-specific data, provincial breakdowns, Canadian CPI/employment.
+  Dimension modifiers: StatsCan tables have multiple dimensions (Geography, Sex/Gender,
+  Age group, Industry, etc.). When the user specifies a sub-category like "male",
+  "female", "youth", "Ontario", "Alberta", "food", "25-54", keep those terms in the
+  original query text — the backend extracts them dynamically from table metadata.
+  Do NOT strip dimension modifiers from the indicator name. For example:
+    "unemployment rate male Canada" -> indicators=["UNEMPLOYMENT_RATE"], parameters.country="CA"
+    "CPI Ontario Canada" -> indicators=["CPI"], parameters.country="CA"
+    "employment rate youth Canada" -> indicators=["EMPLOYMENT"], parameters.country="CA"
 - OECD: OECD member country statistics — composite leading indicators, productivity,
   education, health. LOW PRIORITY — rate limited at 60 req/hour, prefer alternatives
   (WorldBank, Eurostat, IMF) when possible.

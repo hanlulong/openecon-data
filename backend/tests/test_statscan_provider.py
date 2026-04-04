@@ -17,6 +17,12 @@ def statscan_provider():
     return StatsCanProvider()
 
 
+# ---------- Labour force product metadata helper ----------
+def _get_labour_metadata(statscan_provider):
+    """Get locally-cached metadata for Labour Force Survey (14100287)."""
+    return statscan_provider._statscan_metadata_service.get_local_cube_metadata("14100287")
+
+
 @pytest.mark.asyncio
 async def test_get_cube_metadata_uses_local_cache_for_known_product(monkeypatch, statscan_provider):
     monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _FailingHttpClient())
@@ -149,3 +155,401 @@ async def test_fetch_dynamic_data_uses_exact_product_id_without_search(monkeypat
     )
 
     assert result == "ok"
+
+
+# =====================================================================
+# Tests for extract_dimension_modifiers (metadata-driven, no hardcoded lists)
+# =====================================================================
+
+
+class TestExtractDimensionModifiers:
+    """Tests that dimension modifiers are extracted from query text using actual table metadata."""
+
+    def test_extract_geography_ontario(self, statscan_provider):
+        """'Ontario' in query should match the Geography dimension."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate Ontario",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        assert "geography" in modifiers
+        assert "ontario" in modifiers["geography"].lower()
+
+    def test_extract_geography_alberta(self, statscan_provider):
+        """'Alberta' in query should match the Geography dimension."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="employment rate in Alberta Canada",
+            base_indicator="EMPLOYMENT",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        assert "geography" in modifiers
+        assert "alberta" in modifiers["geography"].lower()
+
+    def test_extract_gender_male(self, statscan_provider):
+        """'male' in query should match the Gender/Sex dimension via alias expansion."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate male Canada",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        # Should have detected a gender-related modifier
+        gender_keys = [k for k in modifiers if k in ("gender", "sex")]
+        assert len(gender_keys) > 0, f"Expected gender modifier, got: {modifiers}"
+
+    def test_extract_gender_female(self, statscan_provider):
+        """'female' in query should match the Gender/Sex dimension via alias expansion."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="employment rate female Canada",
+            base_indicator="EMPLOYMENT",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        gender_keys = [k for k in modifiers if k in ("gender", "sex")]
+        assert len(gender_keys) > 0, f"Expected gender modifier, got: {modifiers}"
+
+    def test_extract_age_youth(self, statscan_provider):
+        """'youth' in query should match the Age group dimension via alias expansion."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate youth Canada",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        age_keys = [k for k in modifiers if k in ("age",)]
+        assert len(age_keys) > 0, f"Expected age modifier, got: {modifiers}"
+
+    def test_extract_combined_modifiers(self, statscan_provider):
+        """Multiple modifiers should be extracted simultaneously."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate female Ontario Canada",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        # Should have geography AND gender
+        assert "geography" in modifiers, f"Expected geography, got: {modifiers}"
+        assert "ontario" in modifiers["geography"].lower()
+        gender_keys = [k for k in modifiers if k in ("gender", "sex")]
+        assert len(gender_keys) > 0, f"Expected gender modifier, got: {modifiers}"
+
+    def test_no_modifiers_basic_query(self, statscan_provider):
+        """A basic query without modifiers should return empty dict."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate Canada",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        # 'Canada' is the default/total member, so it should not be extracted as a modifier
+        assert "geography" not in modifiers, f"'Canada' should not be a modifier, got: {modifiers}"
+
+    def test_no_modifiers_empty_query(self, statscan_provider):
+        """Empty query should return empty dict."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        assert modifiers == {}
+
+    def test_no_modifiers_none_metadata(self, statscan_provider):
+        """None metadata should return empty dict."""
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="unemployment rate male Ontario",
+            base_indicator="UNEMPLOYMENT_RATE",
+            product_id="14100287",
+            cube_metadata=None,
+        )
+        assert modifiers == {}
+
+
+# =====================================================================
+# Tests for fetch_with_dimensions coordinate building (offline)
+# =====================================================================
+
+
+class TestFetchWithDimensionsCoordinates:
+    """Test that fetch_with_dimensions builds correct coordinates from modifiers."""
+
+    @pytest.mark.asyncio
+    async def test_geography_modifier_builds_correct_coordinate(self, monkeypatch, statscan_provider):
+        """Ontario modifier should place the Ontario member ID in the geography dimension."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        # Mock HTTP to capture the coordinate
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        # Ensure metadata is in cache
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        result = await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"geography": "Ontario"},
+        )
+
+        assert result is not None
+        assert len(captured_requests) == 1
+        coord = captured_requests[0][0]["coordinate"]
+        parts = coord.split(".")
+
+        # Ontario is member ID 7 in product 14100287
+        geo_dim_idx = next(
+            i for i, d in enumerate(metadata["dimension"])
+            if "geogr" in d["dimensionNameEn"].lower()
+        )
+        assert parts[geo_dim_idx] == "7", f"Ontario should be member 7, got {parts[geo_dim_idx]} in coordinate {coord}"
+
+    @pytest.mark.asyncio
+    async def test_gender_modifier_builds_correct_coordinate(self, monkeypatch, statscan_provider):
+        """Male modifier should set the gender dimension correctly."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        result = await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"gender": "male"},
+        )
+
+        assert result is not None
+        coord = captured_requests[0][0]["coordinate"]
+        parts = coord.split(".")
+
+        # Gender dimension: Men+ is member 2
+        gender_dim_idx = next(
+            i for i, d in enumerate(metadata["dimension"])
+            if "gender" in d["dimensionNameEn"].lower()
+        )
+        assert parts[gender_dim_idx] == "2", f"Male/Men+ should be member 2, got {parts[gender_dim_idx]} in coordinate {coord}"
+
+    @pytest.mark.asyncio
+    async def test_combined_modifiers_build_correct_coordinate(self, monkeypatch, statscan_provider):
+        """Multiple modifiers should each affect their respective dimension."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        result = await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"geography": "Ontario", "gender": "female", "age": "youth"},
+        )
+
+        assert result is not None
+        coord = captured_requests[0][0]["coordinate"]
+        parts = coord.split(".")
+
+        geo_idx = next(i for i, d in enumerate(metadata["dimension"]) if "geogr" in d["dimensionNameEn"].lower())
+        gender_idx = next(i for i, d in enumerate(metadata["dimension"]) if "gender" in d["dimensionNameEn"].lower())
+        age_idx = next(i for i, d in enumerate(metadata["dimension"]) if "age" in d["dimensionNameEn"].lower())
+
+        assert parts[geo_idx] == "7", f"Ontario=7, got {parts[geo_idx]}"
+        assert parts[gender_idx] == "3", f"Women+=3, got {parts[gender_idx]}"
+        assert parts[age_idx] == "2", f"Youth (15 to 24)=2, got {parts[age_idx]}"
+
+    @pytest.mark.asyncio
+    async def test_coordinate_padded_to_10(self, monkeypatch, statscan_provider):
+        """Coordinate should always have exactly 10 dot-separated parts."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"geography": "Alberta"},
+        )
+
+        coord = captured_requests[0][0]["coordinate"]
+        parts = coord.split(".")
+        assert len(parts) == 10, f"Coordinate should have 10 parts, got {len(parts)}: {coord}"
+
+    @pytest.mark.asyncio
+    async def test_defaults_used_for_unspecified_dimensions(self, monkeypatch, statscan_provider):
+        """Unspecified dimensions should use semantic defaults, not blindly 1."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"geography": "Ontario"},
+        )
+
+        coord = captured_requests[0][0]["coordinate"]
+        parts = coord.split(".")
+
+        # Labour force characteristic dimension should default to "Unemployment rate" (member 7)
+        labour_idx = next(
+            i for i, d in enumerate(metadata["dimension"])
+            if "labour force" in d["dimensionNameEn"].lower()
+        )
+        labour_dim = metadata["dimension"][labour_idx]
+        unemp_member = statscan_provider._find_member_id_by_keywords(
+            labour_dim["member"], ["unemployment rate"]
+        )
+        assert parts[labour_idx] == str(unemp_member), (
+            f"Labour characteristic should default to unemployment rate (member {unemp_member}), "
+            f"got {parts[labour_idx]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_metadata_indicator_name_in_result(self, monkeypatch, statscan_provider):
+        """Result metadata should include the dimension descriptions."""
+        metadata = _get_labour_metadata(statscan_provider)
+
+        class _MockResponse:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {"refPer": "2024-01-01", "value": 5.5, "frequencyCode": 6,
+                             "scalarFactorCode": 0, "releaseTime": "2024-02-01"},
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        result = await statscan_provider.fetch_with_dimensions(
+            base_indicator="UNEMPLOYMENT_RATE",
+            modifiers={"geography": "Ontario"},
+        )
+
+        # Indicator name should mention Ontario
+        assert "Ontario" in result.metadata.indicator, (
+            f"Expected 'Ontario' in indicator name, got: {result.metadata.indicator}"
+        )
+        assert result.metadata.source == "Statistics Canada"

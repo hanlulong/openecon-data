@@ -722,6 +722,57 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     if entity and not dimensions:
         dimensions = {"geography": entity}
 
+    # --- Dimension modifier detection (GENERAL, metadata-driven) ---
+    # Before falling through to standard vector/dynamic fetch, check if the
+    # query text contains dimension modifiers (province names, gender terms,
+    # age terms, product categories, etc.) that should narrow the data.
+    # This uses the table's actual metadata, NOT hardcoded modifier lists.
+    if indicator and not dimensions:
+        _indicator_key = indicator.upper().replace(" ", "_").replace("-", "_")
+        _is_known = (
+            _indicator_key in svc.statscan_provider.VECTOR_MAPPINGS
+            or _indicator_key in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
+        )
+        if _is_known:
+            query_text = intent.originalQuery or ""
+            try:
+                # Resolve the product ID for this indicator
+                _product_id = None
+                _vec = svc.statscan_provider.VECTOR_MAPPINGS.get(_indicator_key)
+                _coord = svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key)
+                if _coord:
+                    _product_id = svc.statscan_provider._normalize_metadata_product_id(_coord[0])
+                elif _vec is not None:
+                    _cached = svc.statscan_provider.PRODUCT_ID_CACHE.get(_vec)
+                    if _cached:
+                        _product_id = svc.statscan_provider._normalize_metadata_product_id(_cached)
+
+                if _product_id:
+                    _cube_meta = await svc.statscan_provider._get_cube_metadata(_product_id)
+                    _modifiers = svc.statscan_provider.extract_dimension_modifiers(
+                        query_text, _indicator_key, _product_id, _cube_meta,
+                    )
+                    if _modifiers:
+                        logger.info(
+                            f"StatsCan dimension modifiers detected: {_modifiers} "
+                            f"for indicator={_indicator_key}"
+                        )
+                        start_year = int(params["startDate"][:4]) if params.get("startDate") else None
+                        end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                        series = await svc.statscan_provider.fetch_with_dimensions(
+                            base_indicator=_indicator_key,
+                            modifiers=_modifiers,
+                            start_year=start_year,
+                            end_year=end_year,
+                            periods=params.get("periods", 240),
+                        )
+                        return [series]
+            except Exception as e:
+                logger.warning(
+                    f"Dimension modifier extraction/fetch failed for {_indicator_key}: {e}. "
+                    f"Falling through to standard fetch."
+                )
+
     # Use categorical provider if dimensions are specified
     if dimensions:
         categorical_params = {
