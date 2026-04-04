@@ -108,8 +108,13 @@ class FollowUpDelta(BaseModel):
     is_dimension_modifier_change: bool = False
     raw_query: Optional[str] = None
 
-    # --- Classification (for logging/debugging) ---
+    # --- Classification ---
     delta_type: Optional[str] = None
+    # Combined classification: the LLM delta extractor also classifies
+    # the query type in a single call, eliminating the need for a separate
+    # classifier LLM call. Values: parameter_delta, pro_mode, new_query,
+    # clarification_answer, informational.
+    query_type: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

@@ -212,7 +212,16 @@ Given the user's CURRENT conversation state and their NEW follow-up message,
 determine ONLY what changed. Output a FollowUpDelta JSON where you populate
 ONLY the fields that the user wants to modify. Leave everything else null.
 
-RULES:
+STEP 1 — CLASSIFY the query into one of these types:
+- "parameter_delta": Simple modification (country, time, indicator, dimension, provider, chart type)
+- "pro_mode": Complex analysis needing code execution (correlation, regression, scatter plot, forecast, statistics)
+- "new_query": Completely unrelated new topic
+- "clarification_answer": Answering a system question (picking options, "yes", "the first one")
+- "informational": Question about the system ("what sources do you have?")
+
+Set the query_type field accordingly.
+
+STEP 2 — If query_type is "parameter_delta", populate the changed fields:
 1. Only populate fields the user explicitly wants to change.
 2. For countries:
    - changed_country: REPLACE current country with a new one
@@ -227,18 +236,24 @@ RULES:
      "show seniors" / "55+" → age_group = "55 years and over".
    - When available dimension members are listed below, use the EXACT member name.
    - is_dimension_modifier_change: true when changing dimensions.
-4. If the query is completely unrelated to prior context, set is_new_query=true.
+4. If the query is completely unrelated to prior context, set is_new_query=true, query_type="new_query".
 5. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
 6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
-7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE (added_dimensions for geography, or added_countries for countries).
-8. "What about X" / "show X instead" where X is a different economic concept → indicator_switch, NOT dimension.
-9. "break it down by X" / "filter by X" / "by sex" / "by age" → dimension_change. Pick the most relevant single value for that dimension.
+7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE.
+8. "What about X" / "show X instead" where X is a different economic concept → indicator_switch.
+9. "break it down by X" / "filter by X" / "by sex" / "by age" → dimension_change.
+
+IMPORTANT DISTINCTIONS:
+- "Show unemployment instead" → parameter_delta (indicator switch)
+- "Correlate unemployment with GDP" → pro_mode (needs computation)
+- "Show as bar chart" → parameter_delta (chart type)
+- "Show me a scatter plot" → pro_mode (needs code)
 
 CURRENT STATE:
 {state_text}
 {dimension_context}
 
-Output ONLY the changed fields as JSON."""
+Output the query_type and any changed fields as JSON."""
 
         try:
             delta = await instructor_client.chat.completions.create(

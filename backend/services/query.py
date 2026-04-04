@@ -3244,57 +3244,48 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
-            # ── Query Classification (single LLM call) ─────────────────
-            # Classify BEFORE execution: determines whether this is a delta,
-            # Pro Mode, new query, clarification answer, or informational.
-            # This replaces the old priority chain where handlers competed.
+            # ── Combined Classification + Delta Extraction ──────────────
+            # Single LLM call classifies AND extracts delta in one shot.
+            # The FollowUpDelta model includes a query_type field that the
+            # LLM sets alongside the changed fields. This eliminates the
+            # separate classifier call (~300ms saved per follow-up).
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
             _query_type = None
+            _delta = None
             if _current_conv_state is not None:
-                try:
-                    _openrouter = self.openrouter
-                    _instr_client = getattr(_openrouter, "instructor_client", None)
-                    _instr_model = getattr(_openrouter, "instructor_model", None)
-                    if _instr_client and _instr_model:
-                        from .query_classifier import classify_query
-                        _pending_ctx = conversation_manager.get_pending_clarification_context(conv_id)
-                        _classification = await classify_query(
-                            query, _current_conv_state, _pending_ctx,
-                            _instr_client, _instr_model,
-                        )
-                        _query_type = _classification.query_type
-                        logger.info("Query classified: %s (%.2f) for: %s",
-                                    _query_type, _classification.confidence, query[:50])
-                except Exception as _cls_err:
-                    logger.warning("Query classification failed: %s", _cls_err)
-
-            # ── Dispatch: Pro Mode ──────────────────────────────────────
-            if _query_type == "pro_mode" and auto_pro_mode:
-                logger.info("🚀 Classifier → Pro Mode for: %s", query[:50])
-                return await self._execute_pro_mode(query, conv_id)
-
-            # ── Dispatch: Informational ─────────────────────────────────
-            if _query_type == "informational":
-                logger.info("📖 Classifier → Informational for: %s", query[:50])
-                # Fall through to LLM parse which handles informational via queryType
-
-            # ── Dispatch: Clarification Answer ──────────────────────────
-            # (Already handled by pending_choice above for numeric; LLM parse
-            # handles semantic clarification answers via conversation context)
-
-            # ── Dispatch: Parameter Delta ───────────────────────────────
-            if _query_type == "parameter_delta" and _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
+                # Tier 1: fast regex for structural patterns (country, time, provider)
                 _delta = _delta_extractor.extract(query, _current_conv_state)
-                # Tier 2: LLM delta extraction when regex can't parse
-                if _delta is None:
+                if _delta is not None:
+                    _query_type = "parameter_delta"
+                else:
+                    # Tier 2: combined LLM classification + delta extraction
                     try:
                         _delta = await _delta_extractor.extract_with_llm(
                             query, _current_conv_state,
                         )
+                        if _delta is not None:
+                            _query_type = _delta.query_type or "parameter_delta"
+                            logger.info("LLM classified+extracted: type=%s, delta_type=%s for: %s",
+                                        _query_type, _delta.delta_type, query[:50])
+                            # Non-delta types: clear delta, dispatch to correct handler
+                            if _query_type != "parameter_delta":
+                                _delta = None
                     except Exception as _llm_err:
                         logger.warning("LLM delta extraction error: %s", _llm_err)
-                if _delta is not None:
+
+            # ── Dispatch: Pro Mode ──────────────────────────────────────
+            if _query_type == "pro_mode" and auto_pro_mode:
+                logger.info("🚀 LLM → Pro Mode for: %s", query[:50])
+                return await self._execute_pro_mode(query, conv_id)
+
+            # ── Dispatch: Informational ─────────────────────────────────
+            if _query_type == "informational":
+                logger.info("📖 LLM → Informational for: %s", query[:50])
+                # Fall through to LLM parse which handles informational via queryType
+
+            # ── Dispatch: Parameter Delta ───────────────────────────────
+            if _delta is not None:
                     _merged_state = merge_state(_current_conv_state, _delta)
                     _delta_intent = materialize_intent(_merged_state)
 
@@ -3361,6 +3352,10 @@ class QueryService:
                         parse_result=_delta_parse_result,
                         tracker=tracker,
                     )
+
+            # Log fallthrough when classifier said delta but extraction failed
+            if _query_type == "parameter_delta" and _delta is None:
+                logger.info("Delta extraction returned None despite parameter_delta classification — falling through to LLM parse")
 
             # ── Dispatch: New Query or fallthrough ──────────────────
             # For new_query, clarification_answer, informational, or when

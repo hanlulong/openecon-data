@@ -170,9 +170,11 @@ async def classify_query(
         )
         return result
     except Exception as exc:
-        logger.warning("Query classification failed: %s — defaulting to parameter_delta", exc)
-        # Default to parameter_delta for follow-ups (most common type)
+        logger.warning("Query classification failed: %s — defaulting to new_query (safe fallthrough)", exc)
+        # Default to new_query — it falls through to the standard LLM parse
+        # which handles everything. parameter_delta would be dangerous because
+        # it would trap genuinely new queries in the delta extraction path.
         return QueryClassification(
-            query_type="parameter_delta",
-            confidence=0.5,
+            query_type="new_query",
+            confidence=0.3,
         )
