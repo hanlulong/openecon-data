@@ -282,6 +282,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         # which table/vector to apply modifiers to (e.g., "UNEMPLOYMENT_RATE")
         if state.base_indicator:
             parameters["__base_indicator"] = state.base_indicator
+            # Also set indicator in params so data_fetcher uses the vector key
+            parameters["indicator"] = state.base_indicator
 
     # Indicator: use base_indicator (vector key like "UNEMPLOYMENT_RATE") when
     # dimensions are active, so the StatsCan provider routes correctly.

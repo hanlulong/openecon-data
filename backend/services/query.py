@@ -3303,19 +3303,29 @@ class QueryService:
                     _merged_state = merge_state(_current_conv_state, _delta)
                     _delta_intent = materialize_intent(_merged_state)
 
-                    # Route the materialized intent through UnifiedRouter
-                    try:
-                        _delta_routing = self.unified_router.route(
-                            query=_delta_intent.originalQuery or query,
-                            indicators=_delta_intent.indicators or [],
-                            llm_provider=_delta_intent.apiProvider,
-                            country=_delta_intent.parameters.get("country"),
-                            countries=_delta_intent.parameters.get("countries"),
-                        )
-                        if _delta_routing and _delta_routing.provider:
-                            _delta_intent.apiProvider = normalize_provider_name(_delta_routing.provider)
-                    except Exception as _route_err:
-                        logger.debug("Delta routing failed: %s", _route_err)
+                    # Route the materialized intent through UnifiedRouter.
+                    # EXCEPT when the delta is a dimension modifier change —
+                    # in that case, the provider is already correct (from
+                    # conversation state) and re-routing would override it
+                    # because the vector key (UNEMPLOYMENT_RATE) isn't a
+                    # catalog concept name.
+                    _skip_reroute = (
+                        getattr(_delta, 'is_dimension_modifier_change', False)
+                        and _merged_state.provider
+                    )
+                    if not _skip_reroute:
+                        try:
+                            _delta_routing = self.unified_router.route(
+                                query=_delta_intent.originalQuery or query,
+                                indicators=_delta_intent.indicators or [],
+                                llm_provider=_delta_intent.apiProvider,
+                                country=_delta_intent.parameters.get("country"),
+                                countries=_delta_intent.parameters.get("countries"),
+                            )
+                            if _delta_routing and _delta_routing.provider:
+                                _delta_intent.apiProvider = normalize_provider_name(_delta_routing.provider)
+                        except Exception as _route_err:
+                            logger.debug("Delta routing failed: %s", _route_err)
 
                     _merged_state.routed_provider = _delta_intent.apiProvider
                     _merged_state.last_indicators_resolved = _delta_intent.indicators
