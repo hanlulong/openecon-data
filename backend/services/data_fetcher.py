@@ -1139,16 +1139,27 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
     params = svc._maybe_expand_ranking_country_scope(ranking_scope_query, provider, params)
     intent.parameters = params
 
-    provider, params = svc._apply_concept_provider_override(provider, intent, params)
-    intent.parameters = params
+    # When __dimensions is present (from delta/merge path), the indicator and
+    # provider are already resolved. Skip the override/resolution layers that
+    # would re-route away from the correct provider or change the indicator.
+    _delta_dimensions_active = bool(params.get("__dimensions"))
+    if not _delta_dimensions_active:
+        provider, params = svc._apply_concept_provider_override(provider, intent, params)
+        intent.parameters = params
 
-    # PHASE B: Resolve indicator code via unified resolution pipeline
-    params = await svc._resolve_indicator_for_fetch(provider, intent, params)
+        # PHASE B: Resolve indicator code via unified resolution pipeline
+        params = await svc._resolve_indicator_for_fetch(provider, intent, params)
 
-    # Check catalog availability and re-route if needed
-    provider, params = svc._apply_catalog_availability_override(
-        provider, intent, params, fallback_excluded_providers
-    )
+        # Check catalog availability and re-route if needed
+        provider, params = svc._apply_catalog_availability_override(
+            provider, intent, params, fallback_excluded_providers
+        )
+    else:
+        logger.info(
+            "Skipping indicator resolution for delta-resolved dimensions: "
+            "indicator=%s, provider=%s, dimensions=%s",
+            params.get("indicator"), provider, params.get("__dimensions"),
+        )
 
     # Preserve catalog-resolved flag as a transient attribute on the intent
     if params.get("__catalog_resolved"):
