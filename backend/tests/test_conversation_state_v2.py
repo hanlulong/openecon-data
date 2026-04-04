@@ -608,10 +608,11 @@ class TestDeltaExtractorDimensionModifier:
 
     def test_female_after_unemployment_is_dimension(self, _build_extractor):
         """'show female' after unemployment rate → dimension modifier, not indicator switch."""
+        _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
             product_id_cache={2062815: "1410028702"},
-            cube_metadata={"dimension": [{"dimensionNameEn": "Sex", "member": []}]},
+            cube_metadata=_cube,
             extracted_modifiers={"sex": "female"},
         )
         state = ConversationState(
@@ -619,6 +620,8 @@ class TestDeltaExtractorDimensionModifier:
             base_indicator="UNEMPLOYMENT_RATE",
             provider="StatsCan",
             country="CA",
+            statscan_product_id="14100287",
+            statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show female", state)
         assert delta is not None
@@ -628,10 +631,11 @@ class TestDeltaExtractorDimensionModifier:
 
     def test_shelter_after_cpi_is_dimension(self, _build_extractor):
         """'show shelter' after CPI → dimension modifier for product category."""
+        _cube = {"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"CPI": 41690973},
             product_id_cache={41690973: "1810000401"},
-            cube_metadata={"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]},
+            cube_metadata=_cube,
             extracted_modifiers={"products": "Shelter"},
         )
         state = ConversationState(
@@ -639,6 +643,8 @@ class TestDeltaExtractorDimensionModifier:
             base_indicator="CPI",
             provider="StatsCan",
             country="CA",
+            statscan_product_id="18100004",
+            statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show shelter", state)
         assert delta is not None
@@ -648,10 +654,11 @@ class TestDeltaExtractorDimensionModifier:
 
     def test_inflation_after_unemployment_is_indicator_switch(self, _build_extractor):
         """'show inflation' after unemployment → true indicator switch (no dimension match)."""
+        _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
             product_id_cache={2062815: "1410028702"},
-            cube_metadata={"dimension": [{"dimensionNameEn": "Sex", "member": []}]},
+            cube_metadata=_cube,
             extracted_modifiers={},  # No dimension match for "inflation"
         )
         state = ConversationState(
@@ -659,6 +666,8 @@ class TestDeltaExtractorDimensionModifier:
             base_indicator="UNEMPLOYMENT_RATE",
             provider="StatsCan",
             country="CA",
+            statscan_product_id="14100287",
+            statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show inflation", state)
         # Should NOT be dimension_change; should fall through to indicator switch
@@ -682,10 +691,11 @@ class TestDeltaExtractorDimensionModifier:
 
     def test_dimension_modifier_sets_is_dimension_flag(self, _build_extractor):
         """Dimension modifier delta must set is_dimension_modifier_change=True."""
+        _cube = {"dimension": []}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
             product_id_cache={2062815: "1410028702"},
-            cube_metadata={"dimension": []},
+            cube_metadata=_cube,
             extracted_modifiers={"age": "youth"},
         )
         state = ConversationState(
@@ -693,6 +703,8 @@ class TestDeltaExtractorDimensionModifier:
             base_indicator="UNEMPLOYMENT_RATE",
             provider="STATSCAN",
             country="CA",
+            statscan_product_id="14100287",
+            statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show youth", state)
         assert delta is not None
@@ -700,9 +712,10 @@ class TestDeltaExtractorDimensionModifier:
 
     def test_coordinate_mapping_indicator(self, _build_extractor):
         """Indicators using COORDINATE_PRODUCT_MAPPINGS should also work."""
+        _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
         extractor = _build_extractor(
             coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
-            cube_metadata={"dimension": [{"dimensionNameEn": "Geography", "member": []}]},
+            cube_metadata=_cube,
             extracted_modifiers={"geography": "Ontario"},
         )
         state = ConversationState(
@@ -710,6 +723,8 @@ class TestDeltaExtractorDimensionModifier:
             base_indicator="HOUSING_PRICE_INDEX",
             provider="StatsCan",
             country="CA",
+            statscan_product_id="18100205",
+            statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show Ontario", state)
         # "Ontario" is also a geography term that the country handler might catch,
