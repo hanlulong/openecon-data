@@ -666,6 +666,32 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     entity = params.get("entity")
     indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)
 
+    # EARLY DISPATCH: When __dimensions comes from the delta/merge path,
+    # route directly to fetch_with_dimensions. This MUST happen before any
+    # other dispatch path (industry breakdown, dynamic discovery, etc.) that
+    # could divert to the wrong table.
+    if dimensions and params.get("__dimensions"):
+        _base = params.get("__base_indicator") or (indicator or "").upper().replace(" ", "_").replace("-", "_")
+        _is_known = (
+            _base in svc.statscan_provider.VECTOR_MAPPINGS
+            or _base in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
+        )
+        if _is_known:
+            try:
+                start_year = int(params["startDate"][:4]) if params.get("startDate") else None
+                end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                logger.info(f"StatsCan EARLY dimension dispatch: {_base} + {dimensions}")
+                series = await svc.statscan_provider.fetch_with_dimensions(
+                    base_indicator=_base,
+                    modifiers=dimensions,
+                    start_year=start_year,
+                    end_year=end_year,
+                    periods=params.get("periods", 240),
+                )
+                return [series]
+            except Exception as e:
+                logger.warning(f"StatsCan early dimension dispatch failed: {e}. Falling through.")
+
     # --- Framework fix: resolve numeric table/product IDs back to known vectors ---
     resolved_indicator = indicator
     indicator_key = indicator.upper().replace(" ", "_") if indicator else None
