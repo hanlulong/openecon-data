@@ -401,6 +401,13 @@ class StatsCanProvider(BaseProvider):
         self.metadata_search = metadata_search_service  # Optional: for intelligent indicator discovery
         self._statscan_metadata_service = get_statscan_metadata_service()
         self._cube_metadata_cache: Dict[str, Dict[str, Any]] = {}
+        # Pre-populate cube metadata cache from local file for key tables.
+        # This ensures dimension follow-ups work without runtime API calls.
+        for _pid in ["14100287", "18100004", "36100434", "17100005", "34100156",
+                      "18100205", "12100011", "14100355", "20100008", "14100017"]:
+            _local = self._statscan_metadata_service.get_local_cube_metadata(_pid)
+            if _local:
+                self._cube_metadata_cache[_pid] = _local
 
     async def _fetch_data(self, **params) -> NormalizedData | List[NormalizedData]:
         """Implement BaseProvider interface by routing to fetch_indicator."""
