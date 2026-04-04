@@ -1840,34 +1840,40 @@ class QueryService:
         parse_result: ParseRouteResult,
         tracker: Optional['ProcessingTracker'] = None,
         skip_prefetch_clarification: bool = False,
+        skip_post_fetch_clarification: bool = False,
     ) -> QueryResponse:
         """Run validation, clarification guardrails, and fetch for an already-built intent."""
         conv_id = conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
 
-        # Dual-write: update ConversationState alongside last_intent
-        try:
-            _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
-            _existing_state = conversation_manager.get_conversation_state(conv_id)
-            if _existing_state:
-                _new_state.turn_number = _existing_state.turn_number + 1
-            # Pre-cache cube metadata for StatsCan dimension-capable indicators.
-            # This allows the delta extractor to check dimensions synchronously
-            # on the next follow-up (no async API call needed).
-            if (_new_state.statscan_product_id
-                    and _new_state.provider
-                    and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}
-                    and not _new_state.statscan_cube_metadata):
-                try:
-                    _cube = await self.statscan_provider._get_cube_metadata(
-                        _new_state.statscan_product_id
-                    )
-                    if _cube:
-                        _new_state.statscan_cube_metadata = _cube
-                except Exception:
-                    pass  # Non-critical — delta extractor has fallback
-            conversation_manager.set_conversation_state(conv_id, _new_state)
-        except Exception as _sw_err:
-            logger.debug("Dual-write conversation_state failed: %s", _sw_err)
+        # Dual-write: update ConversationState alongside last_intent.
+        # Skip when called from the delta path (skip_post_fetch_clarification=True)
+        # because the delta path already saved the precisely-merged state with
+        # dimensions and cube metadata intact. Re-extracting from the intent
+        # would lose that carefully-merged context.
+        if not skip_post_fetch_clarification:
+            try:
+                _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+                _existing_state = conversation_manager.get_conversation_state(conv_id)
+                if _existing_state:
+                    _new_state.turn_number = _existing_state.turn_number + 1
+                # Pre-cache cube metadata for StatsCan dimension-capable indicators.
+                # This allows the delta extractor to check dimensions synchronously
+                # on the next follow-up (no async API call needed).
+                if (_new_state.statscan_product_id
+                        and _new_state.provider
+                        and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}
+                        and not _new_state.statscan_cube_metadata):
+                    try:
+                        _cube = await self.statscan_provider._get_cube_metadata(
+                            _new_state.statscan_product_id
+                        )
+                        if _cube:
+                            _new_state.statscan_cube_metadata = _cube
+                    except Exception:
+                        pass  # Non-critical — delta extractor has fallback
+                conversation_manager.set_conversation_state(conv_id, _new_state)
+            except Exception as _sw_err:
+                logger.debug("Dual-write conversation_state failed: %s", _sw_err)
 
         if intent.clarificationNeeded:
             conversation_manager.clear_pending_indicator_options(conv_id)
@@ -2043,27 +2049,31 @@ class QueryService:
 
         data = self._rerank_data_by_query_relevance(query, data)
         data = self._apply_ranking_projection(query, data)
-        recovered_uncertain_data = await self._maybe_recover_from_uncertain_match(
-            query,
-            intent,
-            data,
-        )
-        if recovered_uncertain_data:
-            data = recovered_uncertain_data
-        data, coverage_warning = await self._maybe_improve_country_coverage(
-            query,
-            intent,
-            data,
-        )
-        clarification_response = self._build_uncertain_result_clarification(
-            conversation_id=conv_id,
-            query=query,
-            intent=intent,
-            data=data,
-            processing_steps=tracker.to_list() if tracker else None,
-        )
-        if clarification_response:
-            return clarification_response
+        coverage_warning = None
+        if not skip_post_fetch_clarification:
+            recovered_uncertain_data = await self._maybe_recover_from_uncertain_match(
+                query,
+                intent,
+                data,
+            )
+            if recovered_uncertain_data:
+                data = recovered_uncertain_data
+            data, coverage_warning = await self._maybe_improve_country_coverage(
+                query,
+                intent,
+                data,
+            )
+            clarification_response = self._build_uncertain_result_clarification(
+                conversation_id=conv_id,
+                query=query,
+                intent=intent,
+                data=data,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if clarification_response:
+                return clarification_response
+        else:
+            logger.info("Skipping post-fetch clarification for delta-resolved intent")
 
         conv_id = conversation_manager.add_message_safe(
             conv_id,
@@ -3345,6 +3355,14 @@ class QueryService:
                     _merged_state.routed_provider = _delta_intent.apiProvider
                     _merged_state.last_indicators_resolved = _delta_intent.indicators
 
+                    # Mark intent as delta-resolved so data_fetcher skips
+                    # indicator re-resolution (the delta already determined
+                    # the correct indicator; re-resolving against the raw
+                    # follow-up query would match wrong indicators).
+                    if _delta_intent.parameters is None:
+                        _delta_intent.parameters = {}
+                    _delta_intent.parameters["__delta_resolved"] = True
+
                     # Build a ParseRouteResult for _execute_resolved_intent
                     _delta_parse_result = ParseRouteResult(
                         intent=_delta_intent,
@@ -3367,6 +3385,7 @@ class QueryService:
                     return await self._execute_resolved_intent(
                         query=_delta_intent.originalQuery or query,
                         skip_prefetch_clarification=True,
+                        skip_post_fetch_clarification=True,
                         conversation_id=conv_id,
                         intent=_delta_intent,
                         parse_result=_delta_parse_result,

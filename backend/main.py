@@ -56,6 +56,11 @@ from .utils.dependencies import require_promode
 
 logger = logging.getLogger("openecon")
 logging.basicConfig(level=logging.INFO)
+# File handler for debugging (uvicorn reloader pipes child output through sockets)
+_fh = logging.FileHandler("/tmp/backend-app.log", mode="a")
+_fh.setLevel(logging.INFO)
+_fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logging.getLogger().addHandler(_fh)
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -833,6 +838,19 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 yield f"event: done\ndata: {json.dumps({})}\n\n"
                 return
 
+            # Guaranteed post-query conversation state save (streaming path).
+            # Mirrors the non-streaming endpoint's save at query_endpoint().
+            if result.data and result.intent and result.conversationId:
+                try:
+                    from backend.services.conversation_state_v2 import extract_state_from_intent as _extract_state
+                    _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
+                    _existing = conversation_manager.get_conversation_state(result.conversationId)
+                    if _existing:
+                        _state.turn_number = _existing.turn_number + 1
+                    conversation_manager.set_conversation_state(result.conversationId, _state)
+                except Exception:
+                    pass
+
             # Save to user history if authenticated
             if user and result.data:
                 save_to_user_history(user, request.query, result.conversationId, result.intent, result.data)
@@ -1597,6 +1615,27 @@ async def submit_feedback(request: FeedbackRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to submit feedback. Please try again later."
         )
+
+
+@app.get("/api/debug/conversation-state/{conversation_id}")
+async def debug_conversation_state(conversation_id: str):
+    """Debug endpoint: inspect conversation state for a given ID. Dev-only."""
+    if settings.environment == "production":
+        return JSONResponse(status_code=404, content={"error": "Not found"})
+    ctx = conversation_manager._get(conversation_id)
+    if not ctx:
+        return {"found": False, "conversation_id": conversation_id}
+    state = ctx.conversation_state
+    return {
+        "found": True,
+        "conversation_id": conversation_id,
+        "message_count": len(ctx.messages),
+        "has_last_intent": ctx.last_intent is not None,
+        "has_conversation_state": state is not None,
+        "state": state.model_dump() if state and hasattr(state, 'model_dump') else str(state),
+        "last_intent_indicators": ctx.last_intent.indicators if ctx.last_intent else None,
+        "last_intent_provider": ctx.last_intent.apiProvider if ctx.last_intent else None,
+    }
 
 
 @app.get("/api/cache/stats")

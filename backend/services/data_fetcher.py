@@ -1165,11 +1165,36 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
     params = svc._maybe_expand_ranking_country_scope(ranking_scope_query, provider, params)
     intent.parameters = params
 
-    # When __dimensions is present (from delta/merge path), the indicator and
-    # provider are already resolved. Skip the override/resolution layers that
-    # would re-route away from the correct provider or change the indicator.
-    _delta_dimensions_active = bool(params.get("__dimensions"))
-    if not _delta_dimensions_active:
+    # When __dimensions is present (from delta/merge path for dimension changes),
+    # the indicator and provider are fully resolved. Skip all overrides.
+    # When __delta_resolved is present (time/country/indicator follow-ups),
+    # still resolve the indicator code but use the indicator name as the query
+    # (not the raw follow-up text like "last 20 years") to prevent mismatches.
+    _has_dimensions = bool(params.get("__dimensions"))
+    _is_delta_resolved = bool(params.get("__delta_resolved"))
+    if _has_dimensions:
+        logger.info(
+            "Skipping indicator resolution for delta-resolved dimensions: "
+            "indicator=%s, provider=%s, dimensions=%s",
+            params.get("indicator"), provider, params.get("__dimensions"),
+        )
+    elif _is_delta_resolved:
+        # Delta follow-up (time change, country change, etc.): the indicator
+        # name is correct but may need code resolution (e.g., "GDP" → "NY.GDP.MKTP.CD").
+        # Override originalQuery so the resolution search uses the indicator name,
+        # NOT the raw follow-up query ("last 20 years") which would match wrong indicators.
+        _indicator_name = intent.indicators[0] if intent.indicators else ""
+        _saved_query = intent.originalQuery
+        intent.originalQuery = _indicator_name
+        logger.info(
+            "Delta-resolved follow-up: resolving indicator '%s' (query='%s' overridden to '%s')",
+            _indicator_name, _saved_query, _indicator_name,
+        )
+        provider, params = svc._apply_concept_provider_override(provider, intent, params)
+        intent.parameters = params
+        params = await svc._resolve_indicator_for_fetch(provider, intent, params)
+        intent.originalQuery = _saved_query  # Restore for downstream use
+    else:
         provider, params = svc._apply_concept_provider_override(provider, intent, params)
         intent.parameters = params
 
@@ -1180,18 +1205,12 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
         provider, params = svc._apply_catalog_availability_override(
             provider, intent, params, fallback_excluded_providers
         )
-    else:
-        logger.info(
-            "Skipping indicator resolution for delta-resolved dimensions: "
-            "indicator=%s, provider=%s, dimensions=%s",
-            params.get("indicator"), provider, params.get("__dimensions"),
-        )
 
     # Preserve catalog-resolved flag as a transient attribute on the intent
     if params.get("__catalog_resolved"):
         object.__setattr__(intent, "_catalog_resolved", True)
 
-    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child"}
+    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved"}
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params

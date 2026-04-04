@@ -364,8 +364,17 @@ class ConversationManager:
         """Return the ConversationState for a conversation, or None."""
         with self._lock:
             conversation = self._get_locked(conversation_id)
-            if not conversation or conversation.conversation_state is None:
+            if not conversation:
+                logger.debug("get_conversation_state(%s): conversation NOT FOUND", conversation_id)
                 return None
+            if conversation.conversation_state is None:
+                logger.debug("get_conversation_state(%s): conversation exists but state is None (msgs=%d, has_intent=%s)",
+                             conversation_id, len(conversation.messages), conversation.last_intent is not None)
+                return None
+            _s = conversation.conversation_state
+            logger.debug("get_conversation_state(%s): FOUND state (indicator=%s, provider=%s, base=%s, cube=%s)",
+                         conversation_id, getattr(_s, 'indicator', '?'), getattr(_s, 'provider', '?'),
+                         getattr(_s, 'base_indicator', '?'), getattr(_s, 'statscan_cube_metadata', None) is not None)
             # Return a deep copy to prevent external mutation
             return conversation.conversation_state.model_copy(deep=True)
 
@@ -382,10 +391,15 @@ class ConversationManager:
         with self._lock:
             conversation = self._get_locked(conversation_id)
             if not conversation:
+                logger.warning("set_conversation_state(%s): conversation NOT FOUND — state NOT saved!", conversation_id)
                 return
             conversation.conversation_state = state
             conversation.updated_at = self._now()
             self._redis_save(conversation)
+            logger.debug("set_conversation_state(%s): SAVED (indicator=%s, provider=%s, base=%s, cube=%s, turn=%d)",
+                         conversation_id, getattr(state, 'indicator', '?'), getattr(state, 'provider', '?'),
+                         getattr(state, 'base_indicator', '?'), getattr(state, 'statscan_cube_metadata', None) is not None,
+                         getattr(state, 'turn_number', -1))
 
     def restore_conversation_state(self, conversation_id: str, state) -> None:
         """Restore conversation_state to a previous value after a failure.
