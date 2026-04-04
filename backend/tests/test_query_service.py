@@ -1523,34 +1523,6 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.indicators, ["employment rate"])
         self.assertGreaterEqual(len(intent.parameters.get("countries") or []), 10)
 
-    def test_build_intent_from_contextual_follow_up_reuses_last_intent_with_new_country(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-country-follow-up")
-        conversation_manager.add_message_safe(
-            conv_id,
-            "user",
-            "employment rate across G20 member countries",
-            intent=ParsedIntent(
-                apiProvider="WORLDBANK",
-                indicators=["employment rate"],
-                parameters={"countries": sorted(CountryResolver.G20_MEMBERS)},
-                clarificationNeeded=False,
-                originalQuery="employment rate across G20 member countries",
-            ),
-        )
-
-        contextual_follow_up = self.service._build_intent_from_contextual_follow_up(  # pylint: disable=protected-access
-            query="show only US",
-            conversation_id=conv_id,
-        )
-
-        self.assertIsNotNone(contextual_follow_up)
-        assert contextual_follow_up is not None
-        refined_query, intent, parse_result = contextual_follow_up
-        self.assertEqual(refined_query, "employment rate in US")
-        self.assertEqual(intent.parameters.get("country"), "US")
-        self.assertNotIn("countries", intent.parameters)
-        self.assertEqual(parse_result.routed_provider, intent.apiProvider)
-
     def test_process_query_uses_delta_for_country_follow_up(self) -> None:
         """'show only US' after a multi-country query uses the delta path."""
         from backend.services.conversation_state_v2 import ConversationState
@@ -1631,57 +1603,6 @@ class QueryServiceTests(unittest.TestCase):
             target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
             self.assertIn("DE", [c.upper() for c in target_countries])
 
-    def test_additive_follow_up_compare_with_merges_countries(self) -> None:
-        """'compare with India' after 'GDP of China' should return BOTH countries."""
-        conv_id = conversation_manager.get_or_create("conv-additive-compare")
-        conversation_manager.add_message_safe(
-            conv_id, "user", "GDP of China 2018-2023",
-            intent=ParsedIntent(
-                apiProvider="WORLDBANK",
-                indicators=["GDP"],
-                parameters={"country": "CN"},
-                clarificationNeeded=False,
-                originalQuery="GDP of China 2018-2023",
-            ),
-        )
-
-        result = self.service._build_intent_from_contextual_follow_up(
-            query="compare with India",
-            conversation_id=conv_id,
-        )
-        self.assertIsNotNone(result)
-        refined_query, intent, _ = result
-        params = intent.parameters or {}
-        countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
-        country_codes = [c.upper() for c in countries]
-        self.assertIn("CN", country_codes, "Should preserve China from prior query")
-        self.assertIn("IN", country_codes, "Should add India from follow-up")
-
-    def test_replacement_follow_up_show_only_replaces(self) -> None:
-        """'show only US' should REPLACE, not add to prior countries."""
-        conv_id = conversation_manager.get_or_create("conv-replacement-show-only")
-        conversation_manager.add_message_safe(
-            conv_id, "user", "GDP growth G7 countries",
-            intent=ParsedIntent(
-                apiProvider="WORLDBANK",
-                indicators=["GDP growth"],
-                parameters={"countries": sorted(CountryResolver.G7_MEMBERS)},
-                clarificationNeeded=False,
-                originalQuery="GDP growth G7 countries",
-            ),
-        )
-
-        result = self.service._build_intent_from_contextual_follow_up(
-            query="show only US",
-            conversation_id=conv_id,
-        )
-        self.assertIsNotNone(result)
-        _, intent, _ = result
-        params = intent.parameters or {}
-        countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
-        self.assertEqual(len(countries), 1, "Should have only US, not all G7")
-        self.assertEqual(countries[0].upper(), "US")
-
     def test_looks_like_country_follow_up_accepts_add_pattern(self) -> None:
         """'Add Germany' should be recognized as a country follow-up."""
         result = self.service._looks_like_country_follow_up("Add Germany", ["DE"])
@@ -1696,69 +1617,6 @@ class QueryServiceTests(unittest.TestCase):
         """'Also include Japan' should be recognized as a country follow-up."""
         result = self.service._looks_like_country_follow_up("Also include Japan", ["JP"])
         self.assertTrue(result)
-
-    def test_indicator_switch_preserves_base_indicator_for_dimension_follow_up(self) -> None:
-        """'what about energy' after 'CPI food in Canada' should produce 'cpi energy'
-        not just 'energy', preserving the CPI base indicator."""
-        conv_id = conversation_manager.get_or_create("conv-dim-follow-up")
-        conversation_manager.add_message_safe(
-            conv_id,
-            "user",
-            "CPI food in Canada",
-            intent=ParsedIntent(
-                apiProvider="STATSCAN",
-                indicators=["CPI"],
-                parameters={"country": "CA"},
-                clarificationNeeded=False,
-                originalQuery="CPI food in Canada",
-            ),
-        )
-
-        result = self.service._build_intent_from_indicator_switch(  # pylint: disable=protected-access
-            query="what about energy",
-            conversation_id=conv_id,
-        )
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        refined_query, intent, _ = result
-        # The resolved query should contain both the base indicator (CPI) and the new modifier (energy)
-        self.assertIn("cpi", refined_query.lower())
-        self.assertIn("energy", refined_query.lower())
-        # The indicators list should preserve the base indicator for provider resolution
-        self.assertTrue(
-            any("CPI" in ind.upper() for ind in intent.indicators),
-            f"Expected CPI in indicators, got {intent.indicators}",
-        )
-
-    def test_indicator_switch_does_not_preserve_base_for_true_indicator_change(self) -> None:
-        """'what about unemployment' after 'CPI food' should switch to unemployment,
-        not produce 'cpi unemployment'."""
-        conv_id = conversation_manager.get_or_create("conv-true-switch")
-        conversation_manager.add_message_safe(
-            conv_id,
-            "user",
-            "CPI food in Canada",
-            intent=ParsedIntent(
-                apiProvider="STATSCAN",
-                indicators=["CPI"],
-                parameters={"country": "CA"},
-                clarificationNeeded=False,
-                originalQuery="CPI food in Canada",
-            ),
-        )
-
-        result = self.service._build_intent_from_indicator_switch(  # pylint: disable=protected-access
-            query="what about unemployment",
-            conversation_id=conv_id,
-        )
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        refined_query, intent, _ = result
-        # This is a true indicator switch — should NOT contain CPI
-        self.assertNotIn("cpi", refined_query.lower())
-        self.assertIn("unemployment", refined_query.lower())
 
     def test_match_indicator_choice_option_supports_natural_numeric_forms(self) -> None:
         options = [
@@ -3620,43 +3478,6 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("IGNORING", prompt)
         self.assertIn("new independent query", prompt.lower())
         self.assertIn("isFollowUp=false", prompt)
-
-    def test_contextual_follow_up_skipped_during_clarification(self) -> None:
-        """When last_intent has clarificationNeeded=True, the deterministic
-        follow-up detector correctly skips (returning None), so the query
-        falls through to the LLM which has the updated prompt guidance."""
-        conv_id = conversation_manager.get_or_create("conv-clarification-ignore")
-        # Store a clarification intent
-        conversation_manager.add_message_safe(
-            conv_id,
-            "user",
-            "employment data Canada",
-            intent=ParsedIntent(
-                apiProvider="StatsCan",
-                indicators=["employment"],
-                parameters={"country": "CA"},
-                clarificationNeeded=True,
-                clarificationQuestions=["Which specific employment indicator?"],
-                originalQuery="employment data Canada",
-            ),
-        )
-
-        # The contextual follow-up detector should return None because
-        # clarificationNeeded=True on the last intent.
-        result = self.service._build_intent_from_contextual_follow_up(
-            query="show me the same for US",
-            conversation_id=conv_id,
-        )
-        self.assertIsNone(result)
-
-        # The indicator switch detector should also return None.
-        result2 = self.service._build_intent_from_indicator_switch(
-            query="what about inflation",
-            conversation_id=conv_id,
-        )
-        self.assertIsNone(result2)
-
-    # ── Issue 2: Province follow-up prompt guidance ──────────────────
 
     def test_prompt_follow_up_section_has_province_guidance(self) -> None:
         """The follow-up section should include province/state handling

@@ -482,7 +482,14 @@ export function ChatPage() {
   }
 
   const handleExampleClick = (exampleQuery: string) => {
-    setQuery(exampleQuery)
+    // Auto-submit: clicking an example should immediately send the query
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: exampleQuery,
+      timestamp: new Date(),
+    }])
+    void handleStreamingQuery(exampleQuery)
+    setQuery('')
   }
 
   const handleClarificationOptionClick = useCallback((option: ClarificationOption) => {
