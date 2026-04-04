@@ -3244,13 +3244,46 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
-            # ── Phase: FollowUpDelta + Merge (v2 conversation state) ─────
-            # Two-tier extraction:
-            # 1. Fast deterministic regex for structurally unambiguous patterns
-            # 2. LLM-based extraction for natural language / compound changes
-            # Both produce a FollowUpDelta → merge → materialize → execute.
+            # ── Query Classification (single LLM call) ─────────────────
+            # Classify BEFORE execution: determines whether this is a delta,
+            # Pro Mode, new query, clarification answer, or informational.
+            # This replaces the old priority chain where handlers competed.
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
+            _query_type = None
             if _current_conv_state is not None:
+                try:
+                    _openrouter = self.openrouter
+                    _instr_client = getattr(_openrouter, "instructor_client", None)
+                    _instr_model = getattr(_openrouter, "instructor_model", None)
+                    if _instr_client and _instr_model:
+                        from .query_classifier import classify_query
+                        _pending_ctx = conversation_manager.get_pending_clarification_context(conv_id)
+                        _classification = await classify_query(
+                            query, _current_conv_state, _pending_ctx,
+                            _instr_client, _instr_model,
+                        )
+                        _query_type = _classification.query_type
+                        logger.info("Query classified: %s (%.2f) for: %s",
+                                    _query_type, _classification.confidence, query[:50])
+                except Exception as _cls_err:
+                    logger.warning("Query classification failed: %s", _cls_err)
+
+            # ── Dispatch: Pro Mode ──────────────────────────────────────
+            if _query_type == "pro_mode" and auto_pro_mode:
+                logger.info("🚀 Classifier → Pro Mode for: %s", query[:50])
+                return await self._execute_pro_mode(query, conv_id)
+
+            # ── Dispatch: Informational ─────────────────────────────────
+            if _query_type == "informational":
+                logger.info("📖 Classifier → Informational for: %s", query[:50])
+                # Fall through to LLM parse which handles informational via queryType
+
+            # ── Dispatch: Clarification Answer ──────────────────────────
+            # (Already handled by pending_choice above for numeric; LLM parse
+            # handles semantic clarification answers via conversation context)
+
+            # ── Dispatch: Parameter Delta ───────────────────────────────
+            if _query_type == "parameter_delta" and _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
                 _delta = _delta_extractor.extract(query, _current_conv_state)
                 # Tier 2: LLM delta extraction when regex can't parse
@@ -3329,93 +3362,30 @@ class QueryService:
                         tracker=tracker,
                     )
 
-            # ── Phase 4: LLM-based clarification resolution ───────────
-            # Semantic clarifications and country follow-ups are now
-            # handled by the LLM via enhanced conversation context.
+            # ── Dispatch: New Query or fallthrough ──────────────────
+            # For new_query, clarification_answer, informational, or when
+            # the classifier isn't available, fall through to the standard
+            # LLM parse pipeline which handles all of these via
+            # conversation_context and queryType classification.
 
-            contextual_follow_up = self._build_intent_from_contextual_follow_up(
-                query=query,
-                conversation_id=conv_id,
-            )
-            if contextual_follow_up is not None:
-                refined_query, contextual_intent, contextual_parse_result = contextual_follow_up
-                return await self._execute_resolved_intent(
-                    query=refined_query,
-                    skip_prefetch_clarification=True,  # Trust contextual follow-up — intent was verified against prior query
-                    conversation_id=conv_id,
-                    intent=contextual_intent,
-                    parse_result=contextual_parse_result,
-                    tracker=tracker,
-                )
+            # Pro Mode: check complexity for first-turn queries or when
+            # classifier explicitly says pro_mode (already handled above for follow-ups)
+            if auto_pro_mode and _query_type in (None, "new_query"):
+                early_complexity = QueryComplexityAnalyzer.detect_complexity(query, intent=None)
+                if early_complexity['pro_mode_required']:
+                    logger.info("🚀 Auto-switching to Pro Mode (detected: %s)", early_complexity['complexity_factors'])
+                    return await self._execute_pro_mode(query, conv_id)
 
-            # Check for indicator-switch follow-ups ("what about inflation",
-            # "show unemployment instead") — keeps country, changes metric.
-            indicator_switch = self._build_intent_from_indicator_switch(
-                query=query,
-                conversation_id=conv_id,
-            )
-            if indicator_switch is not None:
-                refined_query, switch_intent, switch_parse_result = indicator_switch
-                return await self._execute_resolved_intent(
-                    query=refined_query,
-                    skip_prefetch_clarification=True,
-                    conversation_id=conv_id,
-                    intent=switch_intent,
-                    parse_result=switch_parse_result,
-                    tracker=tracker,
-                )
-
-            # CONSOLIDATED: Semantic ambiguity and group scope checks now run
-            # ONLY after LLM parse (in _build_post_parse_clarification) where
-            # they have full intent context.  Pre-parse checks with intent=None
-            # were redundant and less accurate.
-
-            # Check if LangChain orchestrator should be used
+            # Orchestrator: only for explicitly complex new queries that
+            # need multi-agent routing (not for simple single-indicator queries)
             from ..config import get_settings
             settings = get_settings()
-            bypass_orchestrator = self._is_temporal_split_query(query)
-            # Also bypass orchestrator for queries that look informational —
-            # the orchestrator doesn't handle metadata queries.  Let them
-            # flow to the LLM parse step where queryType is classified.
-            if not bypass_orchestrator and self._looks_informational(query):
-                bypass_orchestrator = True
-                logger.info("⏭️ Bypassing orchestrator for possible informational query")
-            # Simple single-country macro queries work better through the
-            # deterministic pipeline with the UnifiedRouter, which has
-            # reliable fallback logic.  The orchestrator is better for
-            # complex/multi-step queries.
-            if not bypass_orchestrator and self._is_simple_single_country_query(query):
-                bypass_orchestrator = True
-                logger.info("⏭️ Bypassing orchestrator for simple single-country query; deterministic pipeline is more reliable")
-            # Bypass orchestrator when there is ANY conversation context.
-            # The deterministic pipeline builds conversation_context for the LLM
-            # prompt (indicator, country, provider from previous turn), enabling
-            # proper follow-up detection.  The orchestrator's parse_and_route
-            # does NOT pass conversation_context, so follow-up queries like
-            # "what about GDP growth" (indicator switch) or "exports" (clarification
-            # answer) lose the previous turn's country/indicator and return
-            # intent=null.
-            if not bypass_orchestrator:
-                last_intent_for_orch = conversation_manager.get_last_intent(conv_id)
-                if last_intent_for_orch:
-                    bypass_orchestrator = True
-                    if last_intent_for_orch.clarificationNeeded:
-                        logger.info("⏭️ Bypassing orchestrator for clarification answer; LLM conversation context required")
-                    else:
-                        logger.info("⏭️ Bypassing orchestrator for follow-up query; deterministic pipeline preserves conversation context")
-            if allow_orchestrator and (use_orchestrator or settings.use_langchain_orchestrator) and not bypass_orchestrator:
-                logger.info("🤖 Using LangChain orchestrator for intelligent query routing")
+            if (allow_orchestrator
+                    and use_orchestrator
+                    and _query_type in (None, "new_query")
+                    and not conversation_manager.get_last_intent(conv_id)):
+                logger.info("🤖 Using LangChain orchestrator for complex query routing")
                 return await self._execute_with_orchestrator(query, conv_id, tracker)
-            if bypass_orchestrator:
-                logger.info("⏭️ Bypassing orchestrator for temporal split query; using deterministic pipeline")
-
-            # Early complexity detection (before LLM parsing)
-            early_complexity = QueryComplexityAnalyzer.detect_complexity(query, intent=None)
-
-            # If query REQUIRES Pro Mode, automatically switch
-            if auto_pro_mode and early_complexity['pro_mode_required']:
-                logger.info("🚀 Auto-switching to Pro Mode (detected: %s)", early_complexity['complexity_factors'])
-                return await self._execute_pro_mode(query, conv_id)
 
             # ── LLM-based follow-up detection via dynamic prompt ─────
             # Build conversation_context for the LLM system prompt so it can

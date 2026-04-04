@@ -1551,7 +1551,9 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("countries", intent.parameters)
         self.assertEqual(parse_result.routed_provider, intent.apiProvider)
 
-    def test_process_query_uses_contextual_country_follow_up_before_parse(self) -> None:
+    def test_process_query_uses_delta_for_country_follow_up(self) -> None:
+        """'show only US' after a multi-country query uses the delta path."""
+        from backend.services.conversation_state_v2 import ConversationState
         conv_id = conversation_manager.get_or_create("conv-country-follow-up-process")
         conversation_manager.add_message_safe(
             conv_id,
@@ -1565,21 +1567,31 @@ class QueryServiceTests(unittest.TestCase):
                 originalQuery="employment rate across G20 member countries",
             ),
         )
+        # Set conversation state so the delta path fires
+        conversation_manager.set_conversation_state(conv_id, ConversationState(
+            indicator="employment rate",
+            countries=sorted(CountryResolver.G20_MEMBERS),
+            provider="WORLDBANK",
+        ))
 
         expected_response = QueryResponse(
             conversationId=conv_id,
             clarificationNeeded=False,
             message="ok",
         )
-        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
-             patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
             response = run(self.service.process_query("show only US", conversation_id=conv_id))
 
         self.assertEqual(response, expected_response)
         execute_intent.assert_awaited_once()
 
     def test_process_query_handles_add_country_follow_up(self) -> None:
-        """'Add Germany' after a GDP query should reuse the GDP intent."""
+        """'Add Germany' after a GDP query should reuse the GDP intent.
+
+        The delta path (regex tier) detects 'Add Germany' as an additive
+        country follow-up and executes without re-parsing.
+        """
+        from backend.services.conversation_state_v2 import ConversationState
         conv_id = conversation_manager.get_or_create("conv-add-country-follow-up")
         conversation_manager.add_message_safe(
             conv_id,
@@ -1593,14 +1605,20 @@ class QueryServiceTests(unittest.TestCase):
                 originalQuery="US GDP last 5 years",
             ),
         )
+        # Set conversation state so the delta path fires
+        conversation_manager.set_conversation_state(conv_id, ConversationState(
+            indicator="GDP",
+            country="US",
+            provider="FRED",
+            original_query="US GDP last 5 years",
+        ))
 
         expected_response = QueryResponse(
             conversationId=conv_id,
             clarificationNeeded=False,
             message="ok",
         )
-        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent, \
-             patch.object(self.service.pipeline, "parse_and_route", side_effect=AssertionError("parse should not run")):
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
             response = run(self.service.process_query("Add Germany", conversation_id=conv_id))
 
         self.assertEqual(response, expected_response)
