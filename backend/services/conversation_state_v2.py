@@ -278,9 +278,20 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # Dimensions (Phase 3: pass through to data_fetcher for StatsCan etc.)
     if state.dimensions:
         parameters["__dimensions"] = state.dimensions
+        # Include the base indicator key so fetch_with_dimensions knows
+        # which table/vector to apply modifiers to (e.g., "UNEMPLOYMENT_RATE")
+        if state.base_indicator:
+            parameters["__base_indicator"] = state.base_indicator
 
-    # Indicator
-    indicators = [state.indicator] if state.indicator else ["unknown"]
+    # Indicator: use base_indicator (vector key like "UNEMPLOYMENT_RATE") when
+    # dimensions are active, so the StatsCan provider routes correctly.
+    # Otherwise use the human-readable indicator name.
+    if state.dimensions and state.base_indicator:
+        indicators = [state.base_indicator]
+    elif state.indicator:
+        indicators = [state.indicator]
+    else:
+        indicators = ["unknown"]
 
     # Provider: use explicit provider if set, otherwise default
     provider = state.provider or state.routed_provider or "WorldBank"

@@ -787,7 +787,10 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         # use fetch_with_dimensions which is the general mechanism that
         # discovers table metadata and builds coordinates dynamically.
         # fetch_categorical_data is only for basic product ID / dimensions combos.
-        _indicator_key_for_dim = (indicator or "").upper().replace(" ", "_").replace("-", "_")
+        # Prefer __base_indicator from conversation state (e.g., "UNEMPLOYMENT_RATE")
+        # which is the vector mapping key. Fall back to current indicator.
+        _base = params.get("__base_indicator") or indicator or ""
+        _indicator_key_for_dim = _base.upper().replace(" ", "_").replace("-", "_")
         _is_known_dim = (
             _indicator_key_for_dim in svc.statscan_provider.VECTOR_MAPPINGS
             or _indicator_key_for_dim in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
