@@ -3317,10 +3317,15 @@ class QueryService:
                     _merged_state.last_indicators_resolved = _delta_intent.indicators
 
                     # Mark intent as delta-resolved. Pass whether the indicator
-                    # changed so the data_fetcher knows whether to re-resolve.
+                    # needs re-resolution. This is true when:
+                    # 1. The indicator explicitly changed (indicator switch)
+                    # 2. The provider changed (same concept needs different code)
                     if _delta_intent.parameters is None:
                         _delta_intent.parameters = {}
-                    _indicator_changed = _delta.changed_indicator is not None
+                    _provider_changed = (
+                        _delta_intent.apiProvider != (_current_conv_state.provider or _current_conv_state.routed_provider or "")
+                    )
+                    _indicator_changed = _delta.changed_indicator is not None or _provider_changed
                     _delta_intent.parameters["__delta_resolved"] = True
                     _delta_intent.parameters["__delta_indicator_changed"] = _indicator_changed
 
