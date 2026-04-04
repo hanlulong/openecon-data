@@ -44,6 +44,11 @@ class ConversationState(BaseModel):
 
     # --- Dimension modifiers (StatsCan, Eurostat sub-categories) ---
     dimensions: Optional[Dict[str, str]] = None
+    # Cached product ID and cube metadata for dimension-capable indicators.
+    # Pre-populated after first successful StatsCan query so the delta
+    # extractor can check dimension members without async API calls.
+    statscan_product_id: Optional[str] = None
+    statscan_cube_metadata: Optional[Dict[str, Any]] = None
 
     # --- Chart / display preferences ---
     chart_type: Optional[str] = None
@@ -390,9 +395,27 @@ def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
         if not base_indicator and params.get("__base_indicator"):
             base_indicator = params["__base_indicator"]
 
+    # Pre-resolve StatsCan product ID for dimension-capable indicators.
+    # This avoids async metadata lookups in the delta extractor.
+    statscan_product_id: Optional[str] = None
+    if base_indicator:
+        try:
+            from ..providers.statscan import StatsCanProvider
+            _vec = StatsCanProvider.VECTOR_MAPPINGS.get(base_indicator)
+            _coord = StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS.get(base_indicator)
+            if _coord:
+                statscan_product_id = str(_coord[0])[:8]
+            elif _vec is not None:
+                _cached_pid = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec)
+                if _cached_pid:
+                    statscan_product_id = str(_cached_pid)[:8]
+        except Exception:
+            pass
+
     return ConversationState(
         indicator=indicator,
         base_indicator=base_indicator,
+        statscan_product_id=statscan_product_id,
         country=country,
         countries=countries,
         provider=intent.apiProvider,

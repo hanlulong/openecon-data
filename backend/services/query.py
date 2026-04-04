@@ -1850,6 +1850,21 @@ class QueryService:
             _existing_state = conversation_manager.get_conversation_state(conv_id)
             if _existing_state:
                 _new_state.turn_number = _existing_state.turn_number + 1
+            # Pre-cache cube metadata for StatsCan dimension-capable indicators.
+            # This allows the delta extractor to check dimensions synchronously
+            # on the next follow-up (no async API call needed).
+            if (_new_state.statscan_product_id
+                    and _new_state.provider
+                    and _new_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}
+                    and not _new_state.statscan_cube_metadata):
+                try:
+                    _cube = await self.statscan_provider._get_cube_metadata(
+                        _new_state.statscan_product_id
+                    )
+                    if _cube:
+                        _new_state.statscan_cube_metadata = _cube
+                except Exception:
+                    pass  # Non-critical — delta extractor has fallback
             conversation_manager.set_conversation_state(conv_id, _new_state)
         except Exception as _sw_err:
             logger.debug("Dual-write conversation_state failed: %s", _sw_err)

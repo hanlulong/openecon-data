@@ -382,32 +382,31 @@ class DeltaExtractor:
         if not product_id:
             return None
 
-        # Fetch cube metadata (async → sync bridge)
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We are inside an already-running event loop (e.g., FastAPI).
-                # Create a future and use run_coroutine_threadsafe if possible,
-                # or use the nest_asyncio approach.  For simplicity we use a
-                # new thread to avoid deadlocks.
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    cube_metadata = pool.submit(
-                        lambda: asyncio.run(
-                            statscan._get_cube_metadata(product_id)
-                        )
-                    ).result(timeout=10)
-            else:
-                cube_metadata = loop.run_until_complete(
-                    statscan._get_cube_metadata(product_id)
+        # Use cached cube metadata from conversation state (pre-populated
+        # after first successful StatsCan query — no async API call needed).
+        # Fall back to async fetch in a thread if cache is missing.
+        cube_metadata = state.statscan_cube_metadata
+        if not cube_metadata:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        cube_metadata = pool.submit(
+                            lambda: asyncio.run(
+                                statscan._get_cube_metadata(product_id)
+                            )
+                        ).result(timeout=10)
+                else:
+                    cube_metadata = loop.run_until_complete(
+                        statscan._get_cube_metadata(product_id)
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Dimension modifier: failed to fetch cube metadata for %s: %s",
+                    product_id, exc,
                 )
-        except Exception as exc:
-            logger.debug(
-                "Dimension modifier: failed to fetch cube metadata for %s: %s",
-                product_id,
-                exc,
-            )
-            return None
+                return None
 
         if not cube_metadata:
             return None
