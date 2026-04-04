@@ -371,8 +371,28 @@ def extract_state_from_intent(intent: ParsedIntent) -> ConversationState:
             "entities": intent.decompositionEntities,
         }
 
+    # Infer base_indicator (vector mapping key) from the indicator name.
+    # For StatsCan, the indicator resolved by the catalog is often the vector
+    # key (e.g., "UNEMPLOYMENT_RATE", "CPI", "GDP"). Check if it matches a
+    # known VECTOR_MAPPINGS or COORDINATE_PRODUCT_MAPPINGS key.
+    base_indicator: Optional[str] = None
+    if indicator:
+        _key = indicator.upper().replace(" ", "_").replace("-", "_")
+        # Check if this is already a vector key (e.g., from catalog resolution)
+        try:
+            from ..providers.statscan import StatsCanProvider
+            if (_key in StatsCanProvider.VECTOR_MAPPINGS
+                    or _key in StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS):
+                base_indicator = _key
+        except Exception:
+            pass
+        # Also check if the params had __base_indicator from a prior delta path
+        if not base_indicator and params.get("__base_indicator"):
+            base_indicator = params["__base_indicator"]
+
     return ConversationState(
         indicator=indicator,
+        base_indicator=base_indicator,
         country=country,
         countries=countries,
         provider=intent.apiProvider,
