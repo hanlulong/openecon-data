@@ -275,6 +275,10 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     if state.vs_currency:
         parameters["vsCurrency"] = state.vs_currency
 
+    # Dimensions (Phase 3: pass through to data_fetcher for StatsCan etc.)
+    if state.dimensions:
+        parameters["__dimensions"] = state.dimensions
+
     # Indicator
     indicators = [state.indicator] if state.indicator else ["unknown"]
 

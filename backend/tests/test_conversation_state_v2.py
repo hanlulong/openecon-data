@@ -555,6 +555,219 @@ class TestDeltaExtractor:
         assert delta is None
 
 
+# ─── DeltaExtractor Phase 3: Context-aware dimension modifiers ──────
+
+class TestDeltaExtractorDimensionModifier:
+    """Tests for context-aware dimension modifier detection (Phase 3).
+
+    These tests verify that when the conversation state points to a
+    StatsCan indicator with dimensional tables, follow-up terms like
+    "female", "shelter", "Ontario" are correctly classified as dimension
+    modifiers rather than indicator switches.
+    """
+
+    @pytest.fixture
+    def _build_extractor(self):
+        """Factory for a DeltaExtractor with a mocked StatsCan provider."""
+        from unittest.mock import MagicMock, AsyncMock
+
+        def _make(
+            vector_mappings=None,
+            coord_mappings=None,
+            product_id_cache=None,
+            cube_metadata=None,
+            extracted_modifiers=None,
+        ):
+            mock_qs = MagicMock()
+            mock_statscan = MagicMock()
+
+            # Set up the mappings
+            mock_statscan.VECTOR_MAPPINGS = vector_mappings or {}
+            mock_statscan.COORDINATE_PRODUCT_MAPPINGS = coord_mappings or {}
+            mock_statscan.PRODUCT_ID_CACHE = product_id_cache or {}
+            mock_statscan._normalize_metadata_product_id = (
+                lambda pid: "".join(ch for ch in str(pid) if ch.isdigit())[:8]
+            )
+
+            # Mock _get_cube_metadata as async
+            mock_statscan._get_cube_metadata = AsyncMock(
+                return_value=cube_metadata or {}
+            )
+
+            # Mock extract_dimension_modifiers as sync
+            mock_statscan.extract_dimension_modifiers = MagicMock(
+                return_value=extracted_modifiers or {}
+            )
+
+            mock_qs.statscan_provider = mock_statscan
+
+            from backend.services.delta_extractor import DeltaExtractor
+            return DeltaExtractor(mock_qs)
+
+        return _make
+
+    def test_female_after_unemployment_is_dimension(self, _build_extractor):
+        """'show female' after unemployment rate → dimension modifier, not indicator switch."""
+        extractor = _build_extractor(
+            vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
+            product_id_cache={2062815: "1410028702"},
+            cube_metadata={"dimension": [{"dimensionNameEn": "Sex", "member": []}]},
+            extracted_modifiers={"sex": "female"},
+        )
+        state = ConversationState(
+            indicator="unemployment rate",
+            base_indicator="UNEMPLOYMENT_RATE",
+            provider="StatsCan",
+            country="CA",
+        )
+        delta = extractor.extract("show female", state)
+        assert delta is not None
+        assert delta.delta_type == "dimension_change"
+        assert delta.added_dimensions == {"sex": "female"}
+        assert delta.changed_indicator is None
+
+    def test_shelter_after_cpi_is_dimension(self, _build_extractor):
+        """'show shelter' after CPI → dimension modifier for product category."""
+        extractor = _build_extractor(
+            vector_mappings={"CPI": 41690973},
+            product_id_cache={41690973: "1810000401"},
+            cube_metadata={"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]},
+            extracted_modifiers={"products": "Shelter"},
+        )
+        state = ConversationState(
+            indicator="CPI",
+            base_indicator="CPI",
+            provider="StatsCan",
+            country="CA",
+        )
+        delta = extractor.extract("show shelter", state)
+        assert delta is not None
+        assert delta.delta_type == "dimension_change"
+        assert delta.added_dimensions == {"products": "Shelter"}
+        assert delta.changed_indicator is None
+
+    def test_inflation_after_unemployment_is_indicator_switch(self, _build_extractor):
+        """'show inflation' after unemployment → true indicator switch (no dimension match)."""
+        extractor = _build_extractor(
+            vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
+            product_id_cache={2062815: "1410028702"},
+            cube_metadata={"dimension": [{"dimensionNameEn": "Sex", "member": []}]},
+            extracted_modifiers={},  # No dimension match for "inflation"
+        )
+        state = ConversationState(
+            indicator="unemployment rate",
+            base_indicator="UNEMPLOYMENT_RATE",
+            provider="StatsCan",
+            country="CA",
+        )
+        delta = extractor.extract("show inflation", state)
+        # Should NOT be dimension_change; should fall through to indicator switch
+        assert delta is not None
+        assert delta.delta_type == "indicator_switch"
+        assert delta.changed_indicator == "inflation"
+
+    def test_non_statscan_provider_skips_dimension_check(self, _build_extractor):
+        """Non-StatsCan provider should not attempt dimension modifier detection."""
+        extractor = _build_extractor()
+        state = ConversationState(
+            indicator="GDP",
+            provider="FRED",
+            country="US",
+        )
+        # "female" is a valid dimension term but should not be checked for FRED
+        delta = extractor.extract("female", state)
+        assert delta is not None
+        assert delta.delta_type == "indicator_switch"
+        assert delta.changed_indicator == "female"
+
+    def test_dimension_modifier_sets_is_dimension_flag(self, _build_extractor):
+        """Dimension modifier delta must set is_dimension_modifier_change=True."""
+        extractor = _build_extractor(
+            vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
+            product_id_cache={2062815: "1410028702"},
+            cube_metadata={"dimension": []},
+            extracted_modifiers={"age": "youth"},
+        )
+        state = ConversationState(
+            indicator="unemployment rate",
+            base_indicator="UNEMPLOYMENT_RATE",
+            provider="STATSCAN",
+            country="CA",
+        )
+        delta = extractor.extract("show youth", state)
+        assert delta is not None
+        assert delta.is_dimension_modifier_change is True
+
+    def test_coordinate_mapping_indicator(self, _build_extractor):
+        """Indicators using COORDINATE_PRODUCT_MAPPINGS should also work."""
+        extractor = _build_extractor(
+            coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
+            cube_metadata={"dimension": [{"dimensionNameEn": "Geography", "member": []}]},
+            extracted_modifiers={"geography": "Ontario"},
+        )
+        state = ConversationState(
+            indicator="housing price index",
+            base_indicator="HOUSING_PRICE_INDEX",
+            provider="StatsCan",
+            country="CA",
+        )
+        delta = extractor.extract("show Ontario", state)
+        # "Ontario" is also a geography term that the country handler might catch,
+        # but the country handler returns None because "Ontario" is a province, not a country ISO2.
+        # The dimension handler should catch it.
+        assert delta is not None
+        assert delta.delta_type == "dimension_change"
+        assert delta.added_dimensions == {"geography": "Ontario"}
+
+
+# ─── materialize_intent with dimensions ─────────────────────────────
+
+class TestMaterializeIntentWithDimensions:
+    """Phase 3: materialize_intent passes dimensions to intent parameters."""
+
+    def test_dimensions_included_in_parameters(self):
+        state = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"sex": "female"},
+        )
+        intent = materialize_intent(state)
+        assert "__dimensions" in intent.parameters
+        assert intent.parameters["__dimensions"] == {"sex": "female"}
+
+    def test_no_dimensions_no_key(self):
+        state = ConversationState(
+            indicator="GDP",
+            country="US",
+            provider="FRED",
+        )
+        intent = materialize_intent(state)
+        assert "__dimensions" not in intent.parameters
+
+    def test_dimensions_round_trip_through_merge(self):
+        """Dimension modifier delta → merge → materialize includes dimensions."""
+        initial = ConversationState(
+            indicator="CPI",
+            country="CA",
+            provider="STATSCAN",
+            turn_number=1,
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"products": "Shelter"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+            raw_query="show shelter",
+        )
+        merged = merge_state(initial, delta)
+        assert merged.dimensions == {"products": "Shelter"}
+
+        intent = materialize_intent(merged)
+        assert intent.parameters["__dimensions"] == {"products": "Shelter"}
+        assert intent.indicators == ["CPI"]  # Indicator preserved
+        assert intent.isFollowUp is True
+
+
 # ─── Integration: merge + materialize round-trip ────────────────────
 
 class TestMergeAndMaterialize:

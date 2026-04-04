@@ -1,17 +1,24 @@
 """Delta extraction for conversation follow-ups.
 
-Phase 2: Deterministic detection of what changed between turns.
+Phase 3: Context-aware deterministic detection of what changed between turns.
 
 DeltaExtractor tries fast structural handlers (country-only change,
-indicator switch, dimension modifier, time change) BEFORE the LLM.
+dimension modifier, indicator switch, time change) BEFORE the LLM.
 If no deterministic match is found it returns None so the caller can
 fall through to the LLM-based follow-up detection.
+
+Phase 3 addition: the extractor is now *context-aware*.  When the current
+ConversationState points to a StatsCan indicator with dimensional tables,
+follow-up terms like "female", "shelter", "Ontario" are checked against the
+table's actual dimension members BEFORE the indicator-switch handler runs.
+This prevents dimension modifiers from being misclassified as new indicators.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from typing import List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from .conversation_state_v2 import ConversationState, FollowUpDelta
 from ..routing.country_resolver import CountryResolver
@@ -114,6 +121,14 @@ class DeltaExtractor:
             return delta
 
         delta = self._try_provider_change(query_text, state)
+        if delta:
+            return delta
+
+        # Phase 3: Context-aware dimension modifier detection.
+        # Must run BEFORE indicator switch so that "show female" after
+        # "unemployment rate" is recognised as a dimension change, not
+        # an indicator switch to "female".
+        delta = self._try_dimension_modifier(query_text, state)
         if delta:
             return delta
 
@@ -301,6 +316,123 @@ class DeltaExtractor:
             changed_provider=provider,
             raw_query=query,
             delta_type="provider_change",
+        )
+
+    # ------------------------------------------------------------------
+    # Handler: Context-aware dimension modifier  (Phase 3)
+    # ------------------------------------------------------------------
+
+    def _try_dimension_modifier(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Detect dimension modifiers for StatsCan indicators.
+
+        When the conversation state points to a StatsCan indicator that has
+        dimensional tables (e.g., unemployment rate with sex/age/geography
+        dimensions, or CPI with product dimensions), this handler checks
+        whether the follow-up query contains a term that matches one of
+        those dimension members.
+
+        If a match is found the delta is ``added_dimensions`` (not
+        ``changed_indicator``), which prevents misclassification.
+
+        This handler is synchronous but wraps an async call to
+        ``_get_cube_metadata`` via ``asyncio`` so it integrates with the
+        sync ``extract()`` method.
+        """
+        # Only applies when current state is StatsCan
+        current_provider = (
+            state.provider or state.routed_provider or ""
+        ).upper()
+        if current_provider not in {"STATSCAN", "STATISTICS CANADA"}:
+            return None
+
+        # Need a base indicator in state
+        if not state.indicator:
+            return None
+
+        # Access the StatsCan provider via the QueryService
+        statscan = getattr(self._qs, "statscan_provider", None)
+        if statscan is None:
+            return None
+
+        # Resolve the indicator key
+        indicator_key = (
+            state.base_indicator
+            or state.indicator.upper().replace(" ", "_").replace("-", "_")
+        )
+
+        # Check if this indicator is known (has a vector or coordinate mapping)
+        _vec = statscan.VECTOR_MAPPINGS.get(indicator_key)
+        _coord = statscan.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
+        if _vec is None and _coord is None:
+            return None
+
+        # Resolve product ID
+        product_id: Optional[str] = None
+        if _coord:
+            product_id = statscan._normalize_metadata_product_id(_coord[0])
+        elif _vec is not None:
+            _cached = statscan.PRODUCT_ID_CACHE.get(_vec)
+            if _cached:
+                product_id = statscan._normalize_metadata_product_id(_cached)
+
+        if not product_id:
+            return None
+
+        # Fetch cube metadata (async → sync bridge)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We are inside an already-running event loop (e.g., FastAPI).
+                # Create a future and use run_coroutine_threadsafe if possible,
+                # or use the nest_asyncio approach.  For simplicity we use a
+                # new thread to avoid deadlocks.
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    cube_metadata = pool.submit(
+                        lambda: asyncio.run(
+                            statscan._get_cube_metadata(product_id)
+                        )
+                    ).result(timeout=10)
+            else:
+                cube_metadata = loop.run_until_complete(
+                    statscan._get_cube_metadata(product_id)
+                )
+        except Exception as exc:
+            logger.debug(
+                "Dimension modifier: failed to fetch cube metadata for %s: %s",
+                product_id,
+                exc,
+            )
+            return None
+
+        if not cube_metadata:
+            return None
+
+        # Use the provider's extract_dimension_modifiers
+        modifiers: Dict[str, str] = statscan.extract_dimension_modifiers(
+            query_text=query,
+            base_indicator=indicator_key,
+            product_id=product_id,
+            cube_metadata=cube_metadata,
+        )
+
+        if not modifiers:
+            return None
+
+        logger.info(
+            "Delta: dimension modifier for %s → %s",
+            indicator_key,
+            modifiers,
+        )
+        return FollowUpDelta(
+            added_dimensions=modifiers,
+            is_dimension_modifier_change=True,
+            raw_query=query,
+            delta_type="dimension_change",
         )
 
     # ------------------------------------------------------------------

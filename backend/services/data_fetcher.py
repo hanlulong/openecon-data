@@ -655,6 +655,14 @@ async def fetch_from_provider_dispatch(
 async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> List[NormalizedData]:
     """Statistics Canada provider dispatch."""
     dimensions = params.get("dimensions", {})
+
+    # Phase 3: pick up __dimensions from materialized ConversationState
+    # These are dimension modifiers detected by the context-aware DeltaExtractor
+    # and carried through materialize_intent().
+    if not dimensions and params.get("__dimensions"):
+        dimensions = params["__dimensions"]
+        logger.info(f"StatsCan: using __dimensions from conversation state: {dimensions}")
+
     entity = params.get("entity")
     indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)
 
@@ -773,8 +781,35 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     f"Falling through to standard fetch."
                 )
 
-    # Use categorical provider if dimensions are specified
+    # Use dimension-aware fetch when dimensions are specified
     if dimensions:
+        # Phase 3: If dimensions came from conversation state (__dimensions),
+        # use fetch_with_dimensions which is the general mechanism that
+        # discovers table metadata and builds coordinates dynamically.
+        # fetch_categorical_data is only for basic product ID / dimensions combos.
+        _indicator_key_for_dim = (indicator or "").upper().replace(" ", "_").replace("-", "_")
+        _is_known_dim = (
+            _indicator_key_for_dim in svc.statscan_provider.VECTOR_MAPPINGS
+            or _indicator_key_for_dim in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
+        )
+        if _is_known_dim and params.get("__dimensions"):
+            try:
+                start_year = int(params["startDate"][:4]) if params.get("startDate") else None
+                end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                series = await svc.statscan_provider.fetch_with_dimensions(
+                    base_indicator=_indicator_key_for_dim,
+                    modifiers=dimensions,
+                    start_year=start_year,
+                    end_year=end_year,
+                    periods=params.get("periods", 240),
+                )
+                return [series]
+            except Exception as e:
+                logger.warning(
+                    f"fetch_with_dimensions failed for {_indicator_key_for_dim} "
+                    f"with __dimensions={dimensions}: {e}. Falling through."
+                )
+
         categorical_params = {
             "productId": params.get("productId", "17100005"),
             "indicator": indicator or "Population",
