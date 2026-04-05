@@ -1135,8 +1135,8 @@ class TestResolvedIndicatorCodePreservation:
         assert state.resolved_indicator_code == "NY.GDP.PCAP.CD"
         assert state.indicator == "GDP per capita"
 
-    def test_extract_state_no_resolved_code_when_same(self):
-        """When params indicator matches intent indicator, no separate code."""
+    def test_extract_state_resolved_code_always_set(self):
+        """resolved_indicator_code is always set from params.indicator."""
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["CPIAUCSL"],
@@ -1144,7 +1144,7 @@ class TestResolvedIndicatorCodePreservation:
             clarificationNeeded=False,
         )
         state = extract_state_from_intent(intent)
-        assert state.resolved_indicator_code is None
+        assert state.resolved_indicator_code == "CPIAUCSL"
 
     def test_resolved_code_preserved_across_time_change(self):
         """Changing time range should keep the resolved indicator code."""

@@ -395,12 +395,11 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # follow-up turns can reuse the exact code without re-resolution drift.
     resolved_indicator_code: Optional[str] = None
     _params_indicator = params.get("indicator")
-    if _params_indicator and indicator:
-        # Only store if it differs from the human-readable name (i.e., it
-        # was actually resolved to a provider-specific code).
-        _pi = str(_params_indicator).strip()
-        if _pi and _pi != indicator:
-            resolved_indicator_code = _pi
+    if _params_indicator:
+        # Always store the resolved code from the data fetch pipeline.
+        # This is the provider-specific code (e.g., NY.GDP.PCAP.CD) that
+        # should be reused on follow-up turns to prevent indicator drift.
+        resolved_indicator_code = str(_params_indicator).strip() or None
 
     # Trade
     trade_flow = params.get("flow")
