@@ -126,10 +126,10 @@ function getDisplayContent(message: Message): string {
 
 // Example queries array - consistent with landing page
 const EXAMPLE_QUERIES = [
-  "US unemployment rate and inflation 2019-2024",
+  "US unemployment rate 2019-2024",
   "GDP growth China, India, Brazil 2018-2023",
   "GDP growth US, Germany, Japan from IMF 2018-2023",
-  "Credit to GDP ratio US, UK, Japan from BIS 2019-2023",
+  "Central bank policy rates US, UK, Japan from BIS 2019-2024",
   "Total exports US, China 2018-2023 from Comtrade",
 ]
 
