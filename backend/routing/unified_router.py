@@ -333,7 +333,7 @@ class UnifiedRouter:
         indicators = getattr(intent, "indicators", []) or []
         parameters = getattr(intent, "parameters", {}) or {}
         country = parameters.get("country", "")
-        countries = parameters.get("countries", [])
+        countries = parameters.get("countries") or []
         llm_provider = getattr(intent, "apiProvider", None)
 
         return self.route(

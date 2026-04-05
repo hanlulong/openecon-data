@@ -946,7 +946,7 @@ async def _fetch_from_eurostat(svc: Any, intent: ParsedIntent, params: dict) -> 
     params["indicator"] = indicator
 
     country_param = params.get("country")
-    countries_param = params.get("countries", [])
+    countries_param = params.get("countries") or []
 
     # EU aggregate codes that should NOT expand
     EU_AGGREGATES = {"EU", "EU27", "EU27_2020", "EU28", "EA", "EA19", "EA20", "EUROZONE", "EURO_AREA"}
@@ -1025,7 +1025,7 @@ async def _fetch_from_oecd(svc: Any, intent: ParsedIntent, params: dict) -> List
     params["indicator"] = indicator
 
     country_param = params.get("country")
-    countries_param = params.get("countries", [])
+    countries_param = params.get("countries") or []
 
     # Handle LLM parsing "OECD unemployment" as countries=["ALL_OECD"]
     if countries_param and len(countries_param) == 1:
@@ -1404,7 +1404,7 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
 
     # Fetch all indicators in parallel with a total timeout
     num_countries = len(
-        intent.parameters.get("countries", []) if intent.parameters else []
+        (intent.parameters.get("countries") or []) if intent.parameters else []
     )
     total_timeout = min(90, 45 + max(0, num_countries - 3) * 5)
     logger.info(

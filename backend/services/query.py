@@ -1510,7 +1510,7 @@ class QueryService:
 
             provider_name = intent.apiProvider
             indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
-            country = intent.parameters.get("country") or intent.parameters.get("countries", [""])[0] if intent.parameters else ""
+            country = intent.parameters.get("country") or (intent.parameters.get("countries") or [""])[0] if intent.parameters else ""
 
             error_details = []
             error_details.append(f"No data found for **{indicators}**")
@@ -1845,7 +1845,7 @@ class QueryService:
 
         logger.info(
             "📈 Expanded ranking scope to %d countries for provider %s",
-            len(updated.get("countries", [])),
+            len(updated.get("countries") or []),
             normalized_provider or provider,
         )
         return updated
@@ -3405,7 +3405,7 @@ class QueryService:
                 # Try to provide helpful context about why data might be missing
                 provider_name = intent.apiProvider
                 indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
-                country = intent.parameters.get("country") or intent.parameters.get("countries", [""])[0] if intent.parameters else ""
+                country = intent.parameters.get("country") or (intent.parameters.get("countries") or [""])[0] if intent.parameters else ""
 
                 error_details = []
                 error_details.append(f"No data found for **{indicators}**")
@@ -4007,7 +4007,7 @@ class QueryService:
         if intent.parameters:
             country = intent.parameters.get("country") or ""
             if not country:
-                countries = intent.parameters.get("countries", [])
+                countries = intent.parameters.get("countries") or []
                 if countries:
                     country = ", ".join(str(c) for c in countries)
 
@@ -4610,13 +4610,13 @@ class QueryService:
                         indicators_list = parsed_intent.get("indicators", [])
                         indicators = ", ".join(indicators_list) if indicators_list else "requested indicator"
                         params = parsed_intent.get("parameters", {})
-                        country = params.get("country") or params.get("countries", [""])[0] if params else ""
+                        country = params.get("country") or (params.get("countries") or [""])[0] if params else ""
                     elif hasattr(parsed_intent, "apiProvider"):
                         if provider_name == "Unknown":
                             provider_name = parsed_intent.apiProvider or "Unknown"
                         indicators = ", ".join(parsed_intent.indicators) if parsed_intent.indicators else "requested indicator"
                         params = parsed_intent.parameters or {}
-                        country = params.get("country") or params.get("countries", [""])[0] if params else ""
+                        country = params.get("country") or (params.get("countries") or [""])[0] if params else ""
 
                 # Source 4: Check current_indicators from state
                 if indicators == "requested indicator" and result.get("current_indicators"):
@@ -4864,7 +4864,7 @@ class QueryService:
         if not data:
             provider_name = intent.apiProvider or "Unknown"
             indicators = ", ".join(intent.indicators) if intent.indicators else "requested indicator"
-            country = intent.parameters.get("country") or intent.parameters.get("countries", [""])[0] if intent.parameters else ""
+            country = intent.parameters.get("country") or (intent.parameters.get("countries") or [""])[0] if intent.parameters else ""
             no_data_clarification = self._build_no_data_indicator_clarification(
                 conversation_id=conversation_id,
                 query=query,
