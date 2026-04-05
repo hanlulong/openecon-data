@@ -78,8 +78,8 @@ You should receive normalized data with provenance metadata (`source`, `unit`, `
 ## 6. Next steps
 
 - If you want to use this project as an MCP server in AI coding assistants, see [`docs/mcp/setup.md`](../mcp/setup.md).
-- Hosted MCP endpoint: `https://data.openecon.io/mcp`
-- Hosted user-facing app: `https://data.openecon.io/chat`
+- Hosted MCP endpoint: `https://data.openecon.ai/mcp`
+- Hosted user-facing app: `https://data.openecon.ai/chat`
 - See [`docs/guides/testing.md`](./testing.md) for a manual verification checklist.
 - Review [`docs/reference/trade-data.md`](../reference/trade-data.md) for Comtrade/HS code hints.
 - Browse [`docs/development/agents.md`](../development/agents.md) for AI agent integration notes.

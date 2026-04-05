@@ -4,7 +4,7 @@
 
 ## Endpoints
 
-- Hosted: `https://data.openecon.io/mcp`
+- Hosted: `https://data.openecon.ai/mcp`
 - Local: `http://localhost:3001/mcp`
 
 ## Tool Exposed
@@ -16,7 +16,7 @@
 
 ```bash
 # Hosted
-codex mcp add openecon-data --url https://data.openecon.io/mcp
+codex mcp add openecon-data --url https://data.openecon.ai/mcp
 
 # Or local
 codex mcp add openecon-data-local --url http://localhost:3001/mcp
@@ -30,7 +30,7 @@ codex mcp get openecon-data
 
 ```bash
 # Hosted
-claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
+claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
 
 # Or local
 claude mcp add --transport sse openecon-data-local http://localhost:3001/mcp --scope user

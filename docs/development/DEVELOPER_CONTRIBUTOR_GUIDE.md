@@ -14,7 +14,7 @@ Use this guide for:
 
 If you only want to use the product, start with:
 - [OpenEcon.ai](https://openecon.ai)
-- [data.openecon.io/chat](https://data.openecon.io/chat)
+- [data.openecon.ai/chat](https://data.openecon.ai/chat)
 
 ## Prerequisites
 
@@ -100,7 +100,7 @@ Default URLs:
 ## MCP For Development
 
 Hosted endpoint:
-- `https://data.openecon.io/mcp`
+- `https://data.openecon.ai/mcp`
 
 Local endpoint:
 - `http://localhost:3001/mcp`

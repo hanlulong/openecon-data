@@ -442,7 +442,7 @@ Exposes the `query_data` tool to MCP-compatible clients (Claude Desktop, Claude 
 
 Disable with env var `DISABLE_MCP=true`.
 
-Hosted: `https://data.openecon.io/mcp` | Local: `http://localhost:3001/mcp`
+Hosted: `https://data.openecon.ai/mcp` | Local: `http://localhost:3001/mcp`
 
 ---
 

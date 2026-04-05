@@ -11,7 +11,7 @@ OpenEcon Data is a one-stop MCP + API layer for economic data across 10+ provide
 - **[Developer & Contributor Guide](development/DEVELOPER_CONTRIBUTOR_GUIDE.md)** - Technical setup, architecture, testing, deployment, contribution
 - **[API Quick Reference](providers/API_QUICK_REFERENCE.md)** - Quick reference for all supported APIs
 - **[Security Policy](../.github/SECURITY.md)** - Security features and best practices
-- **Hosted data app:** [https://data.openecon.io/chat](https://data.openecon.io/chat)
+- **Hosted data app:** [https://data.openecon.ai/chat](https://data.openecon.ai/chat)
 
 ---
 
@@ -107,18 +107,18 @@ OpenEcon Data exposes a Model Context Protocol (MCP) server for AI assistants:
 ## MCP Quick Start
 
 Use one of these endpoints:
-- Hosted: `https://data.openecon.io/mcp`
+- Hosted: `https://data.openecon.ai/mcp`
 - Local: `http://localhost:3001/mcp`
 
 Add to Codex:
 ```bash
-codex mcp add openecon-data --url https://data.openecon.io/mcp
+codex mcp add openecon-data --url https://data.openecon.ai/mcp
 codex mcp get openecon-data
 ```
 
 Add to Claude Code:
 ```bash
-claude mcp add --transport sse openecon-data https://data.openecon.io/mcp --scope user
+claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user
 claude mcp get openecon-data
 ```
 

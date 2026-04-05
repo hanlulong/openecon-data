@@ -40,7 +40,6 @@ from ..services.metadata_search import MetadataSearchService
 from ..routing.unified_router import (
     route_provider as unified_route_provider,
     correct_coingecko_misrouting as unified_correct_coingecko_misrouting,
-    validate_routing as unified_validate_routing,
 )
 from ..services.indicator_translator import IndicatorTranslator
 from ..services.indicator_resolver import get_indicator_resolver
