@@ -2876,7 +2876,8 @@ class QueryService:
                     if _delta_intent.parameters is None:
                         _delta_intent.parameters = {}
                     _provider_changed = (
-                        _delta_intent.apiProvider != (_current_conv_state.provider or _current_conv_state.routed_provider or "")
+                        normalize_provider_name(_delta_intent.apiProvider)
+                        != normalize_provider_name(_current_conv_state.provider or _current_conv_state.routed_provider or "")
                     )
                     _indicator_changed = _delta.changed_indicator is not None or _provider_changed
                     _delta_intent.parameters["__delta_resolved"] = True
@@ -2947,6 +2948,12 @@ class QueryService:
                         except Exception:
                             pass
 
+                    # Mark that the delta path already saved the merged state.
+                    # This prevents the guaranteed save in main.py from
+                    # overwriting the carefully-merged state with a freshly
+                    # extracted one (which may have indicator drift).
+                    if _delta_response is not None:
+                        _delta_response.delta_state_saved = True
                     return _delta_response
 
             # Log fallthrough when classifier said delta but extraction failed

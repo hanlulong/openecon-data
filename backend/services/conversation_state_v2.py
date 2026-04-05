@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 from ..models import ParsedIntent
+from ..utils.providers import normalize_provider_name
 
 logger = logging.getLogger(__name__)
 
@@ -489,8 +490,8 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         statscan_cube_metadata=statscan_cube_metadata_val,
         country=country,
         countries=countries,
-        provider=intent.apiProvider,
-        routed_provider=intent.apiProvider,
+        provider=normalize_provider_name(intent.apiProvider or ""),
+        routed_provider=normalize_provider_name(intent.apiProvider or ""),
         start_date=start_date,
         end_date=end_date,
         original_query=intent.originalQuery,

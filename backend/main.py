@@ -684,7 +684,10 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     # query, regardless of which execution path was taken. The cube metadata
     # from StatsCan's _get_cube_metadata cache is available here because the
     # data fetch has already completed.
-    if result.data and result.intent and result.conversationId:
+    # SKIP when the delta path already saved the merged state — re-extracting
+    # from the (mutated) response intent would overwrite the precise merged
+    # state and cause indicator drift (e.g., NY.GDP.PCAP.CD → NY.GDP.MKTP.CD).
+    if result.data and result.intent and result.conversationId and not getattr(result, 'delta_state_saved', False):
         try:
             from .services.conversation_state_v2 import extract_state_from_intent as _extract_state
             _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
@@ -697,6 +700,9 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
         except Exception as _save_err:
             logger.error("FAILED to save conversation state for %s: %s",
                          result.conversationId, _save_err, exc_info=True)
+    elif getattr(result, 'delta_state_saved', False):
+        logger.info("State already saved by delta path for %s — skipping guaranteed save",
+                     result.conversationId)
 
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
@@ -842,7 +848,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 return
 
             # Guaranteed post-query conversation state save (streaming path).
-            if result.data and result.intent and result.conversationId:
+            # SKIP when the delta path already saved the merged state.
+            if result.data and result.intent and result.conversationId and not getattr(result, 'delta_state_saved', False):
                 try:
                     from backend.services.conversation_state_v2 import extract_state_from_intent as _extract_state
                     _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
@@ -853,6 +860,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                     logger.info("Stream state saved for %s: indicator=%s", result.conversationId, _state.indicator)
                 except Exception as _save_err:
                     logger.error("FAILED to save stream conversation state: %s", _save_err, exc_info=True)
+            elif getattr(result, 'delta_state_saved', False):
+                logger.info("Stream state already saved by delta path for %s", result.conversationId)
 
             # Save to user history if authenticated
             if user and result.data:

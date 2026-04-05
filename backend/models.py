@@ -191,6 +191,9 @@ class QueryResponse(BaseModel):
     processingSteps: Optional[List[ProcessingStep]] = None
     alternativeSeries: Optional[List[AlternativeSeries]] = None  # Related indicators user might want
     processingTimeMs: Optional[float] = None  # End-to-end query processing time in milliseconds
+    # Internal flag: delta path already saved conversation state — skip
+    # the guaranteed save in main.py to avoid overwriting the merged state.
+    delta_state_saved: bool = Field(default=False, exclude=True)
 
 
 class StreamEvent(BaseModel):
