@@ -416,7 +416,18 @@ class IndicatorResolver:
                 and not _disc_present(d, (result.code or "").lower())
                 and not _disc_present(d, result_desc_lower)
             }
-            if missing_discs:
+            if missing_discs and result.confidence >= 0.90:
+                # High-confidence catalog results (≥0.90) should NOT be demoted
+                # by name-based discriminator checks. The catalog author set the
+                # confidence intentionally. Demoting based on truncated names
+                # causes correct results like une_rt_a (unemployment rate) to be
+                # replaced by wrong FTS matches like tipsun30.
+                logger.info(
+                    "🔬 Keeping high-confidence catalog result '%s' (conf=%.2f) despite "
+                    "missing discriminators %s — catalog confidence overrides name check",
+                    result.code, result.confidence, missing_discs,
+                )
+            elif missing_discs:
                 # Before demoting to FTS, try OTHER catalog variant codes that
                 # DO match the missing discriminators.  This is the key fix:
                 # when catalog has variant codes (ppp, growth, per_capita),

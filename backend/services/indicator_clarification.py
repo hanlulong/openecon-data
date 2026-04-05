@@ -1681,7 +1681,11 @@ def verify_semantic_discriminators(
     def _matches(disc: str, text: str) -> bool:
         if disc in text:
             return True
-        if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text):
+        # Structural equivalences — different providers use different naming
+        # conventions for the same concept. These are format mappings, not
+        # individual indicator fixes.
+        if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text
+                               or "annual" in text):
             return True
         if disc == "growth" and ("annual %" in text or "percent change" in text):
             return True
