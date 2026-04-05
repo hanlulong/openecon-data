@@ -61,11 +61,15 @@ providers:
 
   Eurostat:
     primary:
-      code: PRC_HICP_AIND
-      name: "HICP - annual data (index)"
+      code: PRC_HICP_MANR
+      name: "HICP - monthly rate of change"
       confidence: 0.90
       coverage: eu_members
-      frequency: annual
+      frequency: monthly
+    variants:
+      index:
+        code: PRC_HICP_AIND
+        name: "HICP - annual data (index)"
 
   StatsCan:
     primary:

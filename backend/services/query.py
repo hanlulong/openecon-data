@@ -5434,11 +5434,21 @@ class QueryService:
                         product_id = self.statscan_provider._normalize_metadata_product_id(_coord[0])
                         logger.info("Decomposition: using COORDINATE_PRODUCT_MAPPINGS for %s → product %s", _indicator_key, product_id)
                     else:
-                        # Fall back to vector ID resolution
-                        product_id = await self.statscan_provider._vector_id(
+                        # Fall back to vector ID → product ID resolution.
+                        # _vector_id returns a vector ID (e.g., 2062815).
+                        # fetch_multi_province_data needs a product ID (e.g., 14100287).
+                        # Use PRODUCT_ID_CACHE to map vector → product.
+                        _vec_id = await self.statscan_provider._vector_id(
                             indicator_name,
                             intent.parameters.get("vectorId")
                         )
+                        _cached_pid = self.statscan_provider.PRODUCT_ID_CACHE.get(_vec_id)
+                        if _cached_pid:
+                            product_id = self.statscan_provider._normalize_metadata_product_id(_cached_pid)
+                            logger.info("Decomposition: vector %s → product %s", _vec_id, product_id)
+                        else:
+                            product_id = str(_vec_id)
+                            logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
 
                     # Build parameters for batch method
                     params = {
