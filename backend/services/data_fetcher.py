@@ -1352,8 +1352,14 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         params = dict(intent.parameters) if intent.parameters else {}
 
         params["indicator"] = indicator
+        # Strip all internal flags — each sub-indicator needs independent
+        # resolution through the full pipeline (database search, not shortcuts).
+        # Without this, "GDP" gets treated as a literal FRED code instead of
+        # being resolved to the best GDP indicator.
         params.pop("__catalog_resolved", None)
         params.pop("__catalog_concept", None)
+        params.pop("__delta_resolved", None)
+        params.pop("__delta_indicator_changed", None)
 
         single_provider = _normalize_provider_name(intent.apiProvider)
         if explicit_provider:
