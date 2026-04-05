@@ -5417,7 +5417,7 @@ class QueryService:
 
         # Check if provider has batch method for efficient multi-entity queries
         # This avoids timeouts by making single API call instead of N parallel requests
-        if intent.apiProvider == "StatsCan" and intent.decompositionType in ["provinces", "regions", "territories"]:
+        if normalize_provider_name(intent.apiProvider) == "STATSCAN" and intent.decompositionType in ["provinces", "regions", "territories"]:
             if hasattr(self.statscan_provider, 'fetch_multi_province_data'):
                 logger.info("🚀 Using batch method for %d %s (single API call)",
                            len(intent.decompositionEntities), intent.decompositionType)
