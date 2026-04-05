@@ -1179,11 +1179,6 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
             params.get("indicator"), provider, params.get("__dimensions"),
         )
     elif _is_delta_resolved:
-        # Delta follow-up: check if the indicator actually changed.
-        # If indicator is UNCHANGED (time change, country add, etc.) → skip
-        # resolution entirely. The code from the prior turn is already correct.
-        # If indicator DID change (indicator switch, provider change) → resolve
-        # the new indicator name using itself as the search query.
         _indicator_name = intent.indicators[0] if intent.indicators else ""
         _indicator_changed = bool(params.get("__delta_indicator_changed"))
         if not _indicator_changed:
