@@ -93,6 +93,7 @@ class FollowUpDelta(BaseModel):
 
     # --- What changed ---
     changed_indicator: Optional[str] = None
+    added_indicators: Optional[List[str]] = None
     changed_country: Optional[str] = None
     changed_countries: Optional[List[str]] = None
     added_countries: Optional[List[str]] = None
@@ -186,6 +187,15 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             merged.coin_ids = [_coin]
             merged.provider = "COINGECKO"
             merged.routed_provider = "COINGECKO"
+
+    # Additive indicators: "also show inflation" adds to existing indicators
+    if delta.added_indicators:
+        existing = merged.last_indicators_resolved or ([merged.indicator] if merged.indicator else [])
+        merged_list = list(dict.fromkeys(existing + delta.added_indicators))
+        merged.last_indicators_resolved = merged_list
+        # Keep the first indicator as the primary
+        if not merged.indicator and merged_list:
+            merged.indicator = merged_list[0]
 
     # --- Country ---
     if delta.changed_country:
@@ -325,6 +335,9 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # total GDP instead of per-capita GDP).
     if state.dimensions and state.base_indicator:
         indicators = [state.base_indicator]
+    elif state.last_indicators_resolved and len(state.last_indicators_resolved) > 1:
+        # Multi-indicator: use the full list from prior turn
+        indicators = list(state.last_indicators_resolved)
     elif state.resolved_indicator_code:
         indicators = [state.resolved_indicator_code]
     elif state.indicator:

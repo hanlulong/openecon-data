@@ -2988,7 +2988,11 @@ class QueryService:
                         normalize_provider_name(_delta_intent.apiProvider)
                         != normalize_provider_name(_current_conv_state.provider or _current_conv_state.routed_provider or "")
                     )
-                    _indicator_changed = _delta.changed_indicator is not None or _provider_changed
+                    _indicator_changed = (
+                        _delta.changed_indicator is not None
+                        or _delta.added_indicators is not None
+                        or _provider_changed
+                    )
                     _delta_intent.parameters["__delta_resolved"] = True
                     _delta_intent.parameters["__delta_indicator_changed"] = _indicator_changed
 

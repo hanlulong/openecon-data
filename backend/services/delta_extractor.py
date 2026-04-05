@@ -257,12 +257,14 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
 4. If the query is completely unrelated to prior context, set is_new_query=true, query_type="new_query".
 5. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
 6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
-7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE.
-8. "What about X" / "show X instead" where X is a different economic concept → indicator_switch.
+7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
+8. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
 9. "break it down by X" / "filter by X" / "by sex" / "by age" → dimension_change.
+10. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
 
 IMPORTANT DISTINCTIONS:
-- "Show unemployment instead" → parameter_delta (indicator switch)
+- "Show unemployment instead" → changed_indicator (replaces current)
+- "Also show unemployment" → added_indicators (adds alongside current)
 - "Correlate unemployment with GDP" → pro_mode (needs computation)
 - "Show as bar chart" → parameter_delta (chart type)
 - "Show me a scatter plot" → pro_mode (needs code)
@@ -305,7 +307,8 @@ Output the query_type and any changed fields as JSON."""
             has_change = any(
                 getattr(delta, f) is not None
                 for f in [
-                    "changed_indicator", "changed_country", "changed_countries",
+                    "changed_indicator", "added_indicators",
+                    "changed_country", "changed_countries",
                     "added_countries", "removed_countries", "changed_provider",
                     "changed_start_date", "changed_end_date",
                     "added_dimensions", "removed_dimensions",
