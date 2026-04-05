@@ -19,13 +19,50 @@ from backend.services.secure_code_executor import (
 class TestSecurityValidator:
     """Test AST-based security validation"""
 
-    def test_blocks_os_import(self):
-        """Test that os module import is blocked"""
+    def test_allows_os_import(self):
+        """Test that os module import is allowed (wrapper provides it, dangerous attrs blocked separately)"""
         validator = SecurityValidator()
         code = "import os"
         is_safe, violations, _ = validator.validate(code)
-        assert not is_safe, "Should block os import"
-        assert any("Forbidden import" in v for v in violations)
+        assert is_safe, "Should allow os import (dangerous os operations are blocked via attribute checks)"
+
+    def test_blocks_os_system(self):
+        """Test that os.system() is blocked via attribute check"""
+        validator = SecurityValidator()
+        code = "import os\nos.system('ls')"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block os.system"
+        assert any("Forbidden os operation" in v for v in violations)
+
+    def test_blocks_os_popen(self):
+        """Test that os.popen() is blocked via attribute check"""
+        validator = SecurityValidator()
+        code = "import os\nos.popen('ls')"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block os.popen"
+        assert any("Forbidden os operation" in v for v in violations)
+
+    def test_allows_os_path_join(self):
+        """Test that os.path.join is allowed (safe operation)"""
+        validator = SecurityValidator()
+        code = "import os\nresult = os.path.join('/tmp', 'file.txt')"
+        is_safe, violations, _ = validator.validate(code)
+        assert is_safe, f"Should allow os.path.join, but got violations: {violations}"
+
+    def test_allows_os_makedirs(self):
+        """Test that os.makedirs is allowed (safe operation)"""
+        validator = SecurityValidator()
+        code = "import os\nos.makedirs('/tmp/test', exist_ok=True)"
+        is_safe, violations, _ = validator.validate(code)
+        assert is_safe, f"Should allow os.makedirs, but got violations: {violations}"
+
+    def test_blocks_os_remove(self):
+        """Test that os.remove() is blocked"""
+        validator = SecurityValidator()
+        code = "import os\nos.remove('/tmp/file.txt')"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block os.remove"
+        assert any("Forbidden os operation" in v for v in violations)
 
     def test_blocks_subprocess_import(self):
         """Test that subprocess module import is blocked"""
@@ -42,12 +79,28 @@ class TestSecurityValidator:
         is_safe, violations, _ = validator.validate(code)
         assert not is_safe, "Should block socket import"
 
-    def test_blocks_sys_import(self):
-        """Test that sys module import is blocked"""
+    def test_allows_sys_import(self):
+        """Test that sys module import is allowed (wrapper provides it, dangerous attrs blocked separately)"""
         validator = SecurityValidator()
         code = "import sys"
         is_safe, violations, _ = validator.validate(code)
-        assert not is_safe, "Should block sys import"
+        assert is_safe, "Should allow sys import (dangerous sys operations are blocked via attribute checks)"
+
+    def test_blocks_sys_exit(self):
+        """Test that sys.exit() is blocked via attribute check"""
+        validator = SecurityValidator()
+        code = "import sys\nsys.exit(1)"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block sys.exit"
+        assert any("Forbidden sys operation" in v for v in violations)
+
+    def test_blocks_sys_modules(self):
+        """Test that sys.modules access is blocked"""
+        validator = SecurityValidator()
+        code = "import sys\nprint(sys.modules)"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block sys.modules"
+        assert any("Forbidden sys operation" in v for v in violations)
 
     def test_blocks_ctypes_import(self):
         """Test that ctypes module import is blocked"""
@@ -77,13 +130,20 @@ class TestSecurityValidator:
         is_safe, violations, _ = validator.validate(code)
         assert not is_safe, "Should block pickle import (security risk)"
 
-    def test_blocks_from_os_import(self):
-        """Test that from os import is blocked"""
+    def test_blocks_from_os_import_dangerous(self):
+        """Test that from os import of dangerous attrs is blocked"""
         validator = SecurityValidator()
         code = "from os import system"
         is_safe, violations, _ = validator.validate(code)
-        assert not is_safe, "Should block from os import"
-        assert any("Forbidden import" in v for v in violations)
+        assert not is_safe, "Should block from os import system"
+        assert any("Forbidden" in v and "os" in v for v in violations)
+
+    def test_allows_from_os_import_safe(self):
+        """Test that from os import of safe submodules is allowed"""
+        validator = SecurityValidator()
+        code = "from os import path"
+        is_safe, violations, _ = validator.validate(code)
+        assert is_safe, f"Should allow from os import path, but got: {violations}"
 
     def test_blocks_from_subprocess_import(self):
         """Test that from subprocess import is blocked"""
@@ -528,7 +588,7 @@ with open('data.txt', 'w') as f:
 def test_validator_returns_tuple():
     """Test that validator.validate() returns proper tuple"""
     validator = SecurityValidator()
-    code = "import os"
+    code = "import subprocess"
     result = validator.validate(code)
 
     assert isinstance(result, tuple), "Should return tuple"
@@ -537,6 +597,7 @@ def test_validator_returns_tuple():
     assert isinstance(is_safe, bool)
     assert isinstance(violations, list)
     assert isinstance(warnings, list)
+    assert not is_safe, "subprocess should be forbidden"
 
 
 def test_validator_handles_syntax_errors():

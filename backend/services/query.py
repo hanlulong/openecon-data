@@ -2880,16 +2880,31 @@ class QueryService:
                     _delta_intent = materialize_intent(_merged_state)
 
                     # Route the materialized intent through UnifiedRouter.
-                    # EXCEPT when the delta is a dimension modifier change —
-                    # in that case, the provider is already correct (from
-                    # conversation state) and re-routing would override it
-                    # because the vector key (UNEMPLOYMENT_RATE) isn't a
-                    # catalog concept name.
-                    _skip_reroute = (
-                        getattr(_delta, 'is_dimension_modifier_change', False)
-                        and _merged_state.provider
+                    # Skip re-routing when the delta doesn't change the
+                    # indicator, provider, or country — the provider from
+                    # conversation state is already correct.  Re-routing
+                    # with a short follow-up query (e.g. "last 10 years")
+                    # causes catalog false-positives that drift the provider
+                    # (e.g. "10 years" matching "10-year bond yield" → IMF).
+                    _delta_changes_routing_params = (
+                        _delta.changed_indicator is not None
+                        or _delta.changed_provider is not None
+                        or _delta.changed_country is not None
+                        or _delta.changed_countries is not None
+                        or _delta.added_countries is not None
+                        or _delta.removed_countries is not None
+                        or _delta.is_new_query
                     )
-                    if not _skip_reroute:
+                    _skip_reroute = (
+                        _merged_state.provider
+                        and not _delta_changes_routing_params
+                    )
+                    if _skip_reroute:
+                        logger.info(
+                            "Delta path: skipping re-route (delta_type=%s, preserving provider=%s)",
+                            _delta.delta_type, _merged_state.provider,
+                        )
+                    else:
                         try:
                             _delta_routing = self.unified_router.route(
                                 query=_delta_intent.originalQuery or query,

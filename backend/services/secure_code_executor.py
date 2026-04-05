@@ -52,13 +52,39 @@ class SecurityValidator:
 
     # Completely forbidden modules
     FORBIDDEN_MODULES = {
-        'os', 'sys', 'subprocess', 'socket', 'shutil',
+        'subprocess', 'socket', 'shutil',
         'importlib', 'ctypes', 'threading', 'multiprocessing',
         'builtins', '__builtin__', 'eval', 'exec', 'compile',
         'input', 'raw_input', 'file',
         'webbrowser', 'antigravity', 'this',
         'pickle', 'shelve', 'dill',  # Pickle vulnerabilities
         'inspect', 'types', 'gc', '__main__', 'pdb',  # Reflection/debugging escape vectors
+    }
+
+    # Modules allowed because the wrapper already provides them,
+    # but with dangerous attribute access blocked (see DANGEROUS_OS_ATTRS).
+    # 'os' and 'sys' are pre-imported by the execution wrapper for session
+    # management, path operations, and environment setup. Blocking them
+    # entirely causes "Forbidden import: os" errors when the LLM generates
+    # code that redundantly imports them.
+    WRAPPER_PROVIDED_MODULES = {'os', 'sys'}
+
+    # Dangerous os attributes - these are blocked even though os is allowed.
+    # This provides defense-in-depth: os.path.join is fine, os.system is not.
+    DANGEROUS_OS_ATTRS = {
+        'system', 'popen', 'exec', 'execl', 'execle', 'execlp', 'execlpe',
+        'execv', 'execve', 'execvp', 'execvpe', 'spawn', 'spawnl', 'spawnle',
+        'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe',
+        'kill', 'killpg', 'fork', 'forkpty', 'remove', 'unlink', 'rmdir',
+        'removedirs', 'rename', 'renames', 'replace', 'link', 'symlink',
+        'chown', 'chmod', 'chroot', 'lchmod', 'lchown', 'setuid', 'setgid',
+        'seteuid', 'setegid', 'setreuid', 'setregid',
+    }
+
+    # Dangerous sys attributes
+    DANGEROUS_SYS_ATTRS = {
+        'exit', 'modules', '_getframe', '_current_frames',
+        'settrace', 'setprofile', 'setrecursionlimit',
     }
 
     # Restricted modules (allowed with limitations)
@@ -156,6 +182,7 @@ class SecurityValidator:
                     self.violations.append(
                         f"Restricted import: {module} - {self.RESTRICTED_MODULES[module]} at line {node.lineno}"
                     )
+                # os and sys are allowed (wrapper-provided) - import os is fine
 
         elif isinstance(node, ast.ImportFrom):
             if node.module:
@@ -168,6 +195,19 @@ class SecurityValidator:
                     self.violations.append(
                         f"Restricted import: {module} at line {node.lineno}"
                     )
+                # For wrapper-provided modules, check if importing dangerous attributes
+                # e.g., "from os import system" should be blocked, "from os import path" is ok
+                elif module in self.WRAPPER_PROVIDED_MODULES and node.names:
+                    dangerous_attrs = (
+                        self.DANGEROUS_OS_ATTRS if module == 'os'
+                        else self.DANGEROUS_SYS_ATTRS if module == 'sys'
+                        else set()
+                    )
+                    for alias in node.names:
+                        if alias.name in dangerous_attrs:
+                            self.violations.append(
+                                f"Forbidden {module} import: {module}.{alias.name} at line {node.lineno}"
+                            )
 
     def _check_call(self, node: ast.Call) -> None:
         """Check function calls for dangerous operations"""
@@ -208,6 +248,17 @@ class SecurityValidator:
             self.violations.append(
                 f"Dunder attribute access not allowed: {node.attr} at line {node.lineno}"
             )
+
+        # Block dangerous os.* operations (os module is allowed for os.path, os.makedirs, etc.)
+        if isinstance(node.value, ast.Name):
+            if node.value.id == 'os' and node.attr in self.DANGEROUS_OS_ATTRS:
+                self.violations.append(
+                    f"Forbidden os operation: os.{node.attr} at line {node.lineno}"
+                )
+            elif node.value.id == 'sys' and node.attr in self.DANGEROUS_SYS_ATTRS:
+                self.violations.append(
+                    f"Forbidden sys operation: sys.{node.attr} at line {node.lineno}"
+                )
 
     def _check_name(self, node: ast.Name) -> None:
         """Check name references for dangerous builtins"""
