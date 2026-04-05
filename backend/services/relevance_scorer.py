@@ -593,11 +593,20 @@ def score_series_relevance(query: str, series: Any) -> float:
     return score
 
 
-def rerank_data_by_query_relevance(query: str, data: List[Any]) -> List[Any]:
+def rerank_data_by_query_relevance(
+    query: str,
+    data: List[Any],
+    *,
+    is_multi_indicator: bool = False,
+) -> List[Any]:
     """Reorder (and lightly filter) returned series by semantic relevance to query.
 
     This is a framework-level guardrail against agent over-decomposition where
     unrelated series can be returned before the intended concept.
+
+    When *is_multi_indicator* is True (explicit multi-indicator fetch),
+    the function reorders but never drops series, since each series
+    intentionally represents a different requested concept.
     """
     if not data:
         return data
@@ -608,6 +617,11 @@ def rerank_data_by_query_relevance(query: str, data: List[Any]) -> List[Any]:
 
     scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
     reranked = [item[2] for item in scored]
+
+    # Multi-indicator queries intentionally fetch different concepts;
+    # never filter any series out — only reorder by relevance.
+    if is_multi_indicator:
+        return reranked
 
     top_score = scored[0][0] if scored else 0.0
     if top_score < 0.8:

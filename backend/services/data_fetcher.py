@@ -1380,10 +1380,16 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
                     exc,
                 )
 
-        countries_text = ""
-        if params.get("countries"):
-            countries_text = f" for {', '.join(str(c) for c in params['countries'][:3])}"
-        narrowed_query = f"{indicator}{countries_text}"
+        # Build a contextual query for indicator resolution.
+        # Include country info so the resolution system has full context.
+        country_text = ""
+        countries_list = params.get("countries") or []
+        country_single = params.get("country") or ""
+        if countries_list:
+            country_text = f" for {', '.join(str(c) for c in countries_list[:3])}"
+        elif country_single:
+            country_text = f" for {country_single}"
+        narrowed_query = f"{indicator}{country_text}"
 
         single_intent = ParsedIntent(
             apiProvider=single_provider,
