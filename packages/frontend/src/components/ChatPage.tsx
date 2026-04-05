@@ -1065,19 +1065,17 @@ print(f"\\nData source: ${sourceUrl}")
               <div className="welcome-screen">
                 <h1 className="welcome-title">What can I help with?</h1>
                 <p className="welcome-subtitle">Ask about economic data in natural language</p>
-                {isMobile && (
-                  <div className="welcome-examples">
-                    {EXAMPLE_QUERIES.slice(0, 4).map((ex, i) => (
-                      <button
-                        key={i}
-                        className="welcome-example-chip"
-                        onClick={() => handleExampleClick(ex)}
-                      >
-                        {ex}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div className="welcome-examples">
+                  {EXAMPLE_QUERIES.slice(0, 4).map((ex, i) => (
+                    <button
+                      key={i}
+                      className="welcome-example-chip"
+                      onClick={() => handleExampleClick(ex)}
+                    >
+                      {ex}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 

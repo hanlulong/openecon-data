@@ -176,16 +176,25 @@ ERROR MESSAGE:
 
 REQUIREMENTS:
 1. Fix ONLY the error - don't change working parts
-2. If the error is about missing imports, add them
+2. If the error is about missing imports, add them (but NOT os, sys, json, re, hashlib - these are pre-loaded)
 3. If the error is about None values, add null checks
 4. If the error is about API failures, add error handling
 5. Return ONLY the fixed Python code, no explanations
+6. NEVER add import os, import sys, import subprocess, or other forbidden sandbox imports
+
+SANDBOX RULES:
+- os, sys, json, re, hashlib are ALREADY available (pre-loaded by sandbox wrapper) - do NOT import them
+- If the error is "Forbidden import: os" - REMOVE the `import os` line, os is already available
+- If the error is "Forbidden import: sys" - REMOVE the `import sys` line, sys is already available
+- Forbidden modules: subprocess, socket, shutil, importlib, ctypes, threading, multiprocessing, pickle
 
 COMMON FIXES:
+- "Forbidden import: os" -> Remove `import os` line (os is pre-loaded)
+- "Forbidden import: sys" -> Remove `import sys` line (sys is pre-loaded)
 - TypeError with None: Add `if value is not None:` checks
 - KeyError: Add `.get()` with defaults
 - API errors: Add try/except with fallback
-- Import errors: Add the missing import
+- Import errors: Add the missing import (if not forbidden)
 
 Output ONLY executable Python code."""
 
@@ -268,7 +277,8 @@ Output ONLY executable Python code."""
 
 Requirements:
 - Write clean, well-commented Python code
-- Include all necessary imports
+- Include all necessary imports EXCEPT os, sys, json, re, hashlib (these are pre-loaded by the sandbox)
+- NEVER import os, sys, subprocess, socket, shutil, pickle, or other forbidden modules
 - Use matplotlib for visualizations if needed
 - Handle errors gracefully with try/except
 - Print results clearly with context
@@ -372,7 +382,8 @@ Output ONLY the Python code, no explanations."""
 
 Requirements:
 - Write clean, well-commented Python code
-- Include all necessary imports
+- Include all necessary imports EXCEPT os, sys, json, re, hashlib (these are pre-loaded by the sandbox)
+- NEVER import os, sys, subprocess, socket, shutil, pickle, or other forbidden modules
 - Use matplotlib for visualizations if needed
 - Handle errors gracefully
 - Print results clearly
@@ -531,11 +542,37 @@ CRITICAL RULES:
 - ✅ Print which dimension IDs you're using for transparency
 - ⚠️ If coordinate fails or metadata unavailable, fall back to Vector API for aggregates
 
+⚠️ **SANDBOX SECURITY - FORBIDDEN IMPORTS** ⚠️
+The following modules are BLOCKED by the security sandbox and will cause errors:
+- os, sys, subprocess, socket, shutil, importlib, ctypes
+- threading, multiprocessing, pickle, shelve, inspect
+- urllib, requests (use httpx instead), http, ftplib, ssl
+
+The following modules are ALREADY AVAILABLE in the sandbox (do NOT re-import them):
+- os, sys, json, re, hashlib, io, contextlib
+These are pre-loaded by the execution wrapper. If you need os.path or os.makedirs, just use them directly WITHOUT importing os.
+
+✅ SAFE TO IMPORT: pandas, numpy, matplotlib, httpx, datetime, statistics, math, collections, itertools, functools, decimal, csv, textwrap, pathlib, seaborn, scipy
+❌ NEVER IMPORT: os, sys, subprocess, socket, shutil, importlib, ctypes, pickle, requests
+
 OTHER APIs:
 - FRED: https://api.stlouisfed.org/fred/series/observations?series_id=X&api_key=Y (often unavailable)
 - World Bank: https://api.worldbank.org/v2/country/CODE/indicator/IND?format=json
 
 DERIVED METRICS: Fetch raw data, calculate in Python, use hardcoded constants for stable reference data
+
+⚠️ **SANDBOX SECURITY - IMPORT RULES** ⚠️
+The execution sandbox BLOCKS these imports (will cause "Forbidden import" error):
+  os, sys, subprocess, socket, shutil, importlib, ctypes, threading, multiprocessing,
+  pickle, shelve, dill, inspect, types, gc, pdb, webbrowser, urllib, requests, http, ftplib, ssl
+
+The sandbox wrapper ALREADY provides: os, sys, json, re, hashlib, io, contextlib
+- Do NOT write `import os` or `import sys` — they are already available
+- If you need os.path.join or os.makedirs, just call them directly (os is pre-loaded)
+- For HTTP requests use `import httpx` (httpx is allowed and recommended)
+
+SAFE imports: pandas, numpy, matplotlib, httpx, datetime, statistics, math, collections,
+itertools, functools, decimal, csv, textwrap, pathlib, seaborn, scipy, glob
 
 IMPORTANT: Output ONLY executable Python code. No explanations, no markdown formatting, just pure Python code."""
 

@@ -53,7 +53,7 @@ class Metadata(BaseModel):
     country: Optional[str] = None
     frequency: str
     unit: str
-    lastUpdated: str
+    lastUpdated: str = ""
     seriesId: Optional[str] = None
     apiUrl: Optional[str] = None
     sourceUrl: Optional[str] = None  # Human-readable URL for data verification
