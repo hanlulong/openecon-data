@@ -194,16 +194,34 @@ class DeltaExtractor:
 
         # Add available dimension members if StatsCan cube metadata is cached.
         # Show exact member names so the LLM can use them directly.
+        # We include top-level members PLUS any members matching the query
+        # to avoid truncation hiding valid dimension values (e.g., "Energy"
+        # at index 344 of 359 in CPI's "Products and product groups").
         dimension_context = ""
         if state.statscan_cube_metadata:
             dims = state.statscan_cube_metadata.get("dimension", [])
             if dims:
                 dim_lines = ["\nAvailable dimensions for this indicator (use EXACT member names):"]
+                _query_tokens = {t.lower() for t in query_text.split() if t.lower() not in _FILLER_WORDS and len(t) > 2}
                 for dim in dims:
                     name = dim.get("dimensionNameEn", "?")
-                    members = [m.get("memberNameEn", "?") for m in (dim.get("member") or [])[:30]]
-                    if members:
-                        dim_lines.append(f"  {name}: {', '.join(members)}")
+                    all_members = [m.get("memberNameEn", "?") for m in (dim.get("member") or [])]
+                    if not all_members:
+                        continue
+                    # Always show top-level members (first 20)
+                    shown = list(all_members[:20])
+                    # Add any members that fuzzy-match query tokens (case-insensitive substring)
+                    if _query_tokens:
+                        for member in all_members[20:]:
+                            member_lower = member.lower()
+                            if any(tok in member_lower for tok in _query_tokens):
+                                if member not in shown:
+                                    shown.append(member)
+                    # Cap at 50 to keep prompt reasonable
+                    if len(shown) > 50:
+                        shown = shown[:50]
+                    truncated = " (truncated, more available)" if len(all_members) > len(shown) else ""
+                    dim_lines.append(f"  {name}: {', '.join(shown)}{truncated}")
                 dimension_context = "\n".join(dim_lines)
 
         system_prompt = f"""You are a delta extractor for an economic data query system.
@@ -248,6 +266,13 @@ IMPORTANT DISTINCTIONS:
 - "Correlate unemployment with GDP" → pro_mode (needs computation)
 - "Show as bar chart" → parameter_delta (chart type)
 - "Show me a scatter plot" → pro_mode (needs code)
+
+CRITICAL RULE — DIMENSION vs INDICATOR SWITCH:
+If available dimension members are listed below, and the user's query term matches
+or closely relates to one of those members, this is a DIMENSION CHANGE (delta_type=dimension_change),
+NOT an indicator switch. Example: if CPI has a "Products and product groups" dimension
+with members like "Food", "Energy", "Shelter", then "show energy" = dimension_change
+to Energy, NOT a switch to a new "Energy" indicator.
 
 CURRENT STATE:
 {state_text}
