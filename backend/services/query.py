@@ -136,6 +136,7 @@ from ..services.indicator_clarification import (
     is_simple_single_country_query as _ic_is_simple_single_country_query,
     looks_informational as _ic_looks_informational,
     handle_informational_intent as _ic_handle_informational_intent,
+    _DefinitionSentinel as _ic_DefinitionSentinel,
     format_informational_results as _ic_format_informational_results,
     verify_semantic_discriminators as _ic_verify_semantic_discriminators,
     humanize_region_name as _ic_humanize_region_name,
@@ -2827,6 +2828,15 @@ class QueryService:
                     except Exception as _llm_err:
                         logger.warning("LLM delta extraction error: %s", _llm_err)
 
+            # ── Pre-LLM informational detection (first-turn) ──────────
+            # When there's no conversation state, the combined classifier is
+            # skipped entirely so _query_type stays None.  Catch informational
+            # queries here so they don't fall through to the full LLM parse
+            # pipeline which would try indicator search instead of answering.
+            if _query_type is None and self._looks_informational(query):
+                _query_type = "informational"
+                logger.info("📖 Pre-LLM heuristic → informational for: %s", query[:60])
+
             # ── Dispatch: Pro Mode ──────────────────────────────────────
             if _query_type == "pro_mode" and auto_pro_mode:
                 logger.info("🚀 LLM → Pro Mode for: %s", query[:50])
@@ -2834,8 +2844,35 @@ class QueryService:
 
             # ── Dispatch: Informational ─────────────────────────────────
             if _query_type == "informational":
-                logger.info("📖 LLM → Informational for: %s", query[:50])
-                # Fall through to LLM parse which handles informational via queryType
+                logger.info("📖 Dispatching informational handler for: %s", query[:50])
+                # Build a minimal intent so the handler can operate without
+                # waiting for the full LLM parse (saves ~2-4s on first turn).
+                _info_intent = ParsedIntent(
+                    originalQuery=query,
+                    queryType="informational",
+                    apiProvider="NONE",
+                    indicators=["INFORMATIONAL"],
+                    clarificationNeeded=False,
+                    parameters={},
+                )
+                _info_response = self._handle_informational_intent(
+                    query=query,
+                    intent=_info_intent,
+                    conversation_id=conv_id,
+                    tracker=tracker,
+                )
+                # Handle async definition sentinel — await the LLM call
+                if isinstance(_info_response, _ic_DefinitionSentinel):
+                    _info_response = await _info_response.resolve()
+                if _info_response is not None:
+                    conv_id = conversation_manager.add_message_safe(
+                        conv_id, "user", query, intent=_info_intent,
+                    )
+                    conversation_manager.add_message_safe(
+                        conv_id, "assistant", _info_response.message or "",
+                    )
+                    return _info_response
+                # If handler returned None, fall through to LLM parse
 
             # ── Dispatch: Parameter Delta ───────────────────────────────
             if _delta is not None:
@@ -3149,6 +3186,9 @@ class QueryService:
                     conversation_id=conv_id,
                     tracker=tracker,
                 )
+                # Handle async definition sentinel
+                if isinstance(informational_response, _ic_DefinitionSentinel):
+                    informational_response = await informational_response.resolve()
                 if informational_response is not None:
                     conv_id = conversation_manager.add_message_safe(
                         conv_id, "user", query, intent=intent,
@@ -5307,16 +5347,26 @@ class QueryService:
                            len(intent.decompositionEntities), intent.decompositionType)
 
                 try:
-                    # Convert indicator name to vector ID using StatsCan's _vector_id method
+                    # Resolve indicator to a product ID for the batch method.
+                    # Check COORDINATE_PRODUCT_MAPPINGS first (handles CPI, housing,
+                    # immigration, labour force), then fall back to _vector_id.
                     indicator_name = intent.indicators[0] if intent.indicators else "Population"
-                    vector_id = await self.statscan_provider._vector_id(
-                        indicator_name,
-                        intent.parameters.get("vectorId")
-                    )
+                    _indicator_key = indicator_name.upper().replace(" ", "_").replace("-", "_")
+                    _coord = self.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key)
+                    if _coord:
+                        # Use product ID from coordinate mapping
+                        product_id = self.statscan_provider._normalize_metadata_product_id(_coord[0])
+                        logger.info("Decomposition: using COORDINATE_PRODUCT_MAPPINGS for %s → product %s", _indicator_key, product_id)
+                    else:
+                        # Fall back to vector ID resolution
+                        product_id = await self.statscan_provider._vector_id(
+                            indicator_name,
+                            intent.parameters.get("vectorId")
+                        )
 
                     # Build parameters for batch method
                     params = {
-                        "productId": vector_id,  # Use resolved vector ID
+                        "productId": product_id,
                         "indicator": indicator_name,
                         "provinces": intent.decompositionEntities,
                         "periods": intent.parameters.get("periods", 20),
