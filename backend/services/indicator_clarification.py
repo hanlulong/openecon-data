@@ -2964,31 +2964,24 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
         return False
 
     # Plain-English indicator names should never be treated as provider codes.
-    # If the text contains a space it is almost certainly natural language.
+
+    # Contains a space → natural language, not a code
     if " " in indicator_text:
         return False
 
-    # Common economic terms that regex would incorrectly classify as codes.
-    # This is a structural filter (not query-specific): any single English
-    # word describing an economic concept is not a provider series ID.
-    _NATURAL_LANGUAGE_TERMS = {
-        "INFLATION", "DEFLATION", "UNEMPLOYMENT", "EMPLOYMENT", "POPULATION",
-        "GROWTH", "INCOME", "POVERTY", "EXPORTS", "IMPORTS", "INVESTMENT",
-        "SAVINGS", "CONSUMPTION", "DEBT", "DEFICIT", "SURPLUS", "REVENUE",
-        "EXPENDITURE", "SPENDING", "RESERVES", "EXCHANGE", "TRADE", "WAGES",
-        "SALARY", "PRODUCTIVITY", "OUTPUT", "MANUFACTURING", "SERVICES",
-        "AGRICULTURE", "INDUSTRY", "ENERGY", "TOURISM", "EDUCATION", "HEALTH",
-        "MORTALITY", "FERTILITY", "MIGRATION", "REMITTANCES", "TARIFF",
-        "TARIFFS", "INTEREST", "YIELD", "CREDIT", "MONEY", "SUPPLY",
-        "DEMAND", "PRICE", "PRICES", "COST", "INDEX", "RATE", "RATIO",
-        "BALANCE", "CURRENT", "CAPITAL", "FINANCIAL", "FISCAL", "MONETARY",
-        "HOUSING", "LABOR", "LABOUR",
-    }
-
-    code_upper = indicator_text.upper()
-    if code_upper in _NATURAL_LANGUAGE_TERMS:
+    # Distinguish real codes from English words using word-morphology patterns.
+    # English economic terms have recognizable suffixes (inflation, unemployment,
+    # population, manufacturing, etc.). Provider codes are abbreviations or
+    # concatenated acronyms (CPIAUCSL, UNRATE, T10Y2Y, prc_hicp_manr) that
+    # don't match these suffixes.
+    _lower = indicator_text.lower()
+    _ENGLISH_SUFFIXES = ("tion", "ment", "ness", "ity", "ing", "ure", "ism",
+                         "ance", "ence", "ory", "ies", "ous", "ble", "ive",
+                         "age", "ure", "dom")
+    if any(_lower.endswith(s) for s in _ENGLISH_SUFFIXES):
         return False
 
+    code_upper = indicator_text.upper()
     provider_upper = normalize_provider_name(provider)
 
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
