@@ -207,32 +207,35 @@ class QueryComplexityAnalyzer:
             for pattern in QueryComplexityAnalyzer.STANDARD_BREAKDOWN_INDICATORS
         )
 
+        # Canadian "by province/territory" queries should use decomposition,
+        # not Pro Mode. StatsCan has 40K+ tables and the batch method handles
+        # multi-province queries efficiently. Only force Pro Mode for non-Canadian
+        # regional breakdowns or when the query is genuinely complex.
+        _is_canadian = bool(re.search(r'\bcanad(?:a|ian)\b', query_lower))
+        _is_by_province = bool(re.search(r'\bby\s+(?:province|provinces|territor)', query_lower))
+
         categorical = any(re.search(pattern, query_lower) for pattern in QueryComplexityAnalyzer.CATEGORICAL_PATTERNS)
-        if categorical and not is_standard_breakdown:
-            # Only require Pro Mode if it's NOT a standard breakdown indicator
+        regional = any(re.search(pattern, query_lower) for pattern in QueryComplexityAnalyzer.REGIONAL_PATTERNS)
+
+        if (categorical or regional) and (_is_canadian and _is_by_province):
+            # Canadian by-province: use decomposition, NOT Pro Mode.
+            # The LLM prompt instructs it to set needsDecomposition=true,
+            # and the batch method handles multi-province efficiently.
+            factors.append('regional_breakdown')
+            logger.debug("Canadian by-province query — using decomposition, not Pro Mode")
+        elif (categorical or regional) and is_standard_breakdown:
+            factors.append('regional_breakdown')
+            logger.debug("Standard breakdown indicator — using decomposition")
+        elif categorical and not is_standard_breakdown:
             factors.append('categorical_breakdown')
             if not limitation_type:
-                limitation_type = 'multi_province'  # Reuse this limitation type
-            pro_mode_required = True  # Categorical queries REQUIRE Pro Mode
-        elif is_standard_breakdown:
-            # Standard breakdown - use regular data fetch, no Pro Mode needed
-            logger.debug(f"Query matches standard breakdown indicator, not triggering Pro Mode")
-
-        # Check for regional breakdown
-        # BUT don't force Pro Mode if it's a standard breakdown (handled by decomposition)
-        regional = any(re.search(pattern, query_lower) for pattern in QueryComplexityAnalyzer.REGIONAL_PATTERNS)
-        if regional and not is_standard_breakdown:
+                limitation_type = 'multi_province'
+            pro_mode_required = True
+        elif regional and not is_standard_breakdown:
             factors.append('regional_breakdown')
             if not limitation_type:
                 limitation_type = 'multi_province'
-            # Force Pro Mode for regional queries that aren't standard breakdowns
-            # Statistics Canada batch methods are too slow (180+ seconds)
-            # Pro Mode can handle this with proper code generation
             pro_mode_required = True
-        elif regional and is_standard_breakdown:
-            # Standard breakdown detected - use decomposition instead of Pro Mode
-            logger.debug(f"Query is a regional query but matches standard breakdown - using decomposition")
-            factors.append('regional_breakdown')
 
         # Check for trade balance (known limitation)
         if 'trade balance' in query_lower and intent and intent.apiProvider == 'Comtrade':
