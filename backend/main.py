@@ -704,6 +704,12 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
         logger.info("State already saved by delta path for %s — skipping guaranteed save",
                      result.conversationId)
 
+    # Provider transparency: warn user when data came from a different provider than requested
+    try:
+        result = query_service._add_provider_transparency(result, request.query)
+    except Exception:
+        pass  # Non-critical
+
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
         try:

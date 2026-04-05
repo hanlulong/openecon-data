@@ -374,6 +374,57 @@ class QueryService:
             logger.info("🌍 Fallback country extraction found countries: %s", countries)
         return countries
 
+    def _add_provider_transparency(
+        self,
+        result: QueryResponse,
+        original_query: str,
+    ) -> QueryResponse:
+        """Add transparency message when data comes from a different provider than requested.
+
+        This is a general framework-level check that runs on ALL query responses.
+        When the user explicitly asked for a specific provider (e.g., "from BIS")
+        but the data came from a different one (e.g., WorldBank fallback), the
+        response gets a message explaining the substitution.
+
+        Also warns when the returned indicator has low relevance to the query.
+        """
+        if not result.data or not result.intent:
+            return result
+
+        # Check if user explicitly requested a provider
+        explicit_provider = self._detect_explicit_provider(original_query)
+        if not explicit_provider:
+            return result
+
+        # Check what provider the data actually came from
+        actual_sources = set()
+        for series in result.data:
+            if series.metadata and series.metadata.source:
+                actual_sources.add(series.metadata.source)
+
+        explicit_norm = normalize_provider_name(explicit_provider)
+        # Map display names to normalized
+        source_map = {
+            "FRED": "FRED", "World Bank": "WORLDBANK", "Statistics Canada": "STATSCAN",
+            "IMF": "IMF", "BIS": "BIS", "Eurostat": "EUROSTAT", "OECD": "OECD",
+            "UN Comtrade": "COMTRADE", "CoinGecko": "COINGECKO", "ExchangeRate-API": "EXCHANGERATE",
+        }
+        actual_norm = {source_map.get(s, s.upper()) for s in actual_sources}
+
+        if explicit_norm not in actual_norm:
+            actual_display = ", ".join(actual_sources)
+            note = (
+                f"**Note:** {explicit_provider} did not have this data. "
+                f"Showing results from {actual_display} instead."
+            )
+            if result.message:
+                result.message = f"{note}\n\n{result.message}"
+            else:
+                result.message = note
+            logger.info("Provider transparency: requested=%s, actual=%s", explicit_provider, actual_sources)
+
+        return result
+
     def _apply_country_overrides(self, intent: ParsedIntent, query: str) -> None:
         """
         Apply geography overrides when query text clearly specifies country context
@@ -868,9 +919,15 @@ class QueryService:
         """Delegates to :func:`relevance_scorer.score_series_relevance`."""
         return _rs_score_series_relevance(query, series)
 
-    def _rerank_data_by_query_relevance(self, query: str, data: List[Any]) -> List[Any]:
+    def _rerank_data_by_query_relevance(
+        self,
+        query: str,
+        data: List[Any],
+        *,
+        is_multi_indicator: bool = False,
+    ) -> List[Any]:
         """Delegates to :func:`relevance_scorer.rerank_data_by_query_relevance`."""
-        return _rs_rerank_data_by_query_relevance(query, data)
+        return _rs_rerank_data_by_query_relevance(query, data, is_multi_indicator=is_multi_indicator)
 
     def _extract_ranking_value(
         self,
@@ -3438,7 +3495,7 @@ class QueryService:
                     processingSteps=tracker.to_list(),
                 )
 
-            data = self._rerank_data_by_query_relevance(query, data)
+            data = self._rerank_data_by_query_relevance(query, data, is_multi_indicator=is_multi_indicator)
             data = self._apply_ranking_projection(query, data)
             recovered_uncertain_data = await self._maybe_recover_from_uncertain_match(
                 query,
@@ -3881,7 +3938,7 @@ class QueryService:
                     return result
                 elif isinstance(result, list):
                     # Rerank and project before returning
-                    result = self._rerank_data_by_query_relevance(query, result)
+                    result = self._rerank_data_by_query_relevance(query, result, is_multi_indicator=is_multi_indicator)
                     result = self._apply_ranking_projection(query, result)
                     result, coverage_warning = await self._maybe_improve_country_coverage(
                         query, intent, result,
