@@ -630,7 +630,13 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
       </div>
 
       {chartData.length > 0 && (
-        <div className="chart-container" style={{ background: '#fafbfc', borderRadius: '12px', padding: '16px 8px 8px 0' }}>
+        <div
+          className="chart-container"
+          style={{ background: '#fafbfc', borderRadius: '12px', padding: '16px 8px 8px 0' }}
+          role="img"
+          aria-label={`${chartType} chart showing ${data.map(d => d.metadata.indicator).join(', ')} from ${data.map(d => d.metadata.source).join(', ')}`}
+          tabIndex={0}
+        >
           <ResponsiveContainer width="100%" height={380}>
             {renderChart()}
           </ResponsiveContainer>
