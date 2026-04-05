@@ -14,7 +14,6 @@ synonyms:
     - national income
     - income per capita
     - GNI per capita
-    - income
 
 explicit_exclusions:
   - GDP

@@ -439,6 +439,27 @@ def is_provider_available(concept_name: str, provider: str) -> bool:
     return provider.lower() in providers_lower
 
 
+def is_provider_explicitly_excluded(concept_name: str, provider: str) -> bool:
+    """Check if a provider is explicitly listed in not_available for a concept.
+
+    Unlike ``is_provider_available``, this returns True **only** when the
+    provider appears in the concept's ``not_available`` list.  A provider that
+    is simply absent from the ``providers`` dict (but not excluded) returns
+    False -- meaning the catalog is incomplete for that provider, not that the
+    provider definitely lacks the data.
+
+    This distinction matters for large-catalog providers like StatsCan (40K+
+    tables): the catalog may not yet have a StatsCan entry for every concept,
+    but that doesn't mean StatsCan lacks the data.
+    """
+    concept = get_concept(concept_name)
+    if not concept:
+        return False  # Unknown concept -- nothing is excluded
+    not_available = concept.get("not_available", [])
+    not_available_lower = [p.lower() for p in not_available]
+    return provider.lower() in not_available_lower
+
+
 def _check_coverage(coverage: Any, countries: Optional[List[str]]) -> bool:
     """Check if provider coverage includes the requested countries.
 

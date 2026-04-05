@@ -623,26 +623,15 @@ class UnifiedRouter:
                     ),
                 )
 
-            # Concept exists but StatsCan doesn't have it — use catalog's
-            # best provider for CA context
-            provider, code, confidence = self._catalog_service.get_best_provider(
-                concept_name, countries=["CA"],
+            # Concept exists but StatsCan doesn't have it — fall through
+            # to StatsCan default instead of redirecting to a global provider.
+            # StatsCan has 40K+ tables; the indicator resolver's FTS5/embedding
+            # search will find the right table even without a catalog entry.
+            logger.info(
+                f"📚 Canada catalog match: {term} → {concept_name} — "
+                f"StatsCan not in catalog, falling through to StatsCan default"
             )
-            if provider and confidence > 0.5:
-                logger.info(
-                    f"📚 Canada catalog match: {term} → {concept_name} → "
-                    f"{provider} (StatsCan unavailable)"
-                )
-                return self._create_decision(
-                    provider=provider,
-                    confidence=confidence,
-                    match_type="catalog",
-                    matched_pattern=f"catalog:{concept_name}",
-                    reasoning=(
-                        f"Catalog lookup: Canada + {concept_name} → {provider} "
-                        f"(StatsCan not available, code: {code})"
-                    ),
-                )
+            return None
 
     def _route_by_regional_group(self, query_lower: str) -> Optional[RoutingDecision]:
         """Route queries that mention specific regional/country groups."""

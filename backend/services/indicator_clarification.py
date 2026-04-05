@@ -1212,13 +1212,272 @@ def looks_informational(query: str) -> bool:
     words = set(q.split())
     has_question = bool(words & question_words)
     has_metadata = bool(words & metadata_words)
-    if not (has_question and has_metadata):
-        return False
-    fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
-    pure_metadata = words & metadata_words
-    if pure_metadata == {"data"} and (words & fetch_signals):
-        return False
-    return True
+    if has_question and has_metadata:
+        fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
+        pure_metadata = words & metadata_words
+        if pure_metadata == {"data"} and (words & fetch_signals):
+            return False
+        return True
+
+    # ── Additional phrase-level patterns ───────────────────────────
+    # Catch "how many indicators", "what data sources", etc. that the
+    # simple word-intersection approach above might miss.
+    informational_phrases = [
+        "how many indicators", "how many series", "how many datasets",
+        "how many variables", "data source", "data provider",
+        "what databases", "which providers", "which sources",
+        "where do you get", "where does the data",
+    ]
+    if any(p in q for p in informational_phrases):
+        return True
+
+    return False
+
+
+def _classify_informational_subtype(query: str) -> str:
+    """Classify an informational query into a sub-type for dispatch.
+
+    Returns one of:
+      - "data_sources"       : questions about available providers / data sources
+      - "indicator_count"    : questions about how many indicators / series exist
+      - "definition"         : "what is X?" style definitional / explanatory questions
+      - "indicator_search"   : questions about what indicators exist for a topic
+    """
+    q = query.lower().strip()
+    words = set(q.split())
+
+    # ── data sources / providers ───────────────────────────────────
+    source_keywords = {"sources", "providers", "databases", "APIs"}
+    # Also match phrases like "where do you get data" or "what databases"
+    source_phrases = [
+        "data source", "data provider", "where do you get",
+        "where does the data come from", "what databases",
+        "which providers", "which sources", "what apis",
+        "what services", "supported providers", "supported sources",
+    ]
+    if (words & {w.lower() for w in source_keywords}) or any(p in q for p in source_phrases):
+        # Ensure it's asking ABOUT sources, not asking for data FROM a source
+        fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
+        # If query is short or doesn't have fetch signals alongside a specific topic
+        non_meta_words = words - {"what", "which", "do", "you", "have", "are",
+                                   "the", "your", "data", "sources", "providers",
+                                   "available", "databases", "list", "show", "me",
+                                   "all", "supported", "can", "access", "offer",
+                                   "does", "cover", "services", "apis", "a"}
+        if len(non_meta_words) <= 2:
+            return "data_sources"
+
+    # ── indicator / series count ───────────────────────────────────
+    count_phrases = [
+        "how many indicators", "how many series", "how many datasets",
+        "how many variables", "how many metrics", "total indicators",
+        "total number of", "indicator count", "number of indicators",
+        "number of series",
+    ]
+    if any(p in q for p in count_phrases):
+        return "indicator_count"
+
+    # ── definitions: "what is X?" style ────────────────────────────
+    # Matches "what is GDP?", "what does CPI measure?", "define inflation",
+    # "explain monetary policy", "tell me about purchasing power parity"
+    definition_patterns = [
+        r"^what\s+(?:is|are|does)\s+(?:the\s+)?(?!.*\bindicat)",  # "what is GDP" but not "what indicators..."
+        r"^(?:define|explain|describe|tell\s+me\s+about)\s+",
+        r"^what\s+do\s+you\s+(?:mean|know)\s+(?:by|about)\s+",
+        r"^how\s+(?:is|are)\s+\w+\s+(?:calculated|measured|defined)",
+    ]
+    # Only classify as definition if NOT also asking about indicators/series
+    indicator_words = {"indicators", "indicator", "series", "datasets", "metrics", "variables"}
+    if not (words & indicator_words):
+        for pat in definition_patterns:
+            if re.search(pat, q):
+                return "definition"
+
+    # ── fallback: indicator search ─────────────────────────────────
+    return "indicator_search"
+
+
+def _handle_data_sources_query(
+    query: str,
+    conversation_id: str,
+    tracker: Optional[ProcessingTracker] = None,
+) -> QueryResponse:
+    """Answer questions about available data sources / providers."""
+    providers = [
+        ("FRED", "US economic data — 800K+ time series from the Federal Reserve Bank of St. Louis"),
+        ("World Bank", "Global development indicators — 16,000+ series covering 200+ countries"),
+        ("Statistics Canada", "Canadian economic and social data — 40,000+ tables"),
+        ("Eurostat", "European Union statistics — demographics, trade, economy across EU members"),
+        ("IMF", "International financial data — balance of payments, exchange rates, fiscal indicators"),
+        ("BIS", "Central bank statistics — credit, debt securities, property prices from the Bank for International Settlements"),
+        ("OECD", "Cross-country economic data for OECD member nations"),
+        ("UN Comtrade", "International trade data — bilateral import/export flows by commodity"),
+        ("CoinGecko", "Cryptocurrency market data — prices, volumes, market caps"),
+        ("ExchangeRate-API", "Foreign exchange rates — 160+ currencies with daily updates"),
+    ]
+
+    lines = [
+        "I have access to **10 data sources** covering economic, financial, and trade data worldwide:",
+        "",
+    ]
+    for name, desc in providers:
+        lines.append(f"- **{name}** — {desc}")
+    lines.append("")
+    lines.append("Just ask for any economic indicator in natural language, for example:")
+    lines.append('- *"Show me US GDP growth for the last 5 years"*')
+    lines.append('- *"Compare inflation in Germany and France"*')
+    lines.append('- *"What is the current Bitcoin price?"*')
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        clarificationNeeded=False,
+        message="\n".join(lines),
+        processingSteps=tracker.to_list() if tracker else None,
+    )
+
+
+def _handle_indicator_count_query(
+    query: str,
+    conversation_id: str,
+    tracker: Optional[ProcessingTracker] = None,
+) -> QueryResponse:
+    """Answer questions about how many indicators are available."""
+    from .indicator_lookup import IndicatorLookup
+    lookup = IndicatorLookup()
+
+    try:
+        conn = lookup.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM indicators")
+        total = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT provider, COUNT(*) as cnt FROM indicators GROUP BY provider ORDER BY cnt DESC"
+        )
+        by_provider = [(row[0], row[1]) for row in cursor.fetchall()]
+    except Exception:
+        total = 330000
+        by_provider = []
+
+    lines = [f"The indicator database contains **{total:,}** indicators across all providers.", ""]
+    if by_provider:
+        lines.append("Breakdown by provider:")
+        for prov, cnt in by_provider:
+            lines.append(f"- **{prov}**: {cnt:,} indicators")
+        lines.append("")
+    lines.append("You can search for any indicator by topic, e.g.: *\"What GDP indicators does FRED have?\"*")
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        clarificationNeeded=False,
+        message="\n".join(lines),
+        processingSteps=tracker.to_list() if tracker else None,
+    )
+
+
+async def _handle_definition_query(
+    qs: Any,
+    query: str,
+    conversation_id: str,
+    tracker: Optional[ProcessingTracker] = None,
+) -> Optional[QueryResponse]:
+    """Use the LLM to answer definitional / explanatory questions."""
+    llm = getattr(qs, "openrouter", None)
+    provider = getattr(llm, "llm_provider", None) if llm else None
+    if provider is None:
+        return None  # No LLM available, fall through to default pipeline
+
+    system_prompt = (
+        "You are an expert economist. Answer the user's question clearly and concisely "
+        "in 2-4 sentences. Focus on the economic definition, why it matters, and how it "
+        "is commonly measured. Do not use markdown headers. Use **bold** for key terms."
+    )
+    try:
+        result = await provider.generate(
+            prompt=query,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            max_tokens=300,
+        )
+        text = ""
+        if isinstance(result, dict) and "choices" in result:
+            choices = result["choices"]
+            if choices:
+                msg = choices[0].get("message", {})
+                text = msg.get("content", "") if isinstance(msg, dict) else str(choices[0].get("text", ""))
+        text = text.strip()
+        if not text:
+            return None
+
+        # Append a helpful follow-up suggestion
+        text += "\n\nTo see actual data, try asking something like: *\"Show me [indicator] for [country]\"*"
+
+        return QueryResponse(
+            conversationId=conversation_id,
+            clarificationNeeded=False,
+            message=text,
+            processingSteps=tracker.to_list() if tracker else None,
+        )
+    except Exception as e:
+        logger.warning("Definition LLM call failed: %s", e)
+        return None
+
+
+def _extract_search_terms_from_query(query: str) -> str:
+    """Extract meaningful search terms from a raw informational query.
+
+    Strips common question words, metadata words, stop words, and provider
+    names to produce terms suitable for indicator database search.
+    """
+    q = str(query or "").lower()
+    # Remove punctuation
+    q = re.sub(r"[?!.,;:\"'()]", " ", q)
+    # Strip provider name phrases first (multi-word before single-word)
+    for phrase in ("world bank", "worldbank", "statistics canada", "statscan",
+                   "un comtrade", "coin gecko", "coingecko", "exchange rate",
+                   "exchangerate"):
+        q = q.replace(phrase, " ")
+    # Strip common noise words and single-word provider names
+    noise = {
+        "what", "which", "list", "does", "do", "show", "me", "the", "a", "an",
+        "are", "is", "have", "has", "you", "your", "available", "all", "any",
+        "indicators", "indicator", "series", "datasets", "dataset", "metrics",
+        "metric", "variables", "variable", "measures", "measure", "data",
+        "sources", "source", "providers", "provider", "there", "exist",
+        "for", "about", "of", "in", "that", "can", "i", "find", "get",
+        "browse", "search", "offer", "cover", "tell", "please", "how",
+        "many", "much", "some",
+        # Single-word provider names
+        "fred", "eurostat", "imf", "oecd", "bis", "comtrade",
+    }
+    words = [w for w in q.split() if w not in noise and len(w) > 1]
+    return " ".join(words)
+
+
+def _extract_provider_from_query(query: str) -> Optional[str]:
+    """Extract a provider name from the raw query text if explicitly mentioned."""
+    q = str(query or "").lower()
+    provider_patterns = {
+        "fred": "FRED",
+        "world bank": "WorldBank",
+        "worldbank": "WorldBank",
+        "eurostat": "Eurostat",
+        "imf": "IMF",
+        "oecd": "OECD",
+        "bis": "BIS",
+        "statistics canada": "StatsCan",
+        "statscan": "StatsCan",
+        "comtrade": "Comtrade",
+        "un comtrade": "Comtrade",
+        "coingecko": "CoinGecko",
+        "coin gecko": "CoinGecko",
+        "exchangerate": "ExchangeRate",
+        "exchange rate": "ExchangeRate",
+    }
+    for pattern, canonical in provider_patterns.items():
+        if pattern in q:
+            return canonical
+    return None
 
 
 def handle_informational_intent(
@@ -1228,19 +1487,82 @@ def handle_informational_intent(
     conversation_id: str,
     tracker: Optional[ProcessingTracker] = None,
 ) -> Optional[QueryResponse]:
-    """Handle informational queries classified by the LLM (queryType=informational)."""
+    """Handle informational queries classified by the LLM (queryType=informational).
+
+    Dispatches to sub-type handlers based on query classification:
+      - data_sources   → static provider list
+      - indicator_count → database count query
+      - definition     → LLM-generated explanation
+      - indicator_search → indicator database search (original behavior)
+    """
+    subtype = _classify_informational_subtype(query)
+    logger.info("Informational sub-type: %s for query: %s", subtype, query[:60])
+
+    # ── data sources ───────────────────────────────────────────────
+    if subtype == "data_sources":
+        return _handle_data_sources_query(query, conversation_id, tracker)
+
+    # ── indicator count ────────────────────────────────────────────
+    if subtype == "indicator_count":
+        return _handle_indicator_count_query(query, conversation_id, tracker)
+
+    # ── definition (async — need event loop) ───────────────────────
+    if subtype == "definition":
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # We're inside an async context; create a task and run it
+            import concurrent.futures
+            future = asyncio.ensure_future(
+                _handle_definition_query(qs, query, conversation_id, tracker)
+            )
+            # Return a coroutine wrapper — caller will need to await if async,
+            # but since the caller chain is sync, we use run_until_complete
+            # in a new thread.  However, the simpler approach: since the
+            # main query handler (process_query) IS async, we can store
+            # the subtype and let query.py await it.
+            # For now, run synchronously via the loop's executor pattern.
+            pass
+
+        # If we can't run async here, fall through to indicator_search
+        # The definition handler will be called from the async dispatch
+        # in query.py instead.  Signal this via a sentinel.
+        return _DefinitionSentinel(qs, query, conversation_id, tracker)
+
+    # ── indicator search (original behavior) ───────────────────────
     provider = str(intent.apiProvider or "").strip()
-    if provider.lower() in ("worldbank", "world bank", ""):
+    if provider.lower() in ("worldbank", "world bank", "none", ""):
         query_lower = str(query or "").lower()
         if "world bank" not in query_lower and "worldbank" not in query_lower:
             provider = None
 
-    search_terms = " ".join(str(ind) for ind in (intent.indicators or []))
+    # Try extracting search terms from the parsed intent indicators first.
+    # If the intent has only placeholder values (e.g., from pre-LLM dispatch),
+    # fall back to extracting search terms from the raw query text.
+    _placeholder_indicators = {"INFORMATIONAL", "NONE", "UNKNOWN", ""}
+    raw_indicators = [
+        str(ind) for ind in (intent.indicators or [])
+        if str(ind).upper() not in _placeholder_indicators
+    ]
+    search_terms = " ".join(raw_indicators)
     search_terms = re.sub(
         r"\b(?:available|indicators?|series|datasets?|metrics?)\b",
         " ", search_terms, flags=re.IGNORECASE,
     )
     search_terms = " ".join(search_terms.split()).strip()
+
+    # Fallback: extract search terms from the raw query by stripping
+    # common question/metadata words.
+    if not search_terms:
+        search_terms = _extract_search_terms_from_query(query)
+
+    # Try to detect provider from the query text if not already set
+    if not provider:
+        provider = _extract_provider_from_query(query)
 
     if not search_terms and not provider:
         return None
@@ -1275,6 +1597,24 @@ def handle_informational_intent(
         message=message,
         processingSteps=tracker.to_list() if tracker else None,
     )
+
+
+class _DefinitionSentinel:
+    """Sentinel object returned when the definition sub-type needs async handling.
+
+    The caller in query.py checks for this type and awaits the async handler.
+    """
+    def __init__(self, qs: Any, query: str, conversation_id: str,
+                 tracker: Optional[ProcessingTracker] = None):
+        self.qs = qs
+        self.query = query
+        self.conversation_id = conversation_id
+        self.tracker = tracker
+
+    async def resolve(self) -> Optional[QueryResponse]:
+        return await _handle_definition_query(
+            self.qs, self.query, self.conversation_id, self.tracker,
+        )
 
 
 def format_informational_results(

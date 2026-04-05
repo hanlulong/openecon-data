@@ -658,7 +658,7 @@ def apply_concept_provider_override(
         return provider, params
 
     try:
-        from .catalog_service import find_concept_by_term, get_best_provider, get_variant_for_query, is_provider_available
+        from .catalog_service import find_concept_by_term, get_best_provider, get_variant_for_query, is_provider_available, is_provider_explicitly_excluded
 
         concept_name = None
         matched_query = ""
@@ -676,6 +676,26 @@ def apply_concept_provider_override(
                 ),
             )
         if not concept_name:
+            return provider, params
+
+        # Large-catalog country-specific providers (e.g. StatsCan with 40K+
+        # tables) often have data the catalog hasn't mapped yet.  When the
+        # concept doesn't *explicitly* exclude the current provider (i.e. it's
+        # not in ``not_available``), keep the provider and let its FTS5 /
+        # embedding indicator resolver find the right table -- don't reroute
+        # to a global provider just because the catalog entry is incomplete.
+        _LARGE_CATALOG_COUNTRY_PROVIDERS = {"STATSCAN"}
+        if (
+            provider in _LARGE_CATALOG_COUNTRY_PROVIDERS
+            and not is_provider_explicitly_excluded(concept_name, provider)
+            and not is_provider_available(concept_name, provider)
+        ):
+            logger.info(
+                "📋 Concept override skipped: %s not explicitly excluded for '%s' "
+                "(catalog incomplete, letting provider resolver handle it)",
+                provider,
+                concept_name,
+            )
             return provider, params
 
         countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
