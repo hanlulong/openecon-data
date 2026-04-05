@@ -3546,7 +3546,6 @@ class QueryService:
                 processingSteps=tracker.to_list(),
             )
         finally:
-            # Only reset tracker if we created it (not using existing one)
             if tracker_token is not None:
                 reset_processing_tracker(tracker_token)
 
