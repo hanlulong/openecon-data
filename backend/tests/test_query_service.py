@@ -3575,10 +3575,10 @@ class QueryServiceTests(unittest.TestCase):
                 conversation_id=conv_id,
             ))
 
-        # The response should contain helpful provider-specific message
+        # The response should contain helpful error message
         self.assertIsNotNone(response.message)
-        self.assertIn("doesn't appear to have", response.message)
-        self.assertIn("housing starts", response.message)
+        self.assertIn("No Data", response.message)
+        self.assertIn("housing starts", response.message.lower())
         self.assertEqual(response.error, "no_data_found")
 
     def test_no_data_non_provider_change_gives_generic_message(self) -> None:

@@ -36,6 +36,11 @@ class ConversationState(BaseModel):
     # --- Core semantic fields ---
     indicator: Optional[str] = None
     base_indicator: Optional[str] = None
+    # Provider-specific resolved indicator code (e.g., "NY.GDP.PCAP.CD" for
+    # WorldBank, "CPIAUCSL" for FRED).  Populated after a successful fetch so
+    # that follow-up turns that keep the same indicator can skip re-resolution
+    # and avoid drifting to a different code.
+    resolved_indicator_code: Optional[str] = None
     country: Optional[str] = None
     countries: Optional[List[str]] = None
     provider: Optional[str] = None
@@ -162,6 +167,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     if delta.changed_indicator:
         merged.indicator = delta.changed_indicator
         merged.base_indicator = None
+        merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
@@ -216,6 +222,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     # --- Provider ---
     if delta.changed_provider:
         merged.provider = delta.changed_provider
+        merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
 
     # --- Time ---
@@ -311,9 +318,14 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
 
     # Indicator: use base_indicator (vector key like "UNEMPLOYMENT_RATE") when
     # dimensions are active, so the StatsCan provider routes correctly.
-    # Otherwise use the human-readable indicator name.
+    # When a resolved_indicator_code is available (from a prior successful
+    # fetch) and the indicator hasn't changed, use the resolved code to
+    # prevent re-resolution drift (e.g., "GDP per capita" re-resolving to
+    # total GDP instead of per-capita GDP).
     if state.dimensions and state.base_indicator:
         indicators = [state.base_indicator]
+    elif state.resolved_indicator_code:
+        indicators = [state.resolved_indicator_code]
     elif state.indicator:
         indicators = [state.indicator]
     else:
@@ -376,6 +388,19 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     indicator: Optional[str] = None
     if intent.indicators:
         indicator = intent.indicators[0]
+
+    # Resolved indicator code: the provider-specific code (e.g., "NY.GDP.PCAP.CD")
+    # populated by the data_fetcher's resolution pipeline. This is stored
+    # separately from ``indicator`` (which is the human-readable name) so that
+    # follow-up turns can reuse the exact code without re-resolution drift.
+    resolved_indicator_code: Optional[str] = None
+    _params_indicator = params.get("indicator")
+    if _params_indicator and indicator:
+        # Only store if it differs from the human-readable name (i.e., it
+        # was actually resolved to a provider-specific code).
+        _pi = str(_params_indicator).strip()
+        if _pi and _pi != indicator:
+            resolved_indicator_code = _pi
 
     # Trade
     trade_flow = params.get("flow")
@@ -459,6 +484,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     return ConversationState(
         indicator=indicator,
         base_indicator=base_indicator,
+        resolved_indicator_code=resolved_indicator_code,
         dimensions=dimensions,
         statscan_product_id=statscan_product_id,
         statscan_cube_metadata=statscan_cube_metadata_val,

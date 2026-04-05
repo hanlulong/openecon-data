@@ -2898,10 +2898,32 @@ class QueryService:
                         _merged_state.countries,
                     )
 
+                    # Ensure StatsCan cube metadata is present in the merged state.
+                    # This is critical for 3rd+ round dimension follow-ups: without
+                    # cube metadata the LLM delta extractor can't see dimension
+                    # members and may misclassify "show energy" as a new query
+                    # instead of a dimension change on the current CPI indicator.
+                    if (_merged_state.statscan_product_id
+                            and not _merged_state.statscan_cube_metadata
+                            and _merged_state.provider
+                            and _merged_state.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}):
+                        try:
+                            _cube = await self.statscan_provider._get_cube_metadata(
+                                _merged_state.statscan_product_id
+                            )
+                            if _cube:
+                                _merged_state.statscan_cube_metadata = _cube
+                                logger.info(
+                                    "Delta path: back-filled cube metadata for product %s",
+                                    _merged_state.statscan_product_id,
+                                )
+                        except Exception as _cube_err:
+                            logger.debug("Delta path: cube metadata fetch failed: %s", _cube_err)
+
                     # Persist the merged state
                     conversation_manager.set_conversation_state(conv_id, _merged_state)
 
-                    return await self._execute_resolved_intent(
+                    _delta_response = await self._execute_resolved_intent(
                         query=_delta_intent.originalQuery or query,
                         skip_prefetch_clarification=True,
                         skip_post_fetch_clarification=True,
@@ -2910,6 +2932,22 @@ class QueryService:
                         parse_result=_delta_parse_result,
                         tracker=tracker,
                     )
+
+                    # After successful fetch, update the resolved_indicator_code
+                    # in the persisted state.  The data_fetcher may have resolved
+                    # the indicator to a provider-specific code (e.g.,
+                    # "NY.GDP.PCAP.CD") — capture it so the next delta turn can
+                    # reuse it without re-resolution drift.
+                    if _delta_response and _delta_response.data:
+                        try:
+                            _resolved_code = (_delta_intent.parameters or {}).get("indicator")
+                            if _resolved_code and _resolved_code != _merged_state.indicator:
+                                _merged_state.resolved_indicator_code = str(_resolved_code)
+                                conversation_manager.set_conversation_state(conv_id, _merged_state)
+                        except Exception:
+                            pass
+
+                    return _delta_response
 
             # Log fallthrough when classifier said delta but extraction failed
             if _query_type == "parameter_delta" and _delta is None:
@@ -3763,6 +3801,19 @@ class QueryService:
                         _qs = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                         _ex = conversation_manager.get_conversation_state(conv_id)
                         if _ex: _qs.turn_number = _ex.turn_number + 1
+                        # Ensure cube metadata for StatsCan dimension follow-ups
+                        if (_qs.statscan_product_id
+                                and not _qs.statscan_cube_metadata
+                                and _qs.provider
+                                and _qs.provider.upper() in {"STATSCAN", "STATISTICS CANADA"}):
+                            try:
+                                _cube = await self.statscan_provider._get_cube_metadata(
+                                    _qs.statscan_product_id
+                                )
+                                if _cube:
+                                    _qs.statscan_cube_metadata = _cube
+                            except Exception:
+                                pass
                         conversation_manager.set_conversation_state(conv_id, _qs)
                     except Exception:
                         pass

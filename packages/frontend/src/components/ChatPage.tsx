@@ -1065,6 +1065,19 @@ print(f"\\nData source: ${sourceUrl}")
               <div className="welcome-screen">
                 <h1 className="welcome-title">What can I help with?</h1>
                 <p className="welcome-subtitle">Ask about economic data in natural language</p>
+                {isMobile && (
+                  <div className="welcome-examples">
+                    {EXAMPLE_QUERIES.slice(0, 4).map((ex, i) => (
+                      <button
+                        key={i}
+                        className="welcome-example-chip"
+                        onClick={() => handleExampleClick(ex)}
+                      >
+                        {ex}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1075,6 +1088,31 @@ print(f"\\nData source: ${sourceUrl}")
                 {displayContent && (
                   <div className="bubble-content">{displayContent}</div>
                 )}
+
+                {msg.isError && msg.role === 'assistant' && (() => {
+                  // Find the user query that triggered this error
+                  let retryQuery = ''
+                  for (let j = i - 1; j >= 0; j--) {
+                    if (messages[j].role === 'user') {
+                      retryQuery = messages[j].content
+                      break
+                    }
+                  }
+                  return retryQuery ? (
+                    <button
+                      type="button"
+                      className="retry-btn"
+                      onClick={() => handleStreamingQuery(retryQuery)}
+                      disabled={processingQuery.current !== null}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                      </svg>
+                      Try again
+                    </button>
+                  ) : null
+                })()}
 
                 {msg.role === 'assistant' && msg.clarificationOptions && msg.clarificationOptions.length > 0 && (
                   <div className="clarification-options">

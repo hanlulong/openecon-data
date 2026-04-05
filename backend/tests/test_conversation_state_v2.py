@@ -959,3 +959,244 @@ class TestConversationManagerState:
         assert retrieved.country == "US"
         assert retrieved.turn_number == 3
         assert retrieved.dimensions == {"product": "food"}
+
+
+# ─── Issue 1: CPI subcategory loses context on 3rd+ round ────────────
+
+class TestCubeMetadataPreservedAcrossDimensionRounds:
+    """Regression: "CPI Canada" → "show food" → "show energy" must keep cube metadata."""
+
+    def test_merge_preserves_statscan_cube_metadata(self):
+        """merge_state deep-copies cube metadata across dimension changes."""
+        _cube = {
+            "dimension": [
+                {
+                    "dimensionNameEn": "Products and product groups",
+                    "member": [
+                        {"memberNameEn": "Food"},
+                        {"memberNameEn": "Energy"},
+                        {"memberNameEn": "Shelter"},
+                    ],
+                }
+            ]
+        }
+        # Turn 1 state (after "CPI Canada")
+        state = ConversationState(
+            indicator="CPI",
+            base_indicator="CPI",
+            provider="STATSCAN",
+            country="CA",
+            statscan_product_id="18100004",
+            statscan_cube_metadata=_cube,
+            turn_number=0,
+        )
+
+        # Turn 2: "show food" (dimension change)
+        delta_food = FollowUpDelta(
+            added_dimensions={"products": "Food"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+            raw_query="show food",
+        )
+        state_t2 = merge_state(state, delta_food)
+        assert state_t2.statscan_cube_metadata is not None
+        assert state_t2.dimensions == {"products": "Food"}
+        assert state_t2.indicator == "CPI"
+        assert state_t2.turn_number == 1
+
+        # Turn 3: "show energy" (another dimension change)
+        delta_energy = FollowUpDelta(
+            added_dimensions={"products": "Energy"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+            raw_query="show energy",
+        )
+        state_t3 = merge_state(state_t2, delta_energy)
+        assert state_t3.statscan_cube_metadata is not None
+        assert state_t3.dimensions == {"products": "Energy"}
+        assert state_t3.indicator == "CPI"
+        assert state_t3.base_indicator == "CPI"
+        assert state_t3.statscan_product_id == "18100004"
+        assert state_t3.turn_number == 2
+
+    def test_merge_preserves_product_id(self):
+        """statscan_product_id survives dimension delta merges."""
+        state = ConversationState(
+            indicator="unemployment rate",
+            base_indicator="UNEMPLOYMENT_RATE",
+            provider="STATSCAN",
+            country="CA",
+            statscan_product_id="14100287",
+            statscan_cube_metadata={"dimension": []},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"sex": "Female"},
+            is_dimension_modifier_change=True,
+        )
+        merged = merge_state(state, delta)
+        assert merged.statscan_product_id == "14100287"
+        assert merged.statscan_cube_metadata is not None
+
+
+# ─── Issue 2: "Add Brazil" to GDP per capita loses "per capita" ──────
+
+class TestResolvedIndicatorCodePreservation:
+    """Regression: resolved_indicator_code prevents re-resolution drift."""
+
+    def test_resolved_code_preserved_across_country_add(self):
+        """Adding a country should keep the resolved indicator code."""
+        state = ConversationState(
+            indicator="GDP per capita",
+            resolved_indicator_code="NY.GDP.PCAP.CD",
+            provider="WORLDBANK",
+            countries=["US", "CA", "MX"],
+            turn_number=1,
+        )
+        delta = FollowUpDelta(
+            added_countries=["BR"],
+            delta_type="additive_country",
+            raw_query="add Brazil",
+        )
+        merged = merge_state(state, delta)
+        assert merged.resolved_indicator_code == "NY.GDP.PCAP.CD"
+        assert merged.indicator == "GDP per capita"
+        assert "BR" in merged.countries
+        assert len(merged.countries) == 4
+
+        intent = materialize_intent(merged)
+        # Intent should use the resolved code, not the human-readable name
+        assert intent.indicators == ["NY.GDP.PCAP.CD"]
+        assert "BR" in intent.parameters["countries"]
+
+    def test_resolved_code_cleared_on_indicator_change(self):
+        """Switching indicator should clear the stale resolved code."""
+        state = ConversationState(
+            indicator="GDP per capita",
+            resolved_indicator_code="NY.GDP.PCAP.CD",
+            provider="WORLDBANK",
+            country="US",
+        )
+        delta = FollowUpDelta(
+            changed_indicator="unemployment rate",
+            delta_type="indicator_switch",
+        )
+        merged = merge_state(state, delta)
+        assert merged.resolved_indicator_code is None
+        assert merged.indicator == "unemployment rate"
+
+        intent = materialize_intent(merged)
+        assert intent.indicators == ["unemployment rate"]
+
+    def test_resolved_code_cleared_on_provider_change(self):
+        """Switching provider should clear the stale resolved code."""
+        state = ConversationState(
+            indicator="GDP",
+            resolved_indicator_code="NY.GDP.MKTP.CD",
+            provider="WORLDBANK",
+            country="US",
+        )
+        delta = FollowUpDelta(
+            changed_provider="FRED",
+            delta_type="provider_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.resolved_indicator_code is None
+
+    def test_resolved_code_used_by_materialize_intent(self):
+        """materialize_intent prefers resolved_indicator_code over indicator."""
+        state = ConversationState(
+            indicator="GDP per capita",
+            resolved_indicator_code="NY.GDP.PCAP.CD",
+            provider="WORLDBANK",
+            country="US",
+        )
+        intent = materialize_intent(state)
+        assert intent.indicators == ["NY.GDP.PCAP.CD"]
+
+    def test_materialize_falls_back_to_indicator_when_no_resolved_code(self):
+        """Without resolved code, materialize uses indicator name."""
+        state = ConversationState(
+            indicator="GDP",
+            provider="FRED",
+            country="US",
+        )
+        intent = materialize_intent(state)
+        assert intent.indicators == ["GDP"]
+
+    def test_extract_state_captures_resolved_code(self):
+        """extract_state_from_intent stores resolved code from params."""
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP per capita"],
+            parameters={"country": "US", "indicator": "NY.GDP.PCAP.CD"},
+            clarificationNeeded=False,
+        )
+        state = extract_state_from_intent(intent)
+        assert state.resolved_indicator_code == "NY.GDP.PCAP.CD"
+        assert state.indicator == "GDP per capita"
+
+    def test_extract_state_no_resolved_code_when_same(self):
+        """When params indicator matches intent indicator, no separate code."""
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["CPIAUCSL"],
+            parameters={"country": "US", "indicator": "CPIAUCSL"},
+            clarificationNeeded=False,
+        )
+        state = extract_state_from_intent(intent)
+        assert state.resolved_indicator_code is None
+
+    def test_resolved_code_preserved_across_time_change(self):
+        """Changing time range should keep the resolved indicator code."""
+        state = ConversationState(
+            indicator="inflation rate",
+            resolved_indicator_code="FP.CPI.TOTL.ZG",
+            provider="WORLDBANK",
+            country="US",
+            start_date="2020-01-01",
+        )
+        delta = FollowUpDelta(
+            changed_start_date="2010-01-01",
+            delta_type="time_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.resolved_indicator_code == "FP.CPI.TOTL.ZG"
+        assert merged.start_date == "2010-01-01"
+
+    def test_resolved_code_survives_redis_round_trip(self, monkeypatch):
+        """resolved_indicator_code survives Redis serialization."""
+        import backend.services.conversation as conv_mod
+
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+            def setex(self, key, ttl, value):
+                self._store[key] = value
+            def get(self, key):
+                return self._store.get(key)
+            def delete(self, key):
+                self._store.pop(key, None)
+
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        from backend.services.conversation import ConversationManager
+        mgr = ConversationManager()
+        cid = mgr.get_or_create(None)
+
+        state = ConversationState(
+            indicator="GDP per capita",
+            resolved_indicator_code="NY.GDP.PCAP.CD",
+            provider="WORLDBANK",
+            country="US",
+            turn_number=1,
+        )
+        mgr.set_conversation_state(cid, state)
+
+        # Simulate restart
+        mgr2 = ConversationManager()
+        mgr2.get_or_create(cid)
+        retrieved = mgr2.get_conversation_state(cid)
+        assert retrieved is not None
+        assert retrieved.resolved_indicator_code == "NY.GDP.PCAP.CD"
+        assert retrieved.indicator == "GDP per capita"

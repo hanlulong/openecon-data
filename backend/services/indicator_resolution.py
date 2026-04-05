@@ -47,6 +47,11 @@ _GDP_RATIO_PATTERNS = (
     "as share of gdp",
 )
 
+
+def _has_ratio_cue(text: str) -> bool:
+    """Check if text contains a GDP ratio pattern (e.g., '% of GDP')."""
+    return any(pattern in text for pattern in _GDP_RATIO_PATTERNS)
+
 # Indicator cues that require strict precision matching (no fuzzy fallback).
 _STRICT_PRECISION_CUES = {
     "import", "export", "trade_balance", "trade_openness",
@@ -257,7 +262,7 @@ def minimum_resolved_relevance_threshold(indicator_query: str) -> float:
     """
     normalized_query = str(indicator_query or "").strip().lower()
     cue_set = extract_indicator_cues(normalized_query)
-    has_ratio_query = any(pattern in normalized_query for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio_query = _has_ratio_cue(normalized_query)
 
     threshold = -0.40
     strict_precision_cues = _STRICT_PRECISION_CUES
@@ -308,7 +313,7 @@ def indicator_resolution_threshold(indicator_query: str, resolved_source: str) -
     threshold = 0.68
     normalized_query = str(indicator_query or "").strip().lower()
     cue_set = extract_indicator_cues(normalized_query)
-    has_ratio_query = any(pattern in normalized_query for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio_query = _has_ratio_cue(normalized_query)
     strict_precision_cues = _STRICT_PRECISION_CUES
     high_precision_cues = {
         "trade_openness",
@@ -381,7 +386,7 @@ def is_resolved_indicator_plausible(
     if "hicp" in query_cues and provider_upper in {"WORLDBANK", "IMF", "FRED", "STATSCAN", "STATISTICS CANADA"}:
         return False
 
-    has_ratio_query = any(pattern in query_lower for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio_query = _has_ratio_cue(query_lower)
 
     if "current_account" in query_cues and not any(
         token in code_upper for token in ("BCA", "CAB", "CURRENT", "CURR")
@@ -1331,8 +1336,8 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         return _fallback_to_original_or_distilled()
 
     original_lower = original_query.lower()
-    has_ratio_original = any(pattern in original_lower for pattern in _GDP_RATIO_PATTERNS)
-    has_ratio_indicator = any(pattern in indicator_lower for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio_original = _has_ratio_cue(original_lower)
+    has_ratio_indicator = _has_ratio_cue(indicator_lower)
     if has_ratio_original and not has_ratio_indicator:
         logger.info(
             "🔎 Indicator dropped GDP-ratio context. Using original query for resolution."
@@ -1467,7 +1472,7 @@ def build_distilled_indicator_query(svc: Any, query: str) -> str:
     if not cues:
         return ""
 
-    has_ratio = any(pattern in query_lower for pattern in _GDP_RATIO_PATTERNS)
+    has_ratio = _has_ratio_cue(query_lower)
 
     if (
         "trade_openness" in cues

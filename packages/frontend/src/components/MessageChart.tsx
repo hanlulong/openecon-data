@@ -1,4 +1,4 @@
-import { useMemo, useState, memo, useCallback } from 'react'
+import { useMemo, useState, memo, useCallback, useEffect } from 'react'
 import {
   Bar,
   BarChart,
@@ -263,6 +263,16 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
   const chartData = useMemo(() => transformDataForChart(data), [data])
   const seriesNames = useMemo(() => getSeriesNames(data), [data])
   const [showApiUrls, setShowApiUrls] = useState(false)
+
+  // Responsive chart height based on viewport width
+  const [chartHeight, setChartHeight] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 640 ? 260 : 380
+  )
+  useEffect(() => {
+    const onResize = () => setChartHeight(window.innerWidth < 640 ? 260 : 380)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const dataPoints = data[0]?.data.length ?? 0
   const showLine = dataPoints > 3
@@ -637,7 +647,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
           aria-label={`${chartType} chart showing ${data.map(d => d.metadata.indicator).join(', ')} from ${data.map(d => d.metadata.source).join(', ')}`}
           tabIndex={0}
         >
-          <ResponsiveContainer width="100%" height={380}>
+          <ResponsiveContainer width="100%" height={chartHeight}>
             {renderChart()}
           </ResponsiveContainer>
         </div>
