@@ -416,23 +416,13 @@ class IndicatorResolver:
                 and not _disc_present(d, (result.code or "").lower())
                 and not _disc_present(d, result_desc_lower)
             }
-            if missing_discs and result.confidence >= 0.90:
-                # High-confidence catalog results (≥0.90) should NOT be demoted
-                # by name-based discriminator checks. The catalog author set the
-                # confidence intentionally. Demoting based on truncated names
-                # causes correct results like une_rt_a (unemployment rate) to be
-                # replaced by wrong FTS matches like tipsun30.
-                logger.info(
-                    "🔬 Keeping high-confidence catalog result '%s' (conf=%.2f) despite "
-                    "missing discriminators %s — catalog confidence overrides name check",
-                    result.code, result.confidence, missing_discs,
-                )
-            elif missing_discs:
-                # Before demoting to FTS, try OTHER catalog variant codes that
-                # DO match the missing discriminators.  This is the key fix:
-                # when catalog has variant codes (ppp, growth, per_capita),
-                # prefer those over FTS fallback which may find wrong codes.
-                variant_found = False
+            if missing_discs:
+                # Try to find a better VARIANT within the same catalog concept.
+                # E.g., "GDP growth" matched concept "gdp" → primary is NY.GDP.MKTP.CD
+                # but variant "growth" → NY.GDP.MKTP.KD.ZG is better.
+                # If no better variant exists, KEEP the catalog result — never
+                # demote to FTS. The catalog's concept match is authoritative;
+                # demoting to FTS produces worse results (e.g., UNE_RT_A ��� TIPSUN30).
                 if provider and query_concept and preferred_catalog_codes:
                     current_code = self._normalize_code(result.code)
                     other_codes = {c for c in preferred_catalog_codes if c != current_code}
@@ -462,19 +452,15 @@ class IndicatorResolver:
                                 source="catalog",
                                 metadata=alt_meta,
                             )
-                            variant_found = True
                             break
 
-                if not variant_found:
-                    logger.info(
-                        "🔬 Catalog result '%s' (%s) missing semantic discriminators %s "
-                        "from query '%s' — demoting to allow FTS fallback",
-                        result.code, result.name[:40] if result.name else "?",
-                        missing_discs, query,
-                    )
-                    # Keep as fallback but allow FTS to potentially override
-                    catalog_fallback = result
-                    result = None
+                # No variant found — keep catalog result anyway. The concept
+                # match is authoritative. Never demote catalog to FTS.
+                logger.debug(
+                    "🔬 Catalog result '%s' kept despite missing discriminators %s "
+                    "(catalog concept match is authoritative)",
+                    result.code, missing_discs,
+                )
 
         # 3b. Some concepts intentionally use dynamic provider-side discovery
         # (e.g., CoinGecko/Comtrade). Prefer this catalog signal over low-quality
