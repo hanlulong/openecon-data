@@ -269,12 +269,18 @@ IMPORTANT DISTINCTIONS:
 - "Show as bar chart" → parameter_delta (chart type)
 - "Show me a scatter plot" → pro_mode (needs code)
 
-CRITICAL RULE — DIMENSION vs INDICATOR SWITCH:
+CRITICAL RULE — DIMENSION vs INDICATOR SWITCH vs COUNTRY CHANGE:
 If available dimension members are listed below, and the user's query term matches
-or closely relates to one of those members, this is a DIMENSION CHANGE (delta_type=dimension_change),
-NOT an indicator switch. Example: if CPI has a "Products and product groups" dimension
-with members like "Food", "Energy", "Shelter", then "show energy" = dimension_change
-to Energy, NOT a switch to a new "Energy" indicator.
+or closely relates to one of those members, this is a DIMENSION CHANGE (added_dimensions),
+NOT an indicator switch or country change.
+
+Examples:
+- CPI has "Products and product groups" with "Food", "Energy" → "show energy" = added_dimensions
+- Unemployment has "Geography" with "Ontario", "Quebec" → "show for Ontario" = added_dimensions with Geography=Ontario, NOT changed_country
+- Unemployment has "Sex" with "Males", "Females" → "show female" = added_dimensions with Sex value
+
+Canadian provinces (Ontario, Quebec, BC, Alberta, etc.) appearing in Geography dimension members
+should ALWAYS be added_dimensions, NEVER changed_country. They are sub-national filters, not countries.
 
 CURRENT STATE:
 {state_text}
