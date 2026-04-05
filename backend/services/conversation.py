@@ -368,9 +368,16 @@ class ConversationManager:
                 logger.debug("get_conversation_state(%s): conversation NOT FOUND", conversation_id)
                 return None
             if conversation.conversation_state is None:
-                logger.debug("get_conversation_state(%s): conversation exists but state is None (msgs=%d, has_intent=%s)",
-                             conversation_id, len(conversation.messages), conversation.last_intent is not None)
-                return None
+                # The in-memory version may be stale if state was saved by a
+                # different code path (e.g., guaranteed save in main.py) after
+                # the conversation was already loaded. Try Redis as fallback.
+                redis_ctx = self._redis_load(conversation_id)
+                if redis_ctx and redis_ctx.conversation_state is not None:
+                    conversation.conversation_state = redis_ctx.conversation_state
+                    logger.debug("get_conversation_state(%s): recovered state from Redis", conversation_id)
+                else:
+                    logger.debug("get_conversation_state(%s): state is None (msgs=%d)", conversation_id, len(conversation.messages))
+                    return None
             _s = conversation.conversation_state
             logger.debug("get_conversation_state(%s): FOUND state (indicator=%s, provider=%s, base=%s, cube=%s)",
                          conversation_id, getattr(_s, 'indicator', '?'), getattr(_s, 'provider', '?'),
