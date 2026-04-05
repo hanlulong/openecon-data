@@ -3124,6 +3124,13 @@ class QueryService:
                     "endDate": li_params.get("endDate", "not specified"),
                     "originalQuery": last_intent.originalQuery or "not specified",
                 }
+                # Include accumulated state context so the LLM can preserve
+                # dimensions, base_indicator, etc. in the fallthrough path.
+                if _current_conv_state:
+                    if _current_conv_state.dimensions:
+                        conversation_context["dimensions"] = str(_current_conv_state.dimensions)
+                    if _current_conv_state.base_indicator:
+                        conversation_context["base_indicator"] = _current_conv_state.base_indicator
 
                 # Phase 4: Include clarification context when previous turn was a clarification.
                 # This lets the LLM see what was asked and resolve the user's answer with full context.
@@ -3283,14 +3290,29 @@ class QueryService:
             _prev_good_state = conversation_manager.get_conversation_state(conv_id)
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
 
-            # Dual-write: update ConversationState alongside last_intent
+            # Dual-write: update ConversationState alongside last_intent.
+            # MERGE new intent fields into existing state to preserve accumulated
+            # dimensions, cube metadata, and base_indicator from prior rounds.
+            # Without this, the fallthrough path (when delta extraction fails)
+            # would destroy all accumulated context.
             try:
                 _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                 if _prev_good_state:
                     _new_conv_state.turn_number = _prev_good_state.turn_number + 1
+                    # Preserve accumulated fields that the new intent doesn't know about
+                    if not _new_conv_state.dimensions and _prev_good_state.dimensions:
+                        _new_conv_state.dimensions = _prev_good_state.dimensions
+                    if not _new_conv_state.base_indicator and _prev_good_state.base_indicator:
+                        _new_conv_state.base_indicator = _prev_good_state.base_indicator
+                    if not _new_conv_state.statscan_cube_metadata and _prev_good_state.statscan_cube_metadata:
+                        _new_conv_state.statscan_cube_metadata = _prev_good_state.statscan_cube_metadata
+                    if not _new_conv_state.statscan_product_id and _prev_good_state.statscan_product_id:
+                        _new_conv_state.statscan_product_id = _prev_good_state.statscan_product_id
+                    if not _new_conv_state.resolved_indicator_code and _prev_good_state.resolved_indicator_code:
+                        _new_conv_state.resolved_indicator_code = _prev_good_state.resolved_indicator_code
                 conversation_manager.set_conversation_state(conv_id, _new_conv_state)
             except Exception as _sw_err:
-                logger.debug("Dual-write conversation_state failed in process_query: %s", _sw_err)
+                logger.warning("Dual-write conversation_state failed in process_query: %s", _sw_err)
 
             if intent.clarificationNeeded:
                 conversation_manager.clear_pending_indicator_options(conv_id)

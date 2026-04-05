@@ -291,7 +291,7 @@ Output the query_type and any changed fields as JSON."""
                     {"role": "user", "content": query_text},
                 ],
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=2000,  # Reasoning models need 3-5x headroom for JSON output
             )
 
             # For non-parameter_delta classifications (pro_mode, new_query,
