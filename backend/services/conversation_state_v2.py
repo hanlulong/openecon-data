@@ -173,6 +173,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.last_indicators_resolved = None
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
+            merged.statscan_cube_metadata = None  # Clear stale cube metadata when indicator changes
         # Auto-detect crypto indicator switches and update coin_ids/provider
         _crypto_map = {
             "bitcoin": "bitcoin", "btc": "bitcoin",
@@ -345,6 +346,14 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     else:
         indicators = ["unknown"]
 
+    # Persist the resolved indicator code into parameters["indicator"] so that
+    # the indicator resolution pipeline sees it on follow-up turns and does not
+    # re-resolve (which causes drift).  Without this, materialize_intent only
+    # set parameters["indicator"] for dimension queries, leaving it empty for
+    # normal follow-ups and forcing an unnecessary re-resolution cycle.
+    if state.resolved_indicator_code and "indicator" not in parameters:
+        parameters["indicator"] = state.resolved_indicator_code
+
     # Provider: use explicit provider if set, otherwise default
     provider = state.provider or state.routed_provider or "WorldBank"
 
@@ -414,6 +423,21 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         # This is the provider-specific code (e.g., NY.GDP.PCAP.CD) that
         # should be reused on follow-up turns to prevent indicator drift.
         resolved_indicator_code = str(_params_indicator).strip() or None
+
+    # Fallback: if params["indicator"] was not set (e.g., some providers or
+    # code paths skip the resolution pipeline), but intent.indicators[0]
+    # looks like a provider-specific code (contains dots, underscores, or is
+    # all uppercase like "CPIAUCSL"), capture it as the resolved code.
+    # This ensures the first turn ALWAYS persists the resolved code.
+    if not resolved_indicator_code and indicator:
+        _ind = indicator.strip()
+        _looks_like_code = (
+            "." in _ind           # e.g., NY.GDP.PCAP.CD, SL.UEM.TOTL.ZS
+            or "_" in _ind        # e.g., UNEMPLOYMENT_RATE
+            or _ind.isupper()     # e.g., CPIAUCSL, GDP, CPI
+        )
+        if _looks_like_code:
+            resolved_indicator_code = _ind
 
     # Trade
     trade_flow = params.get("flow")
@@ -518,3 +542,87 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         decomposition=decomposition,
         chart_type=intent.recommendedChartType,
     )
+
+
+# ---------------------------------------------------------------------------
+# merge_new_state_with_previous  (context preservation helper)
+# ---------------------------------------------------------------------------
+
+def merge_new_state_with_previous(
+    new_state: ConversationState,
+    previous: Optional[ConversationState],
+) -> ConversationState:
+    """Carry forward accumulated context from *previous* into *new_state*.
+
+    When a non-delta execution path builds a ConversationState from a
+    ParsedIntent (via ``extract_state_from_intent``), the intent may lack
+    fields that were established in earlier turns (e.g., the country was
+    set in R1 but R2 only changes the indicator).  This function fills
+    those gaps so that accumulated context is never silently dropped.
+
+    Fields are carried forward **only when the new state has no value**
+    for that field — explicit values in the new state always win.
+
+    This is the single, authoritative place for "don't lose context"
+    logic.  Every state-save location outside the delta path should call
+    this instead of ad-hoc field-by-field merging.
+    """
+    if previous is None:
+        return new_state
+
+    new_state.turn_number = previous.turn_number + 1
+
+    # --- Geography ---
+    _new_has_geo = new_state.country or new_state.countries
+    _prev_has_geo = previous.country or previous.countries
+    if not _new_has_geo and _prev_has_geo:
+        new_state.country = previous.country
+        new_state.countries = previous.countries
+
+    # --- Provider ---
+    if not new_state.provider and previous.provider:
+        new_state.provider = previous.provider
+    if not new_state.routed_provider and previous.routed_provider:
+        new_state.routed_provider = previous.routed_provider
+
+    # --- Time range ---
+    if not new_state.start_date and previous.start_date:
+        new_state.start_date = previous.start_date
+    if not new_state.end_date and previous.end_date:
+        new_state.end_date = previous.end_date
+
+    # --- Indicator resolution ---
+    if not new_state.resolved_indicator_code and previous.resolved_indicator_code:
+        new_state.resolved_indicator_code = previous.resolved_indicator_code
+    if not new_state.base_indicator and previous.base_indicator:
+        new_state.base_indicator = previous.base_indicator
+
+    # --- StatsCanada dimension context ---
+    if not new_state.dimensions and previous.dimensions:
+        new_state.dimensions = previous.dimensions
+    if not new_state.statscan_product_id and previous.statscan_product_id:
+        new_state.statscan_product_id = previous.statscan_product_id
+    if not new_state.statscan_cube_metadata and previous.statscan_cube_metadata:
+        new_state.statscan_cube_metadata = previous.statscan_cube_metadata
+
+    # --- Trade fields ---
+    if not new_state.trade_flow and previous.trade_flow:
+        new_state.trade_flow = previous.trade_flow
+    if not new_state.trade_reporter and previous.trade_reporter:
+        new_state.trade_reporter = previous.trade_reporter
+    if not new_state.trade_partner and previous.trade_partner:
+        new_state.trade_partner = previous.trade_partner
+    if not new_state.trade_commodity and previous.trade_commodity:
+        new_state.trade_commodity = previous.trade_commodity
+
+    # --- Crypto fields ---
+    if not new_state.coin_ids and previous.coin_ids:
+        new_state.coin_ids = previous.coin_ids
+    if not new_state.vs_currency and previous.vs_currency:
+        new_state.vs_currency = previous.vs_currency
+
+    # --- Display preferences ---
+    if not new_state.chart_type and previous.chart_type:
+        new_state.chart_type = previous.chart_type
+
+    return new_state

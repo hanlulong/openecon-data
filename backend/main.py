@@ -690,13 +690,13 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     if result.data and result.intent and result.conversationId and not getattr(result, 'delta_state_saved', False):
         try:
             from .services.conversation_state_v2 import extract_state_from_intent as _extract_state
+            from .services.conversation_state_v2 import merge_new_state_with_previous as _merge_with_prev
             _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
             _existing = conversation_manager.get_conversation_state(result.conversationId)
-            if _existing:
-                _state.turn_number = _existing.turn_number + 1
+            _state = _merge_with_prev(_state, _existing)
             conversation_manager.set_conversation_state(result.conversationId, _state)
-            logger.info("State saved for %s: indicator=%s, provider=%s",
-                        result.conversationId, _state.indicator, _state.provider)
+            logger.info("State saved for %s: indicator=%s, country=%s/%s, provider=%s",
+                        result.conversationId, _state.indicator, _state.country, _state.countries, _state.provider)
         except Exception as _save_err:
             logger.error("FAILED to save conversation state for %s: %s",
                          result.conversationId, _save_err, exc_info=True)
@@ -858,12 +858,12 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
             if result.data and result.intent and result.conversationId and not getattr(result, 'delta_state_saved', False):
                 try:
                     from backend.services.conversation_state_v2 import extract_state_from_intent as _extract_state
+                    from backend.services.conversation_state_v2 import merge_new_state_with_previous as _merge_with_prev
                     _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
                     _existing = conversation_manager.get_conversation_state(result.conversationId)
-                    if _existing:
-                        _state.turn_number = _existing.turn_number + 1
+                    _state = _merge_with_prev(_state, _existing)
                     conversation_manager.set_conversation_state(result.conversationId, _state)
-                    logger.info("Stream state saved for %s: indicator=%s", result.conversationId, _state.indicator)
+                    logger.info("Stream state saved for %s: indicator=%s, country=%s/%s", result.conversationId, _state.indicator, _state.country, _state.countries)
                 except Exception as _save_err:
                     logger.error("FAILED to save stream conversation state: %s", _save_err, exc_info=True)
             elif getattr(result, 'delta_state_saved', False):

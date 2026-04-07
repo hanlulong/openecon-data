@@ -1190,12 +1190,39 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 _indicator_name,
             )
         else:
-            # New indicator — resolve using indicator name as query
+            # New indicator or provider changed — resolve using indicator name
+            # as query.  When the indicator name is a provider-specific code
+            # from a *prior* provider (e.g. A191RL1Q225SBEA from FRED, but
+            # we're now routing to WorldBank), resolve via the catalog concept
+            # name instead (e.g. "gdp growth") so the new provider can find
+            # its own indicator code.
+            _resolution_query = _indicator_name
+            _ALL_PROVIDERS = ("FRED", "WORLDBANK", "IMF", "EUROSTAT", "BIS", "OECD", "STATSCAN")
+            _is_code = _indicator_name and any(
+                svc._looks_like_provider_indicator_code(p, _indicator_name)
+                for p in _ALL_PROVIDERS
+            )
+            if _is_code:
+                from ..services.catalog_service import find_concepts_by_code
+                for _p in _ALL_PROVIDERS:
+                    _concepts = find_concepts_by_code(_p, _indicator_name)
+                    if _concepts:
+                        _resolution_query = _concepts[0].replace("_", " ")
+                        logger.info(
+                            "Delta-resolved: indicator '%s' is a %s code, "
+                            "using concept '%s' for cross-provider resolution",
+                            _indicator_name, _p, _resolution_query,
+                        )
+                        # Also update the intent's indicators so downstream
+                        # resolution uses the concept name, not the code
+                        intent.indicators = [_resolution_query]
+                        break
+
             _saved_query = intent.originalQuery
-            intent.originalQuery = _indicator_name
+            intent.originalQuery = _resolution_query
             logger.info(
                 "Delta-resolved: indicator changed to '%s', resolving (query overridden from '%s')",
-                _indicator_name, _saved_query,
+                _resolution_query, _saved_query,
             )
             provider, params = svc._apply_concept_provider_override(provider, intent, params)
             intent.parameters = params

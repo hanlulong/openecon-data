@@ -30,6 +30,7 @@ from ..services.conversation_state_v2 import (
     FollowUpDelta,
     extract_state_from_intent,
     materialize_intent,
+    merge_new_state_with_previous,
     merge_state,
 )
 from ..services.delta_extractor import DeltaExtractor
@@ -1410,8 +1411,7 @@ class QueryService:
             try:
                 _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                 _existing_state = conversation_manager.get_conversation_state(conv_id)
-                if _existing_state:
-                    _new_state.turn_number = _existing_state.turn_number + 1
+                _new_state = merge_new_state_with_previous(_new_state, _existing_state)
                 # Pre-cache cube metadata for StatsCan dimension-capable indicators.
                 # This allows the delta extractor to check dimensions synchronously
                 # on the next follow-up (no async API call needed).
@@ -2256,16 +2256,56 @@ class QueryService:
             return None
 
         # Determine best provider for each country.
+        # When the indicator is a provider-specific code (e.g. CPIAUCSL for FRED),
+        # use the human-readable concept for cross-provider catalog lookups.
         concept_query = self._select_indicator_query_for_resolution(intent)
         if not concept_query:
             concept_query = " ".join(str(ind) for ind in intent.indicators if ind)
+
+        # Build a human-readable indicator description for sub-intents sent to
+        # a different provider.  Provider-specific codes (CPIAUCSL, GDP, etc.)
+        # are meaningless to other providers; we need a concept phrase like
+        # "inflation" or "gross domestic product" for proper resolution.
+        _human_indicator_query = concept_query
+        _first_indicator = str(intent.indicators[0]) if intent.indicators else ""
+        # Check if indicator looks like a code for ANY provider, not just
+        # the current one (the indicator may have been resolved by a prior
+        # provider, e.g. NY.GDP.PCAP.CD from WorldBank on a StatsCan-routed intent).
+        _ALL_PROVIDERS = ("FRED", "WORLDBANK", "IMF", "EUROSTAT", "BIS", "OECD", "STATSCAN")
+        _indicator_is_code = _first_indicator and any(
+            self._looks_like_provider_indicator_code(p, _first_indicator)
+            for p in _ALL_PROVIDERS
+        )
+        if _indicator_is_code:
+            # The indicator is a provider-specific code.  Try reverse-looking
+            # up the catalog concept name (e.g. CPIAUCSL → "inflation",
+            # NY.GDP.PCAP.CD → "gdp_per_capita").  Check all providers.
+            from .catalog_service import find_concepts_by_code
+            _reverse_concepts: List[str] = []
+            for _p in _ALL_PROVIDERS:
+                _reverse_concepts = find_concepts_by_code(_p, _first_indicator)
+                if _reverse_concepts:
+                    break
+            if _reverse_concepts:
+                # Use the concept name as the human-readable description
+                _human_indicator_query = _reverse_concepts[0].replace("_", " ")
+                logger.info(
+                    "🌐 Geographic split: reverse-mapped %s → concept '%s'",
+                    _first_indicator, _human_indicator_query,
+                )
+            elif not _indicator_is_code or (concept_query and concept_query != _first_indicator):
+                # concept_query is already distilled and different from the code
+                _human_indicator_query = concept_query
+            else:
+                # Last resort: use the original query which might be "US inflation rate"
+                _human_indicator_query = intent.originalQuery or concept_query
 
         # Group countries by their best provider.
         provider_groups: Dict[str, List[str]] = {}  # provider -> [iso2, ...]
         provider_codes: Dict[str, Optional[str]] = {}  # provider -> indicator code (if catalog knows)
         for iso2 in iso2_map:
             best_prov, best_code = self._get_provider_for_single_country(
-                iso2, concept_query, provider,
+                iso2, _human_indicator_query, provider,
             )
             provider_groups.setdefault(best_prov, []).append(iso2)
             # Keep the first code suggestion per provider.
@@ -2285,6 +2325,18 @@ class QueryService:
         # Build and execute per-provider sub-intents in parallel.
         async def _fetch_for_group(group_provider: str, group_iso2s: List[str]) -> List[NormalizedData]:
             sub_params = dict(params)
+
+            # ── Strip delta-resolution flags ────────────────────────────
+            # The parent intent may carry __delta_resolved from the
+            # conversation delta path.  Sub-intents dispatched to a
+            # *different* provider need full indicator resolution (the
+            # prior provider's code, e.g. CPIAUCSL, is meaningless to
+            # WorldBank).  Even same-provider sub-intents should go
+            # through normal resolution since the geographic context
+            # changed.
+            sub_params.pop("__delta_resolved", None)
+            sub_params.pop("__delta_indicator_changed", None)
+
             # Replace multi-country params with the group's countries.
             sub_params.pop("country", None)
             if len(group_iso2s) == 1:
@@ -2309,12 +2361,29 @@ class QueryService:
             # attempt another geographic split on it.
             sub_params["__geo_split_child"] = True
 
+            # For sub-intents going to a different provider, use the
+            # human-readable indicator description (not the provider-specific
+            # code) so the resolution pipeline can find the right indicator.
+            _sub_indicators: List[str]
+            _sub_original_query: str
+            if catalog_code:
+                _sub_indicators = [catalog_code]
+                _sub_original_query = _human_indicator_query
+            elif group_provider != provider:
+                # Different provider: use human-readable indicator for resolution
+                _sub_indicators = [_human_indicator_query] if _human_indicator_query else list(intent.indicators or [])
+                _sub_original_query = _human_indicator_query
+            else:
+                # Same provider: keep the original indicator codes
+                _sub_indicators = list(intent.indicators or [])
+                _sub_original_query = intent.originalQuery or _human_indicator_query
+
             sub_intent = ParsedIntent(
                 apiProvider=group_provider,
-                indicators=[catalog_code] if catalog_code else list(intent.indicators or []),
+                indicators=_sub_indicators,
                 parameters=sub_params,
                 clarificationNeeded=False,
-                originalQuery=intent.originalQuery,
+                originalQuery=_sub_original_query,
             )
 
             try:
@@ -3063,15 +3132,21 @@ class QueryService:
                         tracker=tracker,
                     )
 
-                    # After successful fetch, update the resolved_indicator_code
+                    # After successful fetch, ALWAYS update the resolved_indicator_code
                     # in the persisted state.  The data_fetcher may have resolved
                     # the indicator to a provider-specific code (e.g.,
                     # "NY.GDP.PCAP.CD") — capture it so the next delta turn can
                     # reuse it without re-resolution drift.
+                    #
+                    # Previously this only saved when _resolved_code differed from
+                    # _merged_state.indicator, but on turn 1 the guaranteed-save
+                    # path sets indicator = resolved code, so the condition was
+                    # always False and resolved_indicator_code was never persisted
+                    # via the delta path.  Now we always persist when available.
                     if _delta_response and _delta_response.data:
                         try:
                             _resolved_code = (_delta_intent.parameters or {}).get("indicator")
-                            if _resolved_code and _resolved_code != _merged_state.indicator:
+                            if _resolved_code:
                                 _merged_state.resolved_indicator_code = str(_resolved_code)
                                 conversation_manager.set_conversation_state(conv_id, _merged_state)
                         except Exception:
@@ -3122,7 +3197,8 @@ class QueryService:
             last_intent = conversation_manager.get_last_intent(conv_id)
             if last_intent:
                 li_params = last_intent.parameters or {}
-                # Gather country/countries from prior intent
+                # Gather country/countries from prior intent, with fallback
+                # to ConversationState which carries forward accumulated context
                 prior_country = li_params.get("country", "")
                 prior_countries_list = li_params.get("countries")
                 if prior_countries_list and isinstance(prior_countries_list, list):
@@ -3130,7 +3206,18 @@ class QueryService:
                 elif prior_country:
                     country_str = str(prior_country)
                 else:
-                    country_str = "not specified"
+                    # Fallback: check ConversationState for accumulated country
+                    # context that may not be in last_intent parameters (e.g.,
+                    # when a follow-up changed indicator but not country).
+                    if _current_conv_state:
+                        if _current_conv_state.countries:
+                            country_str = ", ".join(_current_conv_state.countries)
+                        elif _current_conv_state.country:
+                            country_str = _current_conv_state.country
+                        else:
+                            country_str = "not specified"
+                    else:
+                        country_str = "not specified"
 
                 conversation_context = {
                     "indicator": ", ".join(last_intent.indicators) if last_intent.indicators else "not specified",
@@ -3307,25 +3394,12 @@ class QueryService:
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
 
             # Dual-write: update ConversationState alongside last_intent.
-            # MERGE new intent fields into existing state to preserve accumulated
-            # dimensions, cube metadata, and base_indicator from prior rounds.
-            # Without this, the fallthrough path (when delta extraction fails)
-            # would destroy all accumulated context.
+            # Use merge_new_state_with_previous to preserve ALL accumulated
+            # context (country, provider, time range, dimensions, etc.) from
+            # prior rounds when the new intent doesn't include those fields.
             try:
                 _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
-                if _prev_good_state:
-                    _new_conv_state.turn_number = _prev_good_state.turn_number + 1
-                    # Preserve accumulated fields that the new intent doesn't know about
-                    if not _new_conv_state.dimensions and _prev_good_state.dimensions:
-                        _new_conv_state.dimensions = _prev_good_state.dimensions
-                    if not _new_conv_state.base_indicator and _prev_good_state.base_indicator:
-                        _new_conv_state.base_indicator = _prev_good_state.base_indicator
-                    if not _new_conv_state.statscan_cube_metadata and _prev_good_state.statscan_cube_metadata:
-                        _new_conv_state.statscan_cube_metadata = _prev_good_state.statscan_cube_metadata
-                    if not _new_conv_state.statscan_product_id and _prev_good_state.statscan_product_id:
-                        _new_conv_state.statscan_product_id = _prev_good_state.statscan_product_id
-                    if not _new_conv_state.resolved_indicator_code and _prev_good_state.resolved_indicator_code:
-                        _new_conv_state.resolved_indicator_code = _prev_good_state.resolved_indicator_code
+                _new_conv_state = merge_new_state_with_previous(_new_conv_state, _prev_good_state)
                 conversation_manager.set_conversation_state(conv_id, _new_conv_state)
             except Exception as _sw_err:
                 logger.warning("Dual-write conversation_state failed in process_query: %s", _sw_err)
@@ -3960,7 +4034,7 @@ class QueryService:
                     try:
                         _qs = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                         _ex = conversation_manager.get_conversation_state(conv_id)
-                        if _ex: _qs.turn_number = _ex.turn_number + 1
+                        _qs = merge_new_state_with_previous(_qs, _ex)
                         # Ensure cube metadata for StatsCan dimension follow-ups
                         if (_qs.statscan_product_id
                                 and not _qs.statscan_cube_metadata
@@ -3997,8 +4071,7 @@ class QueryService:
                             intent, statscan_provider=self.statscan_provider
                         )
                         _existing = conversation_manager.get_conversation_state(conv_id)
-                        if _existing:
-                            _new_state.turn_number = _existing.turn_number + 1
+                        _new_state = merge_new_state_with_previous(_new_state, _existing)
                         # Explicitly fetch cube metadata for StatsCan dimension follow-ups.
                         # Vector-based fetches don't call _get_cube_metadata, so the
                         # provider's cache may be empty. We fetch it here so R2 has it.
