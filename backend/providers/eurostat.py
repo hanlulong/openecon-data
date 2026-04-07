@@ -237,7 +237,7 @@ class EurostatProvider(BaseProvider):
         "lfsq_egan": {"age": "Y15-64", "sex": "T", "wstatus": "EMP"},  # Employment by age
 
         # === Prices and Inflation ===
-        "prc_hicp_aind": {"coicop": "CP00"},  # HICP inflation - HEADLINE (all items)
+        "prc_hicp_aind": {"coicop": "CP00", "unit": "RCH_A_AVG"},  # HICP inflation - HEADLINE (all items, annual avg rate of change %)
         "prc_hicp_aind_core": {"coicop": "TOT_X_NRG_FOOD"},  # HICP inflation - CORE (excluding energy, food)
         "prc_hicp_manr": {"coicop": "CP00"},  # HICP monthly - headline
         "prc_hicp_midx": {"coicop": "CP00"},  # HICP index - headline

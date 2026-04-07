@@ -309,6 +309,18 @@ class IndicatorResolver:
                             return False
 
                         missing = {d for d in q_discs if not _dp(d, res_name_lower) and not _dp(d, (result.code or "").lower())}
+                        # High-confidence catalog matches (>= 0.90) are authoritative —
+                        # skip discriminator rejection.  The concept itself already
+                        # encodes the query's semantic intent.
+                        if missing and float(best_confidence or 0.0) >= 0.90:
+                            logger.debug(
+                                "🔬 Skipping discriminator rejection for high-confidence "
+                                "provider-agnostic result '%s' (confidence=%.2f, concept=%s, "
+                                "missing=%s)",
+                                result.code, float(best_confidence or 0.0),
+                                concept_name, missing,
+                            )
+                            missing = set()  # Clear missing to accept the result
                         if missing:
                             # Before giving up, try variant codes from the same
                             # concept/provider that DO match the discriminators.

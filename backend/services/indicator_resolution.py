@@ -631,8 +631,13 @@ def apply_concept_provider_override(
     explicit_provider_requested = _normalize_provider_name(
         svc._detect_explicit_provider(raw_query) or ""
     )
-    if explicit_provider_requested and explicit_provider_requested == provider:
-        return provider, params
+    # When the user explicitly requested this provider (e.g., "from IMF"),
+    # we still need to do the concept lookup and inject the canonical
+    # indicator code (e.g., GDP growth rate → NGDP_RPCH).  We just must
+    # NOT re-route to a different provider.
+    explicit_provider_locked = bool(
+        explicit_provider_requested and explicit_provider_requested == provider
+    )
 
     blocked_override_providers = {
         _normalize_provider_name(str(candidate))
@@ -750,7 +755,18 @@ def apply_concept_provider_override(
                 _resolver = get_indicator_resolver()
                 code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
                 code_name = (code_meta.get("name", "") if code_meta else "")
-                if not svc._verify_semantic_discriminators(original_query, canonical_code, code_name):
+                # High-confidence catalog matches (>= 0.90) are authoritative —
+                # the concept itself already encodes the query's semantic intent
+                # (e.g. gdp_growth concept already implies "growth").  Discriminator
+                # checks should NOT override the catalog in these cases.
+                _skip_discriminator = float(preferred_confidence or 0.0) >= 0.90
+                if _skip_discriminator:
+                    logger.debug(
+                        "📋 Skipping discriminator check for high-confidence catalog match "
+                        "'%s' (confidence=%.2f, concept=%s)",
+                        canonical_code, float(preferred_confidence or 0.0), concept_name,
+                    )
+                if not _skip_discriminator and not svc._verify_semantic_discriminators(original_query, canonical_code, code_name):
                     # Primary variant doesn't match query discriminators (e.g.,
                     # user asked for "GDP per capita PPP" but primary is current US$).
                     # Try named catalog variants (ppp, growth, constant, etc.)
@@ -779,27 +795,29 @@ def apply_concept_provider_override(
                             )
 
                     # No matching variant found — try provider-agnostic resolution
-                    alt_provider, alt_code, alt_conf = get_best_provider(
-                        concept_name, countries_ctx
-                    )
-                    alt_normalized = _normalize_provider_name(alt_provider or "")
-                    if alt_normalized and alt_normalized != provider and alt_code:
-                        alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
-                        alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
-                        # Check discriminators from the original query
-                        disc_set = getattr(_resolver, '_semantic_discriminators', set())
-                        query_discs = {d for d in disc_set if d in original_query.lower()}
-                        alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
-                        if not alt_missing:
-                            logger.info(
-                                "🔄 Switching provider %s → %s (code %s matches discriminators better)",
-                                provider, alt_normalized, alt_code,
-                            )
-                            params = {**params, "indicator": alt_code}
-                            intent.parameters = params
-                            intent.indicators = [alt_code]
-                            intent.apiProvider = alt_normalized
-                            return alt_normalized, params
+                    # but only if the user didn't explicitly lock this provider
+                    if not explicit_provider_locked:
+                        alt_provider, alt_code, alt_conf = get_best_provider(
+                            concept_name, countries_ctx
+                        )
+                        alt_normalized = _normalize_provider_name(alt_provider or "")
+                        if alt_normalized and alt_normalized != provider and alt_code:
+                            alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
+                            alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
+                            # Check discriminators from the original query
+                            disc_set = getattr(_resolver, '_semantic_discriminators', set())
+                            query_discs = {d for d in disc_set if d in original_query.lower()}
+                            alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
+                            if not alt_missing:
+                                logger.info(
+                                    "🔄 Switching provider %s → %s (code %s matches discriminators better)",
+                                    provider, alt_normalized, alt_code,
+                                )
+                                params = {**params, "indicator": alt_code}
+                                intent.parameters = params
+                                intent.indicators = [alt_code]
+                                intent.apiProvider = alt_normalized
+                                return alt_normalized, params
                     return provider, params
 
                 params = {**params, "indicator": canonical_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
@@ -828,6 +846,11 @@ def apply_concept_provider_override(
                 not best_provider_normalized or best_provider_normalized == provider
             ):
                 return provider, params
+
+        # When the user explicitly requested this provider, never re-route
+        # to a different one.  Code injection (if any) already happened above.
+        if explicit_provider_locked:
+            return provider, params
 
         if (
             in_fallback_context

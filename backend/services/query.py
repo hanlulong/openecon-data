@@ -751,6 +751,22 @@ class QueryService:
         )
         if explicit_provider_requested:
             intent.apiProvider = explicit_provider_requested
+            # Still apply concept override to inject the correct indicator code
+            # (e.g., "GDP growth rate from IMF" → NGDP_RPCH) even though the
+            # provider is already locked by the user's explicit request.
+            params_before = dict(params)
+            _, params = self._apply_concept_provider_override(
+                explicit_provider_requested,
+                intent,
+                params,
+            )
+            intent.parameters = params
+            if params.get("indicator") != params_before.get("indicator"):
+                logger.info(
+                    "🧭 Concept code injected for explicit provider %s: %s",
+                    explicit_provider_requested,
+                    params.get("indicator"),
+                )
             return explicit_provider_requested
         if countries and len(countries) > 1 and not self._provider_covers_country_list(routed_provider, countries):
             logger.info(

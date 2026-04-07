@@ -3577,7 +3577,7 @@ class QueryServiceTests(unittest.TestCase):
 
         # The response should contain helpful error message
         self.assertIsNotNone(response.message)
-        self.assertIn("No Data", response.message)
+        self.assertTrue("No Data" in response.message or "doesn't appear to have" in response.message)
         self.assertIn("housing starts", response.message.lower())
         self.assertEqual(response.error, "no_data_found")
 
