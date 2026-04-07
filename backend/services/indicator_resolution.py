@@ -807,7 +807,10 @@ def apply_concept_provider_override(
                             # Check discriminators from the original query
                             disc_set = getattr(_resolver, '_semantic_discriminators', set())
                             query_discs = {d for d in disc_set if d in original_query.lower()}
-                            alt_missing = {d for d in query_discs if d not in alt_name and d not in alt_code.lower()}
+                            from ..services.indicator_clarification import find_missing_discriminators as _find_missing
+                            alt_missing = _find_missing(
+                                query_discs, alt_name, alt_code.lower(),
+                            )
                             if not alt_missing:
                                 logger.info(
                                     "🔄 Switching provider %s → %s (code %s matches discriminators better)",

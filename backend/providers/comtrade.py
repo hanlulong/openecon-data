@@ -442,6 +442,8 @@ class ComtradeProvider(BaseProvider):
         Returns:
             List of NormalizedData objects (one per flow type)
         """
+        from ..utils.retry import DataNotAvailableError
+
         reporter_code = self._country_code(reporter_raw)
 
         # Check if reporter is a known non-reporting territory
@@ -455,22 +457,21 @@ class ComtradeProvider(BaseProvider):
 
         if reporter_code in NON_REPORTING_TERRITORIES:
             territory_name = NON_REPORTING_TERRITORIES[reporter_code]
-            logger.warning(
+            raise DataNotAvailableError(
                 f"{territory_name} does not report trade data to UN Comtrade. "
                 f"To get {territory_name} trade data, use partner perspective: "
-                f"For {territory_name} exports: query partner imports FROM {territory_name} (partner code 490). "
-                f"For {territory_name} imports: query partner exports TO {territory_name} (partner code 490). "
-                f"Returning empty result - consider querying major trading partners (China, Japan, USA)."
+                f"query partner imports FROM {territory_name} or partner exports TO {territory_name}."
             )
-            return []
 
         # Handle invalid regional codes that cannot be resolved
         # (e.g., "Middle East", "Asia", "Africa" without specific country codes)
         if partner_code is None:
             # Only happens for regional codes that aren't mapped
             # These should be decomposed by the query service
-            logger.warning(f"Skipping fetch for {reporter_raw}: partner code is None (invalid region?)")
-            return []
+            raise DataNotAvailableError(
+                f"Cannot resolve partner code for reporter '{reporter_raw}' — "
+                f"region may need to be decomposed into individual countries."
+            )
 
         params = {
             "typeCode": "C",
@@ -513,13 +514,20 @@ class ComtradeProvider(BaseProvider):
                         f"Comtrade API error for reporter {reporter_raw}: "
                         f"HTTP {e.response.status_code}: {str(e)}"
                     )
-                    return []
+                    raise DataNotAvailableError(
+                        f"Comtrade API error for reporter {reporter_raw}: "
+                        f"HTTP {e.response.status_code}"
+                    ) from e
+            except DataNotAvailableError:
+                raise  # Let DataNotAvailableError propagate directly
             except Exception as e:
                 # Other errors (network, JSON parsing, etc.)
                 logger.error(
                     f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
                 )
-                return []
+                raise DataNotAvailableError(
+                    f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
+                ) from e
 
         records = payload.get("data") or []
         if not records:
@@ -990,11 +998,21 @@ class ComtradeProvider(BaseProvider):
 
         # Flatten results (each task returns a list; exceptions become empty)
         all_results = []
+        last_error: Optional[BaseException] = None
         for result in results_list:
             if isinstance(result, BaseException):
                 logger.debug("Comtrade sub-task failed: %s", result)
+                last_error = result
                 continue
             all_results.extend(result)
+
+        # When ALL sub-tasks failed, propagate the most informative error
+        # so the caller gets a specific message (e.g. "Taiwan does not report")
+        # instead of the generic "No data available" from the fallback layer.
+        if not all_results and last_error is not None:
+            if isinstance(last_error, DataNotAvailableError):
+                raise last_error
+            raise DataNotAvailableError(str(last_error)) from last_error
 
         return self._merge_series_segments(all_results)
 

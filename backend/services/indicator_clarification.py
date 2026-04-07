@@ -1658,6 +1658,47 @@ def format_informational_results(
 # Semantic discriminator verification
 # ====================================================================
 
+def discriminator_present(disc: str, text: str) -> bool:
+    """Check whether semantic discriminator *disc* is satisfied by *text*.
+
+    This is the **single source of truth** for discriminator equivalence
+    mappings.  Every call-site that needs to decide "does this indicator
+    name / code / description match the query discriminator?" MUST use
+    this function (or :func:`verify_semantic_discriminators` which wraps it).
+
+    The equivalences are structural format mappings (e.g. "rate" ↔ "%"),
+    NOT per-indicator patches.
+    """
+    if disc in text:
+        return True
+    if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text
+                           or "annual" in text):
+        return True
+    if disc == "growth" and ("annual %" in text or "percent change" in text):
+        return True
+    if disc == "ppp" and ("purchasing power" in text or "international $" in text):
+        return True
+    if disc == "purchasing power" and ("ppp" in text or "international $" in text):
+        return True
+    if disc == "per capita" and ("per person" in text or "per inhabitant" in text):
+        return True
+    return False
+
+
+def find_missing_discriminators(
+    query_discs: set[str],
+    *texts: str,
+) -> set[str]:
+    """Return the subset of *query_discs* NOT satisfied by any of *texts*.
+
+    Each text is checked via :func:`discriminator_present`.
+    """
+    return {
+        d for d in query_discs
+        if not any(discriminator_present(d, t) for t in texts)
+    }
+
+
 def verify_semantic_discriminators(
     original_query: str,
     code: str,
@@ -1678,24 +1719,7 @@ def verify_semantic_discriminators(
     name_lower = str(series_name or "").lower()
     code_lower = str(code or "").lower()
 
-    def _matches(disc: str, text: str) -> bool:
-        if disc in text:
-            return True
-        # Structural equivalences — different providers use different naming
-        # conventions for the same concept. These are format mappings, not
-        # individual indicator fixes.
-        if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text
-                               or "annual" in text):
-            return True
-        if disc == "growth" and ("annual %" in text or "percent change" in text):
-            return True
-        if disc == "ppp" and ("purchasing power" in text or "international $" in text):
-            return True
-        if disc == "purchasing power" and ("ppp" in text or "international $" in text):
-            return True
-        return False
-
-    missing = {d for d in query_discs if not _matches(d, name_lower) and not _matches(d, code_lower)}
+    missing = find_missing_discriminators(query_discs, name_lower, code_lower)
     if missing:
         logger.info(
             "Semantic verification: '%s' (%s) missing discriminators %s from '%s'",

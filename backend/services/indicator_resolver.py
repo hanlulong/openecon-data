@@ -36,6 +36,7 @@ from collections import OrderedDict
 from time import monotonic
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .indicator_clarification import discriminator_present, find_missing_discriminators
 from .indicator_lookup import IndicatorLookup, get_indicator_lookup
 from .indicator_translator import IndicatorTranslator, get_indicator_translator
 from .vector_search import VECTOR_SEARCH_AVAILABLE, get_vector_search_service
@@ -299,16 +300,9 @@ class IndicatorResolver:
                         res_name_lower = (result.name or "").lower()
                         q_discs = {d for d in self._semantic_discriminators if d in query_lower}
 
-                        def _dp(disc: str, text: str) -> bool:
-                            if disc in text: return True
-                            if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text): return True
-                            if disc == "growth" and ("annual %" in text or "percent change" in text): return True
-                            if disc == "ppp" and ("purchasing power" in text or "international $" in text): return True
-                            if disc == "purchasing power" and ("ppp" in text or "international $" in text): return True
-                            if disc == "per capita" and ("per person" in text or "per inhabitant" in text): return True
-                            return False
-
-                        missing = {d for d in q_discs if not _dp(d, res_name_lower) and not _dp(d, (result.code or "").lower())}
+                        missing = find_missing_discriminators(
+                            q_discs, res_name_lower, (result.code or "").lower(),
+                        )
                         # High-confidence catalog matches (>= 0.90) are authoritative —
                         # skip discriminator rejection.  The concept itself already
                         # encodes the query's semantic intent.
@@ -340,12 +334,9 @@ class IndicatorResolver:
                                         )
                                     alt_name = (alt_meta.get("name") or "").lower()
                                     alt_desc = (alt_meta.get("description") or "").lower()[:500]
-                                    alt_missing = {
-                                        d for d in missing
-                                        if not _dp(d, alt_name)
-                                        and not _dp(d, alt_code.lower())
-                                        and not _dp(d, alt_desc)
-                                    }
+                                    alt_missing = find_missing_discriminators(
+                                        missing, alt_name, alt_code.lower(), alt_desc,
+                                    )
                                     if not alt_missing:
                                         logger.info(
                                             "🔬 Provider-agnostic variant '%s' (%s) matches discriminators %s",
@@ -401,33 +392,15 @@ class IndicatorResolver:
             query_lower = query.lower()
             result_name_lower = (result.name or "").lower()
             query_discs = {d for d in self._semantic_discriminators if d in query_lower}
-            # Check if discriminators are present in name/code, accounting
-            # for equivalent expressions: "rate" = "% of", "growth" = "annual %"
-            def _disc_present(disc: str, text: str) -> bool:
-                if disc in text:
-                    return True
-                if disc == "rate" and ("%" in text or "percent" in text or "ratio" in text):
-                    return True
-                if disc == "growth" and ("annual %" in text or "percent change" in text):
-                    return True
-                if disc == "ppp" and ("purchasing power" in text or "international $" in text):
-                    return True
-                if disc == "purchasing power" and ("ppp" in text or "international $" in text):
-                    return True
-                if disc == "per capita" and ("per person" in text or "per inhabitant" in text):
-                    return True
-                return False
 
             # Also check description for discriminator presence
             result_desc_lower = (
                 (result.metadata or {}).get("description", "") or ""
             ).lower()[:500]
-            missing_discs = {
-                d for d in query_discs
-                if not _disc_present(d, result_name_lower)
-                and not _disc_present(d, (result.code or "").lower())
-                and not _disc_present(d, result_desc_lower)
-            }
+            missing_discs = find_missing_discriminators(
+                query_discs, result_name_lower,
+                (result.code or "").lower(), result_desc_lower,
+            )
             if missing_discs:
                 # Try to find a better VARIANT within the same catalog concept.
                 # E.g., "GDP growth" matched concept "gdp" → primary is NY.GDP.MKTP.CD
@@ -444,12 +417,9 @@ class IndicatorResolver:
                             alt_meta = {"code": alt_code, "provider": provider, "name": ""}
                         alt_name = (alt_meta.get("name") or "").lower()
                         alt_desc = (alt_meta.get("description") or "").lower()[:500]
-                        alt_missing = {
-                            d for d in missing_discs
-                            if not _disc_present(d, alt_name)
-                            and not _disc_present(d, alt_code.lower())
-                            and not _disc_present(d, alt_desc)
-                        }
+                        alt_missing = find_missing_discriminators(
+                            missing_discs, alt_name, alt_code.lower(), alt_desc,
+                        )
                         if not alt_missing:
                             logger.info(
                                 "🔬 Catalog variant '%s' (%s) matches discriminators %s — using instead of '%s'",

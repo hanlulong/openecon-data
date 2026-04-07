@@ -1,8 +1,14 @@
-"""Canonical provider name normalization.
+"""Canonical provider name normalization and shared provider constants.
 
 Single source of truth for mapping LLM outputs, user input, and internal
 references to the standard uppercase provider names used throughout the system.
 """
+
+# Canonical tuple of all data providers that support indicator codes.
+# Used for cross-provider indicator code detection and reverse concept lookups.
+ALL_PROVIDERS: tuple[str, ...] = (
+    "FRED", "WORLDBANK", "IMF", "EUROSTAT", "BIS", "OECD", "STATSCAN",
+)
 
 # Provider name aliases → canonical form (uppercase)
 PROVIDER_ALIASES = {

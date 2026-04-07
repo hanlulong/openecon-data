@@ -34,14 +34,6 @@ providers:
       coverage: global
       frequency: annual
 
-  IMF:
-    primary:
-      code: LE
-      name: "Employment"
-      confidence: 0.85
-      coverage: global
-      frequency: annual
-
   FRED:
     primary:
       code: PAYEMS
@@ -60,13 +52,14 @@ providers:
 
   StatsCan:
     primary:
-      code: "EMPLOYMENT"
-      name: "Labour force characteristics"
+      code: "14100287"
+      name: "Labour force characteristics, monthly, seasonally adjusted and trend-cycle"
       confidence: 0.90
       coverage: [CA]
       frequency: monthly
 
 not_available:
+  - IMF
   - Comtrade
   - CoinGecko
   - ExchangeRate

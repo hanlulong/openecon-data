@@ -60,6 +60,7 @@ from ..providers.eurostat import EurostatProvider
 from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import normalize_canadian_region_list
+from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
@@ -2271,10 +2272,9 @@ class QueryService:
         # Check if indicator looks like a code for ANY provider, not just
         # the current one (the indicator may have been resolved by a prior
         # provider, e.g. NY.GDP.PCAP.CD from WorldBank on a StatsCan-routed intent).
-        _ALL_PROVIDERS = ("FRED", "WORLDBANK", "IMF", "EUROSTAT", "BIS", "OECD", "STATSCAN")
         _indicator_is_code = _first_indicator and any(
             self._looks_like_provider_indicator_code(p, _first_indicator)
-            for p in _ALL_PROVIDERS
+            for p in ALL_PROVIDERS
         )
         if _indicator_is_code:
             # The indicator is a provider-specific code.  Try reverse-looking
@@ -2282,7 +2282,7 @@ class QueryService:
             # NY.GDP.PCAP.CD → "gdp_per_capita").  Check all providers.
             from .catalog_service import find_concepts_by_code
             _reverse_concepts: List[str] = []
-            for _p in _ALL_PROVIDERS:
+            for _p in ALL_PROVIDERS:
                 _reverse_concepts = find_concepts_by_code(_p, _first_indicator)
                 if _reverse_concepts:
                     break

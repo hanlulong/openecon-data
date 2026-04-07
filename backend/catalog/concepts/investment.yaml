@@ -27,8 +27,8 @@ providers:
       frequency: annual
   IMF:
     primary:
-      code: NID_NGDP
-      name: "Total investment (% of GDP)"
+      code: NI_GDP
+      name: "Total Investment (% of GDP)"
       confidence: 0.90
       coverage: global
       frequency: annual

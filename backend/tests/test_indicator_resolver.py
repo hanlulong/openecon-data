@@ -487,7 +487,7 @@ class IndicatorResolverTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result.code, "UNEMPLOYMENT_RATE")
+        self.assertEqual(result.code, "14100287")
         self.assertEqual(result.source, "catalog")
         # Catalog name may be the concept name or the full description
         self.assertTrue(result.name is not None and len(result.name) > 0)

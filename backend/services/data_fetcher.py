@@ -22,6 +22,7 @@ import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..models import Metadata, NormalizedData, ParsedIntent
+from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
@@ -1197,14 +1198,13 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
             # name instead (e.g. "gdp growth") so the new provider can find
             # its own indicator code.
             _resolution_query = _indicator_name
-            _ALL_PROVIDERS = ("FRED", "WORLDBANK", "IMF", "EUROSTAT", "BIS", "OECD", "STATSCAN")
             _is_code = _indicator_name and any(
                 svc._looks_like_provider_indicator_code(p, _indicator_name)
-                for p in _ALL_PROVIDERS
+                for p in ALL_PROVIDERS
             )
             if _is_code:
                 from ..services.catalog_service import find_concepts_by_code
-                for _p in _ALL_PROVIDERS:
+                for _p in ALL_PROVIDERS:
                     _concepts = find_concepts_by_code(_p, _indicator_name)
                     if _concepts:
                         _resolution_query = _concepts[0].replace("_", " ")

@@ -50,7 +50,7 @@ providers:
 
   StatsCan:
     primary:
-      code: "HOUSING_PRICE_INDEX"
+      code: "18100205"
       name: "New housing price index, monthly"
       confidence: 0.95
       coverage: [CA]
