@@ -473,6 +473,27 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
             if (_key in StatsCanProvider.VECTOR_MAPPINGS
                     or _key in StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS):
                 base_indicator = _key
+            # Framework fix: if _key is a numeric table/product ID (e.g., "14100287"),
+            # reverse-lookup through PRODUCT_ID_CACHE to find the vector mapping key.
+            # This ensures base_indicator is set for dimension follow-ups.
+            # Prefer the longest (most specific) key, e.g., "UNEMPLOYMENT_RATE" over
+            # "UNEMPLOYMENT", since longer names carry more semantic precision for
+            # downstream coordinate building.
+            elif _key.isdigit():
+                _numeric_id = int(_key)
+                _cached_product = StatsCanProvider.PRODUCT_ID_CACHE.get(_numeric_id)
+                if _cached_product:
+                    _normalized_product = StatsCanProvider._normalize_metadata_product_id(_cached_product)
+                    _candidates = []
+                    for _vec_key, _vec_id in StatsCanProvider.VECTOR_MAPPINGS.items():
+                        if _vec_id is None:
+                            continue
+                        _vec_product = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec_id)
+                        if _vec_product and StatsCanProvider._normalize_metadata_product_id(_vec_product) == _normalized_product:
+                            _candidates.append(_vec_key)
+                    if _candidates:
+                        # Prefer the longest key (most specific, e.g., UNEMPLOYMENT_RATE > UNEMPLOYMENT)
+                        base_indicator = max(_candidates, key=len)
         except Exception:
             pass
         # Also check if the params had __base_indicator from a prior delta path

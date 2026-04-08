@@ -247,10 +247,15 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
    - added_countries: "add", "also", "compare with", "include" → ADDITIVE
    - removed_countries: "remove", "exclude", "without" → SUBTRACTIVE
 3. For dimensions (sub-categories like sex, age group, province, product type):
-   - added_dimensions: dict of {{dimension_name: single_value}} to FILTER by
-   - IMPORTANT: Each dimension value must be a SINGLE filter value, NOT a list.
-     "break down by sex" → use the specific sex mentioned, or "female" if not specified.
-     "show youth" → age_group = "15 to 24 years" (use exact member name if available below).
+   - added_dimensions: dict of {{dimension_name: value}} where value is either:
+     a) A SPECIFIC member name to FILTER by (e.g., "Ontario", "Females", "15 to 24 years")
+     b) The CATEGORY name when the user wants to see ALL items (e.g., "province", "age group")
+   - IMPORTANT: When the user says "by province" / "show by province" / "break down by province"
+     WITHOUT naming a specific province, the value MUST be "province" (the category), NOT a
+     specific province like "Ontario". This means "show data for ALL provinces".
+   - Similarly: "by age group" → value="age group", "by sex" → value="sex" (show all).
+   - But "show Ontario" / "for Ontario" → value="Ontario" (specific filter).
+   - "show youth" → age_group = "15 to 24 years" (use exact member name if available below).
      "show seniors" / "55+" → age_group = "55 years and over".
    - When available dimension members are listed below, use the EXACT member name.
    - is_dimension_modifier_change: true when changing dimensions.
@@ -259,7 +264,10 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
 6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
 7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
 8. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
-9. "break it down by X" / "filter by X" / "by sex" / "by age" → dimension_change.
+9. "break it down by X" / "filter by X" / "by sex" / "by age" / "show by province" → dimension_change.
+   - CRITICAL: "show by province" / "by province" / "break down by province" (no specific province named)
+     → added_dimensions = {{"Geography": "province"}} (category name, NOT a specific province like "Ontario")
+   - "show for Ontario" → added_dimensions = {{"Geography": "Ontario"}} (specific filter)
 10. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
 
 IMPORTANT DISTINCTIONS:
@@ -268,6 +276,8 @@ IMPORTANT DISTINCTIONS:
 - "Correlate unemployment with GDP" → pro_mode (needs computation)
 - "Show as bar chart" → parameter_delta (chart type)
 - "Show me a scatter plot" → pro_mode (needs code)
+- "Show by province" → dimension_change with Geography="province" (ALL provinces, not one specific)
+- "Show for Ontario" → dimension_change with Geography="Ontario" (specific province filter)
 
 CRITICAL RULE — DIMENSION vs INDICATOR SWITCH vs COUNTRY CHANGE:
 If available dimension members are listed below, and the user's query term matches
@@ -277,6 +287,7 @@ NOT an indicator switch or country change.
 Examples:
 - CPI has "Products and product groups" with "Food", "Energy" → "show energy" = added_dimensions
 - Unemployment has "Geography" with "Ontario", "Quebec" → "show for Ontario" = added_dimensions with Geography=Ontario, NOT changed_country
+- Unemployment has "Geography" with provinces → "show by province" = added_dimensions with Geography="province" (ALL provinces)
 - Unemployment has "Sex" with "Males", "Females" → "show female" = added_dimensions with Sex value
 
 Canadian provinces (Ontario, Quebec, BC, Alberta, etc.) appearing in Geography dimension members

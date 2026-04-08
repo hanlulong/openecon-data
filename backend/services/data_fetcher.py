@@ -667,16 +667,123 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     entity = params.get("entity")
     indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)
 
+    # --- Framework fix: resolve numeric table/product IDs to vector mapping keys ---
+    # When the catalog or conversation state provides a numeric table ID (e.g., "14100287")
+    # instead of a human-readable key (e.g., "UNEMPLOYMENT_RATE"), look it up via
+    # PRODUCT_ID_CACHE (vector→product mapping) to find the corresponding vector key.
+    # This enables the early dimension dispatch to work with numeric indicators.
+    def _resolve_numeric_to_vector_key(numeric_indicator: str) -> Optional[str]:
+        """Reverse-lookup a numeric table ID to its VECTOR_MAPPINGS key.
+
+        Prefers the longest (most specific) key, e.g., UNEMPLOYMENT_RATE over
+        UNEMPLOYMENT, since longer names carry more semantic precision for
+        downstream coordinate building.
+        """
+        try:
+            numeric_id = int(numeric_indicator)
+        except (ValueError, TypeError):
+            return None
+        # Check if numeric_id is itself a key in PRODUCT_ID_CACHE
+        cached_product = svc.statscan_provider.PRODUCT_ID_CACHE.get(numeric_id)
+        if cached_product:
+            # Collect all vector mapping keys whose product matches
+            normalized_product = svc.statscan_provider._normalize_metadata_product_id(cached_product)
+            candidates = []
+            for key, vec_id in svc.statscan_provider.VECTOR_MAPPINGS.items():
+                if vec_id is None:
+                    continue
+                vec_product = svc.statscan_provider.PRODUCT_ID_CACHE.get(vec_id)
+                if vec_product and svc.statscan_provider._normalize_metadata_product_id(vec_product) == normalized_product:
+                    candidates.append(key)
+            if candidates:
+                # Prefer the longest key (most specific)
+                return max(candidates, key=len)
+        return None
+
+    # --- Framework fix: detect "breakdown" meta-values in dimensions ---
+    # When the LLM delta extractor produces a dimension value like "Province",
+    # "province", "all provinces", "by province" etc., this means "show data
+    # for ALL items in that dimension" (multi-entity breakdown), NOT "filter
+    # to a single value". Route these to fetch_multi_province_data.
+    _GEOGRAPHY_BREAKDOWN_VALUES = {
+        "province", "provinces", "all provinces", "by province",
+        "territory", "territories", "all territories",
+        "provincial", "all", "each province",
+    }
+
+    def _is_dimension_breakdown(dim_values: dict) -> Optional[str]:
+        """Check if any dimension value is a meta-category (breakdown request).
+
+        Returns the dimension name if a breakdown is detected, else None.
+        """
+        for dim_name, dim_val in dim_values.items():
+            if isinstance(dim_val, str) and dim_val.lower().strip() in _GEOGRAPHY_BREAKDOWN_VALUES:
+                return dim_name
+        return None
+
     # EARLY DISPATCH: When __dimensions comes from the delta/merge path,
-    # route directly to fetch_with_dimensions. This MUST happen before any
-    # other dispatch path (industry breakdown, dynamic discovery, etc.) that
-    # could divert to the wrong table.
+    # route directly to fetch_with_dimensions or fetch_multi_province_data.
+    # This MUST happen before any other dispatch path (industry breakdown,
+    # dynamic discovery, etc.) that could divert to the wrong table.
     if dimensions and params.get("__dimensions"):
         _base = params.get("__base_indicator") or (indicator or "").upper().replace(" ", "_").replace("-", "_")
         _is_known = (
             _base in svc.statscan_provider.VECTOR_MAPPINGS
             or _base in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
         )
+        # If _base is a numeric table ID, try to resolve it to a vector key
+        if not _is_known:
+            _resolved_key = _resolve_numeric_to_vector_key(_base)
+            if _resolved_key:
+                logger.info(f"StatsCan: resolved numeric table ID '{_base}' to vector key '{_resolved_key}'")
+                _base = _resolved_key
+                _is_known = True
+
+        # Check if this is a dimension BREAKDOWN (e.g., Geography="Province")
+        # vs a dimension FILTER (e.g., Geography="Ontario")
+        _breakdown_dim = _is_dimension_breakdown(dimensions)
+        if _breakdown_dim and _is_known:
+            try:
+                # Resolve product ID for multi-province fetch
+                _indicator_key_bp = _base
+                _product_id = None
+                _vec = svc.statscan_provider.VECTOR_MAPPINGS.get(_indicator_key_bp)
+                _coord = svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key_bp)
+                if _coord:
+                    _product_id = svc.statscan_provider._normalize_metadata_product_id(_coord[0])
+                elif _vec is not None:
+                    _cached = svc.statscan_provider.PRODUCT_ID_CACHE.get(_vec)
+                    if _cached:
+                        _product_id = svc.statscan_provider._normalize_metadata_product_id(_cached)
+                # Also try the original numeric indicator as product ID
+                if not _product_id and indicator:
+                    try:
+                        int(indicator)
+                        _product_id = svc.statscan_provider._normalize_metadata_product_id(indicator)
+                    except (ValueError, TypeError):
+                        pass
+
+                if _product_id:
+                    # Remove the breakdown dimension from the modifiers (it's not a real filter)
+                    _non_breakdown_dims = {k: v for k, v in dimensions.items() if k != _breakdown_dim}
+                    province_params = {
+                        "productId": _product_id,
+                        "indicator": _base,
+                        "provinces": "all",
+                        "periods": params.get("periods", 60),
+                        "dimensions": _non_breakdown_dims,
+                        "startDate": params.get("startDate"),
+                        "endDate": params.get("endDate"),
+                    }
+                    logger.info(
+                        f"StatsCan EARLY multi-province dispatch: {_base} product={_product_id} "
+                        f"breakdown_dim={_breakdown_dim}"
+                    )
+                    results = await svc.statscan_provider.fetch_multi_province_data(province_params)
+                    return results if isinstance(results, list) else [results]
+            except Exception as e:
+                logger.warning(f"StatsCan multi-province dispatch failed: {e}. Falling through.")
+
         if _is_known:
             try:
                 start_year = int(params["startDate"][:4]) if params.get("startDate") else None
@@ -822,6 +929,53 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             _indicator_key_for_dim in svc.statscan_provider.VECTOR_MAPPINGS
             or _indicator_key_for_dim in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
         )
+        # Resolve numeric table IDs to vector mapping keys (same as early dispatch)
+        if not _is_known_dim:
+            _resolved_key_dim = _resolve_numeric_to_vector_key(_indicator_key_for_dim)
+            if _resolved_key_dim:
+                logger.info(f"StatsCan (dim fallback): resolved numeric '{_indicator_key_for_dim}' to '{_resolved_key_dim}'")
+                _indicator_key_for_dim = _resolved_key_dim
+                _is_known_dim = True
+
+        # Check again for dimension breakdown (multi-province) in case early dispatch missed it
+        _breakdown_dim_fb = _is_dimension_breakdown(dimensions)
+        if _breakdown_dim_fb and _is_known_dim and params.get("__dimensions"):
+            try:
+                _product_id_fb = None
+                _vec_fb = svc.statscan_provider.VECTOR_MAPPINGS.get(_indicator_key_for_dim)
+                _coord_fb = svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key_for_dim)
+                if _coord_fb:
+                    _product_id_fb = svc.statscan_provider._normalize_metadata_product_id(_coord_fb[0])
+                elif _vec_fb is not None:
+                    _cached_fb = svc.statscan_provider.PRODUCT_ID_CACHE.get(_vec_fb)
+                    if _cached_fb:
+                        _product_id_fb = svc.statscan_provider._normalize_metadata_product_id(_cached_fb)
+                if not _product_id_fb and indicator:
+                    try:
+                        int(indicator)
+                        _product_id_fb = svc.statscan_provider._normalize_metadata_product_id(indicator)
+                    except (ValueError, TypeError):
+                        pass
+                if _product_id_fb:
+                    _non_breakdown_dims_fb = {k: v for k, v in dimensions.items() if k != _breakdown_dim_fb}
+                    province_params_fb = {
+                        "productId": _product_id_fb,
+                        "indicator": _indicator_key_for_dim,
+                        "provinces": "all",
+                        "periods": params.get("periods", 60),
+                        "dimensions": _non_breakdown_dims_fb,
+                        "startDate": params.get("startDate"),
+                        "endDate": params.get("endDate"),
+                    }
+                    logger.info(
+                        f"StatsCan fallback multi-province dispatch: {_indicator_key_for_dim} "
+                        f"product={_product_id_fb}"
+                    )
+                    results_fb = await svc.statscan_provider.fetch_multi_province_data(province_params_fb)
+                    return results_fb if isinstance(results_fb, list) else [results_fb]
+            except Exception as e:
+                logger.warning(f"StatsCan fallback multi-province dispatch failed: {e}. Falling through.")
+
         if _is_known_dim and params.get("__dimensions"):
             try:
                 start_year = int(params["startDate"][:4]) if params.get("startDate") else None
@@ -840,8 +994,18 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     f"with __dimensions={dimensions}: {e}. Falling through."
                 )
 
+        # Fallback: use fetch_categorical_data. If the indicator is a numeric table ID,
+        # use it as the product ID instead of defaulting to "17100005" (population).
+        _fallback_product_id = params.get("productId", "17100005")
+        if indicator and _fallback_product_id == "17100005":
+            try:
+                int(indicator)
+                _fallback_product_id = svc.statscan_provider._normalize_metadata_product_id(indicator)
+                logger.info(f"StatsCan categorical fallback: using numeric indicator '{indicator}' as productId={_fallback_product_id}")
+            except (ValueError, TypeError):
+                pass
         categorical_params = {
-            "productId": params.get("productId", "17100005"),
+            "productId": _fallback_product_id,
             "indicator": indicator or "Population",
             "periods": params.get("periods", 20),
             "dimensions": dimensions,
