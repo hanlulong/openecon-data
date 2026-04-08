@@ -262,6 +262,23 @@ class TestMergeState:
         # Then added_dimensions merges on top
         assert merged.dimensions == {"product": "energy"}
 
+    def test_crypto_indicator_with_suffix_matches_map(self):
+        """'ethereum price', 'bitcoin token', etc. should still auto-detect crypto."""
+        state = ConversationState(indicator="GDP", country="US")
+        for indicator, expected_coin in [
+            ("ethereum price", "ethereum"),
+            ("bitcoin crypto", "bitcoin"),
+            ("dogecoin token", "dogecoin"),
+            ("solana coin", "solana"),
+            ("cardano", "cardano"),       # no suffix, still works
+            ("btc price", "bitcoin"),     # alias + suffix
+            ("xrp", "ripple"),            # alias, no suffix
+        ]:
+            delta = FollowUpDelta(changed_indicator=indicator)
+            merged = merge_state(state, delta)
+            assert merged.coin_ids == [expected_coin], f"Failed for '{indicator}'"
+            assert merged.provider == "COINGECKO", f"Failed for '{indicator}'"
+
 
 # ─── materialize_intent ─────────────────────────────────────────────
 

@@ -203,7 +203,11 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             "cardano": "cardano", "ada": "cardano",
             "ripple": "ripple", "xrp": "ripple",
         }
-        _coin = _crypto_map.get(delta.changed_indicator.lower())
+        _indicator_key = delta.changed_indicator.lower().strip()
+        # Strip common suffixes so "ethereum price" → "ethereum" matches the map
+        for _suffix in ("price", "coin", "crypto", "token", "currency"):
+            _indicator_key = _indicator_key.removesuffix(_suffix).strip()
+        _coin = _crypto_map.get(_indicator_key)
         if _coin:
             merged.coin_ids = [_coin]
             merged.provider = "COINGECKO"
