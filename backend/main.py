@@ -355,8 +355,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins if settings.allowed_origins else ["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 app.add_middleware(RateLimitASGIMiddleware, settings_obj=settings, limiter_obj=limiter)
 app.add_middleware(SecureLoggingASGIMiddleware)
@@ -804,7 +804,15 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
 
             # Stream events as they come
             processing_complete = False
+            _stream_start = time.perf_counter()
+            _STREAM_TIMEOUT = 300  # 5 minute overall timeout for streaming queries
             while not processing_complete:
+                # Check overall streaming timeout
+                if time.perf_counter() - _stream_start > _STREAM_TIMEOUT:
+                    logger.warning("Streaming query timed out after %ds: %s", _STREAM_TIMEOUT, request.query[:80])
+                    yield f"event: error\ndata: {json.dumps({'error': 'Query timed out. Try a simpler query or narrow the scope.'})}\n\n"
+                    yield f"event: done\ndata: {json.dumps({'done': True})}\n\n"
+                    break
                 # Try to get events with timeout
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
