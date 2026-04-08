@@ -1328,7 +1328,7 @@ def _handle_indicator_count_query(
     tracker: Optional[ProcessingTracker] = None,
 ) -> QueryResponse:
     """Answer questions about how many indicators are available."""
-    from .indicator_lookup import IndicatorLookup
+    from .indicator_database import IndicatorLookup
     lookup = IndicatorLookup()
 
     try:
@@ -1532,7 +1532,7 @@ def handle_informational_intent(
     if not search_terms and not provider:
         return None
 
-    from .indicator_lookup import IndicatorLookup
+    from .indicator_database import IndicatorLookup
     lookup = IndicatorLookup()
 
     results = lookup.search(search_terms or "", provider=provider, limit=30)

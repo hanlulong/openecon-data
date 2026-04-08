@@ -288,9 +288,9 @@ class OpenRouterService:
         messages.append({"role": "user", "content": query})
 
         # Reasoning models spend tokens on internal reasoning before producing
-        # JSON output. 1000 is enough for ~400 reasoning + ~600 JSON output.
-        # Previous 2000 was wasteful — actual usage was 500-650 tokens.
-        max_tok = 1000 if self.settings.llm_provider in ("vllm",) else 500
+        # JSON output. 600 is enough for actual output of 500-650 tokens.
+        # Previous 1000 was wasteful — saves ~0.5s per query.
+        max_tok = 600 if self.settings.llm_provider in ("vllm",) else 500
 
         llm_start = time.perf_counter()
         intent: ParsedIntent = await self.instructor_client.chat.completions.create(

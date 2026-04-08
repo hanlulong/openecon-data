@@ -929,7 +929,7 @@ class IMFProvider(BaseProvider):
                 seed_codes.append(primary_upper.split(":", 1)[1])
 
         try:
-            from ..services.indicator_lookup import get_indicator_lookup
+            from ..services.indicator_database import get_indicator_lookup
 
             lookup = get_indicator_lookup()
             search_results = lookup.search(indicator, provider="IMF", limit=20)

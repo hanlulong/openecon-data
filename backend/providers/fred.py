@@ -180,7 +180,7 @@ class FREDProvider(BaseProvider):
 
         # STEP 1: Search local indicator database (FTS5, instant)
         try:
-            from ..services.indicator_lookup import get_indicator_lookup
+            from ..services.indicator_database import get_indicator_lookup
             lookup = get_indicator_lookup()
             db_results = lookup.search(indicator, provider="FRED", limit=10)
             if db_results:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.services.indicator_lookup import IndicatorLookup
+from backend.services.indicator_database import IndicatorLookup
 
 
 class _FakeDB:

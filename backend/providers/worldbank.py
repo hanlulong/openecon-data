@@ -531,7 +531,7 @@ class WorldBankProvider(BaseProvider):
         helps ALL queries hitting unavailable indicators.
         """
         try:
-            from ..services.indicator_lookup import get_indicator_lookup
+            from ..services.indicator_database import get_indicator_lookup
             lookup = get_indicator_lookup()
             results = lookup.search(indicator, provider='WorldBank', limit=limit + 1)
 

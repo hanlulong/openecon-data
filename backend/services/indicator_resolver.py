@@ -37,7 +37,7 @@ from time import monotonic
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .indicator_clarification import discriminator_present, find_missing_discriminators
-from .indicator_lookup import IndicatorLookup, get_indicator_lookup
+from .indicator_database import IndicatorLookup, get_indicator_lookup
 from .indicator_translator import IndicatorTranslator, get_indicator_translator
 from .vector_search import VECTOR_SEARCH_AVAILABLE, get_vector_search_service
 from ..routing.country_resolver import CountryResolver
