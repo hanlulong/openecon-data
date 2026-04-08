@@ -63,6 +63,8 @@ from ..utils.geographies import normalize_canadian_region_list
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.http_pool import extended_timeout
+from ..services.query_decomposition import generate_sub_query
+from ..services.query_parsing import extract_indicator_text_from_refined_query
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
 # detection.  See simplified_prompt.py.
@@ -524,18 +526,7 @@ class QueryService:
     @staticmethod
     def _extract_indicator_text_from_refined_query(refined_query: str) -> str:
         """Strip scope suffixes from a clarification-refined query."""
-        text = str(refined_query or "").strip()
-        if not text:
-            return ""
-
-        cleaned = re.sub(
-            r"\s+(?:across|for)\s+.+$",
-            "",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        ).strip()
-        return cleaned or text
+        return extract_indicator_text_from_refined_query(refined_query)
 
     def _normalize_country_targets(self, countries: List[str]) -> List[str]:
         """Normalize a list of country or region targets to deduplicated ISO2 codes when possible."""
@@ -5652,56 +5643,9 @@ class QueryService:
         """
         Generate a sub-query for a specific entity.
 
-        Examples:
-            - "population of canada by provinces" + "Ontario" → "population of Ontario"
-            - "GDP by each US state" + "California" → "GDP of California"
-
-        Args:
-            original_query: Original user query
-            entity: Entity name (e.g., "Ontario", "California")
-            decomposition_type: Type of decomposition ("provinces", "states", etc.)
-
-        Returns:
-            Modified query for the specific entity
+        Delegates to :func:`query_decomposition.generate_sub_query`.
         """
-        # Patterns to replace
-        patterns = {
-            "provinces": [
-                (r"by\s+provinces?", f"for {entity}"),  # Match "by province" or "by provinces"
-                (r"all\s+provinces?", entity),
-                (r"each\s+provinces?", entity),
-                (r"in\s+canada\s+by\s+provinces?", f"in {entity}"),  # Match "in canada by province(s)"
-                (r"of\s+canada\s+by\s+provinces?", f"of {entity}"),
-                (r"for\s+each\s+provinces?", f"for {entity}"),
-            ],
-            "states": [
-                (r"by\s+states?", f"for {entity}"),
-                (r"all\s+states", entity),
-                (r"each\s+state", entity),
-                (r"by\s+each\s+US\s+state", f"for {entity}"),
-                (r"for\s+each\s+state", f"for {entity}"),
-            ],
-            "countries": [
-                (r"by\s+countr(?:y|ies)", f"for {entity}"),
-                (r"all\s+countries", entity),
-                (r"each\s+country", entity),
-                (r"for\s+each\s+country", f"for {entity}"),
-            ],
-            "regions": [
-                (r"by\s+regions?", f"for {entity}"),
-                (r"all\s+regions", entity),
-                (r"each\s+region", entity),
-                (r"for\s+each\s+region", f"for {entity}"),
-            ],
-        }
-
-        sub_query = original_query
-        if decomposition_type in patterns:
-            for pattern, replacement in patterns[decomposition_type]:
-                sub_query = re.sub(pattern, replacement, sub_query, flags=re.IGNORECASE)
-
-        logger.debug("Generated sub-query for %s: '%s' → '%s'", entity, original_query, sub_query)
-        return sub_query
+        return generate_sub_query(original_query, entity, decomposition_type)
 
     async def _execute_sub_query(
         self,

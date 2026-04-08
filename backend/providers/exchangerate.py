@@ -162,17 +162,17 @@ class ExchangeRateProvider(BaseProvider):
             logger.info(f"✅ Found rate: {base_code} -> {target_code} = {rates[target_code]}")
 
             # Return single exchange rate as a time series with one point
+            from datetime import datetime
             if time_last_update:
                 # Convert from "Sun, 19 Oct 2025 00:02:31 +0000" to ISO 8601
-                from datetime import datetime
                 try:
                     dt = datetime.strptime(time_last_update, "%a, %d %b %Y %H:%M:%S %z")
                     date_str = dt.strftime("%Y-%m-%d")
                 except (ValueError, AttributeError):
                     # Fallback if parsing fails
-                    date_str = "2025-01-01"
+                    date_str = datetime.now().strftime("%Y-%m-%d")
             else:
-                date_str = "2025-01-01"
+                date_str = datetime.now().strftime("%Y-%m-%d")
 
             data_points = [{
                 "date": date_str,

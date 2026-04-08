@@ -1367,20 +1367,35 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 for p in ALL_PROVIDERS
             )
             if _is_code:
-                from ..services.catalog_service import find_concepts_by_code
+                from ..services.catalog_service import find_concepts_by_code, is_provider_available
+                _all_concepts: list[str] = []
                 for _p in ALL_PROVIDERS:
                     _concepts = find_concepts_by_code(_p, _indicator_name)
                     if _concepts:
-                        _resolution_query = _concepts[0].replace("_", " ")
-                        logger.info(
-                            "Delta-resolved: indicator '%s' is a %s code, "
-                            "using concept '%s' for cross-provider resolution",
-                            _indicator_name, _p, _resolution_query,
-                        )
-                        # Also update the intent's indicators so downstream
-                        # resolution uses the concept name, not the code
-                        intent.indicators = [_resolution_query]
+                        _all_concepts = _concepts
                         break
+                if _all_concepts:
+                    # Prefer a concept available on the TARGET provider.
+                    # e.g., PRC_HICP_AIND maps to both "hicp_inflation"
+                    # (Eurostat-only) and "inflation" (WorldBank/FRED/etc).
+                    # When switching to WorldBank, pick "inflation".
+                    _best_concept = _all_concepts[0]
+                    _target_provider = provider  # already set to the new provider
+                    for _c in _all_concepts:
+                        if is_provider_available(_c, _target_provider):
+                            _best_concept = _c
+                            break
+                    _resolution_query = _best_concept.replace("_", " ")
+                    logger.info(
+                        "Delta-resolved: indicator '%s' is a code, "
+                        "using concept '%s' for cross-provider resolution "
+                        "(target=%s, candidates=%s)",
+                        _indicator_name, _resolution_query,
+                        _target_provider, _all_concepts,
+                    )
+                    # Also update the intent's indicators so downstream
+                    # resolution uses the concept name, not the code
+                    intent.indicators = [_resolution_query]
 
             _saved_query = intent.originalQuery
             intent.originalQuery = _resolution_query
@@ -1388,7 +1403,14 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 "Delta-resolved: indicator changed to '%s', resolving (query overridden from '%s')",
                 _resolution_query, _saved_query,
             )
+            # For provider-change deltas, the concept override must respect
+            # the user's explicit provider choice.  Temporarily restore the
+            # raw query so _detect_explicit_provider sees "World Bank" / "FRED".
+            _raw_for_override = _saved_query or _resolution_query
+            _override_orig = intent.originalQuery
+            intent.originalQuery = _raw_for_override
             provider, params = svc._apply_concept_provider_override(provider, intent, params)
+            intent.originalQuery = _override_orig
             intent.parameters = params
             params = await svc._resolve_indicator_for_fetch(provider, intent, params)
             intent.originalQuery = _saved_query
