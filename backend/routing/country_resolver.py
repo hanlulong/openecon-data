@@ -180,6 +180,11 @@ class CountryResolver:
         "north macedonia": "MK", "macedonia": "MK", "mk": "MK", "mkd": "MK",
         "serbia": "RS", "rs": "RS", "srb": "RS",
 
+        # Caucasus countries
+        "georgia": "GE", "ge": "GE", "geo": "GE",
+        "armenia": "AM", "am": "AM", "arm": "AM",
+        "azerbaijan": "AZ", "az": "AZ", "aze": "AZ",
+
         # West African countries for ECOWAS (infrastructure addition)
         "benin": "BJ", "bj": "BJ", "ben": "BJ",
         "burkina faso": "BF", "bf": "BF", "bfa": "BF",

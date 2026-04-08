@@ -642,6 +642,8 @@ def merge_new_state_with_previous(
         new_state.resolved_indicator_code = previous.resolved_indicator_code
     if not new_state.base_indicator and previous.base_indicator:
         new_state.base_indicator = previous.base_indicator
+    if not new_state.last_indicators_resolved and previous.last_indicators_resolved:
+        new_state.last_indicators_resolved = previous.last_indicators_resolved
 
     # --- StatsCanada dimension context ---
     if not new_state.dimensions and previous.dimensions:

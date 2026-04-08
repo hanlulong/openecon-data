@@ -63,8 +63,11 @@ from ..utils.geographies import normalize_canadian_region_list
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.http_pool import extended_timeout
-from ..services.query_decomposition import generate_sub_query
-from ..services.query_parsing import extract_indicator_text_from_refined_query
+from ..services.query_decomposition import generate_sub_query, apply_ranking_projection as _qd_apply_ranking_projection
+from ..services.query_parsing import (
+    extract_indicator_text_from_refined_query,
+    infer_multi_concept_indicators_from_query as _qp_infer_multi_concept_indicators_from_query,
+)
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
 # detection.  See simplified_prompt.py.
@@ -937,41 +940,8 @@ class QueryService:
         return _rs_extract_ranking_value(series, target_year)
 
     def _apply_ranking_projection(self, query: str, data: List[NormalizedData]) -> List[NormalizedData]:
-        """
-        Transform ranking queries into sorted top-N datasets by latest/target-year value.
-
-        This improves UX for prompts like:
-        - "Rank top 10 economies by GDP growth in 2023"
-        - "Which ASEAN country has the highest import share of GDP since 2015"
-        """
-        if not data or not self._is_ranking_query(query):
-            return data
-
-        target_year = self._extract_target_year_from_query(query)
-        top_n = self._extract_top_n_from_query(query, default=10)
-        query_lower = str(query or "").lower()
-        descending = not any(term in query_lower for term in ("lowest", "smallest", "worst", "bottom"))
-
-        ranking_rows: List[tuple[float, int, NormalizedData, DataPoint]] = []
-        for index, series in enumerate(data):
-            value, point = self._extract_ranking_value(series, target_year)
-            if value is None or point is None:
-                continue
-            ranking_rows.append((value, index, series, point))
-
-        if not ranking_rows:
-            return data
-
-        ranking_rows.sort(key=lambda item: (item[0], -item[1]), reverse=descending)
-        selected_rows = ranking_rows[:top_n]
-
-        projected: List[NormalizedData] = []
-        for _value, _index, series, point in selected_rows:
-            projected_series = series.model_copy(deep=True)
-            projected_series.data = [point.model_copy(deep=True)]
-            projected.append(projected_series)
-
-        return projected or data
+        """Delegates to :func:`query_decomposition.apply_ranking_projection`."""
+        return _qd_apply_ranking_projection(query, data)
 
     async def _maybe_recover_from_empty_data(
         self,
@@ -1740,56 +1710,8 @@ class QueryService:
         return _ir_build_distilled_indicator_query(self, query)
 
     def _infer_multi_concept_indicators_from_query(self, query: str) -> List[str]:
-        """Infer explicit indicator list for comparison queries spanning concept families."""
-        query_lower = str(query or "").lower()
-        cues = self._extract_indicator_cues(query_lower)
-        inferred: List[str] = []
-
-        if "employment_population" in cues:
-            inferred.append("employment to population ratio")
-        elif "employment_rate" in cues:
-            inferred.append("employment rate")
-        elif "unemployment" in cues:
-            inferred.append("unemployment rate")
-
-        if "producer_price" in cues:
-            inferred.append("producer price inflation")
-        elif "inflation" in cues:
-            inferred.append("HICP inflation" if "hicp" in query_lower else "inflation rate")
-
-        if "debt_service" in cues:
-            inferred.append("debt service ratio")
-        elif "debt_gdp_ratio" in cues or "public_debt" in cues:
-            inferred.append("government debt (% of GDP)")
-        elif "credit" in cues:
-            inferred.append("private sector credit to GDP")
-
-        if "policy_rate" in cues:
-            inferred.append("policy rate")
-        elif "bond_yield" in cues:
-            inferred.append("long-term interest rate")
-
-        if "money_supply" in cues:
-            inferred.append("money supply")
-
-        if "reserves" in cues:
-            inferred.append("foreign exchange reserves")
-        elif "current_account" in cues:
-            inferred.append("current account balance (% of GDP)")
-        elif "real_effective_exchange_rate" in cues:
-            inferred.append("real effective exchange rate")
-        elif "exchange_rate" in cues:
-            inferred.append("real effective exchange rate" if "reer" in query_lower else "exchange rate")
-
-        if "trade_balance" in cues:
-            inferred.append("trade balance (% of GDP)" if "gdp" in query_lower else "trade balance")
-        elif "import" in cues:
-            inferred.append("imports as % of GDP" if "gdp" in query_lower else "imports")
-        elif "export" in cues:
-            inferred.append("exports as % of GDP" if "gdp" in query_lower else "exports")
-
-        # Preserve order and uniqueness.
-        return list(dict.fromkeys([item for item in inferred if item]))
+        """Delegates to :func:`query_parsing.infer_multi_concept_indicators_from_query`."""
+        return _qp_infer_multi_concept_indicators_from_query(query)
 
     def _maybe_expand_multi_concept_intent(self, query: str, intent: ParsedIntent) -> bool:
         """
