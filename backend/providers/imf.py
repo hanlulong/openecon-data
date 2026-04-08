@@ -8,7 +8,7 @@ import re
 import httpx
 
 from ..config import get_settings
-from ..services.http_pool import get_http_client
+from ..services.http_pool import get_http_client, effective_timeout
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
 from ..services.indicator_translator import get_indicator_translator
@@ -485,7 +485,7 @@ class IMFProvider(BaseProvider):
         for attempt in range(max_retries):
             try:
                 logger.info(f"IMF API request (attempt {attempt + 1}/{max_retries}): {url}")
-                response = await client.get(url, timeout=60.0)
+                response = await client.get(url, timeout=effective_timeout(60.0))
                 response.raise_for_status()
                 return response
 

@@ -9,7 +9,7 @@ import httpx
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
-from ..services.http_pool import get_http_client
+from ..services.http_pool import get_http_client, effective_timeout
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -661,7 +661,7 @@ class WorldBankProvider(BaseProvider):
         # notoriously slow, especially over HTTP/2.
         import time as _time
         _fetch_start = _time.perf_counter()
-        _FETCH_BUDGET_S = 30.0  # Total time budget for all WB API calls
+        _FETCH_BUDGET_S = effective_timeout(30.0)  # Total time budget for all WB API calls
 
         # Single batched request for all countries (with 502 retry — WB API is intermittent)
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
@@ -669,7 +669,7 @@ class WorldBankProvider(BaseProvider):
         batch_response = None  # Track response for metadata (e.g. Date header)
         try:
             for _attempt in range(3):
-                batch_response = await client.get(url, params=params, headers=headers, timeout=25.0)
+                batch_response = await client.get(url, params=params, headers=headers, timeout=effective_timeout(25.0))
                 logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
                 if batch_response.status_code != 502:
                     break
@@ -725,7 +725,7 @@ class WorldBankProvider(BaseProvider):
                     try:
                         country_code = self._country_code(country_code_raw)
                         single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
-                        response = await client.get(single_url, params=params, headers=headers, timeout=15.0)
+                        response = await client.get(single_url, params=params, headers=headers, timeout=effective_timeout(15.0))
                         response.raise_for_status()
                         single_payload = response.json()
                         if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:

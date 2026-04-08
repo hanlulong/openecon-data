@@ -8,7 +8,7 @@ from typing import Dict, Optional, TYPE_CHECKING, Any
 import httpx
 
 from ..config import get_settings
-from ..services.http_pool import get_http_client
+from ..services.http_pool import get_http_client, effective_timeout
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
 from ..services.indicator_translator import get_indicator_translator
@@ -396,7 +396,7 @@ class EurostatProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         client = get_http_client()
         try:
-            response = await client.get(data_url, params=query_params, timeout=30.0)
+            response = await client.get(data_url, params=query_params, timeout=effective_timeout(30.0))
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as e:

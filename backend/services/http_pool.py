@@ -15,12 +15,75 @@ Performance improvement: 30-40% reduction in connection overhead
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import weakref
 import httpx
+from contextlib import contextmanager
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Timeout override context variable
+# ---------------------------------------------------------------------------
+# When multiple providers are fetched in parallel (e.g., geographic split
+# with 3+ sub-intents), the default 30s total timeout can be insufficient.
+# This context variable lets callers extend the timeout for the current
+# async execution context without affecting single-provider queries.
+#
+# Usage:
+#   with extended_timeout(120.0):
+#       await asyncio.gather(*provider_tasks)
+#
+# Providers that call effective_timeout(requested) or BaseProvider's
+# _get_with_retry will automatically respect the override.
+_timeout_override: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "_timeout_override", default=None
+)
+
+
+@contextmanager
+def extended_timeout(seconds: float):
+    """Context manager that sets a timeout floor for all HTTP requests
+    made within the current execution context.
+
+    This is designed for multi-provider parallel fetches where the default
+    30s timeout is too low.  Single-provider queries are unaffected because
+    they never enter this context manager.
+
+    Args:
+        seconds: Minimum timeout in seconds (e.g. 120.0 for parallel fetches)
+    """
+    token = _timeout_override.set(seconds)
+    logger.info("HTTP timeout override set to %.0fs for parallel fetch context", seconds)
+    try:
+        yield
+    finally:
+        _timeout_override.reset(token)
+        logger.debug("HTTP timeout override cleared")
+
+
+def effective_timeout(requested: float) -> float:
+    """Return the effective timeout, respecting any active override.
+
+    If an extended_timeout context is active, returns the larger of the
+    requested timeout and the override.  Otherwise returns the requested
+    timeout unchanged.
+
+    Providers that make direct client.get(..., timeout=X) calls can wrap
+    the timeout value with this function to respect parallel-fetch overrides.
+
+    Args:
+        requested: The timeout the caller would normally use
+
+    Returns:
+        The effective timeout (may be higher than requested if override is active)
+    """
+    override = _timeout_override.get()
+    if override is not None and override > requested:
+        return override
+    return requested
 
 
 class HTTPClientPool:
@@ -183,6 +246,11 @@ def get_http_client() -> httpx.AsyncClient:
     Get the shared HTTP client pool.
 
     This function should be used instead of creating new AsyncClient instances.
+
+    Note: The shared client has a 30s default timeout.  For multi-provider
+    parallel fetches, use ``extended_timeout(120)`` context manager combined
+    with ``effective_timeout(requested)`` in individual requests to ensure
+    each request gets adequate time.
 
     Returns:
         Shared httpx.AsyncClient instance

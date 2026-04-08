@@ -17,6 +17,7 @@ from tenacity import (
 )
 
 from ..models import NormalizedData
+from ..services.http_pool import effective_timeout
 from ..utils.retry import DataNotAvailableError
 
 logger = logging.getLogger(__name__)
@@ -121,8 +122,10 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
-        # Allow callers to override timeout via kwargs; fall back to self.timeout
-        req_timeout = kwargs.pop("timeout", self.timeout)
+        # Allow callers to override timeout via kwargs; fall back to self.timeout.
+        # Then apply the extended_timeout context override (if active) so that
+        # multi-provider parallel fetches get adequate time.
+        req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
 
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),

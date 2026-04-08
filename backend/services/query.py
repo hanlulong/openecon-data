@@ -62,6 +62,7 @@ from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import normalize_canadian_region_list
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
+from ..services.http_pool import extended_timeout
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
 # detection.  See simplified_prompt.py.
@@ -2385,7 +2386,15 @@ class QueryService:
             _fetch_for_group(prov, countries)
             for prov, countries in provider_groups.items()
         ]
-        results = await asyncio.gather(*tasks)
+
+        # When dispatching 3+ parallel provider fetches, extend the HTTP
+        # timeout so that slow providers don't cause premature failures.
+        # Single-provider queries keep the default 30s for fast responses.
+        if len(tasks) >= 3:
+            with extended_timeout(120.0):
+                results = await asyncio.gather(*tasks)
+        else:
+            results = await asyncio.gather(*tasks)
 
         merged: List[NormalizedData] = []
         for result_list in results:
@@ -5575,18 +5584,35 @@ class QueryService:
 
         logger.debug("Generated %d sub-queries: %s", len(sub_queries), [sq[1] for sq in sub_queries[:3]])
 
-        # Execute sub-queries in parallel using asyncio.gather
+        # Execute sub-queries in parallel using asyncio.gather.
+        # When decomposing into 3+ sub-queries, extend HTTP timeouts to
+        # prevent premature failures under parallel load.
+        _use_extended = len(sub_queries) >= 3
         if tracker:
             with tracker.track("fetching_data", f"📥 Fetching data for {len(sub_queries)} {intent.decompositionType}..."):
+                if _use_extended:
+                    with extended_timeout(120.0):
+                        results = await asyncio.gather(*[
+                            self._execute_sub_query(entity, sq, intent, conversation_id)
+                            for entity, sq in sub_queries
+                        ], return_exceptions=True)
+                else:
+                    results = await asyncio.gather(*[
+                        self._execute_sub_query(entity, sq, intent, conversation_id)
+                        for entity, sq in sub_queries
+                    ], return_exceptions=True)
+        else:
+            if _use_extended:
+                with extended_timeout(120.0):
+                    results = await asyncio.gather(*[
+                        self._execute_sub_query(entity, sq, intent, conversation_id)
+                        for entity, sq in sub_queries
+                    ], return_exceptions=True)
+            else:
                 results = await asyncio.gather(*[
                     self._execute_sub_query(entity, sq, intent, conversation_id)
                     for entity, sq in sub_queries
                 ], return_exceptions=True)
-        else:
-            results = await asyncio.gather(*[
-                self._execute_sub_query(entity, sq, intent, conversation_id)
-                for entity, sq in sub_queries
-            ], return_exceptions=True)
 
         # Filter out failed queries and aggregate successful results
         aggregated_data = []
