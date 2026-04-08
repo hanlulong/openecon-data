@@ -75,7 +75,8 @@ class FREDProvider(BaseProvider):
 
         try:
             client = get_http_client()
-            response = await client.get(
+            response = await self._get_with_retry(
+                client,
                 f"{self.base_url}/series/search",
                 params={
                     "search_text": search_text,
@@ -87,7 +88,6 @@ class FREDProvider(BaseProvider):
                 },
                 timeout=10.0,
             )
-            response.raise_for_status()
             data = response.json()
 
             series_list = data.get("seriess", [])
@@ -426,9 +426,10 @@ class FREDProvider(BaseProvider):
             params.get("indicator"), params.get("seriesId")
         )
 
-        # Use shared HTTP client pool for better performance
+        # Use shared HTTP client pool with retry logic for transient failures
         client = get_http_client()
-        info_response = await client.get(
+        info_response = await self._get_with_retry(
+            client,
             f"{self.base_url}/series",
             params={
                 "series_id": target_series,
@@ -437,7 +438,6 @@ class FREDProvider(BaseProvider):
             },
             timeout=15.0,
         )
-        info_response.raise_for_status()
         info_payload = info_response.json()
         if not info_payload.get("seriess"):
             raise DataNotAvailableError(f"FRED series '{target_series}' not found. Please check the series ID or try a different indicator.")
@@ -457,10 +457,10 @@ class FREDProvider(BaseProvider):
         if transformation:
             obs_params["units"] = transformation
 
-        obs_response = await client.get(
+        obs_response = await self._get_with_retry(
+            client,
             f"{self.base_url}/series/observations", params=obs_params, timeout=15.0
         )
-        obs_response.raise_for_status()
         observations = obs_response.json().get("observations", [])
 
         # Build API URL for metadata (without exposing actual API key)

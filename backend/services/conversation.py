@@ -96,7 +96,15 @@ class ConversationContext:
 # ---------------------------------------------------------------------------
 
 _REDIS_KEY_PREFIX = "conv:"
-_REDIS_TTL_SECONDS = 24 * 3600  # 24 hours
+
+
+def _get_ttl_seconds() -> int:
+    """Return conversation TTL in seconds from config (default 24 hours)."""
+    try:
+        from ..config import get_settings
+        return get_settings().conversation_ttl_hours * 3600
+    except Exception:
+        return 24 * 3600
 
 
 def _serialize_context(ctx: ConversationContext) -> str:
@@ -174,8 +182,12 @@ def _deserialize_context(raw: str) -> ConversationContext:
 # ---------------------------------------------------------------------------
 
 class ConversationManager:
-    MAX_AGE = timedelta(hours=24)
     MAX_MESSAGES = 200  # Cap messages per conversation to prevent memory leaks
+
+    @property
+    def MAX_AGE(self) -> timedelta:
+        """Conversation max age derived from config (default 24h)."""
+        return timedelta(seconds=_get_ttl_seconds())
 
     def __init__(self) -> None:
         self._conversations: Dict[str, ConversationContext] = {}
@@ -190,7 +202,7 @@ class ConversationManager:
             if client is None:
                 return
             key = f"{_REDIS_KEY_PREFIX}{ctx.id}"
-            client.setex(key, _REDIS_TTL_SECONDS, _serialize_context(ctx))
+            client.setex(key, _get_ttl_seconds(), _serialize_context(ctx))
         except Exception as exc:
             logger.debug("Redis save failed for %s: %s", ctx.id, exc)
 

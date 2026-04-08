@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     promode_public_dir: str | None = Field(default=None, alias="PROMODE_PUBLIC_DIR")
     promode_session_dir: str | None = Field(default=None, alias="PROMODE_SESSION_DIR")
 
+    # Conversation TTL
+    conversation_ttl_hours: int = Field(
+        default=24,
+        alias="CONVERSATION_TTL_HOURS",
+        description="Conversation expiration time in hours (Redis TTL and in-memory max age)"
+    )
+
     # Vector Search Configuration
     enable_metadata_loading: bool = Field(
         default=True,

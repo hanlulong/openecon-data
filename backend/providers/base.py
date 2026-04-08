@@ -121,6 +121,9 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
+        # Allow callers to override timeout via kwargs; fall back to self.timeout
+        req_timeout = kwargs.pop("timeout", self.timeout)
+
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
@@ -134,7 +137,7 @@ class BaseProvider(ABC):
             reraise=True,
         )
         async def _do_get():
-            response = await client.get(url, **kwargs, timeout=self.timeout)
+            response = await client.get(url, **kwargs, timeout=req_timeout)
 
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 60))

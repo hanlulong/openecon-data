@@ -34,14 +34,26 @@ providers:
       confidence: 0.96
       coverage: 44_countries
       frequency: quarterly
+  WorldBank:
+    primary:
+      code: DT.TDS.DECT.GN.ZS
+      name: "Total debt service (% of GNI)"
+      confidence: 0.90
+      coverage: developing_countries
+      frequency: annual
+  FRED:
+    primary:
+      code: TDSP
+      name: "Household Debt Service Payments as a Percent of Disposable Personal Income"
+      confidence: 0.85
+      coverage: US
+      frequency: quarterly
 
 not_available:
   - Comtrade
   - CoinGecko
   - ExchangeRate
-  - FRED
   - IMF
   - OECD
   - Eurostat
   - StatsCan
-  - WorldBank

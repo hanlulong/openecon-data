@@ -1090,6 +1090,7 @@ async def resolve_indicator_for_fetch(
     # Catalog-resolved codes may be the BASE indicator (e.g., total unemployment).
     # If the query has variant qualifiers (female, youth, male, rural, per capita, PPP),
     # let the IndicatorSelector find the specific variant instead of locking to base.
+    _catalog_variant_fallback: Optional[str] = None
     if has_explicit_code and params.get("__catalog_resolved"):
         original_query = _effective_original_query(intent).lower()
         variant_qualifiers = {
@@ -1132,8 +1133,11 @@ async def resolve_indicator_for_fetch(
                 "🔓 Catalog resolved %s but query has variant qualifiers %s — letting IndicatorSelector refine",
                 existing_indicator, matched_qualifiers,
             )
-            # Clear catalog lock so IndicatorSelector can run
+            # Clear catalog lock so IndicatorSelector can run.
+            # Track original catalog code so we can fall back to it
+            # instead of running the expensive legacy resolver.
             has_explicit_code = False
+            _catalog_variant_fallback = existing_indicator
 
     # Path 1: Validate explicit code against query context
     if has_explicit_code:
@@ -1225,9 +1229,41 @@ async def resolve_indicator_for_fetch(
             )
             params = {**params, "__indicator_options": selection.options}
             intent.parameters = params
+            if _catalog_variant_fallback:
+                # Catalog already resolved a base code; IndicatorSelector offered
+                # options for the variant.  Return now instead of also running the
+                # expensive legacy resolver -- the options are already the best we
+                # can offer without a user decision.
+                logger.info(
+                    "🔒 Catalog-variant path: returning user-choice options without legacy fallback",
+                )
+                return params
             # Don't return -- fall through to legacy resolver as backup
     except Exception as e:
+        if _catalog_variant_fallback:
+            # IndicatorSelector failed but we have the catalog base code --
+            # use it directly instead of running the legacy resolver.
+            logger.info(
+                "🔒 IndicatorSelector unavailable; falling back to catalog-resolved code: %s (error: %s)",
+                _catalog_variant_fallback, e,
+            )
+            params = {**params, "indicator": _catalog_variant_fallback}
+            intent.parameters = params
+            return params
         logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
+
+    # When the catalog already resolved a code and IndicatorSelector ran but
+    # found nothing (no code, no user-choice options), fall back to the
+    # catalog code rather than running the legacy resolver redundantly.
+    if _catalog_variant_fallback:
+        logger.info(
+            "🔒 IndicatorSelector returned no result for variant query; "
+            "keeping catalog-resolved code: %s",
+            _catalog_variant_fallback,
+        )
+        params = {**params, "indicator": _catalog_variant_fallback}
+        intent.parameters = params
+        return params
 
     # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
     resolved = resolver.resolve(

@@ -163,9 +163,17 @@ export function ChatPage() {
   const { user, isAuthenticated, logout } = useAuth()
   const { isMobile } = useMobile()
   const processingQuery = useRef<string | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     document.title = 'Chat | OpenEcon.ai'
+  }, [])
+
+  // Abort any in-flight streaming request on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+    }
   }, [])
 
   const scrollToBottom = () => {
@@ -295,6 +303,11 @@ export function ChatPage() {
       return
     }
 
+    // Abort any previous in-flight streaming request
+    abortControllerRef.current?.abort()
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
     processingQuery.current = q
     setLoadingStatus('🤖 Processing your query...')
     setActiveProcessingSteps([]) // Clear any previous steps
@@ -409,8 +422,14 @@ export function ChatPage() {
           setLoadingStatus('')
           setActiveProcessingSteps([])
         },
-      })
+      }, abortController.signal)
     } catch (error: unknown) {
+      // Silently ignore aborted requests (user navigated away or started a new query)
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        logger.log('Streaming query aborted:', q)
+        return
+      }
+
       logger.error('Streaming query error:', error)
       setLoadingStatus('')
       processingQuery.current = null
@@ -507,6 +526,13 @@ export function ChatPage() {
   }, [handleStreamingQuery])
 
   const handleNewChat = () => {
+    // Abort any in-flight streaming request
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    processingQuery.current = null
+    setLoadingStatus('')
+    setActiveProcessingSteps([])
+
     // Clear all state
     setMessages([])
     setConversationId(undefined)
