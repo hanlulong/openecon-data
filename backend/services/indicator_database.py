@@ -23,6 +23,7 @@ Coverage Goals:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -271,6 +272,102 @@ class IndicatorDatabase:
 
         return inserted
 
+    # Common negation prefixes that change the meaning of economic terms.
+    # e.g., "unemployment" is the antonym of "employment", "disinflation"
+    # differs from "inflation", etc.  Used in post-query filtering to
+    # avoid returning antonym indicators for a positive-form query.
+    _NEGATION_PREFIXES = ("un", "dis", "de", "non", "in", "im", "ir", "il", "mis")
+
+    @staticmethod
+    def _word_appears_standalone(word: str, text: str) -> bool:
+        """Check if *word* appears in *text* as a standalone word (not as a
+        substring of a negated/prefixed form).
+
+        For example, ``_word_appears_standalone("employment", "Unemployment Rate")``
+        returns ``False`` because "employment" only appears inside "unemployment".
+        ``_word_appears_standalone("employment", "Employment-Population Ratio")``
+        returns ``True``.
+
+        The check is case-insensitive and respects word boundaries.
+        """
+        # Pattern: word boundary + word (optionally followed by common suffixes)
+        # but NOT preceded by a negation prefix.
+        # We look for all occurrences of the word and verify none are prefixed.
+        word_lower = word.lower()
+        text_lower = text.lower()
+
+        # Find every occurrence of the word in the text
+        start = 0
+        while True:
+            idx = text_lower.find(word_lower, start)
+            if idx == -1:
+                return False  # word not found at all
+            # Check what precedes this occurrence
+            if idx == 0:
+                return True  # at start of text — standalone
+            preceding_char = text_lower[idx - 1]
+            if not preceding_char.isalpha():
+                return True  # preceded by non-alpha (space, hyphen, etc.) — standalone
+            # preceded by letters — check if this is a negation prefix
+            # find the full "word" that contains our match
+            word_start = idx
+            while word_start > 0 and text_lower[word_start - 1].isalpha():
+                word_start -= 1
+            prefix = text_lower[word_start:idx]
+            # If the prefix is NOT a known negation prefix, treat as standalone
+            # (handles compound words like "reemployment" which IS employment-related)
+            if prefix not in IndicatorDatabase._NEGATION_PREFIXES:
+                return True
+            start = idx + 1
+
+    def _apply_antonym_filter(
+        self,
+        results: List[Dict[str, Any]],
+        query_words: List[str],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Demote results where query words appear only in negated form in the
+        indicator name.
+
+        For a query like "employment", an indicator named "Unemployment Rate"
+        matched FTS because its description mentions "employment" in context.
+        This filter demotes such results so genuine employment indicators
+        rank higher.
+
+        The demotion is applied as a large relevance penalty (+50.0 to the
+        bm25 score, which is negative — higher = worse).  This keeps the
+        results available but pushes them well below genuine matches.
+        """
+        # Only apply for single-word queries where antonym confusion is likely.
+        # Multi-word queries (e.g., "employment rate") are already precise
+        # enough via AND joining.
+        if len(query_words) != 1:
+            return results[:limit]
+
+        word = query_words[0].lower()
+        # Quick check: could this word even have negation-prefix issues?
+        # If the word itself starts with a negation prefix, skip filtering
+        # (user IS searching for the negated form, e.g., "unemployment").
+        for prefix in self._NEGATION_PREFIXES:
+            if word.startswith(prefix):
+                return results[:limit]
+
+        scored = []
+        for r in results:
+            name = r.get("name", "")
+            if not self._word_appears_standalone(word, name):
+                # The query word does NOT appear standalone in the name —
+                # it only appears as part of a negated form (e.g.,
+                # "unemployment") or not at all in the name (matched via
+                # description/keywords).  Apply a demotion penalty.
+                r = dict(r)  # copy to avoid mutating cached rows
+                r["relevance"] = r.get("relevance", 0) + 50.0
+            scored.append(r)
+
+        # Re-sort by relevance (lower = better for bm25)
+        scored.sort(key=lambda x: x.get("relevance", 0))
+        return scored[:limit]
+
     def search(
         self,
         query: str,
@@ -310,6 +407,10 @@ class IndicatorDatabase:
         joiner = " AND " if len(words) > 1 else " OR "
         fts_query = joiner.join([f'"{w}"*' for w in words])
 
+        # Over-fetch when antonym filtering may apply (single-word queries)
+        # so we have enough genuine results after demotion.
+        fetch_limit = limit * 3 if len(words) == 1 else limit
+
         # Column weights: provider=0, code=3, name=10, description=1,
         # category=3, keywords=2, synonyms=2.  Name match is 10x more
         # important than description match — this is the single biggest
@@ -334,14 +435,14 @@ class IndicatorDatabase:
             params.append(category)
 
         sql += " ORDER BY relevance LIMIT ?"
-        params.append(limit)
+        params.append(fetch_limit)
 
         try:
             cursor.execute(sql, params)
             results = []
             for row in cursor.fetchall():
                 results.append(dict(row))
-            return results
+            return self._apply_antonym_filter(results, words, limit)
         except Exception as e:
             logger.error(f"Search error: {e}")
             return []

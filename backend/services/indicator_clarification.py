@@ -1508,29 +1508,8 @@ def handle_informational_intent(
 
     # ── definition (async — need event loop) ───────────────────────
     if subtype == "definition":
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # We're inside an async context; create a task and run it
-            import concurrent.futures
-            future = asyncio.ensure_future(
-                _handle_definition_query(qs, query, conversation_id, tracker)
-            )
-            # Return a coroutine wrapper — caller will need to await if async,
-            # but since the caller chain is sync, we use run_until_complete
-            # in a new thread.  However, the simpler approach: since the
-            # main query handler (process_query) IS async, we can store
-            # the subtype and let query.py await it.
-            # For now, run synchronously via the loop's executor pattern.
-            pass
-
-        # If we can't run async here, fall through to indicator_search
-        # The definition handler will be called from the async dispatch
-        # in query.py instead.  Signal this via a sentinel.
+        # Signal that this is a definition query — the async dispatch
+        # in query.py will call _handle_definition_query.
         return _DefinitionSentinel(qs, query, conversation_id, tracker)
 
     # ── indicator search (original behavior) ───────────────────────

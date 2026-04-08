@@ -213,7 +213,7 @@ def _put_cached_parse_result(query_hash: str, result: Any) -> None:
 
 
 # Provider normalization — single source of truth
-from ..utils.providers import PROVIDER_ALIASES, normalize_provider_name  # noqa: F401
+from ..utils.providers import normalize_provider_name
 
 
 def _filter_valid_data(data: List[NormalizedData]) -> List[NormalizedData]:
@@ -231,21 +231,6 @@ def _filter_valid_data(data: List[NormalizedData]) -> List[NormalizedData]:
     if not data:
         return []
     return [d for d in data if d is not None]
-
-
-def _safe_get_source(data: List[NormalizedData]) -> str:
-    """Safely get source from data list, handling None elements.
-
-    Args:
-        data: List that may contain None elements
-
-    Returns:
-        Source string or "UNKNOWN" if not available
-    """
-    valid = _filter_valid_data(data)
-    if valid and valid[0].metadata:
-        return valid[0].metadata.source or "UNKNOWN"
-    return "UNKNOWN"
 
 
 def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
