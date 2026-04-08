@@ -45,6 +45,8 @@ _FILLER_WORDS = {
     "keep", "filter", "display", "plot", "use", "from", "with",
     "compare", "add", "include", "plus", "get", "give", "tell",
     "look", "at", "up", "see", "that", "this", "it", "its", "my",
+    # Removal words (country-level operations, not indicator terms)
+    "remove", "exclude", "without", "drop", "delete", "minus",
     # Time-related words (not indicator terms)
     "since", "last", "past", "recent", "latest", "between",
     "years", "year", "months", "month", "quarters", "quarter",
@@ -69,10 +71,15 @@ _TIME_FROM_TO_RE = re.compile(
     r"\bfrom\s+(19\d{2}|20\d{2})\s+to\s+(19\d{2}|20\d{2})\b",
     re.IGNORECASE,
 )
+# "change to 2020-2025", "2020-2025", "2020 to 2025" (with hyphen or dash)
+_TIME_RANGE_RE = re.compile(
+    r"\b(19\d{2}|20\d{2})\s*[-–—]\s*(19\d{2}|20\d{2})\b",
+)
 
-# Additive / replacement markers
+# Additive / replacement / removal markers
 _ADDITIVE_MARKERS = {"compare", "add", "also", "include", "plus", "too", "well"}
 _REPLACEMENT_MARKERS = {"only", "just", "filter", "keep"}
+_REMOVAL_MARKERS = {"remove", "exclude", "without", "drop", "delete", "minus"}
 
 
 class DeltaExtractor:
@@ -404,11 +411,23 @@ Output the query_type and any changed fields as JSON."""
         if non_geography_tokens:
             return None
 
-        # Determine additive vs. replacement
+        # Determine additive vs. removal vs. replacement
         query_words = set(query_lower.split())
+        is_removal = bool(query_words & _REMOVAL_MARKERS)
         is_additive = bool(query_words & _ADDITIVE_MARKERS) and not bool(
             query_words & _REPLACEMENT_MARKERS
-        )
+        ) and not is_removal
+
+        if is_removal:
+            logger.info(
+                "Delta: removal country follow-up %s",
+                target_countries,
+            )
+            return FollowUpDelta(
+                removed_countries=target_countries,
+                raw_query=query,
+                delta_type="country_change",
+            )
 
         if is_additive:
             logger.info(
@@ -675,7 +694,8 @@ Output the query_type and any changed fields as JSON."""
         non_filler = [t for t in tokens if t not in _FILLER_WORDS and t not in {
             "years", "year", "months", "month", "quarters", "quarter",
             "decades", "decade", "since", "last", "from", "to", "between",
-            "past", "recent", "latest",
+            "past", "recent", "latest", "change", "switch", "update", "set",
+            "period", "range", "time", "dates", "date", "timeframe",
         }]
 
         # If there are non-filler, non-time tokens, this is not a pure time change
@@ -688,6 +708,19 @@ Output the query_type and any changed fields as JSON."""
             start_year = m.group(1)
             end_year = m.group(2)
             logger.info("Delta: time change → %s to %s", start_year, end_year)
+            return FollowUpDelta(
+                changed_start_date=f"{start_year}-01-01",
+                changed_end_date=f"{end_year}-12-31",
+                raw_query=query,
+                delta_type="time_change",
+            )
+
+        # Try "YYYY-YYYY" / "YYYY–YYYY" (range with hyphen/dash)
+        m = _TIME_RANGE_RE.search(query)
+        if m:
+            start_year = m.group(1)
+            end_year = m.group(2)
+            logger.info("Delta: time change → %s-%s", start_year, end_year)
             return FollowUpDelta(
                 changed_start_date=f"{start_year}-01-01",
                 changed_end_date=f"{end_year}-12-31",

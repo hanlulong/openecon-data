@@ -22,6 +22,26 @@ from ..utils.providers import normalize_provider_name
 logger = logging.getLogger(__name__)
 
 
+def _normalize_country_to_iso2(name: str) -> str:
+    """Normalize a country name/code to ISO2 for reliable comparison.
+
+    Handles full names ('Germany'), ISO2 ('DE'), ISO3 ('DEU'), and common
+    aliases.  Returns uppercase ISO2 code when possible, otherwise the
+    original string lowercased (so comparisons still work for unknown names).
+    """
+    from ..routing.country_resolver import CountryResolver
+
+    key = name.strip().lower()
+    # Direct alias lookup (covers full names, ISO2, ISO3)
+    iso2 = CountryResolver.COUNTRY_ALIASES.get(key)
+    if iso2:
+        return iso2.upper()
+    # Already an ISO2 code (2-letter uppercase)?
+    if len(name.strip()) == 2 and name.strip().isalpha():
+        return name.strip().upper()
+    return key
+
+
 # ---------------------------------------------------------------------------
 # ConversationState
 # ---------------------------------------------------------------------------
@@ -220,15 +240,20 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             merged.country = None
 
     # Subtractive: remove countries from existing list
+    # Uses ISO2 normalization so "Germany", "DE", "DEU" all match.
     if delta.removed_countries:
         existing = merged.countries or ([merged.country] if merged.country else [])
-        remaining = [c for c in existing if c not in delta.removed_countries]
+        removed_iso2 = {_normalize_country_to_iso2(c) for c in delta.removed_countries}
+        remaining = [c for c in existing if _normalize_country_to_iso2(c) not in removed_iso2]
         if len(remaining) == 1:
             merged.country = remaining[0]
             merged.countries = None
         elif len(remaining) > 1:
             merged.countries = remaining
             merged.country = None
+        elif len(remaining) == 0 and existing:
+            # All countries removed — keep the last state to avoid empty result
+            logger.warning("merge_state: all countries removed, keeping last state")
         # If empty after removal, keep the last state (edge case)
 
     # --- Provider ---

@@ -716,30 +716,17 @@ def provider_supports_country_for_options(provider: str, country_iso2: Optional[
 
 
 def provider_supports_requested_scope(
-    qs: Any,
     provider: str,
     query: str,
     countries: Optional[List[str]],
 ) -> bool:
-    """Filter options that are incompatible with the requested comparison scope."""
-    if not countries:
-        return True
+    """Filter options that are incompatible with the requested comparison scope.
 
-    provider_upper = normalize_provider_name(provider)
-    query_lower = str(query or "").lower()
-    country_count = len([country for country in countries if country])
-    comparison_markers = (
-        qs._is_comparison_query(query_lower)
-        or "member countries" in query_lower
-        or "by country" in query_lower
-        or "country by country" in query_lower
-        or "each country" in query_lower
-    )
+    Delegates to :func:`provider_strategy.provider_supports_requested_scope`.
+    """
+    from .provider_strategy import provider_supports_requested_scope as _ps_fn
 
-    if provider_upper == "OECD" and country_count > 8 and comparison_markers:
-        return False
-
-    return True
+    return _ps_fn(provider, query, countries)
 
 
 def apply_indicator_option_to_intent(intent: ParsedIntent, option_text: str) -> bool:
@@ -954,7 +941,6 @@ def collect_indicator_choice_options(
         ):
             continue
         if not provider_supports_requested_scope(
-            qs,
             provider_name,
             raw_query or indicator_query,
             target_iso2,

@@ -130,7 +130,6 @@ from ..services.indicator_clarification import (
     try_resolve_pending_indicator_choice as _ic_try_resolve_pending_indicator_choice,
     maybe_recover_from_uncertain_match as _ic_maybe_recover_from_uncertain_match,
     provider_supports_country_for_options as _ic_provider_supports_country_for_options,
-    provider_supports_requested_scope as _ic_provider_supports_requested_scope,
     apply_indicator_option_to_intent as _ic_apply_indicator_option_to_intent,
     provider_can_execute_indicator_option as _ic_provider_can_execute_indicator_option,
     build_no_reliable_indicator_match_response as _ic_build_no_reliable_indicator_match_response,
@@ -167,6 +166,11 @@ from ..services.data_fetcher import (
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
+)
+from ..services.provider_strategy import (
+    collect_target_countries as _ps_collect_target_countries,
+    get_provider_for_single_country as _ps_get_provider_for_single_country,
+    provider_supports_requested_scope as _ps_provider_supports_requested_scope,
 )
 
 
@@ -1173,8 +1177,8 @@ class QueryService:
         query: str,
         countries: Optional[List[str]],
     ) -> bool:
-        """Delegates to :func:`indicator_clarification.provider_supports_requested_scope`."""
-        return _ic_provider_supports_requested_scope(self, provider, query, countries)
+        """Delegates to :func:`provider_strategy.provider_supports_requested_scope`."""
+        return _ps_provider_supports_requested_scope(provider, query, countries)
 
     def _apply_indicator_option_to_intent(self, intent: ParsedIntent, option_text: str) -> bool:
         """Delegates to :func:`indicator_clarification.apply_indicator_option_to_intent`."""
@@ -2127,25 +2131,8 @@ class QueryService:
         logger.debug(f"Saved to in-memory cache: {provider}")
 
     def _collect_target_countries(self, parameters: Optional[dict]) -> List[str]:
-        """Extract ordered country context from query parameters."""
-        if not parameters:
-            return []
-
-        countries: List[str] = []
-        for key in ("countries", "reporters", "partner"):
-            value = parameters.get(key)
-            if isinstance(value, list):
-                countries.extend(str(item) for item in value if item)
-            elif value:
-                countries.append(str(value))
-
-        for key in ("country", "reporter"):
-            value = parameters.get(key)
-            if value:
-                countries.append(str(value))
-
-        # Preserve order while removing duplicates.
-        return list(dict.fromkeys(countries))
+        """Delegates to :func:`provider_strategy.collect_target_countries`."""
+        return _ps_collect_target_countries(parameters)
 
     @staticmethod
     def _normalize_country_to_iso2(country: Optional[str]) -> Optional[str]:
@@ -2169,40 +2156,14 @@ class QueryService:
     # and merges the results.  It is a framework-level fix that benefits
     # every multi-country query — not a query-specific patch.
 
-    # Map from country-specific provider to the ISO2 codes it covers.
-    # "None" means global (covers everything) — used as a sentinel.
-    _PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
-        "FRED": {"US"},
-        "STATSCAN": {"CA"},
-        # Eurostat and OECD are handled dynamically via CountryResolver
-    }
-
     def _get_provider_for_single_country(
         self,
         iso2: str,
         concept_query: str,
         original_provider: str,
     ) -> Tuple[str, Optional[str]]:
-        """Return (provider, indicator_code) best suited for *one* country.
-
-        Uses the catalog to find the best provider that covers the given
-        country, falling back to the original provider when the catalog
-        has no opinion.
-        """
-        from .catalog_service import find_concept_by_term, get_best_provider
-
-        concept = find_concept_by_term(concept_query)
-        if concept:
-            prov, code, conf = get_best_provider(concept, countries=[iso2])
-            if prov and conf > 0.0:
-                return normalize_provider_name(prov), code
-
-        # If the original provider actually covers this country, keep it.
-        if self._provider_covers_country_list(original_provider, [iso2]):
-            return original_provider, None
-
-        # Last resort: WorldBank has global coverage.
-        return "WORLDBANK", None
+        """Delegates to :func:`provider_strategy.get_provider_for_single_country`."""
+        return _ps_get_provider_for_single_country(iso2, concept_query, original_provider)
 
     async def _preflight_geographic_split(
         self,
