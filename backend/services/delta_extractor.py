@@ -309,9 +309,17 @@ Output the query_type and any changed fields as JSON."""
                             delta.query_type, query_text[:50])
                 return delta
 
-            # For parameter_delta: at least one field must be non-None
+            # For parameter_delta: at least one field must be non-None AND non-empty.
+            # LLM may return empty strings/dicts/lists which are truthy but meaningless.
+            def _has_value(val: object) -> bool:
+                if val is None:
+                    return False
+                if isinstance(val, (str, dict, list)) and not val:
+                    return False
+                return True
+
             has_change = any(
-                getattr(delta, f) is not None
+                _has_value(getattr(delta, f))
                 for f in [
                     "changed_indicator", "added_indicators",
                     "changed_country", "changed_countries",

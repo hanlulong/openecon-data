@@ -470,6 +470,7 @@ export function ChatPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!query.trim()) return
+    if (processingQuery.current !== null) return
 
     setMessages(prev => [...prev, {
       role: 'user',
