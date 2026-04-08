@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import Settings
@@ -25,6 +24,7 @@ from ..embedding_utils import (
     normalize_embedding_model_name,
 )
 from ..services.json_parser import extract_json_from_text
+from ..utils.providers import normalize_provider_name
 from .unified_router import RoutingDecision, UnifiedRouter
 
 logger = logging.getLogger(__name__)
@@ -58,41 +58,21 @@ class SemanticProviderRouter:
     _SHARED_ENGINE_KEY: Optional[Tuple[str, str, Optional[int], Optional[str]]] = None
     _SHARED_INIT_FAILED: bool = False
 
-    _PROVIDER_CANONICAL = {
-        "WORLDBANK": "WorldBank",
-        "WORLD BANK": "WorldBank",
-        "FRED": "FRED",
-        "IMF": "IMF",
-        "BIS": "BIS",
-        "EUROSTAT": "Eurostat",
-        "OECD": "OECD",
-        "COMTRADE": "Comtrade",
-        "UNCOMTRADE": "Comtrade",
-        "UN COMTRADE": "Comtrade",
-        "STATSCAN": "StatsCan",
-        "STATISTICSCANADA": "StatsCan",
-        "STATISTICS CANADA": "StatsCan",
-        "EXCHANGERATE": "ExchangeRate",
-        "EXCHANGE RATE": "ExchangeRate",
-        "COINGECKO": "CoinGecko",
-        "COIN GECKO": "CoinGecko",
-    }
-
     _PROVIDER_HINTS = {
-        "WorldBank": "cross-country development indicators and macro ratios",
+        "WORLDBANK": "cross-country development indicators and macro ratios",
         "FRED": "US macro and financial time series",
         "IMF": "global macro, fiscal, balance-of-payments, and international finance",
         "BIS": "property prices, credit, and central bank policy/financial stability",
-        "Eurostat": "official EU/euro-area statistics",
+        "EUROSTAT": "official EU/euro-area statistics",
         "OECD": "OECD comparative policy and macro statistics",
-        "Comtrade": "bilateral imports/exports and detailed merchandise trade flows",
-        "StatsCan": "official Canada statistics",
-        "ExchangeRate": "FX conversion and exchange rates",
-        "CoinGecko": "crypto prices and market metrics",
+        "COMTRADE": "bilateral imports/exports and detailed merchandise trade flows",
+        "STATSCAN": "official Canada statistics",
+        "EXCHANGERATE": "FX conversion and exchange rates",
+        "COINGECKO": "crypto prices and market metrics",
     }
 
     _ROUTE_UTTERANCES = {
-        "WorldBank": [
+        "WORLDBANK": [
             "exports as percent of gdp across countries",
             "imports share of gdp for china and united states",
             "poverty rate in developing countries",
@@ -119,7 +99,7 @@ class SemanticProviderRouter:
             "policy rate and debt service ratio",
             "banking stability indicators",
         ],
-        "Eurostat": [
+        "EUROSTAT": [
             "germany hicp inflation",
             "eu unemployment statistics",
             "euro area macro indicators",
@@ -131,25 +111,25 @@ class SemanticProviderRouter:
             "oecd average economic indicators",
             "research and development expenditure oecd",
         ],
-        "Comtrade": [
+        "COMTRADE": [
             "exports to partner country by commodity",
             "bilateral trade flows between countries",
             "imports from china by hs code",
             "trade surplus by reporter and partner",
         ],
-        "StatsCan": [
+        "STATSCAN": [
             "canada gdp and unemployment",
             "ontario inflation statistics",
             "statistics canada provincial data",
             "canadian labor force survey",
         ],
-        "ExchangeRate": [
+        "EXCHANGERATE": [
             "usd to eur exchange rate",
             "gbp to usd forex",
             "currency conversion rates",
             "fx pair history",
         ],
-        "CoinGecko": [
+        "COINGECKO": [
             "bitcoin market cap",
             "ethereum price history",
             "crypto trading volume",
@@ -173,17 +153,15 @@ class SemanticProviderRouter:
 
     @classmethod
     def _normalize_provider(cls, provider: Optional[str]) -> Optional[str]:
+        """Normalize a provider name using the shared canonical normalization.
+
+        Delegates to ``utils.providers.normalize_provider_name`` so that every
+        component in the codebase agrees on canonical (uppercase) names.
+        """
         if not provider:
             return None
-        cleaned = re.sub(r"[^A-Za-z ]+", "", str(provider)).strip().upper()
-        if not cleaned:
-            return None
-        if cleaned in cls._PROVIDER_CANONICAL:
-            return cls._PROVIDER_CANONICAL[cleaned]
-        compact = cleaned.replace(" ", "")
-        if compact in cls._PROVIDER_CANONICAL:
-            return cls._PROVIDER_CANONICAL[compact]
-        return None
+        normalized = normalize_provider_name(str(provider))
+        return normalized if normalized else None
 
     def _build_candidates(
         self,
@@ -197,7 +175,7 @@ class SemanticProviderRouter:
                 candidates.append(normalized)
 
         if not candidates:
-            candidates = [self._normalize_provider(baseline.provider) or "WorldBank"]
+            candidates = [self._normalize_provider(baseline.provider) or "WORLDBANK"]
         return candidates
 
     def _init_semantic_engine(self) -> Optional[Any]:

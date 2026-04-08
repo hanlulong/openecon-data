@@ -150,18 +150,28 @@ class UnifiedRouter:
     a lightweight structural safeguard.
     """
 
-    # Fallback chains when primary provider fails
+    # Fallback chains when primary provider fails.
+    #
+    # Design: no direct A↔B mutual pairs (e.g. if A→B then B must NOT→A).
+    # The runtime get_fallbacks() also filters out providers already tried
+    # via an ``exclude`` parameter to prevent cycles at call sites.
+    #
+    # Tier structure (fallbacks generally flow downward):
+    #   Tier 1 (specialty): OECD, BIS, StatsCan, CoinGecko, Comtrade, ExchangeRate
+    #   Tier 2 (regional):  Eurostat
+    #   Tier 3 (broad):     FRED, IMF
+    #   Tier 4 (universal): WorldBank  (sink — no outgoing fallbacks)
     FALLBACK_MAP: Dict[str, List[str]] = {
-        "OECD": ["WorldBank", "Eurostat"],
+        "OECD": ["Eurostat", "WorldBank"],
         "EUROSTAT": ["WorldBank", "IMF"],
         "BIS": ["IMF", "WorldBank"],
-        "IMF": ["BIS", "WorldBank", "OECD"],
-        "STATSCAN": ["WorldBank", "OECD"],
-        "FRED": ["WorldBank", "OECD"],
+        "IMF": ["FRED", "WorldBank"],
+        "STATSCAN": ["FRED", "WorldBank"],
+        "FRED": ["WorldBank"],
         "COMTRADE": ["Eurostat", "WorldBank"],
-        "WORLDBANK": ["IMF", "OECD"],
+        "WORLDBANK": [],
         "EXCHANGERATE": ["FRED"],
-        "COINGECKO": [],
+        "COINGECKO": ["FRED"],
     }
 
     DEFAULT_PROVIDER = "WorldBank"
@@ -344,9 +354,25 @@ class UnifiedRouter:
             llm_provider=llm_provider,
         )
 
-    def get_fallbacks(self, provider: str) -> List[str]:
-        """Get fallback providers when primary fails."""
-        return self.FALLBACK_MAP.get(provider.upper(), [self.DEFAULT_PROVIDER])
+    def get_fallbacks(self, provider: str, *, exclude: Optional[set] = None) -> List[str]:
+        """Get fallback providers when primary fails.
+
+        Args:
+            provider: The provider that failed.
+            exclude: Optional set of provider names (upper-case) to skip.
+                     Callers that chain fallbacks should pass the set of
+                     providers already attempted to prevent cycles.
+
+        Returns:
+            List of fallback provider names, filtered to exclude the
+            primary provider itself and any providers in *exclude*.
+        """
+        key = provider.upper()
+        fallbacks = self.FALLBACK_MAP.get(key, [self.DEFAULT_PROVIDER])
+        skip = {key}
+        if exclude:
+            skip |= {e.upper() for e in exclude}
+        return [fb for fb in fallbacks if fb.upper() not in skip]
 
     # ==========================================================================
     # Private Helper Methods — structural checks only

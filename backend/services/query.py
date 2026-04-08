@@ -1411,8 +1411,8 @@ class QueryService:
                         )
                         if _cube:
                             _new_state.statscan_cube_metadata = _cube
-                    except Exception:
-                        pass  # Non-critical — delta extractor has fallback
+                    except Exception as _cube_exc:
+                        logger.debug("Non-critical: statscan cube metadata fetch failed: %s", _cube_exc)
                 conversation_manager.set_conversation_state(conv_id, _new_state)
             except Exception as _sw_err:
                 logger.warning("Dual-write conversation_state failed: %s", _sw_err, exc_info=True)
@@ -2033,8 +2033,9 @@ class QueryService:
         """Serialize cache params deterministically for Redis cache key input."""
         try:
             return json.dumps(cache_params, sort_keys=True, separators=(",", ":"), default=str)
-        except Exception:
+        except Exception as _ser_exc:
             # Keep a deterministic fallback for non-serializable values.
+            logger.debug("Cache key JSON serialization fallback: %s", _ser_exc)
             return str(sorted(cache_params.items()))
 
     def _coerce_parsed_intent(self, raw_intent: Any, query: str) -> Optional[ParsedIntent]:
@@ -3134,8 +3135,8 @@ class QueryService:
                             if _resolved_code:
                                 _merged_state.resolved_indicator_code = str(_resolved_code)
                                 conversation_manager.set_conversation_state(conv_id, _merged_state)
-                        except Exception:
-                            pass
+                        except Exception as _persist_exc:
+                            logger.warning("Failed to persist resolved_indicator_code in delta path: %s", _persist_exc)
 
                     # Mark that the delta path already saved the merged state.
                     # This prevents the guaranteed save in main.py from
@@ -4031,11 +4032,11 @@ class QueryService:
                                 )
                                 if _cube:
                                     _qs.statscan_cube_metadata = _cube
-                            except Exception:
-                                pass
+                            except Exception as _cube_exc:
+                                logger.debug("Non-critical: statscan cube metadata fetch failed (QueryResponse branch): %s", _cube_exc)
                         conversation_manager.set_conversation_state(conv_id, _qs)
-                    except Exception:
-                        pass
+                    except Exception as _state_exc:
+                        logger.warning("Failed to save conversation state (QueryResponse branch): %s", _state_exc)
                     return result
                 elif isinstance(result, list):
                     # Rerank and project before returning
@@ -4070,11 +4071,11 @@ class QueryService:
                                 )
                                 if _cube:
                                     _new_state.statscan_cube_metadata = _cube
-                            except Exception:
-                                pass
+                            except Exception as _cube_exc:
+                                logger.debug("Non-critical: statscan cube metadata fetch failed (list branch): %s", _cube_exc)
                         conversation_manager.set_conversation_state(conv_id, _new_state)
-                    except Exception:
-                        pass
+                    except Exception as _state_exc:
+                        logger.warning("Failed to save conversation state (list branch): %s", _state_exc)
                     return QueryResponse(
                         conversationId=conversation_id,
                         intent=intent,
@@ -4144,8 +4145,8 @@ class QueryService:
                     message="The data provider is temporarily unavailable. Showing cached data (may not be the latest).",
                     processingSteps=tracker.to_list() if tracker else None,
                 )
-        except Exception:
-            pass
+        except Exception as _stale_exc:
+            logger.warning("Stale cache retrieval failed (last-resort fallback): %s", _stale_exc)
 
         # Build indicator-specific clarification if possible
         clarification_response = self._build_no_data_indicator_clarification(
@@ -5163,8 +5164,9 @@ class QueryService:
                     (fts_query, normalized_provider.upper(), series_id),
                 )
                 rows = cur.fetchall()
-            except Exception:
+            except Exception as _fts_exc:
                 # FTS5 fallback: if match fails, try simpler query
+                logger.debug("FTS5 AND query failed, trying OR fallback: %s", _fts_exc)
                 simple_fts = " OR ".join([f'"{w}"' for w in fts_words[:3]])
                 try:
                     cur.execute(
@@ -5175,7 +5177,8 @@ class QueryService:
                         (simple_fts, normalized_provider.upper(), series_id),
                     )
                     rows = cur.fetchall()
-                except Exception:
+                except Exception as _fts_or_exc:
+                    logger.debug("FTS5 OR fallback also failed: %s", _fts_or_exc)
                     rows = []
 
             if not rows:
@@ -5190,7 +5193,8 @@ class QueryService:
                 ))
 
             return alternatives if alternatives else None
-        except Exception:
+        except Exception as _alt_exc:
+            logger.debug("Alternative series lookup failed: %s", _alt_exc)
             return None
 
     async def _execute_pro_mode(self, query: str, conversation_id: str) -> QueryResponse:

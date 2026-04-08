@@ -15,6 +15,7 @@ PROVIDER_ALIASES = {
     # Comtrade variations
     "un comtrade": "COMTRADE",
     "un_comtrade": "COMTRADE",
+    "uncomtrade": "COMTRADE",
     "comtrade": "COMTRADE",
     "un": "COMTRADE",
     # World Bank variations
@@ -23,6 +24,7 @@ PROVIDER_ALIASES = {
     "wb": "WORLDBANK",
     # Statistics Canada variations
     "statistics canada": "STATSCAN",
+    "statisticscanada": "STATSCAN",
     "stats canada": "STATSCAN",
     "statcan": "STATSCAN",
     "statscan": "STATSCAN",

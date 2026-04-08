@@ -707,15 +707,15 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     # Provider transparency: warn user when data came from a different provider than requested
     try:
         result = query_service._add_provider_transparency(result, request.query)
-    except Exception:
-        pass  # Non-critical
+    except Exception as _transp_exc:
+        logger.debug("Non-critical: provider transparency annotation failed: %s", _transp_exc)
 
     # Add alternative series suggestions if data was returned and not already present
     if result.data and not result.alternativeSeries:
         try:
             result.alternativeSeries = query_service._build_alternative_series(result.intent, result.data)
-        except Exception:
-            pass  # Non-critical — don't break the response
+        except Exception as _alt_exc:
+            logger.debug("Non-critical: alternative series building failed: %s", _alt_exc)
 
     # Record end-to-end processing time
     elapsed_ms = (time.perf_counter() - query_start) * 1000
@@ -791,8 +791,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 )
                 try:
                     event_queue.put_nowait(event)
-                except Exception:
-                    pass  # Queue might be closed if client disconnected
+                except Exception as _q_exc:
+                    logger.debug("Stream event queue put failed (client likely disconnected): %s", _q_exc)
 
             tracker = ProcessingTracker(stream_callback=stream_callback)
             tracker_token = activate_processing_tracker(tracker)
@@ -825,7 +825,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                         try:
                             event = event_queue.get_nowait()
                             yield f"event: {event.event}\ndata: {json.dumps(event.data)}\n\n"
-                        except Exception:
+                        except Exception as _drain_exc:
+                            logger.debug("Event queue drain interrupted: %s", _drain_exc)
                             break
                     processing_complete = True
 
@@ -923,8 +924,10 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 query_task.cancel()
                 try:
                     await query_task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass  # Expected when cancelling
+                except Exception as _cancel_exc:
+                    logger.debug("Unexpected error while cancelling query task: %s", _cancel_exc)
                 logger.info("📡 Cleaned up pending query task")
 
     return StreamingResponse(
@@ -1176,8 +1179,8 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
                 )
                 try:
                     event_queue.put_nowait(event)
-                except Exception:
-                    pass  # Queue might be closed if client disconnected
+                except Exception as _q_exc:
+                    logger.debug("Pro Mode stream event queue put failed (client likely disconnected): %s", _q_exc)
 
             tracker = ProcessingTracker(stream_callback=stream_callback)
             tracker_token = activate_processing_tracker(tracker)
