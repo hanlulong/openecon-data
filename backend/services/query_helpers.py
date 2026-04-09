@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional, TYPE_CHECKING
 
-from ..models import ParsedIntent, QueryResponse
+from ..models import NormalizedData, ParsedIntent, QueryResponse
 from ..routing.country_resolver import CountryResolver
 from ..services.query_complexity import QueryComplexityAnalyzer
 from ..utils.providers import normalize_provider_name
+from ..utils.retry import retry_async, DataNotAvailableError
 
 if TYPE_CHECKING:
     from .query import QueryService
@@ -350,3 +351,226 @@ def should_use_deep_agents(svc: "QueryService", query: str) -> bool:
         logger.info(f"🧠 Deep Agents triggered: {', '.join(trigger_reason)}")
 
     return is_complex
+
+
+async def maybe_recover_from_empty_data(
+    svc: "QueryService",
+    query: str,
+    intent: Optional[ParsedIntent],
+) -> Optional[List[NormalizedData]]:
+    """Attempt semantic/ranking recovery when a primary fetch returns empty data.
+
+    Recovery actions:
+    - Distill noisy ranking/comparison phrasing to a stable metric phrase.
+    - Expand region/group queries to explicit country lists.
+    - Re-route provider for the recovered intent and retry once.
+    """
+    if not intent:
+        return None
+
+    params = dict(intent.parameters or {})
+    if params.get("_semantic_recovery_attempted"):
+        return None
+
+    ranking_or_comparison = svc._is_ranking_query(query) or svc._is_comparison_query(query)
+    distilled_indicator = svc._build_distilled_indicator_query(query)
+    if not ranking_or_comparison and not distilled_indicator:
+        return None
+
+    recovered_intent = intent.model_copy(deep=True)
+    recovered_params = dict(recovered_intent.parameters or {})
+    recovered_params["_semantic_recovery_attempted"] = True
+
+    if distilled_indicator:
+        recovered_intent.indicators = [distilled_indicator]
+        recovered_params.pop("indicator", None)
+        recovered_params.pop("seriesId", None)
+        recovered_params.pop("series_id", None)
+        recovered_params.pop("code", None)
+        recovered_params["indicator"] = distilled_indicator
+
+    if ranking_or_comparison:
+        target_countries = svc._collect_target_countries(recovered_params)
+        if len(target_countries) < 2:
+            expanded_regions = CountryResolver.expand_regions_in_query(query)
+            explicit_countries = svc._extract_countries_from_query(query)
+            target_countries = explicit_countries or expanded_regions or target_countries
+        # Structural safety net: comparison queries need multiple countries.
+        if len(target_countries) < 2:
+            target_countries = sorted(CountryResolver.G20_MEMBERS)
+        if target_countries:
+            recovered_params.pop("country", None)
+            recovered_params["countries"] = list(
+                dict.fromkeys([str(c) for c in target_countries if c])
+            )
+
+    recovered_intent.parameters = recovered_params
+
+    try:
+        rerouted_provider = await svc._select_routed_provider(
+            recovered_intent, distilled_indicator or query
+        )
+        recovered_intent.apiProvider = rerouted_provider
+    except Exception as exc:
+        logger.warning(
+            "Semantic recovery routing failed, keeping existing provider: %s", exc
+        )
+
+    try:
+        recovered_data = await retry_async(
+            lambda: svc._fetch_data(recovered_intent),
+            max_attempts=2,
+            initial_delay=0.5,
+        )
+    except Exception as exc:
+        logger.info("Semantic recovery fetch failed: %s", exc)
+        return None
+
+    if not recovered_data:
+        return None
+
+    recovered_data = svc._rerank_data_by_query_relevance(query, recovered_data)
+    if ranking_or_comparison:
+        recovered_data = svc._apply_ranking_projection(query, recovered_data)
+    return recovered_data
+
+
+async def maybe_improve_country_coverage(
+    svc: "QueryService",
+    query: str,
+    intent: Optional[ParsedIntent],
+    data: Optional[List[NormalizedData]],
+) -> tuple[List[NormalizedData], Optional[str]]:
+    """Try to improve multi-country coverage via fallback providers, then
+    return data plus optional warning when coverage remains partial.
+    """
+    current_data = list(data or [])
+    if not intent or not current_data:
+        return current_data, None
+
+    initial_coverage = svc._assess_country_coverage(intent, current_data)
+    if not initial_coverage or initial_coverage.get("complete"):
+        return current_data, None
+
+    logger.warning(
+        "Partial country coverage detected for query '%s': covered=%s/%s missing=%s",
+        query,
+        initial_coverage.get("covered_count"),
+        initial_coverage.get("requested_count"),
+        initial_coverage.get("missing_display"),
+    )
+
+    best_data = current_data
+    best_coverage = initial_coverage
+
+    try:
+        fallback_data = await svc._try_with_fallback(
+            intent,
+            DataNotAvailableError("Partial multi-country coverage from primary provider"),
+        )
+    except Exception as exc:
+        logger.info("Coverage fallback attempt failed: %s", exc)
+        fallback_data = None
+
+    if fallback_data:
+        fallback_data = svc._rerank_data_by_query_relevance(query, fallback_data)
+        fallback_data = svc._apply_ranking_projection(query, fallback_data)
+        fallback_coverage = svc._assess_country_coverage(intent, fallback_data)
+        if fallback_coverage:
+            fallback_score = (
+                float(fallback_coverage.get("coverage_ratio", 0.0)),
+                int(fallback_coverage.get("covered_count", 0)),
+            )
+            best_score = (
+                float(best_coverage.get("coverage_ratio", 0.0)),
+                int(best_coverage.get("covered_count", 0)),
+            )
+            if fallback_score > best_score:
+                best_data = fallback_data
+                best_coverage = fallback_coverage
+                logger.info(
+                    "Coverage fallback improved country coverage to %s/%s",
+                    best_coverage.get("covered_count"),
+                    best_coverage.get("requested_count"),
+                )
+        elif fallback_data:
+            logger.debug(
+                "Coverage fallback returned data without country labels; keeping primary result"
+            )
+
+    if best_coverage.get("complete"):
+        return best_data, None
+
+    warning_message = svc._build_country_coverage_warning_message(best_coverage)
+    return best_data, warning_message or None
+
+
+def resolve_concept_for_fallback(
+    svc: "QueryService",
+    intent: ParsedIntent,
+    primary_provider: str,
+) -> Optional[str]:
+    """Resolve a catalog concept name from the intent for cross-provider fallback.
+
+    Checks (in order):
+    1. Stored ``__catalog_concept`` parameter (set during catalog resolution)
+    2. Reverse lookup from provider-specific indicator code via catalog
+    3. Forward lookup from the original query text via ``find_concept_by_term``
+
+    Returns:
+        Catalog concept name (e.g., ``"exports_pct_gdp"``) or ``None``.
+    """
+    try:
+        from .catalog_service import find_concept_by_term, find_concepts_by_code
+
+        # 1. Check stored concept from prior catalog resolution
+        stored_concept = (intent.parameters or {}).get("__catalog_concept")
+        if stored_concept:
+            logger.debug("Fallback concept from __catalog_concept: %s", stored_concept)
+            return str(stored_concept)
+
+        # 2. Reverse lookup: provider code -> concept
+        for ind in (intent.indicators or []):
+            ind_str = str(ind or "").strip()
+            if ind_str and svc._looks_like_provider_indicator_code(primary_provider, ind_str):
+                concepts = find_concepts_by_code(primary_provider, ind_str)
+                if concepts:
+                    logger.debug(
+                        "Fallback concept via reverse code lookup (%s/%s): %s",
+                        primary_provider, ind_str, concepts[0],
+                    )
+                    return concepts[0]
+
+        # Also check the 'indicator' parameter which may hold the resolved code
+        param_indicator = str((intent.parameters or {}).get("indicator", "")).strip()
+        if param_indicator and svc._looks_like_provider_indicator_code(
+            primary_provider, param_indicator
+        ):
+            concepts = find_concepts_by_code(primary_provider, param_indicator)
+            if concepts:
+                logger.debug(
+                    "Fallback concept via param indicator reverse lookup (%s/%s): %s",
+                    primary_provider, param_indicator, concepts[0],
+                )
+                return concepts[0]
+
+        # 3. Forward lookup: original query text -> concept
+        original_query = str(intent.originalQuery or "").strip()
+        if original_query:
+            concept = find_concept_by_term(original_query)
+            if concept:
+                logger.debug("Fallback concept via query text: %s", concept)
+                return concept
+
+            # Try distilled query
+            distilled = svc._build_distilled_indicator_query(original_query)
+            if distilled:
+                concept = find_concept_by_term(distilled)
+                if concept:
+                    logger.debug("Fallback concept via distilled query: %s", concept)
+                    return concept
+
+    except Exception as exc:
+        logger.debug("Concept resolution for fallback failed: %s", exc)
+
+    return None
