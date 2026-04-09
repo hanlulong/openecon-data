@@ -1,0 +1,56 @@
+# Capacity Utilization Indicator Catalog
+concept: capacity_utilization
+category: industry
+domain: macroeconomics
+
+description: |
+  Capacity utilization measures the extent to which an industry, firm, or
+  economy uses its installed productive capacity.  Total industry and
+  manufacturing variants are commonly tracked as business cycle indicators.
+
+synonyms:
+  primary:
+    - capacity utilization
+    - industrial capacity utilization
+  secondary:
+    - manufacturing capacity utilization
+    - capacity use
+    - utilization rate
+
+explicit_exclusions:
+  - industrial production
+  - factory orders
+  - PMI
+
+providers:
+  FRED:
+    primary:
+      code: TCU
+      name: "Capacity Utilization: Total Industry"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    manufacturing:
+      code: CUMFNS
+      name: "Capacity Utilization: Manufacturing"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+
+  Eurostat:
+    primary:
+      code: EI_BSIN_Q
+      name: "Industry survey - capacity utilization"
+      confidence: 0.85
+      coverage: eu_members
+      frequency: quarterly
+
+not_available:
+  - WorldBank
+  - IMF
+  - StatsCan
+  - OECD
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

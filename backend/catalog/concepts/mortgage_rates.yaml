@@ -1,0 +1,51 @@
+# Mortgage Rates Indicator Catalog
+concept: mortgage_rates
+category: housing
+domain: macroeconomics
+
+description: |
+  Mortgage interest rates from the Freddie Mac Primary Mortgage Market
+  Survey (PMMS), reflecting average rates offered to qualified borrowers.
+
+synonyms:
+  primary:
+    - mortgage rate
+    - mortgage rates
+    - 30-year mortgage rate
+    - home loan rate
+  secondary:
+    - 15-year mortgage rate
+    - housing loan rate
+    - mortgage interest rate
+
+explicit_exclusions:
+  - bond yield
+  - treasury yield
+  - federal funds rate
+  - corporate bond yield
+
+providers:
+  FRED:
+    primary:
+      code: MORTGAGE30US
+      name: "30-Year Fixed Rate Mortgage Average in the United States"
+      confidence: 0.95
+      coverage: [US]
+      frequency: weekly
+    fifteen_year:
+      code: MORTGAGE15US
+      name: "15-Year Fixed Rate Mortgage Average in the United States"
+      confidence: 0.95
+      coverage: [US]
+      frequency: weekly
+
+not_available:
+  - WorldBank
+  - IMF
+  - Eurostat
+  - StatsCan
+  - OECD
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate

@@ -1,0 +1,53 @@
+# Yield Curve Indicator Catalog
+concept: yield_curve
+category: financial_markets
+domain: macroeconomics
+
+description: |
+  The yield curve shows the relationship between bond yields at
+  different maturities. The 10-year minus 2-year (or 10-year minus
+  3-month) spread is a widely watched recession indicator.
+
+synonyms:
+  primary:
+    - yield curve
+    - yield curve spread
+    - term spread
+    - 10y-2y spread
+    - 10 year 2 year spread
+  secondary:
+    - treasury spread
+    - yield differential
+    - inversion
+    - yield curve inversion
+
+explicit_exclusions:
+  - bond yield
+  - treasury yield
+  - bond price
+
+providers:
+  FRED:
+    primary:
+      code: T10Y2Y
+      name: "10-Year Treasury Constant Maturity Minus 2-Year Treasury"
+      confidence: 0.95
+      coverage: [US]
+      frequency: daily
+    short_term:
+      code: T10Y3M
+      name: "10-Year Treasury Constant Maturity Minus 3-Month Treasury"
+      confidence: 0.95
+      coverage: [US]
+      frequency: daily
+
+not_available:
+  - WorldBank
+  - IMF
+  - Eurostat
+  - StatsCan
+  - OECD
+  - BIS
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
