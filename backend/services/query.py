@@ -368,16 +368,9 @@ class QueryService:
         return match[0] if match else None
 
     def _extract_countries_from_query(self, query: str) -> List[str]:
-        """
-        Extract all country codes from query in appearance order.
-
-        Returns:
-            List of ISO Alpha-2 country codes.
-        """
-        countries = CountryResolver.detect_all_countries_in_query(query)
-        if countries:
-            logger.info("🌍 Fallback country extraction found countries: %s", countries)
-        return countries
+        """Delegates to :func:`query_helpers.extract_countries_from_query`."""
+        from .query_helpers import extract_countries_from_query as _qh_extract
+        return _qh_extract(query)
 
     def _add_provider_transparency(
         self,
@@ -431,112 +424,9 @@ class QueryService:
         return result
 
     def _apply_country_overrides(self, intent: ParsedIntent, query: str) -> None:
-        """
-        Apply geography overrides when query text clearly specifies country context
-        but LLM output defaults to US/no country.
-
-        Rules:
-        - If query names 1 non-US country and intent defaults to US/no country -> set `country`.
-        - If query names multiple countries and intent defaults to US/no country -> set `countries`.
-        """
-        if intent.parameters is None:
-            intent.parameters = {}
-
-        extracted_countries = self._extract_countries_from_query(query)
-        expanded_region_countries = CountryResolver.expand_regions_in_query(query)
-        if not extracted_countries and not expanded_region_countries:
-            return
-
-        current_country = str(intent.parameters.get("country", "") or "")
-        current_countries_raw = intent.parameters.get("countries")
-        current_countries = []
-        if isinstance(current_countries_raw, list):
-            current_countries = [str(c) for c in current_countries_raw if c is not None]
-
-        def _is_us(value: str) -> bool:
-            return value.strip().lower() in {"us", "usa", "united states", "america"}
-
-        defaulted_to_us_or_empty = (
-            (not current_country and not current_countries)
-            or (_is_us(current_country) and not current_countries)
-            or (len(current_countries) == 1 and _is_us(current_countries[0]))
-        )
-
-        # Region-based multi-country override: when query mentions a known
-        # country group (G7, G20, BRICS, EU, ASEAN, etc.), always expand to
-        # the full member list regardless of comparative language.  Previously
-        # this was gated behind "comparative_markers" which caused queries
-        # like "employment in G20" (without words like "compare") to miss the
-        # expansion entirely.
-        if len(expanded_region_countries) > 1:
-            current_geo = current_countries[:] if current_countries else ([current_country] if current_country else [])
-            normalized_current = [
-                self._normalize_country_to_iso2(country) or str(country).upper()
-                for country in current_geo
-                if country
-            ]
-            normalized_target = [
-                self._normalize_country_to_iso2(country) or str(country).upper()
-                for country in expanded_region_countries
-            ]
-            if normalized_current != normalized_target:
-                previous = current_country or (",".join(current_countries) if current_countries else "")
-                intent.parameters.pop("country", None)
-                intent.parameters["countries"] = expanded_region_countries
-                logger.info(
-                    "🌍 Region Override: '%s' -> %s (query specifies a country group)",
-                    previous,
-                    expanded_region_countries,
-                )
-                return
-
-        # Multi-country override should apply whenever query explicitly names multiple
-        # countries, even if parser already selected one non-US country.
-        if len(extracted_countries) > 1:
-            normalized_current = [
-                self._normalize_country_to_iso2(country) or str(country).upper()
-                for country in current_countries
-                if country
-            ]
-            if current_country:
-                normalized_current.append(
-                    self._normalize_country_to_iso2(current_country) or str(current_country).upper()
-                )
-            normalized_current = list(dict.fromkeys(normalized_current))
-
-            normalized_extracted = [
-                self._normalize_country_to_iso2(country) or str(country).upper()
-                for country in extracted_countries
-            ]
-            normalized_extracted = list(dict.fromkeys(normalized_extracted))
-
-            if normalized_current != normalized_extracted:
-                previous = current_country or (",".join(current_countries) if current_countries else "")
-                intent.parameters.pop("country", None)
-                intent.parameters["countries"] = extracted_countries
-                logger.info(
-                    "🌍 Country Override (multi): '%s' -> %s (query explicitly names multiple countries)",
-                    previous,
-                    extracted_countries,
-                )
-            return
-
-        if not defaulted_to_us_or_empty:
-            return
-
-        # Single-country override
-        if not extracted_countries:
-            return
-        extracted_country = extracted_countries[0]
-        if extracted_country.upper() != "US":
-            previous = current_country or (current_countries[0] if current_countries else "")
-            intent.parameters["country"] = extracted_country
-            intent.parameters.pop("countries", None)
-            logger.info(
-                "🌍 Country Override: '%s' -> '%s' (query explicitly mentions non-US country)",
-                previous,
-                extracted_country,
-            )
+        """Delegates to :func:`query_helpers.apply_country_overrides`."""
+        from .query_helpers import apply_country_overrides as _qh_apply
+        _qh_apply(self, intent, query)
 
     @staticmethod
     def _extract_indicator_text_from_refined_query(refined_query: str) -> str:
@@ -3959,125 +3849,9 @@ class QueryService:
     # See git history for the old LangChain orchestrator implementation.
 
     def _should_use_deep_agents(self, query: str) -> bool:
-        """
-        Determine if a query should use Deep Agents for parallel processing.
-
-        Uses QueryComplexityAnalyzer for comprehensive pattern detection.
-
-        Deep Agents are used for:
-        1. Multi-country comparison queries (3+ countries)
-        2. Multi-indicator analysis queries
-        3. Ranking/sorting queries across multiple entities
-        4. Complex regional breakdowns
-        5. Queries with "compare", "vs", "and" with multiple data points
-
-        Returns:
-            True if Deep Agents should be used
-        """
-        query_lower = query.lower()
-
-        # Framework guardrail: keep single-metric retrieval queries on the
-        # deterministic path. Deep planning is most useful for true multi-step
-        # analysis, and can over-decompose straightforward ratio/flow requests.
-        ratio_patterns = [
-            "% of gdp", "as % of gdp", "as percent of gdp", "as percentage of gdp",
-            "share of gdp", "to gdp ratio", "ratio to gdp", "as share of gdp",
-        ]
-        analysis_keywords = [
-            "correlation", "regression", "causal", "simulate", "scenario",
-            "what if", "decompose", "optimize", "compute", "calculate", "derive",
-        ]
-        has_ratio_query = any(pattern in query_lower for pattern in ratio_patterns)
-        has_analysis_keyword = any(term in query_lower for term in analysis_keywords)
-        query_cues = self._extract_indicator_cues(query_lower)
-        high_signal_query_cues = {
-            cue for cue in query_cues
-            if cue not in {"gdp", "tenor_2y", "tenor_10y", "tenor_30y", "discontinued"}
-        }
-        concept_groups = self._infer_query_concept_groups(query)
-
-        if has_ratio_query and not has_analysis_keyword:
-            logger.info("⏭️ Deep Agents skipped for single-metric ratio retrieval query")
-            return False
-
-        # Single-concept retrieval queries (even when ranking/comparison phrasing is
-        # present) are better served by deterministic fetching + framework ranking.
-        if (
-            (self._is_ranking_query(query) or self._is_comparison_query(query))
-            and len(concept_groups) <= 1
-            and len(high_signal_query_cues) <= 2
-            and not has_analysis_keyword
-        ):
-            logger.info(
-                "⏭️ Deep Agents skipped for single-concept retrieval query (concepts=%s, cues=%s)",
-                sorted(concept_groups),
-                sorted(high_signal_query_cues),
-            )
-            return False
-
-        if ("trade" in query_lower or "import" in query_lower or "export" in query_lower) and not has_analysis_keyword:
-            if not any(term in query_lower for term in ["correlation", "versus and", "decompose", "optimize"]):
-                logger.info("⏭️ Deep Agents skipped for direct trade retrieval query")
-                return False
-
-        if any(term in query_lower for term in ["rank", "ranking", "top ", "highest", "lowest"]):
-            # Ranking by a single indicator is a data retrieval + sort problem, not
-            # necessarily a multi-agent planning problem.
-            if len(query_cues) <= 2 and not has_analysis_keyword:
-                logger.info("⏭️ Deep Agents skipped for single-indicator ranking query")
-                return False
-
-        # Use QueryComplexityAnalyzer for comprehensive detection
-        complexity = QueryComplexityAnalyzer.detect_complexity(query)
-
-        # PERFORMANCE FIX: The standard pipeline already handles multi-country +
-        # multi-indicator comparison queries efficiently:
-        # - _maybe_expand_multi_concept_intent() detects comparison queries
-        # - _fetch_multi_indicator_data() fetches indicators in parallel
-        # - WorldBank/IMF batch country requests in a single API call
-        # - BIS/Eurostat fetch countries in parallel with semaphore
-        #
-        # Deep Agents decomposes into N*M individual process_query() calls, each
-        # requiring a full LLM parse (~5s), so a G7 x 2 indicators query = 14
-        # LLM calls = 70+ seconds.  The standard pipeline avoids this entirely.
-        #
-        # Only use Deep Agents for queries that require multi-step analysis
-        # (correlation, regression, forecasting, etc.).
-
-        is_multi_country = complexity.get('is_multi_country', False)
-        is_multi_indicator = complexity.get('is_multi_indicator', False)
-        is_ranking = complexity.get('is_ranking', False)
-
-        # Check if this is a pure data retrieval/comparison query vs analysis
-        analysis_keywords = [
-            "correlation", "correlate", "regression", "decompose",
-            "optimize", "forecast", "predict", "simulate", "model",
-            "causal", "elasticity", "sensitivity",
-        ]
-        needs_analysis = any(kw in query_lower for kw in analysis_keywords)
-
-        # Standard comparison/data-fetch queries: the deterministic pipeline is
-        # faster and more reliable.  Skip Deep Agents for these.
-        if (is_multi_country or is_multi_indicator or is_ranking) and not needs_analysis:
-            logger.info(
-                "⏭️ Deep Agents skipped: multi-country/indicator comparison handled "
-                "by standard pipeline (multi_country=%s, multi_indicator=%s, ranking=%s)",
-                is_multi_country, is_multi_indicator, is_ranking,
-            )
-            return False
-
-        # Deep Agents only for truly complex analytical queries
-        is_complex = False
-        trigger_reason = []
-
-        if needs_analysis:
-            trigger_reason.append("analysis")
-            is_complex = True
-
-        if is_complex:
-            logger.info(f"🧠 Deep Agents triggered: {', '.join(trigger_reason)}")
-
-        return is_complex
+        """Delegates to :func:`query_helpers.should_use_deep_agents`."""
+        from .query_helpers import should_use_deep_agents as _qh_should_deep
+        return _qh_should_deep(self, query)
 
     async def _execute_with_deep_agents(
         self,
@@ -4863,110 +4637,9 @@ class QueryService:
         intent: ParsedIntent,
         data: Any,
     ) -> Optional[list]:
-        """Generate alternative indicator suggestions based on the returned data.
-
-        Shows related indicators the user might also want to explore.
-        E.g., after GDP (current US$), suggest GDP growth, GDP per capita, GDP PPP.
-
-        Performance optimizations:
-        1. Skip entirely for catalog-resolved indicators (high confidence).
-           These are already the correct indicator — alternatives add latency
-           without value for the majority of queries.
-        2. Uses FTS5 full-text search instead of LIKE '%...%' scan.
-           FTS5 is indexed and runs in <50ms vs 2-6s for LIKE on 330K rows.
-        """
-        from .indicator_database import IndicatorDatabase
-        from ..models import AlternativeSeries
-
-        try:
-            if not data:
-                return None
-
-            # Optimization 1: Skip alternatives for catalog-resolved indicators.
-            # When the indicator was resolved via the catalog (high confidence),
-            # the user got exactly what they asked for — building alternatives
-            # is wasted work (saves 50-200ms FTS5 time + DB connection overhead).
-            if getattr(intent, "_catalog_resolved", False):
-                logger.debug(
-                    "Skipping alternative series — catalog-resolved indicator: %s",
-                    (intent.parameters or {}).get("indicator", "?"),
-                )
-                return None
-
-            # Get the indicator code from returned data
-            first_data = data[0] if isinstance(data, list) else data
-            meta = getattr(first_data, "metadata", None) if not isinstance(first_data, dict) else first_data.get("metadata")
-            if not meta:
-                return None
-            series_id = str(getattr(meta, "seriesId", "") or "")
-            provider = str(getattr(meta, "source", "") or "")
-            indicator_name = str(getattr(meta, "indicator", "") or "")
-
-            if not series_id or not provider:
-                return None
-
-            # Get the concept family — indicators with similar name prefix
-            core = indicator_name.split(",")[0].split("(")[0].strip().lower()
-            if len(core) < 2:
-                return None
-
-            normalized_provider = normalize_provider_name(provider)
-
-            # Use FTS5 search instead of LIKE '%...%' scan.
-            # FTS5 is indexed and runs in <50ms vs 2-6s for LIKE on 330K rows.
-            db = IndicatorDatabase()
-            conn = db._get_connection()
-            cur = conn.cursor()
-
-            # Build FTS5 query from core words (strip punctuation, use OR)
-            fts_words = [w.strip() for w in core.split() if w.strip() and len(w.strip()) > 2]
-            if not fts_words:
-                return None
-
-            # Quote each word for FTS5 safety and join with AND for relevance
-            fts_query = " AND ".join([f'"{w}"' for w in fts_words[:4]])
-
-            try:
-                cur.execute(
-                    """SELECT i.code, i.name FROM indicators_fts f
-                    JOIN indicators i ON f.rowid = i.id
-                    WHERE indicators_fts MATCH ? AND i.provider = ? AND i.code != ?
-                    ORDER BY bm25(indicators_fts) LIMIT 5""",
-                    (fts_query, normalized_provider.upper(), series_id),
-                )
-                rows = cur.fetchall()
-            except Exception as _fts_exc:
-                # FTS5 fallback: if match fails, try simpler query
-                logger.debug("FTS5 AND query failed, trying OR fallback: %s", _fts_exc)
-                simple_fts = " OR ".join([f'"{w}"' for w in fts_words[:3]])
-                try:
-                    cur.execute(
-                        """SELECT i.code, i.name FROM indicators_fts f
-                        JOIN indicators i ON f.rowid = i.id
-                        WHERE indicators_fts MATCH ? AND i.provider = ? AND i.code != ?
-                        ORDER BY bm25(indicators_fts) LIMIT 5""",
-                        (simple_fts, normalized_provider.upper(), series_id),
-                    )
-                    rows = cur.fetchall()
-                except Exception as _fts_or_exc:
-                    logger.debug("FTS5 OR fallback also failed: %s", _fts_or_exc)
-                    rows = []
-
-            if not rows:
-                return None
-
-            alternatives = []
-            for code, name in rows:
-                alternatives.append(AlternativeSeries(
-                    code=code,
-                    name=name,
-                    provider=normalized_provider,
-                ))
-
-            return alternatives if alternatives else None
-        except Exception as _alt_exc:
-            logger.debug("Alternative series lookup failed: %s", _alt_exc)
-            return None
+        """Delegates to :func:`query_helpers.build_alternative_series`."""
+        from .query_helpers import build_alternative_series as _qh_build_alt
+        return _qh_build_alt(intent, data)
 
     async def _execute_pro_mode(self, query: str, conversation_id: str) -> QueryResponse:
         """Execute query using Pro Mode (LangChain agent or Grok code generation)"""
