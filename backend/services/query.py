@@ -442,63 +442,9 @@ class QueryService:
         selected_option: ClarificationOption,
         refined_query: str,
     ) -> Optional[ParsedIntent]:
-        """
-        Build a deterministic intent for clarification follow-ups when possible.
-
-        This avoids sending an already-disambiguated reply back through the full
-        LLM parse path.
-        """
-        kind = str(pending.get("kind") or "").strip()
-        option_label = str(selected_option.label or "").strip()
-        query_text = str(refined_query or "").strip()
-        if not query_text:
-            return None
-
-        # "group as a whole" still requires more nuanced aggregate handling.
-        if kind == "group_scope" and "compare member countries" not in option_label.lower():
-            return None
-
-        extracted_countries = self._extract_countries_from_query(query_text)
-        expanded_region_countries = CountryResolver.expand_regions_in_query(query_text)
-        params: Dict[str, Any] = {}
-
-        if expanded_region_countries and (
-            "member countries" in query_text.lower()
-            or self._is_comparison_query(query_text)
-        ):
-            params["countries"] = expanded_region_countries
-        elif len(extracted_countries) == 1:
-            params["country"] = extracted_countries[0]
-        elif len(extracted_countries) > 1:
-            params["countries"] = extracted_countries
-
-        indicator_text = option_label if kind != "group_scope" else self._extract_indicator_text_from_refined_query(query_text)
-        indicator_text = str(indicator_text or "").strip() or self._extract_indicator_text_from_refined_query(query_text)
-        if not indicator_text:
-            return None
-
-        routing_decision = self.unified_router.route(
-            query=query_text,
-            indicators=[indicator_text],
-            country=params.get("country"),
-            countries=params.get("countries"),
-            llm_provider=None,
-        )
-        api_provider = normalize_provider_name(routing_decision.provider)
-        if params.get("countries") and len(params["countries"]) > 1 and not self._provider_covers_country_list(api_provider, params["countries"]):
-            api_provider = "WORLDBANK"
-
-        intent = ParsedIntent(
-            apiProvider=api_provider,
-            indicators=[indicator_text],
-            parameters=params,
-            clarificationNeeded=False,
-            confidence=0.95,
-            recommendedChartType="line",
-            originalQuery=query_text,
-        )
-        self._apply_country_overrides(intent, query_text)
-        return intent
+        """Delegates to :func:`query_helpers.build_intent_from_semantic_clarification`."""
+        from .query_helpers import build_intent_from_semantic_clarification as _qh_build_intent
+        return _qh_build_intent(self, pending, selected_option, refined_query)
 
     async def _select_routed_provider(self, intent: ParsedIntent, query: str) -> str:
         """
