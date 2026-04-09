@@ -1110,8 +1110,7 @@ class OECDProvider(BaseProvider):
 
         # Build proper dimension key to avoid downloading ALL data (causes rate limiting)
         # Use DSD cache service to dynamically discover dimension structure
-        from ..services.dsd_cache import get_dimension_key_builder
-
+        # (already imported at module top)
         key_builder = get_dimension_key_builder()
         filter_key = await key_builder.build_key(
             provider="OECD",

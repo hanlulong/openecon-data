@@ -258,13 +258,16 @@ class IndicatorSelector:
         for code, name in candidates:
             meta = meta_map.get(code, {})
             end_date = meta.get("end_date", "")
-            # Mark as discontinued if last observation is before 2020
+            # Mark as discontinued if last observation is older than 5 years.
+            # Use a sliding 5-year window relative to today rather than a
+            # hardcoded year, so 2020-2025 series aren't incorrectly flagged
+            # as dead in 2026+.
             discontinued = False
             if end_date:
                 try:
-                    # end_date may be "2025-11-01" or "2021-01-01T05:00:00Z"
+                    from datetime import datetime as _dt
                     year = int(end_date[:4])
-                    if year < 2020:
+                    if year < (_dt.now().year - 5):
                         discontinued = True
                 except (ValueError, IndexError):
                     pass

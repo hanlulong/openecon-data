@@ -222,6 +222,50 @@ class ParameterValidator:
                 intent.parameters = params
                 return True, None, None
 
+            # Smart fallback: if the indicator term matches a high-confidence
+            # FRED-native series (e.g. "VIX", "M2", "10Y treasury", "PCE"),
+            # switch the intent to FRED + USA rather than failing.  This is a
+            # general infrastructure fix — uses the FTS5 indicator database to
+            # detect FRED-native US indicators rather than hardcoded keywords.
+            try:
+                indicator_query = (
+                    indicator
+                    or (intent.indicators[0] if intent.indicators else "")
+                    or str(intent.originalQuery or "")
+                ).strip()
+                if indicator_query:
+                    from .indicator_database import IndicatorDatabase
+                    db = IndicatorDatabase()
+                    fred_results = db.search(indicator_query, provider="FRED", limit=3)
+                    if fred_results:
+                        top = fred_results[0]
+                        # High-confidence: top FRED result has a relevance score
+                        # well above a noise floor.  bm25 scores are negative,
+                        # so we use rank position + presence of all query terms.
+                        top_name = str(top.get("name", "")).lower()
+                        query_words = [
+                            w for w in indicator_query.lower().split()
+                            if len(w) > 2 and w not in {"the", "and", "for", "rate"}
+                        ]
+                        word_match_ratio = (
+                            sum(1 for w in query_words if w in top_name)
+                            / max(1, len(query_words))
+                        )
+                        if word_match_ratio >= 0.5:
+                            # FRED-native US indicator detected — auto-default
+                            # to USA and switch provider.
+                            intent.apiProvider = "FRED"
+                            params['country'] = 'US'
+                            params.pop('countries', None)
+                            intent.parameters = params
+                            return True, None, {
+                                'note': f'Defaulted to FRED+USA for "{indicator_query}" '
+                                        f'(matches {top.get("code","?")})',
+                            }
+            except Exception:
+                # Fall through to error response on any lookup failure
+                pass
+
             return False, "World Bank query requires a country or list of countries", {
                 'suggestion': 'Specify which country/countries you want data for',
                 'example': 'Try: "China GDP" or "Compare GDP between US and UK"'

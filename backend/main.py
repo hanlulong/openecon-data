@@ -27,6 +27,7 @@ from .models import (
     FeedbackResponse,
     HealthResponse,
     LoginRequest,
+    ParsedIntent,
     QueryRequest,
     QueryResponse,
     RegisterRequest,
@@ -430,11 +431,10 @@ def save_to_user_history(
     user: User,
     query: str,
     conversation_id: str,
-    intent: Optional["ParsedIntent"],
+    intent: Optional[ParsedIntent],
     data: Optional[list],
 ) -> None:
     """Save query to in-memory user history for authenticated users."""
-    from .models import ParsedIntent
     history_item = UserQueryHistory(
         id=str(uuid.uuid4()),
         userId=user.id,

@@ -89,7 +89,9 @@ class StatsCanProvider(BaseProvider):
         # GDP by industry aggregate (Product 36100402 - annual provincial GDP by industry)
         "GDP_BY_INDUSTRY": 65201211,  # Default to goods-producing as starting point
         "GDP_INDUSTRY": 65201211,  # Alias
-        "GDP_ALL_INDUSTRIES": 2461968,  # All industries vector
+        # NOTE: removed duplicate GDP_ALL_INDUSTRIES key here (line 59 above is canonical:
+        # vector 65201210 = GDP at basic prices, all industries, SA, chained 2017 dollars).
+        # The previous duplicate at this line silently overrode the canonical entry.
 
         # Housing (subject 34 - Construction)
         "HOUSING_STARTS": 52300157,  # Housing starts (all areas), Canada and provinces, monthly (units: thousands) - CMHC data
