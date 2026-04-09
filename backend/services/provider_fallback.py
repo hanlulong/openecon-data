@@ -432,6 +432,7 @@ def is_fallback_relevant(
     fallback_result: List[NormalizedData],
     target_countries: Optional[List[str]] = None,
     original_query: Optional[str] = None,
+    original_concept: Optional[str] = None,
 ) -> bool:
     """Check if a fallback result is semantically related to the original query.
 
@@ -445,17 +446,44 @@ def is_fallback_relevant(
     Also validates COUNTRY matching to prevent returning data for a different
     country than requested.
 
+    When ``original_concept`` is provided, the catalog's ``explicit_exclusions``
+    for that concept are used to reject fallback indicators that match a known
+    wrong-type indicator (e.g., "gdp growth rate" when the concept is "gdp").
+
     Args:
         original_indicators: Original indicator names from user query.
         fallback_result: Data returned from fallback provider.
         target_countries: Optional countries the query is targeting.
         original_query: Optional raw user query text.
+        original_concept: Optional catalog concept name for exclusion checking.
 
     Returns:
         ``True`` if fallback data is relevant, ``False`` otherwise.
     """
     if not fallback_result or not original_indicators:
         return False
+
+    # --- Catalog concept exclusion check ---
+    # Use the catalog's curated explicit_exclusions to reject wrong-type indicators.
+    if original_concept:
+        try:
+            from .catalog_service import is_excluded_term
+            for data in fallback_result:
+                if not data.metadata:
+                    continue
+                indicator_name = str(data.metadata.indicator or "")
+                description = str(data.metadata.description or "")
+                # Check both indicator name and description against exclusions
+                for text in (indicator_name, description):
+                    if text and is_excluded_term(text, original_concept):
+                        logger.warning(
+                            "Fallback rejected: indicator '%s' matches explicit_exclusion "
+                            "for concept '%s'",
+                            text, original_concept,
+                        )
+                        return False
+        except Exception as exc:
+            logger.debug("Catalog exclusion check failed: %s", exc)
 
     # Country validation (generalized): enforce match for known ISO2 country contexts.
     requested_iso2 = {

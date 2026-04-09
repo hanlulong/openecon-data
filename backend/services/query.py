@@ -2390,6 +2390,7 @@ class QueryService:
         fallback_result: List[NormalizedData],
         target_countries: Optional[List[str]] = None,
         original_query: Optional[str] = None,
+        original_concept: Optional[str] = None,
     ) -> bool:
         """Check if fallback result is semantically related to the original query.
 
@@ -2397,6 +2398,7 @@ class QueryService:
         """
         return _pf_is_fallback_relevant(
             original_indicators, fallback_result, target_countries, original_query,
+            original_concept=original_concept,
         )
 
     def _resolve_concept_for_fallback(
@@ -2612,6 +2614,7 @@ class QueryService:
                 result = await self._fetch_data(fb_intent)
                 if result and self._is_fallback_relevant(
                     intent.indicators, result, target_countries, intent.originalQuery,
+                    original_concept=concept_name,
                 ):
                     logger.info(f"✅ Fallback to {fallback_provider} succeeded")
                     return result
