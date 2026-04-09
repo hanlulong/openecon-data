@@ -14,7 +14,39 @@ from datetime import datetime
 BASE_URL = "http://localhost:3001"
 TIMEOUT = 90
 
+# Per-cycle rotation: one query in each test changes based on the day of year
+# so each cycle exercises slightly different code paths instead of running the
+# identical 100-round suite repeatedly.
+import datetime as _dt
+_DAY_OF_YEAR = _dt.datetime.now().timetuple().tm_yday
+_ROTATION_INDEX = _DAY_OF_YEAR % 5  # 5 variants per rotating slot
+
 # ── Test definitions ────────────────────────────────────────────────────────
+
+# Rotating queries per test slot — one round changes per cycle
+_ROTATIONS = {
+    "test1_r10": [
+        "Switch to bar chart",
+        "Show as scatter plot",
+        "Show only top 3",
+        "Convert to billions",
+        "Show year-over-year change",
+    ],
+    "test2_r10": [
+        "Change to monthly frequency",
+        "Show core inflation only",
+        "Convert to annualized rate",
+        "Show 12-month moving average",
+        "Compare to ECB target of 2%",
+    ],
+    "test3_r10": [
+        "Add Ethereum again",
+        "Show market cap instead",
+        "Show 24h volume",
+        "Compare price to all-time high",
+        "Show in EUR",
+    ],
+}
 
 TESTS = {
     "Test 1: GDP Deep Dive": [
@@ -27,7 +59,7 @@ TESTS = {
         "Show from IMF instead",
         "Change time range to 2015-2024",
         "Add Japan",
-        "Switch to bar chart",
+        _ROTATIONS["test1_r10"][_ROTATION_INDEX],  # rotates per cycle
     ],
     "Test 2: Inflation Multi-Provider": [
         "Germany inflation rate",
@@ -39,7 +71,7 @@ TESTS = {
         "Switch to World Bank data",
         "Show only US and UK",
         "Switch to core inflation",
-        "Change to monthly frequency",
+        _ROTATIONS["test2_r10"][_ROTATION_INDEX],  # rotates per cycle
     ],
     "Test 3: Crypto Cycling": [
         "Bitcoin price",
