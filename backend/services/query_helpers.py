@@ -1,18 +1,13 @@
 """Self-contained helper functions extracted from query.py.
 
-Phase 5 decomposition: extracts three larger helpers (~340 lines total)
-that have minimal dependencies on QueryService state:
-
-- extract_countries_from_query: thin wrapper over CountryResolver
-- apply_country_overrides: query-based geography overrides on intent
-- build_alternative_series: FTS5-based alternative indicator suggestions
-- should_use_deep_agents: complexity-based routing decision
-
-These functions are called from QueryService via one-line delegates.
+Phases 5-7 decomposition: extracts larger helpers that have minimal
+dependencies on QueryService state.  Each method accepts ``svc`` as
+first parameter when it needs to delegate back to QueryService.
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import NormalizedData, ParsedIntent, QueryResponse
@@ -574,3 +569,186 @@ def resolve_concept_for_fallback(
         logger.debug("Concept resolution for fallback failed: %s", exc)
 
     return None
+
+
+def add_provider_transparency(
+    svc: "QueryService",
+    result: QueryResponse,
+    original_query: str,
+) -> QueryResponse:
+    """Add transparency message when data comes from a different provider
+    than requested.  Runs on ALL query responses.
+
+    When the user explicitly asked for a specific provider (e.g., "from BIS")
+    but the data came from a different one (e.g., WorldBank fallback), the
+    response gets a message explaining the substitution.
+    """
+    if not result.data or not result.intent:
+        return result
+
+    explicit_provider = svc._detect_explicit_provider(original_query)
+    if not explicit_provider:
+        return result
+
+    actual_sources = set()
+    for series in result.data:
+        if series.metadata and series.metadata.source:
+            actual_sources.add(series.metadata.source)
+
+    explicit_norm = normalize_provider_name(explicit_provider)
+    source_map = {
+        "FRED": "FRED", "World Bank": "WORLDBANK", "Statistics Canada": "STATSCAN",
+        "IMF": "IMF", "BIS": "BIS", "Eurostat": "EUROSTAT", "OECD": "OECD",
+        "UN Comtrade": "COMTRADE", "CoinGecko": "COINGECKO", "ExchangeRate-API": "EXCHANGERATE",
+    }
+    actual_norm = {source_map.get(s, s.upper()) for s in actual_sources}
+
+    if explicit_norm not in actual_norm:
+        actual_display = ", ".join(actual_sources)
+        note = (
+            f"**Note:** {explicit_provider} did not have this data. "
+            f"Showing results from {actual_display} instead."
+        )
+        if result.message:
+            result.message = f"{note}\n\n{result.message}"
+        else:
+            result.message = note
+        logger.info(
+            "Provider transparency: requested=%s, actual=%s",
+            explicit_provider, actual_sources,
+        )
+
+    return result
+
+
+def looks_like_country_follow_up(
+    query: str,
+    target_countries: List[str],
+) -> bool:
+    """Detect short geography-only follow-ups such as "show only US" or "Japan".
+
+    These should reuse the last intent instead of being reparsed as a brand
+    new query with no indicator context.
+    """
+    query_text = str(query or "").strip()
+    if not query_text or not target_countries:
+        return False
+
+    query_lower = query_text.lower()
+    tokens = re.findall(r"[a-zA-Z]+", query_lower)
+    if not tokens:
+        return False
+
+    allowed_tokens = {
+        "show", "only", "just", "keep", "filter", "now", "instead",
+        "use", "plot", "display", "me", "the", "for", "in", "to",
+        "add", "also", "include", "plus", "and", "with", "compare",
+        "what", "about", "how", "same", "but", "too", "well", "as",
+    }
+    geography_tokens = {country.lower() for country in target_countries}
+    for country in target_countries:
+        if country.upper() == "US":
+            geography_tokens.update({"united", "states", "usa", "us", "america"})
+        iso3 = CountryResolver.to_iso3(country)
+        if iso3:
+            geography_tokens.add(iso3.lower())
+        # Add common country name tokens so "Add Germany" matches ["DE"]
+        for alias, code in CountryResolver.COUNTRY_ALIASES.items():
+            if code == country.upper():
+                for token in alias.split():
+                    geography_tokens.add(token.lower())
+
+    non_geography_tokens = [
+        token for token in tokens
+        if token not in allowed_tokens and token not in geography_tokens
+    ]
+    return len(non_geography_tokens) == 0
+
+
+def maybe_expand_multi_concept_intent(
+    svc: "QueryService",
+    query: str,
+    intent: ParsedIntent,
+) -> bool:
+    """Auto-expand clearly comparative multi-concept queries into
+    multi-indicator intent.
+
+    This reduces unnecessary clarification loops for queries like
+    "compare unemployment and inflation for G7 countries".
+    """
+    if not intent:
+        return False
+    if intent.indicators and len(intent.indicators) > 1:
+        return False
+    if not (svc._is_comparison_query(query) or svc._is_ranking_query(query)):
+        return False
+
+    inferred_indicators = svc._infer_multi_concept_indicators_from_query(query)
+    if len(inferred_indicators) < 2:
+        return False
+
+    target_countries = svc._collect_target_countries(intent.parameters)
+    if len(target_countries) < 2:
+        extracted = svc._extract_countries_from_query(query)
+        expanded = CountryResolver.expand_regions_in_query(query)
+        target_countries = extracted or expanded or target_countries
+    if len(target_countries) < 2:
+        return False
+
+    params = dict(intent.parameters or {})
+    params.pop("country", None)
+    params["countries"] = list(
+        dict.fromkeys([str(c) for c in target_countries if c])
+    )
+    params.pop("indicator", None)
+    params.pop("seriesId", None)
+    params.pop("series_id", None)
+    params.pop("code", None)
+
+    intent.parameters = params
+    intent.indicators = inferred_indicators
+    intent.clarificationNeeded = False
+    intent.clarificationQuestions = []
+
+    logger.info(
+        "🧩 Auto-expanded multi-concept comparison query into indicators=%s countries=%s",
+        inferred_indicators,
+        params.get("countries"),
+    )
+    return True
+
+
+def resolve_indicator_for_fallback_provider(
+    concept_name: Optional[str],
+    fallback_provider: str,
+    semantic_query: str,
+    countries: Optional[list],
+) -> list[str]:
+    """Resolve the indicator for a specific fallback provider.
+
+    Uses the catalog concept to get the correct provider-specific code.
+    Falls back to the semantic query string when catalog lookup fails.
+    """
+    if concept_name:
+        try:
+            from .catalog_service import get_best_provider
+
+            provider_name, code, confidence = get_best_provider(
+                concept_name,
+                countries,
+                preferred_provider=fallback_provider,
+            )
+            provider_norm = normalize_provider_name(provider_name or "")
+            if provider_norm == fallback_provider and code and confidence >= 0.5:
+                logger.info(
+                    "📋 Fallback indicator resolved via catalog: concept='%s' -> %s/%s (conf=%.2f)",
+                    concept_name, fallback_provider, code, confidence,
+                )
+                return [code]
+        except Exception as exc:
+            logger.debug("Catalog fallback indicator resolution failed: %s", exc)
+
+    # Fall back to semantic query string
+    if semantic_query:
+        return [semantic_query]
+    return []
