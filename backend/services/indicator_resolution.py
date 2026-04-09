@@ -755,6 +755,43 @@ def apply_concept_provider_override(
                 _resolver = get_indicator_resolver()
                 code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
                 code_name = (code_meta.get("name", "") if code_meta else "")
+
+                # Cycle 27 fix: Frequency-aware variant override.
+                # If user explicitly requested a frequency (monthly/quarterly/etc.)
+                # and the canonical code's frequency doesn't match, try a catalog
+                # variant that does.  This is a general fix using existing catalog
+                # variant infrastructure.
+                _query_lower = (original_query or "").lower()
+                _freq_hints = {
+                    "monthly": "monthly", "month": "monthly",
+                    "quarterly": "quarterly", "quarter": "quarterly",
+                    "weekly": "weekly", "week": "weekly",
+                    "daily": "daily", "day": "daily",
+                }
+                _requested_freq = None
+                for hint, freq in _freq_hints.items():
+                    if hint in _query_lower:
+                        _requested_freq = freq
+                        break
+                if _requested_freq:
+                    code_freq = (code_meta.get("frequency", "") if code_meta else "").lower()
+                    if code_freq and code_freq != _requested_freq:
+                        # Try variant lookup for frequency match
+                        variant_code, _ = get_variant_for_query(
+                            concept_name, provider, original_query, countries_ctx,
+                        )
+                        if variant_code and variant_code != canonical_code:
+                            var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
+                            var_freq = (var_meta.get("frequency", "") if var_meta else "").lower()
+                            if var_freq == _requested_freq:
+                                logger.info(
+                                    "📋 Frequency variant override: %s (%s) → %s (%s) for query freq=%s",
+                                    canonical_code, code_freq, variant_code, var_freq, _requested_freq,
+                                )
+                                canonical_code = variant_code
+                                code_meta = var_meta
+                                code_name = (var_meta.get("name", "") if var_meta else "")
+
                 # High-confidence catalog matches (>= 0.90) are authoritative —
                 # the concept itself already encodes the query's semantic intent
                 # (e.g. gdp_growth concept already implies "growth").  Discriminator

@@ -55,6 +55,18 @@ providers:
       confidence: 0.95
       coverage: eu_members
       frequency: annual
+    monthly:
+      code: UNE_RT_M
+      name: "Unemployment rate - monthly"
+      confidence: 0.95
+      coverage: eu_members
+      frequency: monthly
+    quarterly:
+      code: UNE_RT_Q
+      name: "Unemployment rate - quarterly"
+      confidence: 0.95
+      coverage: eu_members
+      frequency: quarterly
 
   StatsCan:
     primary:

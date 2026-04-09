@@ -83,6 +83,19 @@ CRITICAL RULE — Match specificity of answer to specificity of question:
 - If the user did NOT mention "seasonally adjusted" or "NSA", prefer seasonally adjusted.
 - The answer should NEVER be more specific than what the user asked for.
 
+CRITICAL RULE — Frequency matching:
+- If the user query contains "monthly" / "month" → MUST pick a series with
+  frequency=monthly (e.g., une_rt_m, not une_rt_a).
+- If the user query contains "quarterly" / "quarter" → MUST pick frequency=quarterly.
+- If the user query contains "annual" / "annually" / "yearly" → prefer frequency=annual.
+- If the user query contains "daily" → prefer frequency=daily.
+- If the user query contains "weekly" → prefer frequency=weekly.
+- A monthly variant is BETTER than annual when monthly is requested, even if the
+  annual variant has a slightly more popular code.  Frequency match is a HARD
+  constraint, not a preference.
+- If no frequency-matching candidate exists, fall back to the closest available
+  (e.g., monthly if no daily exists), and note "frequency unavailable" in reasoning.
+
 Selection rules:
 - NEVER pick a DISCONTINUED series when active alternatives exist
 - Prefer ACTIVE (recent data) over DISCONTINUED/OBSOLETE series

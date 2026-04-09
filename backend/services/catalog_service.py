@@ -713,6 +713,13 @@ def get_variant_for_query(
         "net": ["net"],
         "gross": ["gross"],
         "total": ["total"],
+        # Frequency discriminators (cycle 27 fix): when user specifies a
+        # frequency, the variant lookup should match it.
+        "monthly": ["monthly", "month", "_m", "_m_"],
+        "quarterly": ["quarterly", "quarter", "_q", "_q_"],
+        "weekly": ["weekly", "week", "_w", "_w_"],
+        "daily": ["daily", "day", "_d", "_d_"],
+        "annual": ["annual", "annually", "yearly", "_a", "_a_"],
     }
 
     # Get primary variant info to exclude discriminators that already
