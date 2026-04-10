@@ -242,8 +242,10 @@ class GlobalRateLimiter:
         ),
         "FRED": RateLimiterConfig(
             name="FRED",
+            # FRED documented limit: 120 requests/minute per IP.
+            # Use 100/min for safety margin.
             min_delay_seconds=0.1,
-            max_requests_per_minute=200,
+            max_requests_per_minute=100,
             max_requests_per_hour=5000,
         ),
         "COMTRADE": RateLimiterConfig(
@@ -278,9 +280,11 @@ class GlobalRateLimiter:
         ),
         "COINGECKO": RateLimiterConfig(
             name="COINGECKO",
-            min_delay_seconds=0.1,
-            max_requests_per_minute=300,
-            max_requests_per_hour=10000,
+            # CoinGecko free tier: 10-30 requests/minute.
+            # Use 10/min (6s min delay) to respect the lower bound and avoid 429s.
+            min_delay_seconds=6.0,
+            max_requests_per_minute=10,
+            max_requests_per_hour=500,
         ),
     }
 

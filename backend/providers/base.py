@@ -18,6 +18,13 @@ from tenacity import (
 
 from ..models import NormalizedData
 from ..services.http_pool import effective_timeout
+from ..services.rate_limiter import (
+    is_provider_circuit_open,
+    record_provider_rate_limit_error,
+    record_provider_request,
+    record_provider_success,
+    wait_for_provider,
+)
 from ..utils.retry import DataNotAvailableError
 
 logger = logging.getLogger(__name__)
@@ -127,6 +134,18 @@ class BaseProvider(ABC):
         # multi-provider parallel fetches get adequate time.
         req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
 
+        # Cycle 28: Enforce rate limits via shared rate_limiter service.
+        # Previously only OECD/StatsCan called wait_for_provider explicitly;
+        # FRED/CoinGecko/Eurostat/BIS/ExchangeRate silently violated their
+        # configured limits.  Now every provider automatically respects its
+        # rate_limiter config through this base method.
+        _provider_key = (self.provider_name or "").upper()
+        if _provider_key and is_provider_circuit_open(_provider_key):
+            raise DataNotAvailableError(
+                f"{self.provider_name} rate limit circuit OPEN — provider "
+                f"is cooling down after recent 429 errors. Try again shortly."
+            )
+
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
@@ -140,17 +159,39 @@ class BaseProvider(ABC):
             reraise=True,
         )
         async def _do_get():
+            # Pre-flight: wait for rate limiter clearance before each request
+            if _provider_key:
+                try:
+                    await wait_for_provider(_provider_key)
+                    record_provider_request(_provider_key)
+                except Exception as _wait_err:
+                    logger.debug(
+                        "Rate limiter wait failed for %s: %s",
+                        _provider_key, _wait_err,
+                    )
+
             response = await client.get(url, **kwargs, timeout=req_timeout)
 
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 60))
                 self.rate_limit_reset = datetime.now() + timedelta(seconds=retry_after)
+                if _provider_key:
+                    try:
+                        record_provider_rate_limit_error(_provider_key)
+                    except Exception:
+                        pass
                 raise _TransientHTTPError(f"Rate limited (429). Retry after {retry_after}s")
 
             if response.status_code >= 500:
                 raise _TransientHTTPError(f"Server error ({response.status_code})")
 
             response.raise_for_status()
+            # Record success so rate_limiter can reset failure counters
+            if _provider_key:
+                try:
+                    record_provider_success(_provider_key)
+                except Exception:
+                    pass
             return response
 
         # Circuit breaker: fail fast if provider has been failing

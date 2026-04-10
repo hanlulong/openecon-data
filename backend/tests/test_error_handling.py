@@ -38,6 +38,15 @@ def _fresh_provider() -> _TestProvider:
     """Create a provider with a fresh circuit breaker."""
     # Reset the TEST breaker so tests are isolated
     _provider_breakers.pop("TEST", None)
+    # Also reset the rate_limiter state for TEST since cycle 28 added
+    # rate_limiter integration in _get_with_retry.
+    try:
+        from backend.services.rate_limiter import get_global_rate_limiter
+        limiter_mgr = get_global_rate_limiter()
+        if "TEST" in limiter_mgr._limiters:
+            del limiter_mgr._limiters["TEST"]
+    except Exception:
+        pass
     p = _TestProvider(timeout=5.0)
     return p
 
