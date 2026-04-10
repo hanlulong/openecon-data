@@ -720,6 +720,14 @@ def get_variant_for_query(
         "weekly": ["weekly", "week", "_w", "_w_"],
         "daily": ["daily", "day", "_d", "_d_"],
         "annual": ["annual", "annually", "yearly", "_a", "_a_"],
+        # Inflation variant discriminators (cycle 29 fix):
+        # "core CPI", "core PCE", etc. should hit specific variants.
+        # Note: "all items" intentionally NOT a pattern for "headline"
+        # because the core CPI series name ("Core CPI: All Items Less Food
+        # and Energy") contains it, causing wrong matches.
+        "core": ["core", "less food and energy", "excluding food"],
+        "pce": ["pce", "personal consumption expenditures"],
+        "headline": ["headline"],
     }
 
     # Get primary variant info to exclude discriminators that already

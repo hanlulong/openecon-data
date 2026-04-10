@@ -792,6 +792,48 @@ def apply_concept_provider_override(
                                 code_meta = var_meta
                                 code_name = (var_meta.get("name", "") if var_meta else "")
 
+                # Cycle 29: ALWAYS try variant lookup if query has variant
+                # discriminator keywords that don't appear in the canonical code's
+                # name.  This catches cases like "core CPI" where the catalog
+                # matches "inflation" → CPIAUCSL but the user wants the "core"
+                # variant CPILFESL.  Skipping the discriminator check is fine for
+                # confidence reasons, but variant lookup uses the catalog's own
+                # explicit variant definitions, not heuristics.
+                _query_lower_var = (original_query or "").lower()
+                _variant_keywords = (
+                    "core", "headline", "ppp", "constant", "real", "nominal",
+                    "growth", "per capita", "pce",
+                    "monthly", "quarterly", "weekly", "daily",
+                )
+                _has_variant_hint = any(
+                    kw in _query_lower_var for kw in _variant_keywords
+                )
+                _name_lower_var = (code_name or "").lower()
+                if _has_variant_hint:
+                    # Check if any variant keyword in query is missing from
+                    # the primary's name — if so, try variant lookup
+                    _missing_in_primary = [
+                        kw for kw in _variant_keywords
+                        if kw in _query_lower_var and kw not in _name_lower_var
+                    ]
+                    if _missing_in_primary:
+                        variant_code, _ = get_variant_for_query(
+                            concept_name, provider, original_query, countries_ctx,
+                        )
+                        if variant_code and variant_code != canonical_code:
+                            var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
+                            var_name = (var_meta.get("name", "") if var_meta else "")
+                            logger.info(
+                                "📋 Variant override (cycle 29): %s → %s for query "
+                                "'%s' (missing keywords: %s)",
+                                canonical_code, variant_code,
+                                original_query[:50],
+                                _missing_in_primary,
+                            )
+                            canonical_code = variant_code
+                            code_meta = var_meta
+                            code_name = var_name
+
                 # High-confidence catalog matches (>= 0.90) are authoritative —
                 # the concept itself already encodes the query's semantic intent
                 # (e.g. gdp_growth concept already implies "growth").  Discriminator

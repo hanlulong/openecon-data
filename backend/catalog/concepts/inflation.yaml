@@ -58,6 +58,24 @@ providers:
       confidence: 0.95
       coverage: [US]
       frequency: monthly
+    core:
+      code: CPILFESL
+      name: "Core CPI: All Items Less Food and Energy"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    pce:
+      code: PCEPI
+      name: "Personal Consumption Expenditures: Chain-type Price Index"
+      confidence: 0.92
+      coverage: [US]
+      frequency: monthly
+    core_pce:
+      code: PCEPILFE
+      name: "Core PCE: Personal Consumption Expenditures Excluding Food and Energy"
+      confidence: 0.92
+      coverage: [US]
+      frequency: monthly
 
   Eurostat:
     primary:

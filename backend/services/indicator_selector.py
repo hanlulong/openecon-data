@@ -184,21 +184,75 @@ class IndicatorSelector:
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
     ) -> tuple[List[tuple[str, str]], List[float]]:
-        """Step 1: Find nearest indicators with similarity scores."""
+        """Step 1: Find nearest indicators using hybrid FTS5 + embedding retrieval.
+
+        Cycle 29 fix: Audit found that embedding-only retrieval has only ~60%
+        accuracy on FRED variants because:
+        - Embeddings use only `name` field (no aliases or descriptions)
+        - Verbose BLS/Census titles ("Sticky Price CPI less Food and Energy")
+          swamp canonical series ("Core CPI" / CPILFESL)
+        - FTS5 nails lexical/acronym matches that embeddings miss
+
+        Solution: merge BOTH retrieval methods. FTS5 gets the canonical
+        codes that match query vocabulary; embeddings get semantic
+        paraphrases.  The union (deduped) is passed to the LLM for selection.
+        """
+        # 1. Run BOTH retrievals in parallel-ish (sequential but cheap)
+        embedding_candidates: List[tuple[str, str]] = []
+        embedding_scores: List[float] = []
         try:
             from .embedding_retrieval import get_embedding_retrieval
             er = get_embedding_retrieval()
             results = er.search(query, provider=provider, top_k=top_k)
             if results:
-                candidates = [(r["code"], r["name"]) for r in results]
-                scores = [r.get("score", 0.0) for r in results]
-                return candidates, scores
+                embedding_candidates = [(r["code"], r["name"]) for r in results]
+                embedding_scores = [r.get("score", 0.0) for r in results]
         except Exception as e:
             logger.warning("Embedding retrieval failed: %s", e)
 
-        # Fallback
-        candidates = self._get_candidates_fts5(query, provider, top_k)
-        return candidates, [0.0] * len(candidates)
+        # FTS5 retrieval — uses bm25 lexical matching, complements embeddings
+        fts5_candidates: List[tuple[str, str]] = []
+        try:
+            fts5_candidates = self._get_candidates_fts5(query, provider, top_k=20)
+        except Exception as e:
+            logger.debug("FTS5 retrieval failed: %s", e)
+
+        # 2. Merge: if both succeeded, interleave for diversity.
+        # FTS5 results often contain canonical codes that embeddings miss
+        # (e.g., CPILFESL for "core CPI" — FTS5 finds it #1, embeddings bury
+        # it past #100).  Interleaving ensures the LLM sees both signals.
+        if embedding_candidates and fts5_candidates:
+            seen_codes: set = set()
+            merged_candidates: List[tuple[str, str]] = []
+            merged_scores: List[float] = []
+
+            # Take top FTS5 first (canonical lexical matches)
+            for code, name in fts5_candidates[:10]:
+                if code not in seen_codes:
+                    seen_codes.add(code)
+                    merged_candidates.append((code, name))
+                    # Synthetic score: high enough to influence the
+                    # ambiguity check (>0.5) but distinguishable from
+                    # true embedding scores
+                    merged_scores.append(0.55)
+
+            # Then top embedding results (semantic paraphrases)
+            for i, (code, name) in enumerate(embedding_candidates):
+                if code not in seen_codes:
+                    seen_codes.add(code)
+                    merged_candidates.append((code, name))
+                    merged_scores.append(
+                        embedding_scores[i] if i < len(embedding_scores) else 0.0
+                    )
+                if len(merged_candidates) >= top_k:
+                    break
+
+            return merged_candidates, merged_scores
+
+        # Single-source fallback
+        if embedding_candidates:
+            return embedding_candidates, embedding_scores
+        return fts5_candidates, [0.0] * len(fts5_candidates)
 
     def _get_candidates_fts5(
         self, query: str, provider: str, top_k: int = 20,
