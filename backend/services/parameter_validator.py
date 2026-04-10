@@ -228,10 +228,13 @@ class ParameterValidator:
             # general infrastructure fix — uses the FTS5 indicator database to
             # detect FRED-native US indicators rather than hardcoded keywords.
             try:
+                # Use the original natural-language query for FRED lookup, NOT the
+                # resolved WorldBank indicator code (e.g., FM.LBL.BMNY.ZG).
+                # The code was set by concept_provider_override and is WB-specific.
                 indicator_query = (
-                    indicator
+                    str(intent.originalQuery or "").strip()
                     or (intent.indicators[0] if intent.indicators else "")
-                    or str(intent.originalQuery or "")
+                    or indicator
                 ).strip()
                 if indicator_query:
                     from .indicator_database import IndicatorDatabase
@@ -243,15 +246,26 @@ class ParameterValidator:
                         # well above a noise floor.  bm25 scores are negative,
                         # so we use rank position + presence of all query terms.
                         top_name = str(top.get("name", "")).lower()
+                        top_code = str(top.get("code", "")).lower()
+                        query_lower = indicator_query.lower()
                         query_words = [
-                            w for w in indicator_query.lower().split()
-                            if len(w) > 2 and w not in {"the", "and", "for", "rate"}
+                            w for w in query_lower.split()
+                            if len(w) > 2 and w not in {"the", "and", "for", "rate", "us", "usa"}
                         ]
-                        word_match_ratio = (
+                        # Match if ANY of: word overlap, code overlap, or
+                        # query contains a 2+ char substring of the code.
+                        word_match = (
                             sum(1 for w in query_words if w in top_name)
                             / max(1, len(query_words))
                         )
-                        if word_match_ratio >= 0.5:
+                        code_match = (
+                            top_code in query_lower  # query contains series code
+                            or any(w == top_code for w in query_lower.split())
+                        )
+                        # Relaxed threshold: 0.3 instead of 0.5, OR code match.
+                        # Previously "M2 money supply growth rate" failed because
+                        # only "money" matched "M2 Money Stock" (0.33 < 0.5).
+                        if word_match >= 0.3 or code_match:
                             # FRED-native US indicator detected — auto-default
                             # to USA and switch provider.
                             intent.apiProvider = "FRED"
