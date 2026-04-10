@@ -384,7 +384,18 @@ class OpenRouterService:
                 if attempt == max_retries - 1:
                     raise
 
-        raise RuntimeError(f"LLM failed after {max_retries} attempts. Last error: {last_error}")
+        # Translate technical errors to user-friendly messages (cycle 31 fix).
+        # The raw error often contains pydantic validation details like
+        # "('indicators',): Value error, indicators must contain at least one item"
+        # which is meaningless to users.
+        user_msg = "I couldn't understand that query. "
+        if "indicators" in str(last_error).lower() and "empty" in str(last_error).lower():
+            user_msg += 'Try being more specific, like "US GDP" or "inflation in Germany".'
+        elif "indicators" in str(last_error).lower():
+            user_msg += 'Please specify an economic indicator — for example "GDP", "unemployment", or "inflation".'
+        else:
+            user_msg += 'Try rephrasing, e.g. "US unemployment rate" or "China GDP growth".'
+        raise RuntimeError(user_msg)
 
     async def _parse_direct(
         self,

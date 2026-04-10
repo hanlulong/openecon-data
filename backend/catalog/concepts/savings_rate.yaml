@@ -1,33 +1,27 @@
-# Savings Rate Indicator Catalog
+# Household Savings Rate Indicator Catalog
 concept: savings_rate
-category: national_accounts
+category: household
 domain: macroeconomics
 
 description: |
-  Savings rate captures national savings relative to the size of the economy,
-  commonly expressed as gross national savings as a percentage of GDP.
+  The personal savings rate as a percentage of disposable personal income.
+  Measures how much of their income US households save rather than spend.
 
 synonyms:
   primary:
-    - savings
     - savings rate
-    - gross savings
     - personal savings rate
-    - personal savings
-    - gross national savings share of gdp
-    - gross national savings as percent of gdp
-    - savings to gdp ratio
-    - national savings rate
+    - household savings rate
+    - saving rate
   secondary:
-    - gross savings share of gdp
-    - savings share of gdp
-    - aggregate savings ratio
-    - national savings
-    - domestic savings
+    - personal saving
+    - household saving
+    - disposable income savings
 
 explicit_exclusions:
-  - household savings account
-  - savings deposits
+  - national savings
+  - gross savings
+  - government savings
 
 providers:
   FRED:
@@ -42,15 +36,7 @@ providers:
     primary:
       code: NY.GNS.ICTR.ZS
       name: "Gross savings (% of GDP)"
-      confidence: 0.95
-      coverage: global
-      frequency: annual
-
-  IMF:
-    primary:
-      code: NGS_FY_GDP_PT
-      name: "Gross national savings, percent of GDP"
-      confidence: 0.90
+      confidence: 0.80
       coverage: global
       frequency: annual
 
@@ -58,3 +44,5 @@ not_available:
   - Comtrade
   - CoinGecko
   - ExchangeRate
+  - BIS
+  - StatsCan
