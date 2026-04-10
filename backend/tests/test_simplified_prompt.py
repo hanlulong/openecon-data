@@ -37,7 +37,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
     assert "FRED" in prompt
 
     # Guardrail: even with context, prompt should remain under limit
-    assert len(prompt.splitlines()) < 300
+    # (Expanded from 300 to 320 after enriching provider selection rules
+    # in the system prompt for LLM-driven routing — cycle 36)
+    assert len(prompt.splitlines()) < 320
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

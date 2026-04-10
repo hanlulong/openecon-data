@@ -398,7 +398,19 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
 
 Selection rules:
 - If user explicitly names a provider ("from FRED", "World Bank data"), use that provider.
-- If no provider is specified, set apiProvider to "WorldBank" as a neutral placeholder.
-  Deterministic routing code downstream will select the optimal provider.
-- Do NOT guess providers — let the routing layer handle it.
+- If no provider is specified, YOU must select the BEST provider based on the query:
+  • US-specific financial/macro data → FRED (unemployment, CPI, federal funds rate, treasury yields, GDP, housing, money supply, VIX, etc.)
+  • EU/European country data → Eurostat (inflation, unemployment, GDP for Germany, France, Italy, Spain, etc.)
+  • Canada-specific data → StatsCan (employment, CPI, GDP for Canada/provinces)
+  • Global development data or non-US/EU/CA countries → WorldBank (GDP, population, trade openness, etc.)
+  • Central bank rates, property prices, credit → BIS
+  • Sovereign macro, debt/GDP, forecasts → IMF
+  • "exports from X to Y", bilateral trade → Comtrade
+  • Currency conversion → ExchangeRate
+  • Crypto prices → CoinGecko
+  • OECD member data (last resort) → OECD
+- Default to WorldBank ONLY for queries with no clear country or concept match.
+- The key insight: if the query mentions a US-specific concept (federal funds rate, VIX,
+  S&P 500, housing starts, nonfarm payrolls, etc.), ALWAYS choose FRED — never WorldBank.
+  If the query mentions a European country, prefer Eurostat over WorldBank/IMF.
 """
