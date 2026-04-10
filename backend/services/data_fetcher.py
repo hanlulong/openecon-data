@@ -19,7 +19,7 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import Metadata, NormalizedData, ParsedIntent
 from ..utils.providers import ALL_PROVIDERS

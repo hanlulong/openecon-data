@@ -17,13 +17,10 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 import httpx
 import logging
-import json
-import asyncio
 
 from ..config import get_settings
 from .model_config import (
-    ModelConfig, ModelFamily, get_model_config, resolve_model_alias,
-    detect_model_family
+    get_model_config, resolve_model_alias,
 )
 
 logger = logging.getLogger(__name__)

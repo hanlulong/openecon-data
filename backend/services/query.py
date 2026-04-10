@@ -26,8 +26,6 @@ from ..services.cache import cache_service
 from ..services.redis_cache import get_redis_cache
 from ..services.conversation import conversation_manager
 from ..services.conversation_state_v2 import (
-    ConversationState,
-    FollowUpDelta,
     extract_state_from_intent,
     materialize_intent,
     merge_new_state_with_previous,

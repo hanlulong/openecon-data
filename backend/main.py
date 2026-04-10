@@ -37,15 +37,8 @@ from .models import (
 )
 from contextlib import asynccontextmanager
 from .services.auth_factory import get_auth_service_singleton
-from .services.supabase_service import (
-    get_required_user as supabase_get_required_user,
-    get_optional_user as supabase_get_optional_user,
-    get_supabase_service,
-    SupabaseAuthService
-)
+from .services.supabase_service import get_supabase_service
 from fastapi.security import HTTPBearer
-
-from .services.mock_auth import MockAuthService
 from .services.cache import cache_service
 from .services.redis_cache import get_redis_cache
 from .services.conversation import conversation_manager
