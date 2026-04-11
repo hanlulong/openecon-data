@@ -396,21 +396,31 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
   education, health. LOW PRIORITY — rate limited at 60 req/hour, prefer alternatives
   (WorldBank, Eurostat, IMF) when possible.
 
-Selection rules:
-- If user explicitly names a provider ("from FRED", "World Bank data"), use that provider.
-- If no provider is specified, YOU must select the BEST provider based on the query:
-  • US-specific financial/macro data → FRED (unemployment, CPI, federal funds rate, treasury yields, GDP, housing, money supply, VIX, etc.)
-  • EU/European country data → Eurostat (inflation, unemployment, GDP for Germany, France, Italy, Spain, etc.)
-  • Canada-specific data → StatsCan (employment, CPI, GDP for Canada/provinces)
-  • Global development data or non-US/EU/CA countries → WorldBank (GDP, population, trade openness, etc.)
-  • Central bank rates, property prices, credit → BIS
-  • Sovereign macro, debt/GDP, forecasts → IMF
-  • "exports from X to Y", bilateral trade → Comtrade
-  • Currency conversion → ExchangeRate
-  • Crypto prices → CoinGecko
-  • OECD member data (last resort) → OECD
-- Default to WorldBank ONLY for queries with no clear country or concept match.
-- The key insight: if the query mentions a US-specific concept (federal funds rate, VIX,
-  S&P 500, housing starts, nonfarm payrolls, etc.), ALWAYS choose FRED — never WorldBank.
-  If the query mentions a European country, prefer Eurostat over WorldBank/IMF.
+Selection rules (apply in this priority order):
+1. If user explicitly names a provider ("from FRED", "World Bank data"), use that provider.
+2. If query mentions bilateral trade ("exports from X to Y", "imports", "trade between") → Comtrade.
+3. If query is about a US-specific concept → FRED. US-specific includes: unemployment rate,
+   CPI, federal funds rate, treasury yields, GDP, housing starts, money supply, VIX, S&P 500,
+   nonfarm payrolls, consumer confidence, retail sales, industrial production, crude oil price,
+   personal savings rate, capacity utilization, mortgage rates, jobless claims.
+4. If query mentions Canada → StatsCan (employment, CPI, GDP, housing for Canada/provinces).
+5. If query mentions a European country (Germany, France, Italy, Spain, Netherlands, Belgium,
+   Austria, etc.) → Eurostat (HICP inflation, unemployment, GDP).
+6. If query is about currency conversion → ExchangeRate.
+7. If query is about crypto → CoinGecko.
+8. If query is about central bank policy rates or property prices → BIS.
+9. For ALL other country-specific data (India, Brazil, South Africa, Japan, China, Mexico,
+   Australia, South Korea, etc.) → WorldBank. WorldBank is the default for non-US/EU/CA data.
+   Do NOT use IMF as default — IMF is only for sovereign debt ratios, fiscal balance,
+   current account, and WEO forecasts.
+10. For multi-country groups (G7, G20, BRICS, OECD countries) → WorldBank (best global coverage).
+11. Default → WorldBank.
+
+CRITICAL: Do NOT over-use IMF. IMF is ONLY for:
+- Government debt as % of GDP
+- Fiscal balance / budget deficit
+- Current account balance
+- Balance of payments
+- WEO economic forecasts
+For everything else (GDP, inflation, unemployment, population, trade) prefer WorldBank.
 """
