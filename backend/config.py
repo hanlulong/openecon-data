@@ -66,9 +66,9 @@ class Settings(BaseSettings):
         description="Use LangChain orchestrator with LangGraph for intelligent query routing and state persistence"
     )
     use_hybrid_router: bool = Field(
-        default=True,
+        default=False,
         alias="USE_HYBRID_ROUTER",
-        description="Enable hybrid provider routing (deterministic candidates + LLM ranking)"
+        description="Enable hybrid provider routing (disabled: UnifiedRouter handles all routing)"
     )
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
@@ -96,9 +96,9 @@ class Settings(BaseSettings):
         description="Number of semantic candidates to retrieve for indicator hybrid ranking"
     )
     use_semantic_provider_router: bool = Field(
-        default=True,
+        default=False,
         alias="USE_SEMANTIC_PROVIDER_ROUTER",
-        description="Enable semantic-router-based provider routing with LiteLLM fallback"
+        description="Enable semantic-router-based provider routing with LiteLLM fallback (disabled: UnifiedRouter + LLM hint is sufficient)"
     )
     semantic_router_similarity_threshold: float = Field(
         default=0.58,
@@ -116,9 +116,9 @@ class Settings(BaseSettings):
         description="Embedding model name used by semantic-router encoder"
     )
     use_litellm_router_fallback: bool = Field(
-        default=True,
+        default=False,
         alias="USE_LITELLM_ROUTER_FALLBACK",
-        description="Enable LiteLLM JSON routing fallback when semantic-router confidence is low"
+        description="Enable LiteLLM JSON routing fallback (disabled: no Layer C routing)"
     )
     semantic_router_litellm_timeout: int = Field(
         default=20,
