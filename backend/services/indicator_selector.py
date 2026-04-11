@@ -181,6 +181,40 @@ class IndicatorSelector:
 
         return result or SelectionResult(code=candidates[0][0], name=candidates[0][1], source="top_candidate")
 
+    def _get_catalog_candidates(
+        self, query: str, provider: str,
+    ) -> List[tuple[str, str]]:
+        """Retrieve catalog-defined codes for this query+provider.
+
+        The catalog YAML files define canonical indicator codes for ~90+ concepts.
+        Injecting these as top candidates ensures the LLM always sees the
+        "authoritative" code alongside FTS5/embedding results.
+        """
+        try:
+            from . import catalog_service as cs
+            concept_name = cs.find_concept_by_term(query)
+            if not concept_name:
+                return []
+            concept_data = cs.get_concept(concept_name)
+            if not concept_data:
+                return []
+            # Get the provider-specific code from the concept
+            provider_entry = concept_data.get("providers", {}).get(provider)
+            if not provider_entry:
+                return []
+            primary = provider_entry.get("primary", {})
+            code = primary.get("code")
+            name = primary.get("name", "")
+            if code:
+                logger.debug(
+                    "📚 Catalog candidate for '%s' (%s): %s — %s",
+                    query, provider, code, name,
+                )
+                return [(code, f"{name} [catalog recommended]")]
+        except Exception as e:
+            logger.debug("Catalog candidate lookup failed: %s", e)
+        return []
+
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
     ) -> tuple[List[tuple[str, str]], List[float]]:
@@ -196,7 +230,15 @@ class IndicatorSelector:
         Solution: merge BOTH retrieval methods. FTS5 gets the canonical
         codes that match query vocabulary; embeddings get semantic
         paraphrases.  The union (deduped) is passed to the LLM for selection.
+
+        Cycle 42 enhancement: Inject catalog-defined codes as top-priority
+        candidates.  The catalog has authoritative codes for ~90+ concepts
+        but wasn't being consulted during candidate generation.
         """
+        # 0. Catalog injection: if the catalog knows the canonical code
+        # for this query+provider, inject it as the top candidate.
+        catalog_candidates = self._get_catalog_candidates(query, provider)
+
         # 1. Run BOTH retrievals in parallel-ish (sequential but cheap)
         embedding_candidates: List[tuple[str, str]] = []
         embedding_scores: List[float] = []
@@ -217,23 +259,27 @@ class IndicatorSelector:
         except Exception as e:
             logger.debug("FTS5 retrieval failed: %s", e)
 
-        # 2. Merge: if both succeeded, interleave for diversity.
-        # FTS5 results often contain canonical codes that embeddings miss
-        # (e.g., CPILFESL for "core CPI" — FTS5 finds it #1, embeddings bury
-        # it past #100).  Interleaving ensures the LLM sees both signals.
-        if embedding_candidates and fts5_candidates:
-            seen_codes: set = set()
-            merged_candidates: List[tuple[str, str]] = []
-            merged_scores: List[float] = []
+        # 2. Merge: catalog first, then FTS5, then embeddings.
+        # Catalog codes are authoritative (from curated YAML files).
+        # FTS5 results often contain canonical codes that embeddings miss.
+        # Embeddings provide semantic paraphrases for novel queries.
+        seen_codes: set = set()
+        merged_candidates: List[tuple[str, str]] = []
+        merged_scores: List[float] = []
 
-            # Take top FTS5 first (canonical lexical matches)
+        # Catalog candidates at the top (highest synthetic score)
+        for code, name in catalog_candidates:
+            if code not in seen_codes:
+                seen_codes.add(code)
+                merged_candidates.append((code, name))
+                merged_scores.append(0.95)  # High score signals "catalog recommended"
+
+        if embedding_candidates or fts5_candidates:
+            # Take top FTS5 (canonical lexical matches)
             for code, name in fts5_candidates[:10]:
                 if code not in seen_codes:
                     seen_codes.add(code)
                     merged_candidates.append((code, name))
-                    # Synthetic score: high enough to influence the
-                    # ambiguity check (>0.5) but distinguishable from
-                    # true embedding scores
                     merged_scores.append(0.55)
 
             # Then top embedding results (semantic paraphrases)
@@ -249,10 +295,10 @@ class IndicatorSelector:
 
             return merged_candidates, merged_scores
 
-        # Single-source fallback
-        if embedding_candidates:
-            return embedding_candidates, embedding_scores
-        return fts5_candidates, [0.0] * len(fts5_candidates)
+        # Single-source fallback (catalog only or nothing)
+        if merged_candidates:
+            return merged_candidates, merged_scores
+        return [], []
 
     def _get_candidates_fts5(
         self, query: str, provider: str, top_k: int = 20,

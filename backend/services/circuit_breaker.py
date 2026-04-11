@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Callable, TypeVar, Awaitable
 from enum import Enum
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 

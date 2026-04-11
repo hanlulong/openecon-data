@@ -49,10 +49,9 @@ Task:
 - Return JSON only.
 
 Important constraints:
-- Do not do provider routing strategy in prompt logic. Code handles routing.
-- Only set a specific provider when user explicitly requests one (for example: "from IMF").
-- If no provider is explicitly requested, set apiProvider to "WorldBank" as default for global coverage.
-  The deterministic routing layer may override this based on catalog or country context.
+- Select apiProvider using the PROVIDER CAPABILITIES section below.
+  The deterministic routing layer may refine your choice based on catalog or country context,
+  but your selection matters — choose the best-fit provider for the query.
 - Do not invent indicator codes. Use natural-language indicator names unless user explicitly gives a code.
 - Keep compound concepts as ONE indicator, not split into multiple:
   - "average wages and earnings" → ["average wages and earnings"] (one item, NOT two)

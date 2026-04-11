@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+from typing import List
 
 from ..models import DataPoint, NormalizedData
 from ..routing.country_resolver import CountryResolver

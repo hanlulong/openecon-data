@@ -575,17 +575,26 @@ class QueryService:
                 # Framework guardrail: preserve high-confidence deterministic decisions unless
                 # semantic routing is materially stronger. This prevents low-similarity
                 # semantic matches from overriding precise rule-based routing.
+                #
+                # Two tiers:
+                # - High-confidence structural (explicit, catalog, indicator): locked at 0.88+
+                # - Membership-based structural (country, region): locked at 0.70+
+                #   Country/region routing is factual (Italy IS in EU → Eurostat),
+                #   so semantic overrides should only win with strong evidence.
                 if semantic_provider != routed_provider:
+                    _HIGH_CONF_TYPES = {"explicit", "us_only", "indicator", "catalog"}
+                    _STRUCTURAL_TYPES = {"country", "region"}
                     deterministic_locked = (
-                        deterministic_confidence >= 0.88
-                        and deterministic_match_type in {"explicit", "us_only", "indicator", "catalog"}
+                        (deterministic_confidence >= 0.88 and deterministic_match_type in _HIGH_CONF_TYPES)
+                        or (deterministic_confidence >= 0.70 and deterministic_match_type in _STRUCTURAL_TYPES)
                     )
-                    semantic_materially_stronger = semantic_confidence >= (deterministic_confidence + 0.05)
+                    semantic_materially_stronger = semantic_confidence >= (deterministic_confidence + 0.10)
                     if deterministic_locked and not semantic_materially_stronger:
                         logger.info(
-                            "🧭 Semantic override skipped: keep %s (deterministic conf=%.2f, semantic conf=%.2f)",
+                            "🧭 Semantic override skipped: keep %s (deterministic conf=%.2f type=%s, semantic conf=%.2f)",
                             routed_provider,
                             deterministic_confidence,
+                            deterministic_match_type,
                             semantic_confidence,
                         )
                         return routed_provider

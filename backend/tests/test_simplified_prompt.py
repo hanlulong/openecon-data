@@ -9,7 +9,7 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # Guardrail: keep prompt compact to reduce token overhead and policy drift.
     assert len(prompt.splitlines()) < 260
     assert "Return JSON only" in prompt
-    assert "Do not do provider routing strategy" in prompt
+    assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
     assert "PROVIDER CAPABILITIES" in prompt
     assert "FRED" in prompt

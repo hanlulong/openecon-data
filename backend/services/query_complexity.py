@@ -2,7 +2,7 @@
 Query complexity analyzer and handler
 Detects complex queries and provides strategies to handle them
 """
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import re
 import logging
 

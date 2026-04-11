@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 
 from .conversation_state_v2 import ConversationState, FollowUpDelta
 from ..routing.country_resolver import CountryResolver

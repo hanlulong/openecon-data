@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from ..models import NormalizedData, DataPoint
+from ..models import NormalizedData
 
 logger = logging.getLogger(__name__)
 
