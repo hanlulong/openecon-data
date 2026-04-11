@@ -4,8 +4,6 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError

@@ -17,14 +17,12 @@ Security improvements:
 import asyncio
 import logging
 import time
-from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 from backend.models import CodeExecutionResult, GeneratedFile
 from backend.services.secure_code_executor import (
     SecureCodeExecutor,
     SecurityLevel,
-    get_secure_code_executor
 )
 
 logger = logging.getLogger(__name__)

@@ -7,8 +7,6 @@ import re
 from typing import Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
-import httpx
-
 from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData

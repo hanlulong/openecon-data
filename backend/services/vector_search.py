@@ -11,7 +11,6 @@ Backend Selection:
 
 __all__ = ['VectorSearchService', 'VectorSearchResult', 'VECTOR_SEARCH_AVAILABLE']
 
-import os
 import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass

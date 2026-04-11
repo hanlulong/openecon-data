@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-import httpx
-
 from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData

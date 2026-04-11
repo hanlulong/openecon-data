@@ -25,15 +25,12 @@ import logging
 import os
 import re
 import shutil
-import signal
 import sys
-import tempfile
 import time
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.models import CodeExecutionResult
 from backend.config import get_settings
 from backend.services.session_storage import get_session_storage_dir
 
@@ -483,7 +480,6 @@ class SecureCodeExecutor:
         Returns:
             List of file dictionaries with 'url', 'name', and 'type'
         """
-        import re
         import shutil
 
         files = []
