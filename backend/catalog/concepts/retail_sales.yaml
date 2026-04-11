@@ -23,6 +23,9 @@ explicit_exclusions:
   - industrial production
   - gdp
   - cpi
+  - auto sales
+  - vehicle sales
+  - car sales
 
 providers:
   FRED:

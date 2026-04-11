@@ -29,6 +29,8 @@ explicit_exclusions:
   - government debt
   - sovereign debt
   - total credit
+  - business confidence
+  - business sentiment
 
 providers:
   FRED:
