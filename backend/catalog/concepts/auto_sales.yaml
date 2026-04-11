@@ -1,0 +1,49 @@
+# Auto Sales Indicator Catalog
+concept: auto_sales
+category: consumer_spending
+domain: macroeconomics
+
+description: |
+  Total vehicle sales including domestic and imported cars and light trucks,
+  reported as a seasonally adjusted annual rate (SAAR). A key indicator of
+  consumer demand for durable goods.
+
+synonyms:
+  primary:
+    - auto sales
+    - vehicle sales
+    - car sales
+  secondary:
+    - automobile sales
+    - motor vehicle sales
+    - total vehicle sales
+    - light vehicle sales
+    - automotive sales
+    - new car sales
+    - domestic auto sales
+
+explicit_exclusions:
+  - retail sales
+  - consumer spending
+  - industrial production
+  - manufacturing
+
+providers:
+  FRED:
+    primary:
+      code: TOTALSA
+      name: "Total Vehicle Sales"
+      confidence: 0.95
+      coverage: [US]
+      frequency: monthly
+    alternatives:
+      - code: DAUTOSAAR
+        name: "Motor Vehicle Retail Sales: Domestic Autos"
+        confidence: 0.85
+        coverage: [US]
+        frequency: monthly
+        note: "Domestic autos only (excludes imports and light trucks)"
+
+not_available:
+  - CoinGecko
+  - ExchangeRate

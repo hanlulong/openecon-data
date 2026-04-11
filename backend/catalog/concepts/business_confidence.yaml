@@ -1,0 +1,51 @@
+# Business Confidence Indicator Catalog
+concept: business_confidence
+category: sentiment
+domain: macroeconomics
+
+description: |
+  Survey-based measure of business executives' assessment of current and
+  expected economic conditions, reflecting the outlook of the corporate sector
+  rather than households.
+
+synonyms:
+  primary:
+    - business confidence
+    - business sentiment
+    - business confidence index
+  secondary:
+    - business survey
+    - business outlook
+    - CEO confidence
+    - enterprise confidence
+    - business climate
+    - business conditions
+
+explicit_exclusions:
+  - consumer confidence
+  - consumer sentiment
+  - corporate debt
+  - pmi
+  - inflation expectations
+
+providers:
+  FRED:
+    primary:
+      code: UMCSENT
+      name: "University of Michigan: Consumer Sentiment"
+      confidence: 0.60
+      coverage: [US]
+      frequency: monthly
+      note: "Closest US proxy; no direct business confidence series in FRED"
+
+  OECD:
+    primary:
+      code: BSCI
+      name: "Business Survey Confidence Indicator"
+      confidence: 0.95
+      coverage: global
+      frequency: monthly
+
+not_available:
+  - CoinGecko
+  - ExchangeRate
