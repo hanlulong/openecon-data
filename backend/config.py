@@ -90,6 +90,21 @@ class Settings(BaseSettings):
         alias="USE_OUTCOME_DECISION_STAGE",
         description="Enable the shared prefetch outcome-decision stage for direct-answer vs clarify vs unsupported control flow"
     )
+    use_minimal_execution_plan: bool = Field(
+        default=False,
+        alias="USE_MINIMAL_EXECUTION_PLAN",
+        description="Enable the minimal typed execution-plan skeleton used by Phase 2 verification"
+    )
+    use_post_fetch_semantic_judge: bool = Field(
+        default=False,
+        alias="USE_POST_FETCH_SEMANTIC_JUDGE",
+        description="Enable the shared post-fetch semantic verification stage"
+    )
+    use_staged_state_commit: bool = Field(
+        default=False,
+        alias="USE_STAGED_STATE_COMMIT",
+        description="Commit conversation state only after verification succeeds on the new path"
+    )
     indicator_rrf_k: int = Field(
         default=60,
         alias="INDICATOR_RRF_K",

@@ -1471,6 +1471,134 @@ class QueryServiceTests(unittest.TestCase):
         enumerated_lines = [line for line in question_lines if re.match(r"^\d+\.", line)]
         self.assertEqual(len(enumerated_lines), 10)
 
+    def test_verify_execution_result_rejects_ranking_answer_with_single_series(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["unemployment rate"],
+            parameters={"countries": ["US", "DE", "JP"]},
+            clarificationNeeded=False,
+            originalQuery="which country has the highest unemployment rate",
+        )
+
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "which country has the highest unemployment rate",
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                "which country has the highest unemployment rate",
+                intent,
+                execution_plan,
+                [sample_series()],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("at least 2 populated series", failure.lower())
+
+    def test_execute_resolved_intent_verification_failure_restores_previous_state_when_staged_commit_enabled(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_staged_state_commit = True
+
+        conv_id = conversation_manager.get_or_create("conv-phase2-staged-restore")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(indicator="old indicator", country="CA", provider="WORLDBANK"),
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"seriesId": "GDP", "country": "US"},
+            clarificationNeeded=False,
+            originalQuery="show me us gdp",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fetched = [sample_series()]
+
+        with patch.object(self.service.pipeline, "validate_intent", return_value=validation),              patch.object(self.service, "_build_post_parse_clarification", AsyncMock(return_value=None)),              patch.object(self.service, "_fetch_data", AsyncMock(return_value=fetched)),              patch.object(self.service, "_maybe_recover_from_uncertain_match", AsyncMock(return_value=None)),              patch.object(self.service, "_maybe_improve_country_coverage", AsyncMock(return_value=(fetched, None))),              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None),              patch.object(self.service, "_verify_execution_result", AsyncMock(return_value="phase2 verification failed")):
+            response = run(
+                self.service._execute_resolved_intent(  # pylint: disable=protected-access
+                    "show me us gdp",
+                    conv_id,
+                    intent,
+                    parse_result,
+                )
+            )
+
+        self.assertEqual(response.error, "verification_failed")
+        state = conversation_manager.get_conversation_state(conv_id)
+        assert state is not None
+        self.assertEqual(state.indicator, "old indicator")
+        self.assertEqual(state.country, "CA")
+
+    def test_execute_resolved_intent_commits_state_after_successful_verification_when_staged_commit_enabled(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_staged_state_commit = True
+
+        conv_id = conversation_manager.get_or_create("conv-phase2-staged-success")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(indicator="old indicator", country="CA", provider="WORLDBANK"),
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"seriesId": "GDP", "country": "US"},
+            clarificationNeeded=False,
+            originalQuery="show me us gdp",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fetched = [sample_series()]
+
+        with patch.object(self.service.pipeline, "validate_intent", return_value=validation),              patch.object(self.service, "_build_post_parse_clarification", AsyncMock(return_value=None)),              patch.object(self.service, "_fetch_data", AsyncMock(return_value=fetched)),              patch.object(self.service, "_maybe_recover_from_uncertain_match", AsyncMock(return_value=None)),              patch.object(self.service, "_maybe_improve_country_coverage", AsyncMock(return_value=(fetched, None))),              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None),              patch.object(self.service, "_verify_execution_result", AsyncMock(return_value=None)):
+            response = run(
+                self.service._execute_resolved_intent(  # pylint: disable=protected-access
+                    "show me us gdp",
+                    conv_id,
+                    intent,
+                    parse_result,
+                )
+            )
+
+        self.assertIsNone(response.error)
+        state = conversation_manager.get_conversation_state(conv_id)
+        assert state is not None
+        self.assertEqual(state.provider, "FRED")
+        self.assertEqual(state.country, "US")
+
     def test_build_prefetch_indicator_choice_clarification_stops_on_age_variant_without_options(self) -> None:
         """Do not silently accept a youth-employment variant for a broad employment request."""
         intent = ParsedIntent(

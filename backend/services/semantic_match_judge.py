@@ -38,6 +38,15 @@ class OutcomeDecision(BaseModel):
     verification_expectations: List[str] = Field(default_factory=list)
 
 
+class ExecutionResultJudgment(BaseModel):
+    """Structured post-fetch verification decision."""
+
+    decision: Literal["pass", "fail", "uncertain"]
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+    failed_checks: List[str] = Field(default_factory=list)
+
+
 def _series_summary(series: NormalizedData) -> dict[str, str]:
     """Build a compact metadata summary for one candidate series."""
     meta = getattr(series, "metadata", None)
@@ -69,6 +78,19 @@ def _judge_system_prompt() -> str:
     )
 
 
+def _execution_judge_system_prompt() -> str:
+    return (
+        "You verify whether a fetched economic-data result satisfies an execution plan.\n\n"
+        "Important rules:\n"
+        "- Focus on whether the fetched result matches the user's requested metric and the "
+        "execution plan's verification checks.\n"
+        "- Fail when the result is clearly a different concept, transform, or shape.\n"
+        "- Fail when a ranking or comparison requires multiple comparable series but the "
+        "result does not provide them.\n"
+        "- Be conservative. If the metadata is insufficient, choose 'uncertain'."
+    )
+
+
 def _judge_user_prompt(
     *,
     original_indicators: List[str],
@@ -85,6 +107,19 @@ def _judge_user_prompt(
         f"Original indicator text: {', '.join(str(item) for item in original_indicators if str(item).strip()) or '(none)'}\n"
         f"Catalog concept: {str(original_concept or '').strip() or '(none)'}\n"
         f"Candidate series: {candidate_summaries}"
+    )
+
+
+def _execution_judge_user_prompt(
+    *,
+    original_query: str,
+    execution_plan: dict[str, Any],
+    result_summaries: list[dict[str, Any]],
+) -> str:
+    return (
+        f"Original query: {original_query}\n"
+        f"Execution plan: {execution_plan}\n"
+        f"Fetched result summary: {result_summaries}"
     )
 
 
@@ -233,6 +268,86 @@ async def judge_resolved_indicator(
         logger.warning("Resolved-indicator judge (manual JSON) failed: %s", exc)
     except Exception as exc:
         logger.warning("Resolved-indicator judge failed: %s", exc)
+
+    return None
+
+
+async def judge_execution_result(
+    qs: Any,
+    *,
+    original_query: str,
+    execution_plan: dict[str, Any],
+    fetched_result: List[NormalizedData],
+) -> Optional[ExecutionResultJudgment]:
+    """Judge whether the fetched result satisfies the execution plan."""
+    if not fetched_result:
+        return None
+
+    openrouter = getattr(qs, "openrouter", None)
+    if openrouter is None:
+        return None
+
+    summaries: list[dict[str, Any]] = []
+    for series in fetched_result[:3]:
+        meta_summary = _series_summary(series)
+        point_count = len(getattr(series, "data", []) or [])
+        non_null_count = sum(
+            1 for point in (getattr(series, "data", []) or [])
+            if getattr(point, "value", None) is not None
+        )
+        summaries.append(
+            {
+                **meta_summary,
+                "point_count": point_count,
+                "non_null_count": non_null_count,
+            }
+        )
+
+    system_prompt = _execution_judge_system_prompt()
+    user_prompt = _execution_judge_user_prompt(
+        original_query=str(original_query or "").strip(),
+        execution_plan=execution_plan,
+        result_summaries=summaries,
+    )
+
+    instructor_client = getattr(openrouter, "instructor_client", None)
+    instructor_model = getattr(openrouter, "instructor_model", None)
+    if instructor_client is not None and instructor_model is not None:
+        try:
+            verdict: ExecutionResultJudgment = await instructor_client.chat.completions.create(
+                model=instructor_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_model=ExecutionResultJudgment,
+                max_retries=2,
+                temperature=0.0,
+                max_tokens=260,
+            )
+            return verdict
+        except Exception as exc:
+            logger.warning("Execution-result judge (Instructor) failed: %s", exc)
+
+    llm_provider = getattr(openrouter, "llm_provider", None)
+    if llm_provider is None:
+        return None
+
+    try:
+        result = await llm_provider.generate(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.0,
+            max_tokens=260,
+            response_format={"type": "json_object"},
+        )
+        content = result["choices"][0]["message"]["content"]
+        parsed = parse_json_response(content, fix_truncated=True)
+        return ExecutionResultJudgment.model_validate(parsed)
+    except (KeyError, JSONParseError, ValueError) as exc:
+        logger.warning("Execution-result judge (manual JSON) failed: %s", exc)
+    except Exception as exc:
+        logger.warning("Execution-result judge failed: %s", exc)
 
     return None
 
