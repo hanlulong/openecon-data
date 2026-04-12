@@ -15,7 +15,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / "backend" / ".venv" / "bin" / "python"
+
+
+def resolve_python() -> Path:
+    candidates = [
+        ROOT / "backend" / ".venv" / "bin" / "python",
+        Path("/home/hanlulong/OpenEcon/backend/.venv/bin/python"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("No backend virtualenv python found for Phase 2 gate runner")
+
+
+PYTHON = resolve_python()
 
 
 def run_cmd(cmd: list[str]) -> dict[str, object]:
