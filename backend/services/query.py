@@ -103,6 +103,9 @@ from ..services.provider_fallback import (
     normalize_country_to_iso2 as _pf_normalize_country_to_iso2,
     provider_covers_country_list as _pf_provider_covers_country_list,
 )
+from ..services.semantic_match_judge import (
+    judge_resolved_indicator as _smj_judge_resolved_indicator,
+)
 from ..services.indicator_resolution import (
     _effective_original_query as _ir_effective_original_query,
     code_semantic_hint as _ir_code_semantic_hint,
@@ -1345,6 +1348,44 @@ class QueryService:
     ) -> bool:
         """Delegates to :func:`indicator_resolution.is_resolved_indicator_plausible`."""
         return _ir_is_resolved_indicator_plausible(self, provider, indicator_query, resolved_code, resolved_name)
+
+    async def _judge_resolved_indicator_match(
+        self,
+        provider: str,
+        indicator_query: str,
+        resolved_code: str,
+        resolved_name: str = "",
+        resolved_metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Use the shared model-backed resolved-indicator judge when available."""
+        judgment = await _smj_judge_resolved_indicator(
+            self,
+            provider=provider,
+            indicator_query=indicator_query,
+            resolved_code=resolved_code,
+            resolved_name=resolved_name,
+            resolved_metadata=resolved_metadata,
+        )
+        if judgment is None:
+            logger.warning(
+                "Resolved-indicator judge unavailable or inconclusive for provider=%s code=%s",
+                provider,
+                resolved_code,
+            )
+            return False
+
+        if judgment.decision != "match" or judgment.confidence < 0.75:
+            logger.info(
+                "Resolved-indicator judge rejected match: provider=%s code=%s decision=%s confidence=%.2f reason=%s",
+                provider,
+                resolved_code,
+                judgment.decision,
+                judgment.confidence,
+                judgment.reason,
+            )
+            return False
+
+        return True
 
     def _extract_series_provider_and_code(self, series: Any) -> tuple[str, str]:
         """Delegates to :func:`indicator_resolution.extract_series_provider_and_code`."""
