@@ -239,10 +239,9 @@ class TestUnifiedRouter:
         assert decision.provider in ("FRED", "BIS")
 
     def test_federal_funds_routes_via_catalog_or_llm(self, router):
-        """Federal funds rate: catalog matches interest_rate concept; LLM refines at runtime."""
+        """Federal funds rate is a structural FRED cue."""
         decision = router.route("Federal funds rate history", llm_provider="FRED")
-        # Catalog matches "rate" → interest_rate → BIS/IMF/FRED; LLM would pick FRED
-        assert decision.provider in ("FRED", "BIS", "IMF")
+        assert decision.provider == "FRED"
 
     def test_sp500_routes_to_fred_via_llm(self, router):
         """S&P 500: no catalog match, LLM sets provider=FRED; router trusts LLM."""
@@ -267,6 +266,11 @@ class TestUnifiedRouter:
         """Trade as % of GDP uses WorldBank."""
         decision = router.route("Exports as % of GDP for Germany")
         assert decision.provider == "WorldBank"
+
+    def test_unilateral_goods_trade_routes_to_comtrade(self, router):
+        """Goods export/import flows without a partner still use Comtrade."""
+        decision = router.route("Japan semiconductor exports 2020-2023")
+        assert decision.provider == "Comtrade"
 
     def test_us_trade_balance_no_partner_routes_to_fred(self, router):
         """US trade balance without partner uses FRED."""
@@ -363,6 +367,11 @@ class TestUnifiedRouter:
         decision = router.route("House prices in Tokyo")
         assert decision.provider == "BIS"
 
+    def test_real_estate_prices_route_to_bis(self, router):
+        """Real estate market price queries use BIS."""
+        decision = router.route("US residential property prices 2018-2024")
+        assert decision.provider == "BIS"
+
     # ==========================================================================
     # Fiscal/IMF Tests
     # ==========================================================================
@@ -375,6 +384,21 @@ class TestUnifiedRouter:
     def test_fiscal_deficit_routes_to_imf(self, router):
         """Fiscal deficit queries use IMF."""
         decision = router.route("Fiscal deficit forecast")
+        assert decision.provider == "IMF"
+
+    def test_global_forecast_routes_to_imf(self, router):
+        """Global macro forecast queries use IMF."""
+        decision = router.route("Global inflation forecast 2024-2026")
+        assert decision.provider == "IMF"
+
+    def test_macro_group_queries_route_to_imf(self, router):
+        """Broad macro aggregate group queries use IMF."""
+        decision = router.route("Emerging markets current account balance 2018-2023")
+        assert decision.provider == "IMF"
+
+    def test_global_commodity_price_index_routes_to_imf(self, router):
+        """Global commodity price index queries use IMF."""
+        decision = router.route("Global commodity price index 2019-2024")
         assert decision.provider == "IMF"
 
     def test_budget_balance_routes_to_imf(self, router):

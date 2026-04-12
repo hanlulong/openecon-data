@@ -5,14 +5,30 @@ Tests the most difficult patterns: provider switching, indicator variants,
 country add/remove, dimension changes, and mixed provider stress.
 """
 
-import requests
+import argparse
 import json
-import time
+import os
+import requests
 import sys
+import time
 from datetime import datetime
+from pathlib import Path
 
-BASE_URL = "http://localhost:3001"
+ROOT = Path(__file__).resolve().parents[1]
+REPORT_DIR = ROOT / "docs" / "testing" / "reports"
+BASE_URL = os.environ.get("OPENECON_MULTIROUND_BASE_URL", "http://localhost:3001").rstrip("/")
 TIMEOUT = 90
+DEFAULT_REPORT_PATH = os.environ.get("OPENECON_MULTIROUND_REPORT")
+MIN_EFFECTIVE_RATE = float(os.environ.get("OPENECON_MULTIROUND_MIN_EFFECTIVE_RATE", "0.90"))
+MAX_FAILS = int(os.environ.get("OPENECON_MULTIROUND_MAX_FAILS", "0"))
+REQUEST_TIMEOUT = int(os.environ.get("OPENECON_MULTIROUND_REQUEST_TIMEOUT", str(TIMEOUT)))
+MAX_RETRIES = int(os.environ.get("OPENECON_MULTIROUND_MAX_RETRIES", "2"))
+RETRY_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_RETRY_DELAY_SECONDS", "3"))
+CONNECTION_RETRY_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_CONNECTION_RETRY_DELAY_SECONDS", "5"))
+ROUND_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_ROUND_DELAY_SECONDS", "2"))
+BETWEEN_TEST_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_BETWEEN_TEST_DELAY_SECONDS", "3"))
+HEALTH_RETRIES = int(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRIES", "3"))
+HEALTH_RETRY_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRY_DELAY_SECONDS", "5"))
 
 # Per-cycle rotation: one query in each test changes based on the day of year
 # so each cycle exercises slightly different code paths instead of running the
@@ -251,7 +267,7 @@ def classify_response(resp_json):
     return "FAIL", "no_data", str(indicator)[:20]
 
 
-def run_round(query, conversation_id=None, max_retries=2):
+def run_round(query, conversation_id=None, max_retries=MAX_RETRIES, request_timeout=REQUEST_TIMEOUT):
     """Send a single query and return (response_json, conversation_id, elapsed)."""
     payload = {"query": query}
     if conversation_id:
@@ -263,13 +279,13 @@ def run_round(query, conversation_id=None, max_retries=2):
             resp = requests.post(
                 f"{BASE_URL}/api/query",
                 json=payload,
-                timeout=TIMEOUT,
+                timeout=request_timeout,
                 headers={"Content-Type": "application/json"},
             )
             elapsed = time.time() - start
             if resp.status_code != 200:
                 if attempt < max_retries:
-                    time.sleep(3)
+                    time.sleep(RETRY_DELAY_SECONDS)
                     continue
                 return {"error": f"HTTP {resp.status_code}: {resp.text[:100]}"}, conversation_id, elapsed
             data = resp.json()
@@ -279,25 +295,25 @@ def run_round(query, conversation_id=None, max_retries=2):
         except requests.exceptions.Timeout:
             elapsed = time.time() - start
             if attempt < max_retries:
-                time.sleep(3)
+                time.sleep(RETRY_DELAY_SECONDS)
                 continue
             return {"error": "TIMEOUT"}, conversation_id, elapsed
         except (requests.exceptions.ConnectionError, ConnectionError) as e:
             elapsed = time.time() - start
             if attempt < max_retries:
-                print(f"       [retry {attempt+1}] Connection error, waiting 5s...")
-                time.sleep(5)
+                print(f"       [retry {attempt+1}] Connection error, waiting {CONNECTION_RETRY_DELAY_SECONDS}s...")
+                time.sleep(CONNECTION_RETRY_DELAY_SECONDS)
                 # Check if server is back
                 try:
                     requests.get(f"{BASE_URL}/api/health", timeout=5)
                 except:
-                    time.sleep(5)  # Extra wait
+                    time.sleep(CONNECTION_RETRY_DELAY_SECONDS)  # Extra wait
                 continue
             return {"error": str(e)[:100]}, conversation_id, elapsed
         except Exception as e:
             elapsed = time.time() - start
             if attempt < max_retries:
-                time.sleep(3)
+                time.sleep(RETRY_DELAY_SECONDS)
                 continue
             return {"error": str(e)[:100]}, conversation_id, elapsed
     return {"error": "max retries exhausted"}, conversation_id, 0
@@ -331,20 +347,42 @@ def run_test(test_name, queries):
         })
 
         # Delay between rounds to avoid overwhelming the server
-        time.sleep(2)
+        time.sleep(ROUND_DELAY_SECONDS)
 
     return results
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-url", default=BASE_URL)
+    parser.add_argument("--report", default=DEFAULT_REPORT_PATH)
+    parser.add_argument("--min-effective-rate", type=float, default=MIN_EFFECTIVE_RATE)
+    parser.add_argument("--max-fails", type=int, default=MAX_FAILS)
+    parser.add_argument("--request-timeout", type=int, default=REQUEST_TIMEOUT)
+    parser.add_argument("--round-delay-seconds", type=float, default=ROUND_DELAY_SECONDS)
+    parser.add_argument("--between-test-delay-seconds", type=float, default=BETWEEN_TEST_DELAY_SECONDS)
+    parser.add_argument("--max-retries", type=int, default=MAX_RETRIES)
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    base_url = str(args.base_url).rstrip("/")
+    global BASE_URL, REQUEST_TIMEOUT, ROUND_DELAY_SECONDS, BETWEEN_TEST_DELAY_SECONDS, MAX_RETRIES
+    BASE_URL = base_url
+    REQUEST_TIMEOUT = args.request_timeout
+    ROUND_DELAY_SECONDS = args.round_delay_seconds
+    BETWEEN_TEST_DELAY_SECONDS = args.between_test_delay_seconds
+    MAX_RETRIES = args.max_retries
+
     print(f"Multi-Round Conversation Test Suite")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Target: {BASE_URL}")
+    print(f"Target: {base_url}")
     print(f"Tests: {len(TESTS)} x 10 rounds = {sum(len(v) for v in TESTS.values())} total rounds")
 
     # Verify backend is up
     try:
-        health = requests.get(f"{BASE_URL}/api/health", timeout=30)
+        health = requests.get(f"{base_url}/api/health", timeout=30)
         if health.status_code != 200:
             print(f"\nERROR: Backend health check failed: {health.status_code}")
             sys.exit(1)
@@ -359,17 +397,17 @@ def main():
     for idx, (test_name, queries) in enumerate(TESTS.items()):
         # Check backend health between tests
         if idx > 0:
-            print(f"\n  ... waiting 3s between tests ...")
-            time.sleep(3)
-            for retry in range(3):
+            print(f"\n  ... waiting {BETWEEN_TEST_DELAY_SECONDS}s between tests ...")
+            time.sleep(BETWEEN_TEST_DELAY_SECONDS)
+            for retry in range(HEALTH_RETRIES):
                 try:
-                    h = requests.get(f"{BASE_URL}/api/health", timeout=30)
+                    h = requests.get(f"{base_url}/api/health", timeout=30)
                     if h.status_code == 200:
                         break
                 except:
                     pass
-                print(f"  ... backend not ready, waiting 5s (retry {retry+1}) ...")
-                time.sleep(5)
+                print(f"  ... backend not ready, waiting {HEALTH_RETRY_DELAY_SECONDS}s (retry {retry+1}) ...")
+                time.sleep(HEALTH_RETRY_DELAY_SECONDS)
         all_results[test_name] = run_test(test_name, queries)
 
     total_elapsed = time.time() - overall_start
@@ -432,30 +470,53 @@ def main():
             print(f"         source={r['source']}")
 
     # ── Save JSON report ────────────────────────────────────────────────────
+    effective_rate_ratio = (total_pass + total_warn) / total_rounds
+    strict_pass_rate_ratio = total_pass / total_rounds
+    ok = total_fail <= args.max_fails and effective_rate_ratio >= args.min_effective_rate
+
     report = {
         "timestamp": datetime.now().isoformat(),
+        "base_url": base_url,
         "total_rounds": total_rounds,
         "pass": total_pass,
         "warn": total_warn,
         "clarify": total_clarify,
         "fail": total_fail,
-        "effective_rate": f"{(total_pass+total_warn)*100/total_rounds:.1f}%",
-        "strict_pass_rate": f"{total_pass*100/total_rounds:.1f}%",
+        "effective_rate": f"{effective_rate_ratio*100:.1f}%",
+        "effective_rate_ratio": round(effective_rate_ratio, 4),
+        "strict_pass_rate": f"{strict_pass_rate_ratio*100:.1f}%",
+        "strict_pass_rate_ratio": round(strict_pass_rate_ratio, 4),
+        "min_effective_rate": args.min_effective_rate,
+        "max_fails": args.max_fails,
+        "ok": ok,
         "total_time_seconds": round(total_elapsed, 1),
         "tests": {},
     }
     for test_name, results in all_results.items():
         report["tests"][test_name] = results
 
-    report_path = "/home/hanlulong/OpenEcon/docs/testing/reports/multiround_10x10_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json"
+    report_path = args.report or (
+        str(REPORT_DIR / f"multiround_10x10_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    )
     try:
-        import os
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
         print(f"\nReport saved: {report_path}")
     except Exception as e:
         print(f"\nFailed to save report: {e}")
+
+    if not ok:
+        print(
+            f"\nFAIL: effective_rate={effective_rate_ratio:.3f} "
+            f"(min {args.min_effective_rate:.3f}), fails={total_fail} (max {args.max_fails})"
+        )
+        sys.exit(1)
+
+    print(
+        f"\nPASS: effective_rate={effective_rate_ratio:.3f} "
+        f"(min {args.min_effective_rate:.3f}), fails={total_fail} (max {args.max_fails})"
+    )
 
 
 if __name__ == "__main__":

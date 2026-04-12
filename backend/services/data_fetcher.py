@@ -21,7 +21,7 @@ import re
 import time
 from typing import Any, List, Optional, TYPE_CHECKING
 
-from ..models import Metadata, NormalizedData, ParsedIntent
+from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
@@ -60,6 +60,110 @@ _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
 def _normalize_provider_name(provider: str) -> str:
     from ..utils.providers import normalize_provider_name
     return normalize_provider_name(provider)
+
+
+def _execution_plan_candidate_code(intent: ParsedIntent, params: dict) -> str:
+    candidates = [
+        params.get("indicator"),
+        params.get("seriesId"),
+        params.get("series_id"),
+        params.get("code"),
+        (intent.indicators or [None])[0],
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return "UNKNOWN"
+
+
+def _years_from_params(params: dict) -> tuple[Optional[int], Optional[int]]:
+    start_year = params.get("start_year")
+    end_year = params.get("end_year")
+    if start_year is None and params.get("startDate"):
+        start_year = int(str(params["startDate"])[:4])
+    if end_year is None and params.get("endDate"):
+        end_year = int(str(params["endDate"])[:4])
+    return start_year, end_year
+
+
+def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
+    provider_norm = _normalize_provider_name(provider) or "UNKNOWN"
+    code = _execution_plan_candidate_code(intent, params)
+    countries = params.get("countries")
+    country_scope = list(countries) if isinstance(countries, list) else []
+    if not country_scope and params.get("country"):
+        country_scope = [params.get("country")]
+
+    start_year, end_year = _years_from_params(params)
+    contract: dict[str, Any] = {
+        "provider": provider_norm,
+        "code": code,
+        "country_scope": [str(country) for country in country_scope if str(country or "").strip()],
+        "start_year": start_year,
+        "end_year": end_year,
+    }
+
+    if provider_norm == "FRED":
+        contract["series_id"] = str(code or "").strip()
+        contract["country"] = contract["country_scope"][0] if contract["country_scope"] else None
+
+    if provider_norm == "WORLDBANK":
+        contract["indicator"] = str(code or "").strip()
+        contract["country"] = contract["country_scope"][0] if len(contract["country_scope"]) == 1 else None
+        contract["countries"] = contract["country_scope"] if len(contract["country_scope"]) > 1 else []
+
+    if provider_norm == "EUROSTAT":
+        contract["dataset_code"] = str(code or "").strip().lower()
+        contract["filters"] = {
+            key: value
+            for key, value in params.items()
+            if key not in {"country", "countries", "startDate", "endDate", "start_year", "end_year"}
+            and not str(key).startswith("__")
+        }
+
+    return contract
+
+
+def _cache_identity(fetch_strategy: str, provider_request: dict[str, Any], expected_shape: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fetch_strategy": fetch_strategy,
+        "provider_request": provider_request,
+        "expected_shape": expected_shape,
+    }
+
+
+def materialize_execution_plan(
+    execution_plan: Optional[ExecutionPlan],
+    *,
+    provider: str,
+    intent: ParsedIntent,
+    params: dict,
+    fetch_strategy: str = "provider_dispatch",
+) -> ExecutionPlan:
+    """Return an execution plan that reflects the exact provider-dispatch request."""
+    plan = execution_plan or ExecutionPlan(
+        provider=provider,
+        candidate_id="UNKNOWN:UNKNOWN",
+        fetch_strategy=fetch_strategy,
+        params={},
+        expected_shape={},
+        verification_checks=[],
+    )
+    code = _execution_plan_candidate_code(intent, params)
+    provider_norm = _normalize_provider_name(provider) or "UNKNOWN"
+    plan.provider = provider_norm
+    plan.candidate_id = f"{provider_norm}:{str(code or '').strip().upper() or 'UNKNOWN'}"
+    plan.fetch_strategy = fetch_strategy
+    provider_request = _provider_request_contract(provider_norm, intent, params)
+    cache_identity = _cache_identity(fetch_strategy, provider_request, dict(plan.expected_shape or {}))
+    plan.provider_request = provider_request
+    plan.cache_identity = cache_identity
+    plan.params = {
+        **dict(params),
+        "__execution_plan_identity": cache_identity,
+    }
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +620,8 @@ def extract_exchange_rate_params(params: dict, intent: ParsedIntent) -> dict:
 
 async def fetch_from_provider_dispatch(
     svc: Any,
-    provider: str,
     intent: ParsedIntent,
-    params: dict,
+    execution_plan: ExecutionPlan,
 ) -> List[NormalizedData]:
     """Route to the correct provider and call its API.
 
@@ -527,14 +630,17 @@ async def fetch_from_provider_dispatch(
 
     Args:
         svc: QueryService instance (for accessing provider instances)
-        provider: Normalized provider name
         intent: Parsed intent
-        params: Query parameters (may be mutated for some providers)
+        execution_plan: Materialized provider-dispatch request
 
     Returns:
         List of NormalizedData from the chosen provider.
     """
+    provider = _normalize_provider_name(execution_plan.provider)
+    params = dict(execution_plan.params or {})
+
     if provider == "FRED":
+        fred_request = dict(execution_plan.provider_request or {})
         # Ensure params has indicator set
         if not params.get("indicator") and intent.indicators:
             params = {**params, "indicator": intent.indicators[0]}
@@ -543,17 +649,33 @@ async def fetch_from_provider_dispatch(
         if len(intent.indicators) > 1:
             all_series = []
             for indicator in intent.indicators:
-                indicator_params = {**params, "indicator": indicator}
+                indicator_params = {
+                    **params,
+                    "indicator": fred_request.get("series_id") or indicator,
+                }
                 series = await svc.fred_provider.fetch_series(indicator_params)
                 all_series.append(series)
             return all_series
         else:
-            series = await svc.fred_provider.fetch_series(params)
+            fred_params = {
+                **params,
+                "indicator": fred_request.get("series_id") or params.get("indicator"),
+            }
+            series = await svc.fred_provider.fetch_series(fred_params)
             return [series]
 
     if provider in {"WORLDBANK", "WORLD BANK"}:
-        resolved_indicator = params.get("indicator")
-        logger.info(f"WorldBank dispatch: indicator={resolved_indicator}, country={params.get('country')}, countries={params.get('countries')}, startDate={params.get('startDate')}")
+        worldbank_request = dict(execution_plan.provider_request or {})
+        resolved_indicator = worldbank_request.get("indicator") or params.get("indicator")
+        request_country = worldbank_request.get("country") or params.get("country")
+        request_countries = worldbank_request.get("countries") or params.get("countries")
+        logger.info(
+            "WorldBank dispatch: indicator=%s, country=%s, countries=%s, startDate=%s",
+            resolved_indicator,
+            request_country,
+            request_countries,
+            params.get("startDate"),
+        )
         # Handle multiple indicators for World Bank
         if len(intent.indicators) > 1:
             all_data: List[NormalizedData] = []
@@ -564,8 +686,8 @@ async def fetch_from_provider_dispatch(
             for indicator in indicators_to_fetch:
                 data = await svc.world_bank_provider.fetch_indicator(
                     indicator=indicator,
-                    country=params.get("country"),
-                    countries=params.get("countries"),
+                    country=request_country,
+                    countries=request_countries,
                     start_date=params.get("startDate"),
                     end_date=params.get("endDate"),
                 )
@@ -575,8 +697,8 @@ async def fetch_from_provider_dispatch(
             indicator = str(resolved_indicator or (intent.indicators[0] if intent.indicators else ""))
             wb_result = await svc.world_bank_provider.fetch_indicator(
                 indicator=indicator,
-                country=params.get("country"),
-                countries=params.get("countries"),
+                country=request_country,
+                countries=request_countries,
                 start_date=params.get("startDate"),
                 end_date=params.get("endDate"),
             )
@@ -636,7 +758,7 @@ async def fetch_from_provider_dispatch(
         )
 
     if provider == "EUROSTAT":
-        return await _fetch_from_eurostat(svc, intent, params)
+        return await _fetch_from_eurostat(svc, intent, params, execution_plan)
 
     if provider == "OECD":
         return await _fetch_from_oecd(svc, intent, params)
@@ -1105,13 +1227,28 @@ async def _fetch_from_imf(svc: Any, intent: ParsedIntent, params: dict) -> List[
             return [series]
 
 
-async def _fetch_from_eurostat(svc: Any, intent: ParsedIntent, params: dict) -> List[NormalizedData]:
+async def _fetch_from_eurostat(
+    svc: Any,
+    intent: ParsedIntent,
+    params: dict,
+    execution_plan: Optional[ExecutionPlan] = None,
+) -> List[NormalizedData]:
     """Eurostat provider dispatch."""
-    indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "GDP"))
+    eurostat_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    indicator = str(
+        eurostat_request.get("dataset_code")
+        or eurostat_request.get("code")
+        or params.get("indicator")
+        or (intent.indicators[0] if intent.indicators else "GDP")
+    )
     params["indicator"] = indicator
 
-    country_param = params.get("country")
-    countries_param = params.get("countries") or []
+    scoped_countries = list(eurostat_request.get("country_scope") or [])
+    request_start_year = eurostat_request.get("start_year")
+    request_end_year = eurostat_request.get("end_year")
+
+    country_param = params.get("country") or (scoped_countries[0] if len(scoped_countries) == 1 else None)
+    countries_param = params.get("countries") or scoped_countries
 
     # EU aggregate codes that should NOT expand
     EU_AGGREGATES = {"EU", "EU27", "EU27_2020", "EU28", "EA", "EA19", "EA20", "EUROZONE", "EURO_AREA"}
@@ -1152,8 +1289,8 @@ async def _fetch_from_eurostat(svc: Any, intent: ParsedIntent, params: dict) -> 
                     return await svc.eurostat_provider.fetch_indicator(
                         indicator=indicator,
                         country=country_code,
-                        start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                        end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                        start_year=request_start_year,
+                        end_year=request_end_year,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to fetch {indicator} for {country_code}: {e}")
@@ -1178,8 +1315,8 @@ async def _fetch_from_eurostat(svc: Any, intent: ParsedIntent, params: dict) -> 
     series = await svc.eurostat_provider.fetch_indicator(
         indicator=indicator,
         country=single_country,
-        start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-        end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+        start_year=request_start_year,
+        end_year=request_end_year,
     )
     return [series]
 
@@ -1269,7 +1406,11 @@ async def _fetch_from_oecd(svc: Any, intent: ParsedIntent, params: dict) -> List
 # Main fetch orchestration
 # ---------------------------------------------------------------------------
 
-async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
+async def fetch_data(
+    svc: Any,
+    intent: ParsedIntent,
+    execution_plan: Optional[ExecutionPlan] = None,
+) -> List[NormalizedData]:
     """Full data fetch pipeline: resolve indicator, check cache, dispatch to provider, validate.
 
     This is the primary entry point extracted from ``QueryService._fetch_data``.
@@ -1453,9 +1594,16 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
     if intent.originalQuery and "__original_query" not in params:
         params["__original_query"] = intent.originalQuery
 
-    cached = await svc._get_from_cache(provider, params)
+    execution_plan = materialize_execution_plan(
+        execution_plan,
+        provider=provider,
+        intent=intent,
+        params=params,
+    )
+
+    cached = await svc._get_from_cache(execution_plan.provider, execution_plan.params)
     if cached:
-        logger.info("Cache hit for %s", provider)
+        logger.info("Cache hit for %s", execution_plan.provider)
         result_list = cached if isinstance(cached, list) else [cached]
         svc._normalize_bis_metadata_labels(result_list)
         if tracker:
@@ -1463,7 +1611,7 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 "cache_hit",
                 "Served instantly from cache",
                 {
-                    "provider": provider,
+                    "provider": execution_plan.provider,
                     "indicator_count": len(intent.indicators),
                 },
             ) as update_cache_metadata:
@@ -1474,7 +1622,7 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 return result_list
         return result_list
 
-    logger.info("Cache miss for %s, fetching from API", provider)
+    logger.info("Cache miss for %s, fetching from API", execution_plan.provider)
 
     if tracker:
         provider_names = {
@@ -1487,21 +1635,21 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
             "OECD": "OECD",
             "COINGECKO": "CoinGecko",
         }
-        provider_display = provider_names.get(provider, provider)
+        provider_display = provider_names.get(execution_plan.provider, execution_plan.provider)
         fetch_message = f"Retrieving data from {provider_display}..."
 
         with tracker.track(
             "fetching_data",
             fetch_message,
             {
-                "provider": provider,
+                "provider": execution_plan.provider,
                 "indicator_count": len(intent.indicators),
             },
         ) as update_fetch_metadata:
             provider_start = time.perf_counter()
-            result = await fetch_from_provider_dispatch(svc, provider, intent, params)
+            result = await fetch_from_provider_dispatch(svc, intent, execution_plan)
             provider_elapsed = time.perf_counter() - provider_start
-            logger.info(f"Provider {provider} fetch: {provider_elapsed:.2f}s")
+            logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
             update_fetch_metadata({
                 "series_count": len(result),
                 "cached": False,
@@ -1509,13 +1657,13 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
             })
     else:
         provider_start = time.perf_counter()
-        result = await fetch_from_provider_dispatch(svc, provider, intent, params)
+        result = await fetch_from_provider_dispatch(svc, intent, execution_plan)
         provider_elapsed = time.perf_counter() - provider_start
-        logger.info(f"Provider {provider} fetch: {provider_elapsed:.2f}s")
+        logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
 
     if not result or (len(result) == 1 and not result[0].data):
         raise DataNotAvailableError(
-            f"No data available from {provider} for the requested parameters. "
+            f"No data available from {execution_plan.provider} for the requested parameters. "
             f"The data may not exist or may not be available for the specified time period or location."
         )
 
@@ -1533,7 +1681,11 @@ async def fetch_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:
                 f"confidence={validation_result.confidence:.2f}, issues={len(validation_result.issues)}"
             )
 
-    await svc._save_to_cache(provider, params, result if len(result) > 1 else result[0])
+    await svc._save_to_cache(
+        execution_plan.provider,
+        execution_plan.params,
+        result if len(result) > 1 else result[0],
+    )
     return result
 
 

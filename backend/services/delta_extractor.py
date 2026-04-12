@@ -81,6 +81,29 @@ _ADDITIVE_MARKERS = {"compare", "add", "also", "include", "plus", "too", "well"}
 _REPLACEMENT_MARKERS = {"only", "just", "filter", "keep"}
 _REMOVAL_MARKERS = {"remove", "exclude", "without", "drop", "delete", "minus"}
 
+_DECOMPOSITION_VALUE_TO_TYPE = {
+    "province": "provinces",
+    "provinces": "provinces",
+    "state": "states",
+    "states": "states",
+    "region": "regions",
+    "regions": "regions",
+    "country": "countries",
+    "countries": "countries",
+}
+
+_GEOGRAPHY_DIMENSION_KEYS = {
+    "geography",
+    "province",
+    "provinces",
+    "state",
+    "states",
+    "region",
+    "regions",
+    "country",
+    "countries",
+}
+
 
 class DeltaExtractor:
     """Extract FollowUpDelta from a query given conversation state.
@@ -92,6 +115,46 @@ class DeltaExtractor:
 
     def __init__(self, query_service: "QueryService") -> None:
         self._qs = query_service
+
+    @staticmethod
+    def _promote_decomposition_semantics(
+        delta: FollowUpDelta,
+        state: ConversationState,
+    ) -> FollowUpDelta:
+        added_dimensions = dict(delta.added_dimensions or {})
+        if not added_dimensions:
+            return delta
+
+        remaining_dimensions: Dict[str, str] = {}
+        decomposition_payload = delta.changed_decomposition
+        has_specific_geography_filter = False
+
+        for raw_key, raw_value in added_dimensions.items():
+            key = str(raw_key or "").strip()
+            value = str(raw_value or "").strip()
+            key_lower = key.lower()
+            value_lower = value.lower()
+            if key_lower in _GEOGRAPHY_DIMENSION_KEYS:
+                decomp_type = _DECOMPOSITION_VALUE_TO_TYPE.get(value_lower)
+                if decomp_type and decomposition_payload is None:
+                    decomposition_payload = {
+                        "type": decomp_type,
+                        "entities": None,
+                        "axis": key,
+                    }
+                    continue
+                has_specific_geography_filter = True
+            remaining_dimensions[key] = value
+
+        if decomposition_payload is not None:
+            delta.changed_decomposition = decomposition_payload
+            delta.delta_type = "decomposition_change"
+
+        delta.added_dimensions = remaining_dimensions or None
+        if has_specific_geography_filter and state.decomposition is not None:
+            delta.is_dimension_modifier_change = True
+
+        return delta
 
     def extract(
         self,
@@ -258,8 +321,9 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
      a) A SPECIFIC member name to FILTER by (e.g., "Ontario", "Females", "15 to 24 years")
      b) The CATEGORY name when the user wants to see ALL items (e.g., "province", "age group")
    - IMPORTANT: When the user says "by province" / "show by province" / "break down by province"
-     WITHOUT naming a specific province, the value MUST be "province" (the category), NOT a
-     specific province like "Ontario". This means "show data for ALL provinces".
+     WITHOUT naming a specific province, do NOT use added_dimensions. Instead set
+     changed_decomposition = {{"type": "provinces", "entities": null, "axis": "Geography"}}.
+     This means "show data for ALL provinces" as a first-class breakdown, not a member filter.
    - Similarly: "by age group" → value="age group", "by sex" → value="sex" (show all).
    - But "show Ontario" / "for Ontario" → value="Ontario" (specific filter).
    - "show youth" → age_group = "15 to 24 years" (use exact member name if available below).
@@ -271,10 +335,12 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
 6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
 7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
 8. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
-9. "break it down by X" / "filter by X" / "by sex" / "by age" / "show by province" → dimension_change.
+9. "break it down by X" / "filter by X" / "by sex" / "by age" / "show by province":
+   - use changed_decomposition for full breakdowns like "by province"
+   - use added_dimensions for specific member filters like "Ontario only"
    - CRITICAL: "show by province" / "by province" / "break down by province" (no specific province named)
-     → added_dimensions = {{"Geography": "province"}} (category name, NOT a specific province like "Ontario")
-   - "show for Ontario" → added_dimensions = {{"Geography": "Ontario"}} (specific filter)
+     → changed_decomposition = {{"type": "provinces", "entities": null, "axis": "Geography"}}
+   - "show for Ontario" / "Ontario only" → added_dimensions = {{"Geography": "Ontario"}}
 10. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
 
 IMPORTANT DISTINCTIONS:
@@ -283,7 +349,7 @@ IMPORTANT DISTINCTIONS:
 - "Correlate unemployment with GDP" → pro_mode (needs computation)
 - "Show as bar chart" → parameter_delta (chart type)
 - "Show me a scatter plot" → pro_mode (needs code)
-- "Show by province" → dimension_change with Geography="province" (ALL provinces, not one specific)
+- "Show by province" → changed_decomposition with type="provinces" (ALL provinces, not one specific)
 - "Show for Ontario" → dimension_change with Geography="Ontario" (specific province filter)
 
 CRITICAL RULE — DIMENSION vs INDICATOR SWITCH vs COUNTRY CHANGE:
@@ -294,7 +360,7 @@ NOT an indicator switch or country change.
 Examples:
 - CPI has "Products and product groups" with "Food", "Energy" → "show energy" = added_dimensions
 - Unemployment has "Geography" with "Ontario", "Quebec" → "show for Ontario" = added_dimensions with Geography=Ontario, NOT changed_country
-- Unemployment has "Geography" with provinces → "show by province" = added_dimensions with Geography="province" (ALL provinces)
+- Unemployment has "Geography" with provinces → "show by province" = changed_decomposition with type="provinces"
 - Unemployment has "Sex" with "Males", "Females" → "show female" = added_dimensions with Sex value
 
 Canadian provinces (Ontario, Quebec, BC, Alberta, etc.) appearing in Geography dimension members
@@ -343,7 +409,7 @@ Output the query_type and any changed fields as JSON."""
                     "changed_country", "changed_countries",
                     "added_countries", "removed_countries", "changed_provider",
                     "changed_start_date", "changed_end_date",
-                    "added_dimensions", "removed_dimensions",
+                    "added_dimensions", "removed_dimensions", "changed_decomposition",
                     "changed_chart_type", "changed_trade_flow",
                     "changed_trade_reporter", "changed_trade_partner",
                     "changed_trade_commodity",
@@ -354,6 +420,7 @@ Output the query_type and any changed fields as JSON."""
                 logger.info("LLM delta: no changes detected, returning None")
                 return None
 
+            delta = self._promote_decomposition_semantics(delta, state)
             delta.raw_query = query_text
             logger.info(
                 "LLM Delta: type=%s, changes=%s",

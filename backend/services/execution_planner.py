@@ -1,8 +1,13 @@
-"""Minimal typed execution-plan builder for the Phase 2 runtime contract."""
+"""Minimal typed execution-plan builder for the Phase 2 runtime contract.
+
+The planner deliberately records structural execution expectations derived from
+the parsed intent and resolved scope. It does *not* encode new semantic
+heuristics about meaning; transform/variant correctness is delegated to the
+model-backed verification stage.
+"""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from ..models import ExecutionPlan, ParsedIntent
@@ -31,6 +36,40 @@ def _candidate_id(provider: str, code: str) -> str:
     return f"{provider_norm}:{code_norm}"
 
 
+def _execution_query_text(query: str, intent: ParsedIntent) -> str:
+    return str(intent.resolvedQuery or query or intent.originalQuery or "").strip()
+
+
+def _requested_countries(intent: ParsedIntent) -> list[str]:
+    params = intent.parameters or {}
+    countries = params.get("countries")
+    if isinstance(countries, (list, tuple, set)):
+        return [
+            text
+            for item in countries
+            if (text := str(item or "").strip())
+        ]
+
+    country = str(params.get("country") or "").strip()
+    return [country] if country else []
+
+
+def _requested_indicator_text(intent: ParsedIntent) -> str:
+    params = intent.parameters or {}
+    candidates = [
+        (intent.indicators or [None])[0],
+        params.get("indicator"),
+        params.get("seriesId"),
+        params.get("series_id"),
+        params.get("code"),
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def build_minimal_execution_plan(query: str, intent: ParsedIntent) -> ExecutionPlan:
     """Build the minimal typed execution contract used by Phase 2.
 
@@ -42,37 +81,36 @@ def build_minimal_execution_plan(query: str, intent: ParsedIntent) -> ExecutionP
     provider = normalize_provider_name(intent.apiProvider or "") or "UNKNOWN"
     params = dict(intent.parameters or {})
     code = _candidate_code(intent)
-    query_text = str(query or intent.originalQuery or "").strip()
-    lowered = query_text.lower()
+    query_text = _execution_query_text(query, intent)
+    requested_countries = _requested_countries(intent)
+    requested_indicator = _requested_indicator_text(intent)
+    query_type = str(intent.queryType or "data_fetch")
 
     verification_checks = ["indicator_identity", "provider_executable"]
-    min_series_count = 1
+    min_series_count = max(1, len(requested_countries))
 
-    if params.get("country") or params.get("countries"):
+    if requested_countries:
         verification_checks.append("country_scope")
-
-    if any(token in lowered for token in ("highest", "lowest", "top ", "ranking", "rank ")):
-        verification_checks.append("requires_multiple_series")
+    if query_type == "comparison" and min_series_count < 2:
         min_series_count = 2
-
-    if "spread" in lowered:
-        verification_checks.append("requires_spread_metric")
-
-    if re.search(r"\bm1\b", lowered):
-        verification_checks.append("requires_m1_metric")
-
-    if "growth" in lowered or "rate of change" in lowered:
-        verification_checks.append("requires_growth_metric")
+    if intent.needsDecomposition:
+        verification_checks.append("decomposition_cardinality")
+        if not intent.decompositionEntities or len(intent.decompositionEntities or []) != 1:
+            min_series_count = max(min_series_count, 2)
+    if min_series_count > 1:
+        verification_checks.append("comparison_cardinality")
 
     expected_shape: dict[str, Any] = {
         "min_series_count": min_series_count,
         "query_text": query_text,
-        "needs_multiple_series": min_series_count > 1,
+        "requested_indicator": requested_indicator,
+        "requested_countries": requested_countries,
+        "query_type": query_type,
+        "is_follow_up": bool(intent.isFollowUp),
     }
-    if params.get("countries"):
-        expected_shape["requested_countries"] = list(params.get("countries") or [])
-    elif params.get("country"):
-        expected_shape["requested_countries"] = [params.get("country")]
+    if intent.needsDecomposition:
+        expected_shape["decomposition_type"] = str(intent.decompositionType or "")
+        expected_shape["decomposition_entities"] = list(intent.decompositionEntities or [])
 
     return ExecutionPlan(
         provider=provider,

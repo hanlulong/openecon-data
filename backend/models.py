@@ -151,6 +151,8 @@ class ExecutionPlan(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     expected_shape: dict[str, Any] = Field(default_factory=dict)
     verification_checks: List[str] = Field(default_factory=list)
+    provider_request: dict[str, Any] = Field(default_factory=dict)
+    cache_identity: dict[str, Any] = Field(default_factory=dict)
 
 
 class GeneratedFile(BaseModel):

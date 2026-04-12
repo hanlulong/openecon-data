@@ -18,6 +18,7 @@ from backend.services.conversation_state_v2 import (
     extract_state_from_intent,
     materialize_intent,
     merge_state,
+    merge_new_state_with_previous,
 )
 
 
@@ -76,6 +77,41 @@ class TestMergeState:
         merged = merge_state(state, delta)
         assert merged.indicator == "CPI"  # Preserved
         assert merged.dimensions == {"product": "energy"}  # Updated
+
+    def test_geography_breakdown_promotes_to_first_class_decomposition(self):
+        state = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"Geography": "province"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "provinces",
+            "entities": None,
+            "axis": "Geography",
+        }
+        assert merged.dimensions is None
+
+    def test_specific_geography_filter_clears_first_class_decomposition(self):
+        state = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+            decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"Geography": "Ontario"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition is None
+        assert merged.dimensions == {"Geography": "Ontario"}
 
     def test_additive_country(self):
         state = ConversationState(
@@ -449,6 +485,21 @@ class TestExtractStateFromIntent:
             "type": "provinces",
             "entities": ["Ontario", "Quebec"],
         }
+
+    def test_dimension_category_extraction_promotes_to_decomposition(self):
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["unemployment rate"],
+            parameters={"country": "CA", "__dimensions": {"Geography": "province"}},
+            clarificationNeeded=False,
+        )
+        state = extract_state_from_intent(intent)
+        assert state.decomposition == {
+            "type": "provinces",
+            "entities": None,
+            "axis": "Geography",
+        }
+        assert state.dimensions is None
 
 
 # ─── DeltaExtractor ─────────────────────────────────────────────────
@@ -872,6 +923,45 @@ class TestMergeAndMaterialize:
         assert merged.start_date is None  # Clean slate
         assert merged.provider is None
         assert merged.turn_number == 3
+
+    def test_merge_new_state_with_previous_preserves_decomposition_on_time_change(self):
+        previous = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+            decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            turn_number=1,
+        )
+        new_state = ConversationState(
+            indicator="unemployment rate",
+            provider="STATSCAN",
+            start_date="2010-01-01",
+            end_date="2024-12-31",
+        )
+
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.decomposition == previous.decomposition
+        intent = materialize_intent(merged)
+        assert intent.needsDecomposition is True
+        assert intent.decompositionType == "provinces"
+
+    def test_merge_new_state_with_previous_does_not_preserve_decomposition_when_geo_filter_added(self):
+        previous = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+            decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            turn_number=1,
+        )
+        new_state = ConversationState(
+            indicator="unemployment rate",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+        )
+
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.decomposition is None
+        assert merged.dimensions == {"Geography": "Ontario"}
 
 
 # ─── ConversationManager state methods ──────────────────────────────

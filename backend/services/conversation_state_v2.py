@@ -22,6 +22,30 @@ from ..utils.providers import normalize_provider_name
 logger = logging.getLogger(__name__)
 
 
+_DECOMPOSITION_VALUE_TO_TYPE = {
+    "province": "provinces",
+    "provinces": "provinces",
+    "state": "states",
+    "states": "states",
+    "region": "regions",
+    "regions": "regions",
+    "country": "countries",
+    "countries": "countries",
+}
+
+_GEOGRAPHY_DIMENSION_KEYS = {
+    "geography",
+    "province",
+    "provinces",
+    "state",
+    "states",
+    "region",
+    "regions",
+    "country",
+    "countries",
+}
+
+
 def _normalize_country_to_iso2(name: str) -> str:
     """Normalize a country name/code to ISO2 for reliable comparison.
 
@@ -40,6 +64,45 @@ def _normalize_country_to_iso2(name: str) -> str:
     if len(name.strip()) == 2 and name.strip().isalpha():
         return name.strip().upper()
     return key
+
+
+def _interpret_dimension_breakdown(
+    dimensions: Optional[Dict[str, str]],
+) -> tuple[Optional[Dict[str, str]], Optional[Dict[str, Any]], bool]:
+    """Split dimension filters from first-class decomposition semantics.
+
+    Returns:
+        remaining_dimensions,
+        decomposition_payload,
+        has_specific_geography_filter
+    """
+    if not dimensions:
+        return None, None, False
+
+    remaining: Dict[str, str] = {}
+    decomposition: Optional[Dict[str, Any]] = None
+    has_specific_geography_filter = False
+
+    for raw_key, raw_value in dimensions.items():
+        key = str(raw_key or "").strip()
+        value = str(raw_value or "").strip()
+        key_lower = key.lower()
+        value_lower = value.lower()
+
+        if key_lower in _GEOGRAPHY_DIMENSION_KEYS:
+            decomp_type = _DECOMPOSITION_VALUE_TO_TYPE.get(value_lower)
+            if decomposition is None and decomp_type:
+                decomposition = {
+                    "type": decomp_type,
+                    "entities": None,
+                    "axis": key,
+                }
+                continue
+            has_specific_geography_filter = True
+
+        remaining[key] = value
+
+    return (remaining or None), decomposition, has_specific_geography_filter
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +224,9 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     """
 
     if delta.is_new_query:
+        initial_dimensions, decomposition_from_dimensions, _ = _interpret_dimension_breakdown(
+            delta.added_dimensions
+        )
         new_state = ConversationState(
             indicator=delta.changed_indicator,
             country=delta.changed_country,
@@ -169,7 +235,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             start_date=delta.changed_start_date,
             end_date=delta.changed_end_date,
             chart_type=delta.changed_chart_type,
-            decomposition=delta.changed_decomposition,
+            decomposition=delta.changed_decomposition or decomposition_from_dimensions,
             trade_flow=delta.changed_trade_flow,
             trade_reporter=delta.changed_trade_reporter,
             trade_partner=delta.changed_trade_partner,
@@ -177,8 +243,8 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             original_query=delta.raw_query,
             turn_number=current.turn_number + 1,
         )
-        if delta.added_dimensions:
-            new_state.dimensions = dict(delta.added_dimensions)
+        if initial_dimensions:
+            new_state.dimensions = dict(initial_dimensions)
         return new_state
 
     merged = current.model_copy(deep=True)
@@ -274,7 +340,15 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
 
     # --- Dimensions ---
     if delta.added_dimensions:
-        merged.dimensions = {**(merged.dimensions or {}), **delta.added_dimensions}
+        remaining_dimensions, decomposition_from_dimensions, has_specific_geography_filter = (
+            _interpret_dimension_breakdown(delta.added_dimensions)
+        )
+        if remaining_dimensions:
+            merged.dimensions = {**(merged.dimensions or {}), **remaining_dimensions}
+        if decomposition_from_dimensions and delta.changed_decomposition is None:
+            merged.decomposition = decomposition_from_dimensions
+        elif has_specific_geography_filter and merged.decomposition is not None:
+            merged.decomposition = None
     if delta.removed_dimensions:
         if merged.dimensions:
             for key in delta.removed_dimensions:
@@ -479,7 +553,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     vs_currency = params.get("vsCurrency")
 
     # Dimensions (from delta/merge path via __dimensions)
-    dimensions = params.get("__dimensions")
+    dimensions, decomposition_from_dimensions, _ = _interpret_dimension_breakdown(
+        params.get("__dimensions")
+    )
 
     # Decomposition
     decomposition: Optional[Dict[str, Any]] = None
@@ -488,6 +564,8 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
             "type": intent.decompositionType,
             "entities": intent.decompositionEntities,
         }
+    elif decomposition_from_dimensions:
+        decomposition = decomposition_from_dimensions
 
     # Infer base_indicator (vector mapping key) from the indicator name.
     # For StatsCan, the indicator resolved by the catalog is often the vector
@@ -621,6 +699,7 @@ def merge_new_state_with_previous(
         return new_state
 
     new_state.turn_number = previous.turn_number + 1
+    explicit_geo_in_new_state = bool(new_state.country or new_state.countries)
 
     # --- Geography ---
     _new_has_geo = new_state.country or new_state.countries
@@ -656,6 +735,10 @@ def merge_new_state_with_previous(
         new_state.statscan_product_id = previous.statscan_product_id
     if not new_state.statscan_cube_metadata and previous.statscan_cube_metadata:
         new_state.statscan_cube_metadata = previous.statscan_cube_metadata
+    if not new_state.decomposition and previous.decomposition:
+        _, _, has_specific_geography_filter = _interpret_dimension_breakdown(new_state.dimensions)
+        if not has_specific_geography_filter and not explicit_geo_in_new_state:
+            new_state.decomposition = previous.decomposition
 
     # --- Trade fields ---
     if not new_state.trade_flow and previous.trade_flow:

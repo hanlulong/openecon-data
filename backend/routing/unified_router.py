@@ -286,13 +286,50 @@ class UnifiedRouter:
         if CountryResolver.is_canadian_region(query):
             return self._handle_canadian_query(query, indicators, country)
 
-        # 5. Regional group routing (EU countries, OECD countries, etc.)
+        # 5. Structural specialty-provider cues that should override broad regional defaults.
+        if self._is_fred_structural_query(query_lower):
+            return self._create_decision(
+                provider="FRED",
+                confidence=0.88,
+                match_type="indicator",
+                matched_pattern="US monetary / FRED structural cue",
+                reasoning="US-specific monetary query routed to FRED",
+            )
+
+        if self._is_non_bilateral_trade_flow_query(query_lower):
+            return self._create_decision(
+                provider="Comtrade",
+                confidence=0.82,
+                match_type="indicator",
+                matched_pattern="unilateral goods trade flow",
+                reasoning="Goods import/export flow query routed to Comtrade",
+            )
+
+        if self._is_property_market_query(query_lower):
+            return self._create_decision(
+                provider="BIS",
+                confidence=0.84,
+                match_type="indicator",
+                matched_pattern="property / housing market",
+                reasoning="Property or housing price query routed to BIS",
+            )
+
+        if self._is_imf_macro_query(query_lower):
+            return self._create_decision(
+                provider="IMF",
+                confidence=0.82,
+                match_type="indicator",
+                matched_pattern="IMF macro aggregate / forecast",
+                reasoning="Macro aggregate / projection query routed to IMF",
+            )
+
+        # 6. Regional group routing (EU countries, OECD countries, etc.)
         #    Moved BEFORE catalog so regional context overrides catalog defaults.
         regional_decision = self._route_by_regional_group(query_lower)
         if regional_decision:
             return regional_decision
 
-        # 6. Catalog concept match (data-driven YAML lookups)
+        # 7. Catalog concept match (data-driven YAML lookups)
         #    Pass detected region AND countries so coverage-specific providers
         #    are preferred (e.g. StatsCan for CA, Eurostat for EU).
         if self._use_catalog and self._catalog_service:
@@ -304,12 +341,12 @@ class UnifiedRouter:
             if catalog_decision:
                 return catalog_decision
 
-        # 7. Country-based routing
+        # 8. Country-based routing
         country_decision = self._route_by_country(country, countries, query_lower, indicators)
         if country_decision:
             return country_decision
 
-        # 8. Multi-country with non-OECD → WorldBank
+        # 9. Multi-country with non-OECD → WorldBank
         if countries and len(countries) > 1:
             has_non_oecd = any(CountryResolver.is_non_oecd_major(c) for c in countries)
             if has_non_oecd:
@@ -320,7 +357,7 @@ class UnifiedRouter:
                     reasoning="Multi-country query with non-OECD countries → WorldBank",
                 )
 
-        # 9. Trust LLM's provider choice
+        # 10. Trust LLM's provider choice
         if llm_provider and llm_provider != self.DEFAULT_PROVIDER:
             corrected, reason = _correct_coingecko(llm_provider, query, indicators)
             return self._create_decision(
@@ -330,7 +367,7 @@ class UnifiedRouter:
                 reasoning=reason or f"Using LLM suggested provider: {llm_provider}",
             )
 
-        # 10. Default
+        # 11. Default
         return self._create_decision(
             provider=self.DEFAULT_PROVIDER,
             confidence=0.50,
@@ -442,6 +479,17 @@ class UnifiedRouter:
         return any(pattern in combined for pattern in exchange_patterns)
 
     @staticmethod
+    def _is_fred_structural_query(query_lower: str) -> bool:
+        """Detect strongly US/FRED-specific monetary terms."""
+        fred_terms = [
+            "federal funds",
+            "fed funds",
+            "fomc rate",
+            "st louis fed",
+        ]
+        return any(term in query_lower for term in fred_terms)
+
+    @staticmethod
     def _is_aggregate_trade_indicator(query_lower: str) -> bool:
         """Detect aggregate/macro trade indicators that belong to WorldBank/IMF, not Comtrade.
 
@@ -463,6 +511,59 @@ class UnifiedRouter:
             r"\b(?:merchandise)\s+(?:imports?|exports?)\s+(?:as\s+)?(?:share|%|percent)\b",
         ]
         return any(re.search(pat, query_lower) for pat in aggregate_patterns)
+
+    @classmethod
+    def _is_non_bilateral_trade_flow_query(cls, query_lower: str) -> bool:
+        """Detect unilateral goods trade-flow queries that belong to Comtrade."""
+        if cls._is_aggregate_trade_indicator(query_lower):
+            return False
+        if "trade balance" in query_lower or "current account" in query_lower:
+            return False
+        if not any(term in query_lower for term in ["import", "imports", "export", "exports"]):
+            return False
+
+        trade_flow_terms = [
+            "semiconductor", "chip", "chips", "pharmaceutical", "pharmaceuticals",
+            "agricultural", "agriculture", "electronics", "electronic",
+            "auto parts", "textile", "textiles", "petroleum", "oil",
+            "steel", "mineral", "minerals", "soybean", "soybeans",
+            "commodity", "commodities", "goods",
+        ]
+        return any(term in query_lower for term in trade_flow_terms)
+
+    @staticmethod
+    def _is_property_market_query(query_lower: str) -> bool:
+        """Detect property/house/real-estate price queries routed to BIS."""
+        property_terms = [
+            "residential property",
+            "property prices",
+            "real estate prices",
+            "real estate market",
+            "house prices",
+            "housing market index",
+            "property price index",
+            "housing price index",
+        ]
+        return any(term in query_lower for term in property_terms)
+
+    @staticmethod
+    def _is_imf_macro_query(query_lower: str) -> bool:
+        """Detect global/group macro aggregate and forecast queries best suited for IMF."""
+        forecast_terms = ["forecast", "forecasts", "projection", "projections"]
+        macro_terms = [
+            "inflation", "gdp growth", "economic growth", "current account",
+            "fiscal deficit", "government debt", "commodity price index",
+            "trade volume", "world economic outlook",
+        ]
+        macro_group_terms = [
+            "global", "world", "advanced economies", "emerging markets",
+            "developing economies", "g20", "emerging economies",
+        ]
+
+        has_macro = any(term in query_lower for term in macro_terms)
+        if has_macro and any(term in query_lower for term in forecast_terms):
+            return True
+        return has_macro and any(term in query_lower for term in macro_group_terms)
 
     def _is_bilateral_trade_query(self, query_lower: str, query: str) -> bool:
         """Detect bilateral trade queries (exports from X to Y, trade between X and Y).

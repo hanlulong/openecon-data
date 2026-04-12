@@ -6,6 +6,7 @@ import contextlib
 import uuid
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -51,7 +52,9 @@ from .utils.dependencies import require_promode
 logger = logging.getLogger("openecon")
 logging.basicConfig(level=logging.INFO)
 # File handler for debugging (uvicorn reloader pipes child output through sockets)
-_fh = logging.FileHandler("/tmp/backend-app.log", mode="a")
+_LOG_DIR = Path(__file__).resolve().parents[1] / ".omx" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_fh = logging.FileHandler(_LOG_DIR / "backend-app.log", mode="a")
 _fh.setLevel(logging.INFO)
 _fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logging.getLogger().addHandler(_fh)

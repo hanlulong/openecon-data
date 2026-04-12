@@ -82,11 +82,19 @@ def _execution_judge_system_prompt() -> str:
     return (
         "You verify whether a fetched economic-data result satisfies an execution plan.\n\n"
         "Important rules:\n"
+        "- Treat the execution plan as the source of truth for requested metric, country scope, "
+        "and result shape.\n"
         "- Focus on whether the fetched result matches the user's requested metric and the "
         "execution plan's verification checks.\n"
         "- Fail when the result is clearly a different concept, transform, or shape.\n"
         "- Fail when a ranking or comparison requires multiple comparable series but the "
         "result does not provide them.\n"
+        "- Fail when the requested metric says growth, spread, M1, imports, exports, or another "
+        "specific transform/variant and the fetched result reflects a different metric.\n"
+        "- Fail when the execution plan requests explicit countries but the fetched summaries do "
+        "not support that country scope.\n"
+        "- Fail when the execution plan expects a decomposition/breakdown but the fetched result "
+        "collapses to a single member, or when it expects a single-member filter but returns a full breakdown.\n"
         "- Be conservative. If the metadata is insufficient, choose 'uncertain'."
     )
 

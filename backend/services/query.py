@@ -1220,7 +1220,7 @@ class QueryService:
                 data = await self._fetch_multi_indicator_data(intent)
             else:
                 data = await retry_async(
-                    lambda: self._fetch_data(intent),
+                    lambda: self._fetch_data(intent, execution_plan=execution_plan),
                     max_attempts=3,
                     initial_delay=1.0,
                 )
@@ -1514,6 +1514,18 @@ class QueryService:
             if any(getattr(point, "value", None) is not None for point in (series.data or []))
         )
 
+    def _returned_country_scope(self, data: List[NormalizedData]) -> list[str]:
+        countries: list[str] = []
+        for series in data or []:
+            metadata = getattr(series, "metadata", None)
+            country_text = str(getattr(metadata, "country", "") or "").strip()
+            if not country_text:
+                continue
+            normalized = self._normalize_country_to_iso2(country_text) or country_text.upper()
+            if normalized not in countries:
+                countries.append(normalized)
+        return countries
+
     def _verify_execution_plan_structure(
         self,
         execution_plan: ExecutionPlan,
@@ -1530,8 +1542,38 @@ class QueryService:
                 f"but received {series_with_values}."
             )
 
-        if "requires_multiple_series" in verification_checks and series_with_values < 2:
-            return "The result did not provide enough populated series for a ranking/comparison answer."
+        if "decomposition_cardinality" in verification_checks and series_with_values < 2:
+            return "Expected a decomposition result with multiple populated members, but the result collapsed to a single member."
+
+        if "country_scope" in verification_checks:
+            requested_countries = self._normalize_country_targets(
+                list(expected_shape.get("requested_countries") or [])
+            )
+            returned_countries = self._returned_country_scope(data)
+            if requested_countries and not returned_countries:
+                return (
+                    "The result could not verify country scope because the fetched series "
+                    "did not include country metadata."
+                )
+
+            if requested_countries and returned_countries:
+                unexpected_countries = [
+                    country for country in returned_countries if country not in requested_countries
+                ]
+                if unexpected_countries:
+                    return (
+                        "Fetched country scope drifted beyond the requested set. "
+                        f"Requested={requested_countries}, returned={returned_countries}."
+                    )
+
+                missing_countries = [
+                    country for country in requested_countries if country not in returned_countries
+                ]
+                if missing_countries:
+                    return (
+                        "The result did not cover the full requested country scope. "
+                        f"Missing={missing_countries}, returned={returned_countries}."
+                    )
 
         return None
 
@@ -1552,14 +1594,17 @@ class QueryService:
         if not self._use_post_fetch_semantic_judge():
             return None
 
+        verification_query = str(
+            intent.resolvedQuery or query or intent.originalQuery or ""
+        ).strip()
         judgment = await _smj_judge_execution_result(
             self,
-            original_query=str(query or intent.originalQuery or "").strip(),
+            original_query=verification_query,
             execution_plan=execution_plan.model_dump(mode="json"),
             fetched_result=data,
         )
         if judgment is None:
-            return None
+            return "Fetched result could not be semantically verified."
 
         if judgment.decision == "pass" and judgment.confidence >= 0.7:
             return None
@@ -1771,6 +1816,18 @@ class QueryService:
         """
         cache_params = dict(params or {})
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION
+        execution_plan_identity = params.get("__execution_plan_identity") if params else None
+        if execution_plan_identity:
+            cache_params["_provider"] = normalize_provider_name(
+                execution_plan_identity.get("provider_request", {}).get("provider") or provider
+            )
+            cache_params["_plan_hash"] = hashlib.sha256(
+                json.dumps(execution_plan_identity, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()[:16]
+            cache_params.pop("_query_hash", None)
+            cache_params.pop("__execution_plan_identity", None)
+            return cache_params
+
         cache_params["_provider"] = normalize_provider_name(provider)
         # Include original query hash for dimension-aware caching.
         # "CPI shelter Canada" and "CPI energy Canada" both resolve to
@@ -2910,6 +2967,8 @@ class QueryService:
                     processingSteps=tracker.to_list(),
                 )
 
+            execution_plan = self._build_minimal_execution_plan(query, intent)
+
             if intent.needsDecomposition and intent.decompositionType == "provinces":
                 intent.decompositionEntities = normalize_canadian_region_list(
                     intent.decompositionEntities,
@@ -3296,9 +3355,13 @@ class QueryService:
         """Delegates to :func:`data_fetcher.fetch_multi_indicator_data`."""
         return await _df_fetch_multi_indicator_data(self, intent)
 
-    async def _fetch_data(self, intent: ParsedIntent) -> List[NormalizedData]:
+    async def _fetch_data(
+        self,
+        intent: ParsedIntent,
+        execution_plan: Optional[ExecutionPlan] = None,
+    ) -> List[NormalizedData]:
         """Delegates to :func:`data_fetcher.fetch_data`."""
-        return await _df_fetch_data(self, intent)
+        return await _df_fetch_data(self, intent, execution_plan=execution_plan)
 
     async def _execute_with_orchestrator(
         self,
@@ -3514,6 +3577,22 @@ class QueryService:
         fetch_error: Optional[Exception] = None
 
         conv_id = conversation_id
+        execution_plan = self._build_minimal_execution_plan(query, intent)
+        _prev_good_intent = conversation_manager.get_last_intent(conv_id)
+        _prev_good_state = conversation_manager.get_conversation_state(conv_id)
+        _pending_conv_state = None
+
+        try:
+            _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+            _new_state = merge_new_state_with_previous(_new_state, _prev_good_state)
+            _pending_conv_state = _new_state
+            if not self._use_staged_state_commit():
+                conversation_manager.set_conversation_state(conv_id, _new_state)
+        except Exception as _state_prepare_exc:
+            logger.warning(
+                "Failed to prepare conversation state for standard pipeline: %s",
+                _state_prepare_exc,
+            )
 
         # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
         # and use the parallel multi-indicator fetch path.
@@ -3528,7 +3607,7 @@ class QueryService:
                 )
                 result = await self._fetch_multi_indicator_data(intent)
             else:
-                result = await self._fetch_data(intent)
+                result = await self._fetch_data(intent, execution_plan=execution_plan)
             if result:
                 # _fetch_data may return QueryResponse or list of NormalizedData
                 if isinstance(result, QueryResponse):
@@ -4486,6 +4565,8 @@ class QueryService:
 
         self._maybe_resolve_region_clarification(query, intent)
         self._maybe_expand_multi_concept_intent(query, intent)
+        execution_plan = self._build_minimal_execution_plan(query, intent)
+        previous_intent = conversation_manager.get_last_intent(conversation_id)
 
         if record_user_message:
             conversation_id = conversation_manager.add_message_safe(
@@ -4516,7 +4597,7 @@ class QueryService:
 
         # Fetch data
         data = await retry_async(
-            lambda: self._fetch_data(intent),
+            lambda: self._fetch_data(intent, execution_plan=execution_plan),
             max_attempts=3,
             initial_delay=1.0,
         )
@@ -4536,6 +4617,7 @@ class QueryService:
             )
             if no_data_clarification:
                 return no_data_clarification
+            conversation_manager.restore_last_intent(conversation_id, previous_intent)
             details = [f"No data found for **{indicators}**"]
             if country:
                 details.append(f"for **{country}**")
@@ -4572,6 +4654,21 @@ class QueryService:
         )
         if clarification_response:
             return clarification_response
+
+        verification_error = await self._verify_execution_result(
+            query,
+            intent,
+            execution_plan,
+            data,
+        )
+        if verification_error:
+            conversation_manager.restore_last_intent(conversation_id, previous_intent)
+            return self._build_verification_failed_response(
+                conversation_id=conversation_id,
+                intent=intent,
+                message=verification_error,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
 
         conversation_id = conversation_manager.add_message_safe(
             conversation_id,

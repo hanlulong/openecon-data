@@ -153,7 +153,8 @@ Required formatting rules:
   - "informational": user is asking ABOUT available data, indicators, or providers
     (e.g., "What GDP indicators does World Bank have?", "Which providers cover trade data?")
   - "analysis": user wants complex analysis requiring code execution
-  - "comparison": user wants structured comparison across entities
+  - "comparison": user wants structured comparison or ranking across entities
+    (e.g., compare US and Germany GDP, highest unemployment rate across G7, top countries by inflation)
 - apiProvider: string
 - indicators: non-empty array of strings (for informational queries, use search terms like ["employment indicators"])
 - parameters: object (use null values or omit unrelated keys)
