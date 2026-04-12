@@ -32,6 +32,19 @@ import signal
 from pathlib import Path
 from typing import Optional, List
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OMX_LOG_DIR = PROJECT_ROOT / ".omx" / "logs"
+BACKEND_LOG_PATH = OMX_LOG_DIR / "backend-dev.log"
+FRONTEND_LOG_PATH = OMX_LOG_DIR / "frontend-dev.log"
+SHARED_BACKEND_VENV = Path("/home/hanlulong/OpenEcon/backend/.venv")
+
+
+def resolve_backend_venv() -> Path:
+    local_venv = PROJECT_ROOT / "backend" / ".venv"
+    if local_venv.exists():
+        return local_venv
+    return SHARED_BACKEND_VENV
+
 # Color codes for terminal output
 class Colors:
     GREEN = '\033[92m'
@@ -142,6 +155,7 @@ def cleanup_backend():
 
     # Clean up temporary log files
     temp_files = [
+        str(BACKEND_LOG_PATH),
         "/tmp/backend-*.log",
         "/tmp/*backend*.log",
         "/tmp/uvicorn*.log"
@@ -170,7 +184,7 @@ def cleanup_frontend():
 
 def verify_venv() -> bool:
     """Verify that the backend virtual environment exists"""
-    venv_path = Path("/home/hanlulong/OpenEcon/backend/.venv")
+    venv_path = resolve_backend_venv()
 
     if not venv_path.exists():
         print_error("Virtual environment not found at backend/.venv")
@@ -199,18 +213,39 @@ def start_backend() -> bool:
         return False
 
     # Change to project directory
-    os.chdir("/home/hanlulong/OpenEcon")
+    os.chdir(PROJECT_ROOT)
+    OMX_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     # Start uvicorn in background with development environment variables
     # ALLOW_TEST_USER=true enables the test user for development mode
-    cmd = """
-    source backend/.venv/bin/activate && \
-    export ALLOW_TEST_USER=true && \
-    nohup uvicorn backend.main:app --host 0.0.0.0 --port 3001 --reload --reload-dir backend \
-    > /tmp/backend-dev.log 2>&1 &
-    """
+    venv_path = resolve_backend_venv()
+    use_reload = os.environ.get("OPENECON_DEV_RELOAD", "1").strip().lower() not in {"0", "false", "no", "off"}
+    python_executable = venv_path / "bin" / "python3"
+    cmd = [
+        str(python_executable),
+        "-m",
+        "uvicorn",
+        "backend.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "3001",
+    ]
+    if use_reload:
+        cmd.extend(["--reload", "--reload-dir", "backend"])
 
-    result = run_command(cmd)
+    env = os.environ.copy()
+    env["ALLOW_TEST_USER"] = "true"
+
+    with open(BACKEND_LOG_PATH, "a", encoding="utf-8") as log_handle:
+        subprocess.Popen(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid,
+        )
 
     # Wait for server to start
     print_step("Waiting for backend to start...")
@@ -230,7 +265,7 @@ def start_backend() -> bool:
         return True
     else:
         print_error("Backend failed to start")
-        print_warning("Check logs: tail -f /tmp/backend-dev.log")
+        print_warning(f"Check logs: tail -f {BACKEND_LOG_PATH}")
         return False
 
 def check_backend_health() -> bool:
@@ -260,7 +295,8 @@ def start_frontend() -> bool:
     print_step("Starting frontend server...")
 
     # Change to project directory
-    os.chdir("/home/hanlulong/OpenEcon")
+    os.chdir(PROJECT_ROOT)
+    OMX_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     # Check if node_modules exists
     if not Path("node_modules").exists():
@@ -271,7 +307,7 @@ def start_frontend() -> bool:
             return False
 
     # Start vite in background
-    cmd = "nohup npm run dev:frontend > /tmp/frontend-dev.log 2>&1 &"
+    cmd = f"nohup npm run dev:frontend > {FRONTEND_LOG_PATH} 2>&1 &"
     run_command(cmd)
 
     # Wait for server to start
@@ -292,7 +328,7 @@ def start_frontend() -> bool:
         return True
     else:
         print_error("Frontend failed to start")
-        print_warning("Check logs: tail -f /tmp/frontend-dev.log")
+        print_warning(f"Check logs: tail -f {FRONTEND_LOG_PATH}")
         return False
 
 def show_status():
@@ -325,8 +361,8 @@ def show_status():
 
     print()
     print("View logs:")
-    print("  Backend:  tail -f /tmp/backend-dev.log")
-    print("  Frontend: tail -f /tmp/frontend-dev.log")
+    print(f"  Backend:  tail -f {BACKEND_LOG_PATH}")
+    print(f"  Frontend: tail -f {FRONTEND_LOG_PATH}")
     print()
 
 def main():

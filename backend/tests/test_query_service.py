@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from typing import Any
 import unittest
@@ -12,6 +13,7 @@ from backend.services.cache import cache_service
 from backend.services.conversation import conversation_manager
 from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
+from backend.services.semantic_match_judge import ExecutionResultJudgment
 from backend.tests.utils import run
 from backend.utils.retry import DataNotAvailableError
 
@@ -37,10 +39,33 @@ def sample_series() -> NormalizedData:
     )
 
 
+def sample_series_with(
+    *,
+    indicator: str | None = None,
+    country: str | None = None,
+    series_id: str | None = None,
+    description: str | None = None,
+    unit: str | None = None,
+) -> NormalizedData:
+    series = sample_series().model_copy(deep=True)
+    if indicator is not None:
+        series.metadata.indicator = indicator
+    if country is not None:
+        series.metadata.country = country
+    if series_id is not None:
+        series.metadata.seriesId = series_id
+    if description is not None:
+        series.metadata.description = description
+    if unit is not None:
+        series.metadata.unit = unit
+    return series
+
+
 class QueryServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         cache_service.clear()
         self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+        self.service.settings.use_outcome_decision_stage = False
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -1381,12 +1406,761 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
         self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
 
-    def test_build_prefetch_indicator_choice_clarification_accepts_plausible_age_variant(self) -> None:
-        """Age-demographic variant indicators are accepted without clarification.
+    def test_build_prefetch_indicator_choice_clarification_outcome_stage_clarifies_when_primary_and_alternative_are_both_executable(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["inflation"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="inflation in the united states",
+        )
+        options = [
+            "[WorldBank] Inflation, consumer prices (annual %) (FP.CPI.TOTL.ZG)",
+            "[WorldBank] Core inflation proxy (FP.CPI.CORE.ZG)",
+        ]
 
-        The LLM handles semantic refinement (age group selection); the router
-        no longer penalises age-demographic mismatches.
-        """
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "FP.CPI.TOTL.ZG"
+            name = "Inflation, consumer prices (annual %)"
+            confidence = 0.95
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=True)), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
+             patch.object(self.service, "_indicator_resolution_threshold", return_value=0.5), \
+             patch.object(self.service, "_score_resolved_indicator_relevance", return_value=0.9), \
+             patch.object(self.service, "_minimum_resolved_relevance_threshold", return_value=0.1), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="inflation in the united states",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertEqual(len(clarification.clarificationOptions or []), 2)
+        joined = "\n".join(clarification.clarificationQuestions or [])
+        self.assertIn("multiple plausible indicator matches", joined.lower())
+
+    def test_build_prefetch_indicator_choice_clarification_outcome_stage_allows_up_to_ten_options(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage-width")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="employment in the united states",
+        )
+        options = [
+            f"[WorldBank] Employment option {idx} (CODE_{idx})"
+            for idx in range(1, 13)
+        ]
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=False)), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=None))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="employment in the united states",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertEqual(len(clarification.clarificationOptions or []), 10)
+        question_lines = clarification.clarificationQuestions or []
+        enumerated_lines = [line for line in question_lines if re.match(r"^\d+\.", line)]
+        self.assertEqual(len(enumerated_lines), 10)
+
+    def test_verify_execution_result_rejects_ranking_answer_with_single_series(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["unemployment rate"],
+            parameters={"countries": ["US", "DE", "JP"]},
+            clarificationNeeded=False,
+            queryType="comparison",
+            originalQuery="which country has the highest unemployment rate",
+        )
+
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "which country has the highest unemployment rate",
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                "which country has the highest unemployment rate",
+                intent,
+                execution_plan,
+                [sample_series()],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("expected at least 3 populated series", failure.lower())
+
+    def test_verify_execution_result_rejects_country_scope_mismatch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["gdp"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            originalQuery="compare GDP for the United States and Germany",
+        )
+
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "compare GDP for the United States and Germany",
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                "compare GDP for the United States and Germany",
+                intent,
+                execution_plan,
+                [
+                    sample_series_with(country="US", series_id="GDP_US"),
+                    sample_series_with(country="FR", series_id="GDP_FR"),
+                ],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("country scope", failure.lower())
+
+    def test_verify_execution_result_rejects_country_scope_without_country_metadata(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["gdp"],
+            parameters={"countries": ["US", "DE"]},
+            clarificationNeeded=False,
+            queryType="comparison",
+            originalQuery="compare GDP for the United States and Germany",
+        )
+
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "compare GDP for the United States and Germany",
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                "compare GDP for the United States and Germany",
+                intent,
+                execution_plan,
+                [
+                    sample_series_with(country="", series_id="GDP_US"),
+                    sample_series_with(country="", series_id="GDP_DE"),
+                ],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("did not include country metadata", failure.lower())
+
+    def test_verify_execution_result_fails_closed_when_semantic_judge_is_unavailable(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"seriesId": "GDP", "country": "US"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP",
+        )
+
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me US GDP",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch(
+            "backend.services.query._smj_judge_execution_result",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            failure = run(
+                self.service._verify_execution_result(  # pylint: disable=protected-access
+                    "show me US GDP",
+                    intent,
+                    execution_plan,
+                    [sample_series()],
+                )
+            )
+
+        assert failure is not None
+        self.assertIn("could not be semantically verified", failure.lower())
+
+    def test_verify_execution_result_rejects_spread_false_pass_via_semantic_judge(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["yield spread"],
+            parameters={"country": "US", "seriesId": "T10Y2Y"},
+            clarificationNeeded=False,
+            originalQuery="show me the US 10-year minus 2-year yield spread",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me the US 10-year minus 2-year yield spread",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch(
+            "backend.services.query._smj_judge_execution_result",
+            new_callable=AsyncMock,
+            return_value=ExecutionResultJudgment(
+                decision="fail",
+                confidence=0.96,
+                reason="Requested a yield spread, but the fetched series is a single yield level.",
+                failed_checks=["indicator_identity"],
+            ),
+        ):
+            failure = run(
+                self.service._verify_execution_result(  # pylint: disable=protected-access
+                    "show me the US 10-year minus 2-year yield spread",
+                    intent,
+                    execution_plan,
+                    [sample_series_with(indicator="10-Year Treasury Yield", series_id="GS10")],
+                )
+            )
+
+        assert failure is not None
+        self.assertIn("yield spread", failure.lower())
+
+    def test_verify_execution_result_rejects_m1_false_pass_via_semantic_judge(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["M1 money supply"],
+            parameters={"country": "US", "seriesId": "M1SL"},
+            clarificationNeeded=False,
+            originalQuery="show me the US M1 money supply",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me the US M1 money supply",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch(
+            "backend.services.query._smj_judge_execution_result",
+            new_callable=AsyncMock,
+            return_value=ExecutionResultJudgment(
+                decision="fail",
+                confidence=0.96,
+                reason="Requested M1, but the fetched series corresponds to M2.",
+                failed_checks=["indicator_identity"],
+            ),
+        ):
+            failure = run(
+                self.service._verify_execution_result(  # pylint: disable=protected-access
+                    "show me the US M1 money supply",
+                    intent,
+                    execution_plan,
+                    [sample_series_with(indicator="M2 Money Stock", series_id="M2SL")],
+                )
+            )
+
+        assert failure is not None
+        self.assertIn("requested m1", failure.lower())
+
+    def test_verify_execution_result_rejects_growth_false_pass_via_semantic_judge(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP growth rate"],
+            parameters={"country": "US", "indicator": "NY.GDP.MKTP.KD.ZG"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP growth rate",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me US GDP growth rate",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch(
+            "backend.services.query._smj_judge_execution_result",
+            new_callable=AsyncMock,
+            return_value=ExecutionResultJudgment(
+                decision="fail",
+                confidence=0.96,
+                reason="Requested GDP growth rate, but the fetched series is GDP level.",
+                failed_checks=["indicator_identity"],
+            ),
+        ):
+            failure = run(
+                self.service._verify_execution_result(  # pylint: disable=protected-access
+                    "show me US GDP growth rate",
+                    intent,
+                    execution_plan,
+                    [sample_series_with(indicator="GDP (current US$)", series_id="NY.GDP.MKTP.CD")],
+                )
+            )
+
+        assert failure is not None
+        self.assertIn("growth rate", failure.lower())
+
+    def test_verify_execution_result_accepts_semantic_judge_pass(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP growth rate"],
+            parameters={"country": "US", "indicator": "NY.GDP.MKTP.KD.ZG"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP growth rate",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me US GDP growth rate",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch(
+            "backend.services.query._smj_judge_execution_result",
+            new_callable=AsyncMock,
+            return_value=ExecutionResultJudgment(
+                decision="pass",
+                confidence=0.92,
+                reason="The fetched series matches the requested growth metric.",
+                failed_checks=[],
+            ),
+        ):
+            failure = run(
+                self.service._verify_execution_result(  # pylint: disable=protected-access
+                    "show me US GDP growth rate",
+                    intent,
+                    execution_plan,
+                    [sample_series_with(indicator="GDP growth (annual %)", series_id="NY.GDP.MKTP.KD.ZG")],
+                )
+            )
+
+        self.assertIsNone(failure)
+
+    def test_execute_resolved_intent_verification_failure_restores_previous_state_when_staged_commit_enabled(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_staged_state_commit = True
+
+        conv_id = conversation_manager.get_or_create("conv-phase2-staged-restore")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(indicator="old indicator", country="CA", provider="WORLDBANK"),
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"seriesId": "GDP", "country": "US"},
+            clarificationNeeded=False,
+            originalQuery="show me us gdp",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fetched = [sample_series()]
+
+        with patch.object(self.service.pipeline, "validate_intent", return_value=validation),              patch.object(self.service, "_build_post_parse_clarification", AsyncMock(return_value=None)),              patch.object(self.service, "_fetch_data", AsyncMock(return_value=fetched)),              patch.object(self.service, "_maybe_recover_from_uncertain_match", AsyncMock(return_value=None)),              patch.object(self.service, "_maybe_improve_country_coverage", AsyncMock(return_value=(fetched, None))),              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None),              patch.object(self.service, "_verify_execution_result", AsyncMock(return_value="phase2 verification failed")):
+            response = run(
+                self.service._execute_resolved_intent(  # pylint: disable=protected-access
+                    "show me us gdp",
+                    conv_id,
+                    intent,
+                    parse_result,
+                )
+            )
+
+        self.assertEqual(response.error, "verification_failed")
+        state = conversation_manager.get_conversation_state(conv_id)
+        assert state is not None
+        self.assertEqual(state.indicator, "old indicator")
+        self.assertEqual(state.country, "CA")
+
+    def test_execute_resolved_intent_commits_state_after_successful_verification_when_staged_commit_enabled(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_staged_state_commit = True
+
+        conv_id = conversation_manager.get_or_create("conv-phase2-staged-success")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(indicator="old indicator", country="CA", provider="WORLDBANK"),
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"seriesId": "GDP", "country": "US"},
+            clarificationNeeded=False,
+            originalQuery="show me us gdp",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fetched = [sample_series()]
+
+        with patch.object(self.service.pipeline, "validate_intent", return_value=validation),              patch.object(self.service, "_build_post_parse_clarification", AsyncMock(return_value=None)),              patch.object(self.service, "_fetch_data", AsyncMock(return_value=fetched)),              patch.object(self.service, "_maybe_recover_from_uncertain_match", AsyncMock(return_value=None)),              patch.object(self.service, "_maybe_improve_country_coverage", AsyncMock(return_value=(fetched, None))),              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None),              patch.object(self.service, "_verify_execution_result", AsyncMock(return_value=None)):
+            response = run(
+                self.service._execute_resolved_intent(  # pylint: disable=protected-access
+                    "show me us gdp",
+                    conv_id,
+                    intent,
+                    parse_result,
+                )
+            )
+
+        self.assertIsNone(response.error)
+        state = conversation_manager.get_conversation_state(conv_id)
+        assert state is not None
+        self.assertEqual(state.provider, "FRED")
+        self.assertEqual(state.country, "US")
+
+    def test_standard_query_processing_verification_failure_restores_previous_intent(self) -> None:
+        previous_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["inflation"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="canada inflation",
+        )
+        conversation_id = conversation_manager.get_or_create("conv-standard-phase2-restore")
+        conversation_manager.add_message_safe(
+            conversation_id,
+            "user",
+            "canada inflation",
+            intent=previous_intent,
+        )
+
+        current_intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US", "seriesId": "GDP"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP",
+        )
+        parse_result = type("ParseResult", (), {"intent": current_intent})()
+
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[sample_series()]), \
+             patch.object(self.service, "_maybe_recover_from_empty_data", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value="phase2 verification failed"):
+            response = run(
+                self.service._standard_query_processing(  # pylint: disable=protected-access
+                    query="show me US GDP",
+                    conversation_id=conversation_id,
+                    tracker=None,
+                    record_user_message=True,
+                )
+            )
+
+        self.assertEqual(response.error, "verification_failed")
+        restored = conversation_manager.get_last_intent(conversation_id)
+        assert restored is not None
+        self.assertEqual(restored.originalQuery, "canada inflation")
+
+    def test_process_query_decomposition_branch_builds_execution_plan_before_verification(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["unemployment rate"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="provinces",
+            decompositionEntities=["Ontario", "Quebec"],
+            originalQuery="Canada unemployment rate by province",
+        )
+        parse_result = type("ParseResult", (), {"intent": intent})()
+        fetched = [
+            sample_series_with(country="Ontario", indicator="Unemployment rate"),
+            sample_series_with(country="Quebec", indicator="Unemployment rate"),
+        ]
+
+        with patch.object(self.service, "_try_resolve_pending_indicator_choice", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service, "_decompose_and_aggregate", new_callable=AsyncMock, return_value=fetched), \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None):
+            response = run(
+                self.service.process_query(
+                    "Canada unemployment rate by province",
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=False,
+                )
+            )
+
+        self.assertIsNone(response.error)
+        self.assertEqual(len(response.data or []), 2)
+
+    def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US", "seriesId": "GDP"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP",
+        )
+        conversation_id = conversation_manager.get_or_create("conv-standard-plan-boundary")
+
+        async def _fetch_with_plan(
+            passed_intent: ParsedIntent,
+            execution_plan=None,  # type: ignore[no-untyped-def]
+        ):
+            self.assertIsNotNone(execution_plan)
+            assert execution_plan is not None
+            self.assertEqual(execution_plan.expected_shape.get("requested_indicator"), "GDP")
+            return [sample_series()]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fetch_with_plan)):
+            response = run(
+                self.service._execute_standard_pipeline(  # pylint: disable=protected-access
+                    query="show me US GDP",
+                    conversation_id=conversation_id,
+                    intent=intent,
+                    tracker=None,
+                )
+            )
+
+        self.assertIsNone(response.error)
+        self.assertEqual(len(response.data or []), 1)
+
+    def test_fetch_data_materializes_execution_plan_for_provider_dispatch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US", "seriesId": "GDP"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me US GDP",
+            intent,
+        )
+        assert execution_plan is not None
+
+        resolved_params = {"country": "US", "seriesId": "GDP", "indicator": "GDP"}
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=resolved_params), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", resolved_params)), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()):
+            result = run(
+                self.service._fetch_data(  # pylint: disable=protected-access
+                    intent,
+                    execution_plan=execution_plan,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(execution_plan.provider, "FRED")
+        self.assertEqual(execution_plan.fetch_strategy, "provider_dispatch")
+        self.assertEqual(execution_plan.params.get("indicator"), "GDP")
+
+    def test_fetch_data_materializes_eurostat_provider_contract_for_dispatch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="Eurostat",
+            indicators=["harmonized inflation"],
+            parameters={"country": "DE", "indicator": "prc_hicp_manr", "startDate": "2019-01-01", "endDate": "2020-12-31"},
+            clarificationNeeded=False,
+            originalQuery="hicp inflation germany",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "hicp inflation germany",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("EUROSTAT", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("EUROSTAT", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            result = run(
+                self.service._fetch_data(  # pylint: disable=protected-access
+                    intent,
+                    execution_plan=execution_plan,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(execution_plan.provider_request.get("dataset_code"), "prc_hicp_manr")
+        self.assertEqual(execution_plan.provider_request.get("country_scope"), ["DE"])
+        self.assertEqual(execution_plan.cache_identity.get("provider_request", {}).get("provider"), "EUROSTAT")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "prc_hicp_manr")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("country"), "DE")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("start_year"), 2019)
+        self.assertEqual(fetch_mock.call_args.kwargs.get("end_year"), 2020)
+
+    def test_fetch_data_materializes_fred_provider_contract_for_dispatch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US", "seriesId": "GDP"},
+            clarificationNeeded=False,
+            originalQuery="show me US GDP",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "show me US GDP",
+            intent,
+        )
+        assert execution_plan is not None
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value={"country": "US", "seriesId": "GDP", "indicator": "GDP"}), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", {"country": "US", "seriesId": "GDP", "indicator": "GDP"})), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(
+                self.service._fetch_data(  # pylint: disable=protected-access
+                    intent,
+                    execution_plan=execution_plan,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(execution_plan.provider_request.get("series_id"), "GDP")
+        self.assertEqual(execution_plan.provider_request.get("country"), "US")
+        self.assertEqual(fetch_mock.call_args.args[0].get("indicator"), "GDP")
+
+    def test_fetch_data_materializes_worldbank_provider_contract_for_dispatch(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["inflation"],
+            parameters={"countries": ["US", "DE"], "indicator": "FP.CPI.TOTL.ZG", "startDate": "2019-01-01", "endDate": "2020-12-31"},
+            clarificationNeeded=False,
+            originalQuery="compare inflation in the US and Germany",
+            queryType="comparison",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            "compare inflation in the US and Germany",
+            intent,
+        )
+        assert execution_plan is not None
+
+        resolved_params = {
+            "countries": ["US", "DE"],
+            "indicator": "FP.CPI.TOTL.ZG",
+            "startDate": "2019-01-01",
+            "endDate": "2020-12-31",
+        }
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("WORLDBANK", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=resolved_params), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("WORLDBANK", resolved_params)), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
+            result = run(
+                self.service._fetch_data(  # pylint: disable=protected-access
+                    intent,
+                    execution_plan=execution_plan,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(execution_plan.provider_request.get("indicator"), "FP.CPI.TOTL.ZG")
+        self.assertEqual(execution_plan.provider_request.get("countries"), ["US", "DE"])
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "FP.CPI.TOTL.ZG")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("countries"), ["US", "DE"])
+
+    def test_build_cache_params_prefers_execution_plan_identity(self) -> None:
+        cache_params = self.service._build_cache_params(  # pylint: disable=protected-access
+            "Eurostat",
+            {
+                "indicator": "prc_hicp_manr",
+                "__original_query": "hicp inflation germany",
+                "__execution_plan_identity": {
+                    "fetch_strategy": "provider_dispatch",
+                    "provider_request": {
+                        "provider": "EUROSTAT",
+                        "code": "prc_hicp_manr",
+                        "country_scope": ["DE"],
+                        "start_year": 2019,
+                        "end_year": 2020,
+                    },
+                    "expected_shape": {"requested_indicator": "harmonized inflation"},
+                },
+            },
+        )
+
+        self.assertEqual(cache_params["_provider"], "EUROSTAT")
+        self.assertIn("_plan_hash", cache_params)
+        self.assertNotIn("_query_hash", cache_params)
+
+    def test_build_prefetch_indicator_choice_clarification_stops_on_age_variant_without_options(self) -> None:
+        """Do not silently accept a youth-employment variant for a broad employment request."""
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],

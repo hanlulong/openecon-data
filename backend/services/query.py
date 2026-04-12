@@ -16,6 +16,7 @@ from ..models import (
     ClarificationOption,
     CodeExecutionResult,
     DataPoint,
+    ExecutionPlan,
     GeneratedFile,
     NormalizedData,
     ParsedIntent,
@@ -103,6 +104,11 @@ from ..services.provider_fallback import (
     normalize_country_to_iso2 as _pf_normalize_country_to_iso2,
     provider_covers_country_list as _pf_provider_covers_country_list,
 )
+from ..services.semantic_match_judge import (
+    judge_execution_result as _smj_judge_execution_result,
+    judge_resolved_indicator as _smj_judge_resolved_indicator,
+)
+from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
     _effective_original_query as _ir_effective_original_query,
     code_semantic_hint as _ir_code_semantic_hint,
@@ -1044,6 +1050,24 @@ class QueryService:
         """Delegates to :func:`indicator_clarification.build_low_confidence_intent_response`."""
         return _ic_build_low_confidence_intent_response(conversation_id, intent, confidence_reason, processing_steps)
 
+    def _build_verification_failed_response(
+        self,
+        conversation_id: str,
+        intent: ParsedIntent,
+        message: str,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> QueryResponse:
+        """Return a fail-closed response when fetched data cannot be verified."""
+        return QueryResponse(
+            conversationId=conversation_id,
+            intent=intent,
+            data=None,
+            clarificationNeeded=False,
+            error="verification_failed",
+            message=f"⚠️ **Couldn't verify the result**\n\n{message}",
+            processingSteps=processing_steps,
+        )
+
     async def _execute_resolved_intent(
         self,
         query: str,
@@ -1055,7 +1079,10 @@ class QueryService:
         skip_post_fetch_clarification: bool = False,
     ) -> QueryResponse:
         """Run validation, clarification guardrails, and fetch for an already-built intent."""
+        _prev_good_intent = conversation_manager.get_last_intent(conversation_id)
+        _prev_good_state = conversation_manager.get_conversation_state(conversation_id)
         conv_id = conversation_manager.add_message_safe(conversation_id, "user", query, intent=intent)
+        pending_state = None
 
         # Dual-write: update ConversationState alongside last_intent.
         # Skip when called from the delta path (skip_post_fetch_clarification=True)
@@ -1082,7 +1109,9 @@ class QueryService:
                             _new_state.statscan_cube_metadata = _cube
                     except Exception as _cube_exc:
                         logger.debug("Non-critical: statscan cube metadata fetch failed: %s", _cube_exc)
-                conversation_manager.set_conversation_state(conv_id, _new_state)
+                pending_state = _new_state
+                if not self._use_staged_state_commit():
+                    conversation_manager.set_conversation_state(conv_id, _new_state)
             except Exception as _sw_err:
                 logger.warning("Dual-write conversation_state failed: %s", _sw_err, exc_info=True)
 
@@ -1096,6 +1125,8 @@ class QueryService:
                 clarificationQuestions=intent.clarificationQuestions,
                 processingSteps=tracker.to_list() if tracker else None,
             )
+
+        execution_plan = self._build_minimal_execution_plan(query, intent)
 
         if intent.needsDecomposition and intent.decompositionType == "provinces":
             intent.decompositionEntities = normalize_canadian_region_list(
@@ -1113,6 +1144,24 @@ class QueryService:
             logger.info("🚀 Using batch method (Pro Mode disabled for decomposition)")
 
             data = await self._decompose_and_aggregate(query, intent, conv_id, tracker)
+            verification_error = await self._verify_execution_result(
+                query,
+                intent,
+                execution_plan,
+                data,
+            )
+            if verification_error:
+                if _prev_good_intent is not None:
+                    conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                if _prev_good_state is not None:
+                    conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                return self._build_verification_failed_response(
+                    conversation_id=conv_id,
+                    intent=intent,
+                    message=verification_error,
+                    processing_steps=tracker.to_list() if tracker else None,
+                )
+            self._commit_staged_conversation_state(conv_id, pending_state)
 
             conv_id = conversation_manager.add_message_safe(
                 conv_id,
@@ -1171,7 +1220,7 @@ class QueryService:
                 data = await self._fetch_multi_indicator_data(intent)
             else:
                 data = await retry_async(
-                    lambda: self._fetch_data(intent),
+                    lambda: self._fetch_data(intent, execution_plan=execution_plan),
                     max_attempts=3,
                     initial_delay=1.0,
                 )
@@ -1199,6 +1248,24 @@ class QueryService:
                         intent,
                         fallback_data,
                     )
+                    verification_error = await self._verify_execution_result(
+                        query,
+                        intent,
+                        execution_plan,
+                        fallback_data,
+                    )
+                    if verification_error:
+                        if _prev_good_intent is not None:
+                            conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                        if _prev_good_state is not None:
+                            conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                        return self._build_verification_failed_response(
+                            conversation_id=conv_id,
+                            intent=intent,
+                            message=verification_error,
+                            processing_steps=tracker.to_list() if tracker else None,
+                        )
+                    self._commit_staged_conversation_state(conv_id, pending_state)
                     return QueryResponse(
                         conversationId=conv_id,
                         intent=intent,
@@ -1218,6 +1285,24 @@ class QueryService:
                     intent,
                     recovered_data,
                 )
+                verification_error = await self._verify_execution_result(
+                    query,
+                    intent,
+                    execution_plan,
+                    recovered_data,
+                )
+                if verification_error:
+                    if _prev_good_intent is not None:
+                        conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                    if _prev_good_state is not None:
+                        conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                    return self._build_verification_failed_response(
+                        conversation_id=conv_id,
+                        intent=intent,
+                        message=verification_error,
+                        processing_steps=tracker.to_list() if tracker else None,
+                    )
+                self._commit_staged_conversation_state(conv_id, pending_state)
                 return QueryResponse(
                     conversationId=conv_id,
                     intent=intent,
@@ -1286,6 +1371,25 @@ class QueryService:
         else:
             logger.info("Skipping post-fetch clarification for delta-resolved intent")
 
+        verification_error = await self._verify_execution_result(
+            query,
+            intent,
+            execution_plan,
+            data,
+        )
+        if verification_error:
+            if _prev_good_intent is not None:
+                conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+            if _prev_good_state is not None:
+                conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+            return self._build_verification_failed_response(
+                conversation_id=conv_id,
+                intent=intent,
+                message=verification_error,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+        self._commit_staged_conversation_state(conv_id, pending_state)
+
         conv_id = conversation_manager.add_message_safe(
             conv_id,
             "assistant",
@@ -1345,6 +1449,180 @@ class QueryService:
     ) -> bool:
         """Delegates to :func:`indicator_resolution.is_resolved_indicator_plausible`."""
         return _ir_is_resolved_indicator_plausible(self, provider, indicator_query, resolved_code, resolved_name)
+
+    async def _judge_resolved_indicator_match(
+        self,
+        provider: str,
+        indicator_query: str,
+        resolved_code: str,
+        resolved_name: str = "",
+        resolved_metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Use the shared model-backed resolved-indicator judge when available."""
+        judgment = await _smj_judge_resolved_indicator(
+            self,
+            provider=provider,
+            indicator_query=indicator_query,
+            resolved_code=resolved_code,
+            resolved_name=resolved_name,
+            resolved_metadata=resolved_metadata,
+        )
+        if judgment is None:
+            logger.warning(
+                "Resolved-indicator judge unavailable or inconclusive for provider=%s code=%s",
+                provider,
+                resolved_code,
+            )
+            return False
+
+        if judgment.decision != "match" or judgment.confidence < 0.75:
+            logger.info(
+                "Resolved-indicator judge rejected match: provider=%s code=%s decision=%s confidence=%.2f reason=%s",
+                provider,
+                resolved_code,
+                judgment.decision,
+                judgment.confidence,
+                judgment.reason,
+            )
+            return False
+
+        return True
+
+    def _use_minimal_execution_plan(self) -> bool:
+        return bool(getattr(self.settings, "use_minimal_execution_plan", False))
+
+    def _use_post_fetch_semantic_judge(self) -> bool:
+        return bool(getattr(self.settings, "use_post_fetch_semantic_judge", False))
+
+    def _use_staged_state_commit(self) -> bool:
+        return bool(getattr(self.settings, "use_staged_state_commit", False))
+
+    def _build_minimal_execution_plan(
+        self,
+        query: str,
+        intent: ParsedIntent,
+    ) -> Optional[ExecutionPlan]:
+        if not self._use_minimal_execution_plan():
+            return None
+        return _ep_build_minimal_execution_plan(query, intent)
+
+    @staticmethod
+    def _series_with_values_count(data: List[NormalizedData]) -> int:
+        return sum(
+            1
+            for series in (data or [])
+            if any(getattr(point, "value", None) is not None for point in (series.data or []))
+        )
+
+    def _returned_country_scope(self, data: List[NormalizedData]) -> list[str]:
+        countries: list[str] = []
+        for series in data or []:
+            metadata = getattr(series, "metadata", None)
+            country_text = str(getattr(metadata, "country", "") or "").strip()
+            if not country_text:
+                continue
+            normalized = self._normalize_country_to_iso2(country_text) or country_text.upper()
+            if normalized not in countries:
+                countries.append(normalized)
+        return countries
+
+    def _verify_execution_plan_structure(
+        self,
+        execution_plan: ExecutionPlan,
+        data: List[NormalizedData],
+    ) -> Optional[str]:
+        verification_checks = set(execution_plan.verification_checks or [])
+        expected_shape = dict(execution_plan.expected_shape or {})
+
+        min_series_count = int(expected_shape.get("min_series_count", 1) or 1)
+        series_with_values = self._series_with_values_count(data)
+        if series_with_values < min_series_count:
+            return (
+                f"Expected at least {min_series_count} populated series, "
+                f"but received {series_with_values}."
+            )
+
+        if "decomposition_cardinality" in verification_checks and series_with_values < 2:
+            return "Expected a decomposition result with multiple populated members, but the result collapsed to a single member."
+
+        if "country_scope" in verification_checks:
+            requested_countries = self._normalize_country_targets(
+                list(expected_shape.get("requested_countries") or [])
+            )
+            returned_countries = self._returned_country_scope(data)
+            if requested_countries and not returned_countries:
+                return (
+                    "The result could not verify country scope because the fetched series "
+                    "did not include country metadata."
+                )
+
+            if requested_countries and returned_countries:
+                unexpected_countries = [
+                    country for country in returned_countries if country not in requested_countries
+                ]
+                if unexpected_countries:
+                    return (
+                        "Fetched country scope drifted beyond the requested set. "
+                        f"Requested={requested_countries}, returned={returned_countries}."
+                    )
+
+                missing_countries = [
+                    country for country in requested_countries if country not in returned_countries
+                ]
+                if missing_countries:
+                    return (
+                        "The result did not cover the full requested country scope. "
+                        f"Missing={missing_countries}, returned={returned_countries}."
+                    )
+
+        return None
+
+    async def _verify_execution_result(
+        self,
+        query: str,
+        intent: ParsedIntent,
+        execution_plan: Optional[ExecutionPlan],
+        data: List[NormalizedData],
+    ) -> Optional[str]:
+        if not execution_plan or not data:
+            return None
+
+        structural_failure = self._verify_execution_plan_structure(execution_plan, data)
+        if structural_failure:
+            return structural_failure
+
+        if not self._use_post_fetch_semantic_judge():
+            return None
+
+        verification_query = str(
+            intent.resolvedQuery or query or intent.originalQuery or ""
+        ).strip()
+        judgment = await _smj_judge_execution_result(
+            self,
+            original_query=verification_query,
+            execution_plan=execution_plan.model_dump(mode="json"),
+            fetched_result=data,
+        )
+        if judgment is None:
+            return "Fetched result could not be semantically verified."
+
+        if judgment.decision == "pass" and judgment.confidence >= 0.7:
+            return None
+
+        failed_checks = ", ".join(judgment.failed_checks or [])
+        detail = f"{judgment.reason or 'Fetched result could not be verified.'}"
+        if failed_checks:
+            detail += f" Failed checks: {failed_checks}."
+        return detail
+
+    def _commit_staged_conversation_state(
+        self,
+        conversation_id: str,
+        state: Optional[Any],
+    ) -> None:
+        if state is None or not self._use_staged_state_commit():
+            return
+        conversation_manager.set_conversation_state(conversation_id, state)
 
     def _extract_series_provider_and_code(self, series: Any) -> tuple[str, str]:
         """Delegates to :func:`indicator_resolution.extract_series_provider_and_code`."""
@@ -1538,6 +1816,18 @@ class QueryService:
         """
         cache_params = dict(params or {})
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION
+        execution_plan_identity = params.get("__execution_plan_identity") if params else None
+        if execution_plan_identity:
+            cache_params["_provider"] = normalize_provider_name(
+                execution_plan_identity.get("provider_request", {}).get("provider") or provider
+            )
+            cache_params["_plan_hash"] = hashlib.sha256(
+                json.dumps(execution_plan_identity, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()[:16]
+            cache_params.pop("_query_hash", None)
+            cache_params.pop("__execution_plan_identity", None)
+            return cache_params
+
         cache_params["_provider"] = normalize_provider_name(provider)
         # Include original query hash for dimension-aware caching.
         # "CPI shelter Canada" and "CPI energy Canada" both resolve to
@@ -2650,6 +2940,7 @@ class QueryService:
             # the last good state.
             _prev_good_intent = conversation_manager.get_last_intent(conv_id)
             _prev_good_state = conversation_manager.get_conversation_state(conv_id)
+            _pending_conv_state = None
             conv_id = conversation_manager.add_message_safe(conv_id, "user", query, intent=intent)
 
             # Dual-write: update ConversationState alongside last_intent.
@@ -2659,7 +2950,9 @@ class QueryService:
             try:
                 _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                 _new_conv_state = merge_new_state_with_previous(_new_conv_state, _prev_good_state)
-                conversation_manager.set_conversation_state(conv_id, _new_conv_state)
+                _pending_conv_state = _new_conv_state
+                if not self._use_staged_state_commit():
+                    conversation_manager.set_conversation_state(conv_id, _new_conv_state)
             except Exception as _sw_err:
                 logger.warning("Dual-write conversation_state failed in process_query: %s", _sw_err)
 
@@ -2673,6 +2966,8 @@ class QueryService:
                     clarificationQuestions=intent.clarificationQuestions,
                     processingSteps=tracker.to_list(),
                 )
+
+            execution_plan = self._build_minimal_execution_plan(query, intent)
 
             if intent.needsDecomposition and intent.decompositionType == "provinces":
                 intent.decompositionEntities = normalize_canadian_region_list(
@@ -2700,6 +2995,19 @@ class QueryService:
 
                 # Decompose and aggregate using batch method
                 data = await self._decompose_and_aggregate(query, intent, conv_id, tracker)
+                verification_error = await self._verify_execution_result(query, intent, execution_plan, data)
+                if verification_error:
+                    if _prev_good_intent is not None:
+                        conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                    if _prev_good_state is not None:
+                        conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                    return self._build_verification_failed_response(
+                        conversation_id=conv_id,
+                        intent=intent,
+                        message=verification_error,
+                        processing_steps=tracker.to_list(),
+                    )
+                self._commit_staged_conversation_state(conv_id, _pending_conv_state)
 
                 conv_id = conversation_manager.add_message_safe(
                     conv_id,
@@ -3047,9 +3355,13 @@ class QueryService:
         """Delegates to :func:`data_fetcher.fetch_multi_indicator_data`."""
         return await _df_fetch_multi_indicator_data(self, intent)
 
-    async def _fetch_data(self, intent: ParsedIntent) -> List[NormalizedData]:
+    async def _fetch_data(
+        self,
+        intent: ParsedIntent,
+        execution_plan: Optional[ExecutionPlan] = None,
+    ) -> List[NormalizedData]:
         """Delegates to :func:`data_fetcher.fetch_data`."""
-        return await _df_fetch_data(self, intent)
+        return await _df_fetch_data(self, intent, execution_plan=execution_plan)
 
     async def _execute_with_orchestrator(
         self,
@@ -3265,6 +3577,22 @@ class QueryService:
         fetch_error: Optional[Exception] = None
 
         conv_id = conversation_id
+        execution_plan = self._build_minimal_execution_plan(query, intent)
+        _prev_good_intent = conversation_manager.get_last_intent(conv_id)
+        _prev_good_state = conversation_manager.get_conversation_state(conv_id)
+        _pending_conv_state = None
+
+        try:
+            _new_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+            _new_state = merge_new_state_with_previous(_new_state, _prev_good_state)
+            _pending_conv_state = _new_state
+            if not self._use_staged_state_commit():
+                conversation_manager.set_conversation_state(conv_id, _new_state)
+        except Exception as _state_prepare_exc:
+            logger.warning(
+                "Failed to prepare conversation state for standard pipeline: %s",
+                _state_prepare_exc,
+            )
 
         # Check for multi-indicator queries (e.g., "unemployment and inflation for G7")
         # and use the parallel multi-indicator fetch path.
@@ -3279,7 +3607,7 @@ class QueryService:
                 )
                 result = await self._fetch_multi_indicator_data(intent)
             else:
-                result = await self._fetch_data(intent)
+                result = await self._fetch_data(intent, execution_plan=execution_plan)
             if result:
                 # _fetch_data may return QueryResponse or list of NormalizedData
                 if isinstance(result, QueryResponse):
@@ -3289,11 +3617,31 @@ class QueryService:
                         result.intent = intent
                     if result.data and not result.alternativeSeries:
                         result.alternativeSeries = self._build_alternative_series(intent, result.data)
+                    if result.data:
+                        verification_error = await self._verify_execution_result(
+                            query,
+                            intent,
+                            execution_plan,
+                            result.data,
+                        )
+                        if verification_error:
+                            if _prev_good_intent is not None:
+                                conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                            if _prev_good_state is not None:
+                                conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                            return self._build_verification_failed_response(
+                                conversation_id=conv_id,
+                                intent=intent,
+                                message=verification_error,
+                                processing_steps=tracker.to_list() if tracker else None,
+                            )
                     # Dual-write conversation state (QueryResponse branch)
                     try:
-                        _qs = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
-                        _ex = conversation_manager.get_conversation_state(conv_id)
-                        _qs = merge_new_state_with_previous(_qs, _ex)
+                        _qs = _pending_conv_state
+                        if _qs is None:
+                            _qs = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+                            _ex = conversation_manager.get_conversation_state(conv_id)
+                            _qs = merge_new_state_with_previous(_qs, _ex)
                         # Ensure cube metadata for StatsCan dimension follow-ups
                         if (_qs.statscan_product_id
                                 and not _qs.statscan_cube_metadata
@@ -3307,7 +3655,10 @@ class QueryService:
                                     _qs.statscan_cube_metadata = _cube
                             except Exception as _cube_exc:
                                 logger.debug("Non-critical: statscan cube metadata fetch failed (QueryResponse branch): %s", _cube_exc)
-                        conversation_manager.set_conversation_state(conv_id, _qs)
+                        if self._use_staged_state_commit():
+                            conversation_manager.set_conversation_state(conv_id, _qs)
+                        else:
+                            conversation_manager.set_conversation_state(conv_id, _qs)
                     except Exception as _state_exc:
                         logger.warning("Failed to save conversation state (QueryResponse branch): %s", _state_exc)
                     return result
@@ -3318,6 +3669,23 @@ class QueryService:
                     result, coverage_warning = await self._maybe_improve_country_coverage(
                         query, intent, result,
                     )
+                    verification_error = await self._verify_execution_result(
+                        query,
+                        intent,
+                        execution_plan,
+                        result,
+                    )
+                    if verification_error:
+                        if _prev_good_intent is not None:
+                            conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                        if _prev_good_state is not None:
+                            conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                        return self._build_verification_failed_response(
+                            conversation_id=conv_id,
+                            intent=intent,
+                            message=verification_error,
+                            processing_steps=tracker.to_list() if tracker else None,
+                        )
                     alternatives = self._build_alternative_series(intent, result)
                     conversation_manager.add_message_safe(
                         conversation_id, "assistant",
@@ -3326,11 +3694,13 @@ class QueryService:
                     )
                     # Dual-write: save conversation state AFTER fetch
                     try:
-                        _new_state = extract_state_from_intent(
-                            intent, statscan_provider=self.statscan_provider
-                        )
-                        _existing = conversation_manager.get_conversation_state(conv_id)
-                        _new_state = merge_new_state_with_previous(_new_state, _existing)
+                        _new_state = _pending_conv_state
+                        if _new_state is None:
+                            _new_state = extract_state_from_intent(
+                                intent, statscan_provider=self.statscan_provider
+                            )
+                            _existing = conversation_manager.get_conversation_state(conv_id)
+                            _new_state = merge_new_state_with_previous(_new_state, _existing)
                         # Explicitly fetch cube metadata for StatsCan dimension follow-ups.
                         # Vector-based fetches don't call _get_cube_metadata, so the
                         # provider's cache may be empty. We fetch it here so R2 has it.
@@ -3373,6 +3743,25 @@ class QueryService:
                 fallback_data, coverage_warning = await self._maybe_improve_country_coverage(
                     query, intent, fallback_data,
                 )
+                verification_error = await self._verify_execution_result(
+                    query,
+                    intent,
+                    execution_plan,
+                    fallback_data,
+                )
+                if verification_error:
+                    if _prev_good_intent is not None:
+                        conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                    if _prev_good_state is not None:
+                        conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                    return self._build_verification_failed_response(
+                        conversation_id=conv_id,
+                        intent=intent,
+                        message=verification_error,
+                        processing_steps=tracker.to_list() if tracker else None,
+                    )
+                if self._use_staged_state_commit() and _pending_conv_state is not None:
+                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -3392,6 +3781,25 @@ class QueryService:
                 recovered_data, coverage_warning = await self._maybe_improve_country_coverage(
                     query, intent, recovered_data,
                 )
+                verification_error = await self._verify_execution_result(
+                    query,
+                    intent,
+                    execution_plan,
+                    recovered_data,
+                )
+                if verification_error:
+                    if _prev_good_intent is not None:
+                        conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                    if _prev_good_state is not None:
+                        conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                    return self._build_verification_failed_response(
+                        conversation_id=conv_id,
+                        intent=intent,
+                        message=verification_error,
+                        processing_steps=tracker.to_list() if tracker else None,
+                    )
+                if self._use_staged_state_commit() and _pending_conv_state is not None:
+                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -3410,6 +3818,25 @@ class QueryService:
             )
             if stale_data:
                 stale_list = stale_data if isinstance(stale_data, list) else [stale_data]
+                verification_error = await self._verify_execution_result(
+                    query,
+                    intent,
+                    execution_plan,
+                    stale_list,
+                )
+                if verification_error:
+                    if _prev_good_intent is not None:
+                        conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                    if _prev_good_state is not None:
+                        conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                    return self._build_verification_failed_response(
+                        conversation_id=conversation_id,
+                        intent=intent,
+                        message=verification_error,
+                        processing_steps=tracker.to_list() if tracker else None,
+                    )
+                if self._use_staged_state_commit() and _pending_conv_state is not None:
+                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -4138,6 +4565,8 @@ class QueryService:
 
         self._maybe_resolve_region_clarification(query, intent)
         self._maybe_expand_multi_concept_intent(query, intent)
+        execution_plan = self._build_minimal_execution_plan(query, intent)
+        previous_intent = conversation_manager.get_last_intent(conversation_id)
 
         if record_user_message:
             conversation_id = conversation_manager.add_message_safe(
@@ -4168,7 +4597,7 @@ class QueryService:
 
         # Fetch data
         data = await retry_async(
-            lambda: self._fetch_data(intent),
+            lambda: self._fetch_data(intent, execution_plan=execution_plan),
             max_attempts=3,
             initial_delay=1.0,
         )
@@ -4188,6 +4617,7 @@ class QueryService:
             )
             if no_data_clarification:
                 return no_data_clarification
+            conversation_manager.restore_last_intent(conversation_id, previous_intent)
             details = [f"No data found for **{indicators}**"]
             if country:
                 details.append(f"for **{country}**")
@@ -4224,6 +4654,21 @@ class QueryService:
         )
         if clarification_response:
             return clarification_response
+
+        verification_error = await self._verify_execution_result(
+            query,
+            intent,
+            execution_plan,
+            data,
+        )
+        if verification_error:
+            conversation_manager.restore_last_intent(conversation_id, previous_intent)
+            return self._build_verification_failed_response(
+                conversation_id=conversation_id,
+                intent=intent,
+                message=verification_error,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
 
         conversation_id = conversation_manager.add_message_safe(
             conversation_id,
