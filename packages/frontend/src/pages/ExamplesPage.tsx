@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useEffect } from 'react'
 
-const LIVE_DATA_APP_URL = 'https://data.openecon.io/chat'
+const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
 interface ExampleCategory {
   title: string
@@ -131,7 +131,7 @@ export function ExamplesPage() {
             rel="noopener noreferrer"
             className="inline-flex mb-4 items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700"
           >
-            Live app: data.openecon.io/chat
+            Live app: data.openecon.ai/chat
           </a>
           <a
             href={LIVE_DATA_APP_URL}

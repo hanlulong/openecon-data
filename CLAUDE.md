@@ -42,7 +42,7 @@ Production limits (per IP, per minute):
 ### 4. Frontend Verification
 
 - **Always use chrome-devtools MCP** when making frontend changes
-- **Verify production** at https://openecon.ai/chat after deploying fixes
+- **Verify production** at https://data.openecon.ai/chat after deploying fixes
 
 ### 5. Development Mode Auth
 
@@ -174,7 +174,7 @@ npm run build:frontend
 # 2. Backend auto-reloads on file changes (no action needed)
 
 # 3. Verify
-curl https://openecon.ai/api/health
+curl https://data.openecon.ai/api/health
 ```
 
 Apache2 serves frontend from `packages/frontend/dist` and proxies `/api/*` to backend on port 3001.
@@ -259,7 +259,7 @@ PROMODE_SESSION_DIR=/tmp/promode_sessions
 
 # Production
 NODE_ENV=production
-ALLOWED_ORIGINS=https://openecon.ai,https://www.openecon.ai
+ALLOWED_ORIGINS=https://data.openecon.ai,https://www.data.openecon.ai
 ```
 
 ---

@@ -234,7 +234,7 @@ const navItems = [
   { label: 'Docs', href: '/docs' },
 ] as const
 
-const LIVE_DATA_APP_URL = 'https://data.openecon.io/chat'
+const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
 const integrations = [
   { name: 'FRED', tag: 'Macro', desc: '90,000+ US economic series — GDP, CPI, employment, rates.' },

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         default_factory=lambda: [],  # Changed from ["*"] to require explicit configuration
         alias="ALLOWED_ORIGINS"
     )
-    app_url: str = Field(default="https://openecon.ai", alias="APP_URL")
+    app_url: str = Field(default="https://data.openecon.ai", alias="APP_URL")
 
     # LLM Configuration
     # LLM_PROVIDER options: openrouter, vllm, ollama, lm-studio

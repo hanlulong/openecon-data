@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-const LIVE_DATA_APP_URL = 'https://data.openecon.io/chat'
+const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
 export function DocsPage() {
   useEffect(() => {
@@ -20,7 +20,7 @@ export function DocsPage() {
             target="_blank"
             rel="noreferrer"
           >
-            data.openecon.io/chat
+            data.openecon.ai/chat
           </a>{' '}
           where you can type a natural-language question, review the structured response, and export
           the underlying dataset. This page captures the basics. For SDKs, authentication, and deployment guides, visit{' '}
@@ -74,7 +74,7 @@ export function DocsPage() {
           <section>
             <h2 className="text-lg font-semibold text-gray-900 sm:text-xl">Quick start</h2>
             <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm text-gray-600 sm:mt-3 sm:text-base">
-              <li>Open <em>data.openecon.io/chat</em>.</li>
+              <li>Open <em>data.openecon.ai/chat</em>.</li>
               <li>Try a query such as “Canada unemployment rate SA, monthly, last 10 years”.</li>
               <li>
                 Inspect the assistant response, copy the source URL, or download the result as CSV/JSON for your notebook.
