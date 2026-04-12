@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from typing import Any
 import unittest
@@ -41,6 +42,7 @@ class QueryServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         cache_service.clear()
         self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+        self.service.settings.use_outcome_decision_stage = False
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -1381,12 +1383,96 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
         self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
 
-    def test_build_prefetch_indicator_choice_clarification_accepts_plausible_age_variant(self) -> None:
-        """Age-demographic variant indicators are accepted without clarification.
+    def test_build_prefetch_indicator_choice_clarification_outcome_stage_clarifies_when_primary_and_alternative_are_both_executable(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["inflation"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="inflation in the united states",
+        )
+        options = [
+            "[WorldBank] Inflation, consumer prices (annual %) (FP.CPI.TOTL.ZG)",
+            "[WorldBank] Core inflation proxy (FP.CPI.CORE.ZG)",
+        ]
 
-        The LLM handles semantic refinement (age group selection); the router
-        no longer penalises age-demographic mismatches.
-        """
+        class _Resolved:
+            provider = "WORLDBANK"
+            code = "FP.CPI.TOTL.ZG"
+            name = "Inflation, consumer prices (annual %)"
+            confidence = 0.95
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=True)), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
+             patch.object(self.service, "_indicator_resolution_threshold", return_value=0.5), \
+             patch.object(self.service, "_score_resolved_indicator_relevance", return_value=0.9), \
+             patch.object(self.service, "_minimum_resolved_relevance_threshold", return_value=0.1), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="inflation in the united states",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertEqual(len(clarification.clarificationOptions or []), 2)
+        joined = "\n".join(clarification.clarificationQuestions or [])
+        self.assertIn("multiple plausible indicator matches", joined.lower())
+
+    def test_build_prefetch_indicator_choice_clarification_outcome_stage_allows_up_to_ten_options(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage-width")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["employment"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="employment in the united states",
+        )
+        options = [
+            f"[WorldBank] Employment option {idx} (CODE_{idx})"
+            for idx in range(1, 13)
+        ]
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=False)), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=None))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="employment in the united states",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertEqual(len(clarification.clarificationOptions or []), 10)
+        question_lines = clarification.clarificationQuestions or []
+        enumerated_lines = [line for line in question_lines if re.match(r"^\d+\.", line)]
+        self.assertEqual(len(enumerated_lines), 10)
+
+    def test_build_prefetch_indicator_choice_clarification_stops_on_age_variant_without_options(self) -> None:
+        """Do not silently accept a youth-employment variant for a broad employment request."""
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["employment rate"],

@@ -85,6 +85,11 @@ class Settings(BaseSettings):
         alias="USE_INDICATOR_HYBRID_RERANK",
         description="Enable hybrid indicator matching (FTS + vector RRF fusion + fuzzy scoring)"
     )
+    use_outcome_decision_stage: bool = Field(
+        default=False,
+        alias="USE_OUTCOME_DECISION_STAGE",
+        description="Enable the shared prefetch outcome-decision stage for direct-answer vs clarify vs unsupported control flow"
+    )
     indicator_rrf_k: int = Field(
         default=60,
         alias="INDICATOR_RRF_K",

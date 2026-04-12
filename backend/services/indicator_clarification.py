@@ -30,6 +30,8 @@ from ..models import (
 )
 from ..routing.country_resolver import CountryResolver
 from ..services.conversation import conversation_manager
+# Explicit candidate-evidence / decision scaffolding for Phase 1.
+from ..services.candidate_evidence_builder import CandidateEvidenceBuilder, build_candidate_id
 # get_indicator_resolver is imported lazily within functions to allow
 # test patches at backend.services.query.get_indicator_resolver to take effect.
 from ..services.parameter_validator import ParameterValidator
@@ -53,6 +55,7 @@ from ..utils.processing_steps import (
     reset_processing_tracker,
 )
 from ..utils.retry import retry_async
+from .semantic_match_judge import decide_prefetch_outcome
 
 if TYPE_CHECKING:
     from ..services.query_pipeline import ParseRouteResult, ValidationResult
@@ -74,6 +77,12 @@ def normalize_provider_name(provider: str) -> str:
     """Normalize provider name to uppercase canonical form."""
     from ..utils.providers import normalize_provider_name as _npn
     return _npn(provider)
+
+
+def _use_outcome_decision_stage(qs: Any) -> bool:
+    """Return whether the Phase 1 prefetch outcome-decision stage is enabled."""
+    settings = getattr(qs, "settings", None)
+    return bool(getattr(settings, "use_outcome_decision_stage", False))
 
 
 # ====================================================================
@@ -2046,6 +2055,9 @@ async def build_prefetch_indicator_choice_clarification(
     if provider_upper in ("COINGECKO", "EXCHANGERATE"):
         return None
 
+    use_outcome_decision_stage = _use_outcome_decision_stage(qs)
+    evidence_builder = CandidateEvidenceBuilder() if use_outcome_decision_stage else None
+
     if intent.indicators and len(intent.indicators) > 1:
         return None
 
@@ -2141,10 +2153,23 @@ async def build_prefetch_indicator_choice_clarification(
             metadata=getattr(resolved, "metadata", None),
         )
         current_label = f"{current_name} from {provider or getattr(resolved, 'provider', 'unknown provider')}"
-        if primary_accepted and primary_relevance >= 0.65:
+        if (
+            not use_outcome_decision_stage
+            and primary_accepted
+            and primary_relevance >= 0.65
+        ):
             return None
 
-    options = qs._collect_indicator_choice_options(query_text or indicator_query, intent, max_options=4)
+    option_budget = (
+        CandidateEvidenceBuilder.MAX_CLARIFICATION_LIMIT
+        if use_outcome_decision_stage
+        else 4
+    )
+    options = qs._collect_indicator_choice_options(
+        query_text or indicator_query,
+        intent,
+        max_options=option_budget,
+    )
     if not options:
         if not primary_accepted:
             direct_translation = get_direct_provider_indicator_translation(
@@ -2208,7 +2233,7 @@ async def build_prefetch_indicator_choice_clarification(
             query=query_text or indicator_query,
             intent=intent,
             options=options,
-            max_options=4,
+            max_options=option_budget,
         )
         if len(viable_options) >= 2:
             options = viable_options
@@ -2250,11 +2275,83 @@ async def build_prefetch_indicator_choice_clarification(
             )
         return None
 
-    if primary_accepted and top_matches_primary:
+    if not use_outcome_decision_stage and primary_accepted and top_matches_primary:
         return None
 
-    if primary_accepted and not top_matches_primary and primary_relevance >= 0.65:
+    if (
+        not use_outcome_decision_stage
+        and primary_accepted
+        and not top_matches_primary
+        and primary_relevance >= 0.65
+    ):
         return None
+
+    if use_outcome_decision_stage and evidence_builder is not None:
+        option_records: list[dict[str, Any]] = []
+        option_index: dict[str, str] = {}
+        for option_text in options:
+            parsed = parse_indicator_option(option_text)
+            if not parsed:
+                continue
+            option_provider, option_code = parsed
+            candidate_id = build_candidate_id(option_provider, option_code)
+            option_records.append(
+                {
+                    "provider": option_provider,
+                    "code": option_code,
+                    "label": option_text,
+                    "title": option_text,
+                    "source": "option",
+                    "executable": True,
+                }
+            )
+            option_index[candidate_id] = option_text
+
+        primary_candidate_id = None
+        if resolved and getattr(resolved, "code", None):
+            primary_candidate_id = build_candidate_id(
+                str(getattr(resolved, "provider", "") or provider),
+                str(getattr(resolved, "code", "") or ""),
+            )
+
+        candidate_evidence = evidence_builder.build_prefetch_evidence(
+            provider=provider,
+            resolved=resolved,
+            options=option_records,
+            target_countries=target_countries,
+            primary_accepted=primary_accepted,
+        )
+        decision = decide_prefetch_outcome(
+            candidates=candidate_evidence,
+            primary_accepted=primary_accepted,
+            primary_candidate_id=primary_candidate_id,
+        )
+
+        if decision.outcome == "unsupported":
+            return build_no_reliable_indicator_match_response(
+                conversation_id=conversation_id,
+                intent=intent,
+                query=query_text or indicator_query,
+                qs=qs,
+                processing_steps=processing_steps,
+            )
+
+        if decision.outcome == "direct_answer":
+            selected_option = option_index.get(str(decision.selected_candidate_id or ""))
+            if selected_option and (not primary_accepted or not top_matches_primary):
+                apply_indicator_option_to_intent(intent, selected_option)
+            return None
+
+        if decision.outcome == "clarify":
+            max_options = max(
+                2,
+                min(
+                    len(options),
+                    decision.clarification_option_limit
+                    or evidence_builder.clarification_option_limit(candidate_evidence),
+                ),
+            )
+            options = options[:max_options]
 
     clarification_questions = [
         "I found multiple plausible indicator matches before fetching data.",
