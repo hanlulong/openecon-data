@@ -68,6 +68,13 @@ class Metadata(BaseModel):
     startDate: Optional[str] = None  # First available data date
     endDate: Optional[str] = None  # Last available data date
 
+    @field_validator("lastUpdated", mode="before")
+    @classmethod
+    def sanitize_last_updated(cls, v):
+        if v is None:
+            return ""
+        return str(v)
+
 
 class NormalizedData(BaseModel):
     metadata: Metadata
