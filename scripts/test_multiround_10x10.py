@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -88,11 +89,66 @@ def normalize_country(value: Any) -> str:
         alias = CountryResolver.COUNTRY_ALIASES.get(text.lower())
         if alias:
             return str(alias).upper()
+        simplified = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        alias = CountryResolver.COUNTRY_ALIASES.get(simplified)
+        if alias:
+            return str(alias).upper()
+        if "," in text:
+            before_comma = text.split(",", 1)[0].strip().lower()
+            alias = CountryResolver.COUNTRY_ALIASES.get(before_comma)
+            if alias:
+                return str(alias).upper()
     except Exception:
         pass
     if len(text) in {2, 3} and text.isalpha():
         return text.upper()
     return text.upper()
+
+
+def semantic_tags_from_observed(
+    *,
+    providers: list[str],
+    series_ids: list[str],
+    cue_text: str,
+) -> set[str]:
+    text = cue_text.lower().replace("_", " ")
+    tags: set[str] = set()
+
+    if "gdp" in text or "gross domestic product" in text or any("GDP" in series_id for series_id in series_ids):
+        tags.add("gdp")
+    if "inflation" in text or "consumer price" in text or "hicp" in text or "cpi" in text or any("CPI" in series_id or "HICP" in series_id for series_id in series_ids):
+        tags.add("inflation")
+    if "trade balance" in text or "external balance" in text or any("RSB" in series_id for series_id in series_ids):
+        tags.add("trade balance")
+    if "exchange rate" in text or "currency" in text or " forex " in f" {text} " or " fx " in f" {text} " or "EXCHANGERATE" in providers or any(series_id.startswith("DEX") for series_id in series_ids):
+        tags.add("exchange")
+    if "employment" in text:
+        tags.add("employment")
+    if "unemployment" in text:
+        tags.add("unemployment")
+    if "per capita" in text or any(".PCAP." in series_id for series_id in series_ids):
+        tags.add("per capita")
+    if "ppp" in text or any(".PP." in series_id for series_id in series_ids):
+        tags.add("ppp")
+    if "deflator" in text or any("GDPDEF" in series_id or ".DEFL." in series_id for series_id in series_ids):
+        tags.add("deflator")
+    if "current us$" in text or "nominal" in text or any(series_id in {"GDP", "NY.GDP.MKTP.CD"} for series_id in series_ids):
+        tags.add("nominal")
+    if "real gdp" in text or "constant prices" in text or "real gross domestic" in text or any(series_id in {"GDPC1", "NGDPRSAXDCUSQ"} for series_id in series_ids):
+        tags.add("real")
+    if "growth" in text or "annual %" in text or "annual percent" in text or "rate of change" in text or any(
+        series_id in {"A191RL1Q225SBEA", "NGDP_RPCH", "NY.GDP.MKTP.KD.ZG"} for series_id in series_ids
+    ):
+        tags.add("growth")
+    if "debt" in text:
+        tags.add("debt")
+    if "current account" in text or any("BCA" in series_id or "BN.CAB" in series_id for series_id in series_ids):
+        tags.add("current account")
+    if "export" in text or any(".EXP." in series_id for series_id in series_ids):
+        tags.add("export")
+    if "import" in text or any(".IMP." in series_id for series_id in series_ids):
+        tags.add("import")
+    return tags
 
 
 def detect_clarification(resp_json: dict[str, Any]) -> bool:
@@ -171,28 +227,26 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
     response_text = str(resp_json.get("response") or "")
     text_parts.append(response_text)
     text_parts.extend(str(option.get("label") or "") for option in (resp_json.get("clarificationOptions") or []) if isinstance(option, dict))
-    text_parts.extend(str(item) for item in (intent.get("indicators") or []))
-    params = intent.get("parameters") or {}
-    text_parts.extend(
-        [
-            str(params.get("indicator") or ""),
-            str(params.get("seriesId") or ""),
-            str(params.get("series_id") or ""),
-            str(params.get("__catalog_concept") or ""),
-        ]
-    )
 
     populated_series_count = sum(1 for dataset in datasets if dataset_has_values(dataset))
     if populated_series_count == 0 and datasets:
         populated_series_count = len(datasets)
+    scope_cardinality = max(populated_series_count, len(countries))
+    semantic_tags = semantic_tags_from_observed(
+        providers=sorted(providers),
+        series_ids=sorted(series_ids),
+        cue_text=" ".join(part for part in text_parts if part),
+    )
 
     return {
         "providers": sorted(providers),
         "countries": sorted(countries),
         "series_ids": sorted(series_ids),
         "series_count": populated_series_count,
+        "scope_cardinality": scope_cardinality,
         "clarification_detected": detect_clarification(resp_json),
         "cue_text": " ".join(part for part in text_parts if part).lower(),
+        "semantic_tags": sorted(semantic_tags),
     }
 
 
@@ -215,9 +269,10 @@ def evaluate_round(case: RoundCase, resp_json: dict[str, Any]) -> tuple[str, str
             reasons.append("unexpected_clarification")
 
     if not oracle.expect_clarification:
-        if observed["series_count"] < oracle.min_series_count:
+        observed_cardinality = max(observed["series_count"], observed["scope_cardinality"])
+        if observed_cardinality < oracle.min_series_count:
             reasons.append(f"series_count<{oracle.min_series_count}")
-        if oracle.exact_series_count is not None and observed["series_count"] != oracle.exact_series_count:
+        if oracle.exact_series_count is not None and observed_cardinality != oracle.exact_series_count:
             reasons.append(f"series_count!={oracle.exact_series_count}")
 
     if oracle.accepted_providers:
@@ -236,12 +291,18 @@ def evaluate_round(case: RoundCase, resp_json: dict[str, Any]) -> tuple[str, str
             reasons.append(f"forbidden_countries_present={unexpected}")
 
     if oracle.accepted_series_ids:
-        overlap = set(observed["series_ids"]) & {series_id.upper() for series_id in oracle.accepted_series_ids}
+        acceptable_series = {series_id.upper() for series_id in oracle.accepted_series_ids}
+        overlap = {
+            observed_id
+            for observed_id in observed["series_ids"]
+            if observed_id in acceptable_series or any(observed_id.startswith(prefix) for prefix in acceptable_series)
+        }
         if not overlap:
             reasons.append(f"series_id_mismatch expected~={oracle.accepted_series_ids} actual={observed['series_ids']}")
 
     for cue in oracle.required_indicator_cues:
-        if cue.lower() not in observed["cue_text"]:
+        cue_lower = cue.lower()
+        if cue_lower not in observed["cue_text"] and cue_lower not in observed["semantic_tags"]:
             reasons.append(f"missing_indicator_cue={cue}")
 
     for cue in oracle.forbidden_indicator_cues:

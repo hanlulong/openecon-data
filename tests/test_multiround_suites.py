@@ -13,7 +13,7 @@ from scripts.multiround_suites import (
     list_suite_names,
     load_suite,
 )
-from scripts.test_multiround_10x10 import evaluate_round
+from scripts.test_multiround_10x10 import evaluate_round, extract_observed
 
 
 @pytest.mark.unit
@@ -128,3 +128,79 @@ def test_oracle_evaluator_accepts_expected_clarification_path() -> None:
     assert status == "PASS"
     assert reasons == []
     assert observed["clarification_detected"] is True
+
+
+@pytest.mark.unit
+def test_observed_semantic_tags_detect_inflation_and_growth_variants() -> None:
+    inflation_response = {
+        "data": [
+            {
+                "metadata": {
+                    "source": "Eurostat",
+                    "country": "Germany",
+                    "indicator": "HICP - annual data (average index and rate of change)",
+                    "seriesId": "PRC_HICP_AIND",
+                },
+                "data": [{"date": "2024", "value": 2.1}],
+            }
+        ]
+    }
+    growth_response = {
+        "data": [
+            {
+                "metadata": {
+                    "source": "FRED",
+                    "country": "United States",
+                    "indicator": "Real gross domestic product",
+                    "seriesId": "A191RL1Q225SBEA",
+                },
+                "data": [{"date": "2024", "value": 2.2}],
+            }
+        ]
+    }
+
+    inflation_observed = extract_observed(inflation_response)
+    growth_observed = extract_observed(growth_response)
+
+    assert "inflation" in inflation_observed["semantic_tags"]
+    assert "growth" in growth_observed["semantic_tags"]
+    assert "gdp" in growth_observed["semantic_tags"]
+
+
+@pytest.mark.unit
+def test_country_normalization_handles_world_bank_country_labels() -> None:
+    case = RoundCase(
+        query="Add South Korea exports share of GDP",
+        oracle=RoundOracle(
+            required_countries=("JP", "KR"),
+            required_indicator_cues=("export", "gdp"),
+            exact_series_count=2,
+        ),
+    )
+    resp_json = {
+        "data": [
+            {
+                "metadata": {
+                    "source": "World Bank",
+                    "country": "Japan",
+                    "indicator": "Exports of goods and services (% of GDP)",
+                    "seriesId": "NE.EXP.GNFS.ZS",
+                },
+                "data": [{"date": "2024", "value": 1.0}],
+            },
+            {
+                "metadata": {
+                    "source": "World Bank",
+                    "country": "Korea, Rep.",
+                    "indicator": "Exports of goods and services (% of GDP)",
+                    "seriesId": "NE.EXP.GNFS.ZS",
+                },
+                "data": [{"date": "2024", "value": 1.1}],
+            },
+        ]
+    }
+
+    status, _, _, reasons, observed = evaluate_round(case, resp_json)
+    assert status == "PASS"
+    assert reasons == []
+    assert observed["countries"] == ["JP", "KR"]

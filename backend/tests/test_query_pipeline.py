@@ -58,6 +58,7 @@ def test_parse_and_route_enforces_explicit_provider() -> None:
     assert result.explicit_provider == "OECD"
     assert result.routed_provider == "OECD"
     assert result.intent.apiProvider == "OECD"
+    assert result.intent.parameters["__semantic_provider_locked"] is True
 
 
 def test_parse_and_route_uses_router_when_no_explicit_provider() -> None:

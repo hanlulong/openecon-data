@@ -2664,24 +2664,58 @@ class QueryService:
                     # with a short follow-up query (e.g. "last 10 years")
                     # causes catalog false-positives that drift the provider
                     # (e.g. "10 years" matching "10-year bond yield" → IMF).
-                    _delta_changes_routing_params = (
-                        _delta.changed_indicator is not None
-                        or _delta.changed_provider is not None
-                        or _delta.changed_country is not None
+                    _provider_locked = bool(
+                        _merged_state.provider_locked
+                        or (_delta_intent.parameters or {}).get("__semantic_provider_locked")
+                    )
+                    _delta_scope_changed = (
+                        _delta.changed_country is not None
                         or _delta.changed_countries is not None
                         or _delta.added_countries is not None
                         or _delta.removed_countries is not None
+                    )
+                    _delta_changes_routing_params = (
+                        _delta.changed_indicator is not None
+                        or _delta.added_indicators is not None
+                        or _delta.changed_provider is not None
                         or _delta.is_new_query
                     )
                     _skip_reroute = (
                         _merged_state.provider
-                        and not _delta_changes_routing_params
+                        and (
+                            not _delta_changes_routing_params
+                            or (
+                                _provider_locked
+                                and _delta.changed_provider is None
+                                and not _delta.is_new_query
+                            )
+                        )
                     )
                     if _skip_reroute:
                         logger.info(
-                            "Delta path: skipping re-route (delta_type=%s, preserving provider=%s)",
+                            "Delta path: skipping re-route (delta_type=%s, preserving provider=%s, provider_locked=%s)",
                             _delta.delta_type, _merged_state.provider,
+                            _provider_locked,
                         )
+                        if (
+                            _delta_scope_changed
+                            and not _provider_locked
+                            and _merged_state.provider
+                        ):
+                            _target_countries = _delta_intent.parameters.get("countries")
+                            if not _target_countries:
+                                _country_value = _delta_intent.parameters.get("country")
+                                _target_countries = [_country_value] if _country_value else []
+                            if (
+                                _target_countries
+                                and not self._provider_covers_country_list(_merged_state.provider, _target_countries)
+                            ):
+                                logger.info(
+                                    "Delta path: coverage override on scope-only follow-up %s -> WORLDBANK for countries=%s",
+                                    _merged_state.provider,
+                                    _target_countries,
+                                )
+                                _delta_intent.apiProvider = "WORLDBANK"
                     else:
                         try:
                             _delta_routing = self.unified_router.route(
@@ -2755,9 +2789,6 @@ class QueryService:
                         except Exception as _cube_err:
                             logger.debug("Delta path: cube metadata fetch failed: %s", _cube_err)
 
-                    # Persist the merged state
-                    conversation_manager.set_conversation_state(conv_id, _merged_state)
-
                     _delta_response = await self._execute_resolved_intent(
                         query=_delta_intent.originalQuery or query,
                         skip_prefetch_clarification=True,
@@ -2779,12 +2810,16 @@ class QueryService:
                     # path sets indicator = resolved code, so the condition was
                     # always False and resolved_indicator_code was never persisted
                     # via the delta path.  Now we always persist when available.
-                    if _delta_response and _delta_response.data:
+                    if (
+                        _delta_response is not None
+                        and not _delta_response.error
+                        and not _delta_response.clarificationNeeded
+                    ):
                         try:
                             _resolved_code = (_delta_intent.parameters or {}).get("indicator")
                             if _resolved_code:
                                 _merged_state.resolved_indicator_code = str(_resolved_code)
-                                conversation_manager.set_conversation_state(conv_id, _merged_state)
+                            conversation_manager.set_conversation_state(conv_id, _merged_state)
                         except Exception as _persist_exc:
                             logger.warning("Failed to persist resolved_indicator_code in delta path: %s", _persist_exc)
 

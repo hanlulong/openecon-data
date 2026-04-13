@@ -2376,6 +2376,68 @@ class QueryServiceTests(unittest.TestCase):
             params = refined_intent.parameters or {}
             target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
             self.assertIn("DE", [c.upper() for c in target_countries])
+            self.assertEqual(refined_intent.apiProvider, "WORLDBANK")
+
+    def test_delta_path_preserves_locked_provider_on_scope_follow_up(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        conv_id = conversation_manager.get_or_create("conv-locked-provider-scope-follow-up")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="GDP growth rate",
+                countries=["US", "CA"],
+                provider="IMF",
+                provider_locked=True,
+                original_query="GDP growth rate from IMF",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+
+        with patch.object(self.service.unified_router, "route") as route_mock, \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("show only Canada", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        route_mock.assert_not_called()
+        execute_intent.assert_awaited_once()
+        refined_intent = execute_intent.call_args.kwargs["intent"]
+        self.assertEqual(refined_intent.apiProvider, "IMF")
+        self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
+
+    def test_delta_path_does_not_commit_state_on_failed_execution(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        conv_id = conversation_manager.get_or_create("conv-delta-no-commit-on-failure")
+        previous_state = ConversationState(
+            indicator="GDP growth rate",
+            countries=["US", "CA"],
+            provider="IMF",
+            provider_locked=True,
+            original_query="GDP growth rate from IMF",
+        )
+        conversation_manager.set_conversation_state(conv_id, previous_state)
+
+        failed_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            error="verification_failed",
+            message="fail",
+        )
+
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=failed_response)):
+            response = run(self.service.process_query("show only Canada", conversation_id=conv_id))
+
+        self.assertEqual(response.error, "verification_failed")
+        persisted = conversation_manager.get_conversation_state(conv_id)
+        assert persisted is not None
+        self.assertEqual(persisted.provider, "IMF")
+        self.assertEqual(persisted.countries, ["US", "CA"])
 
     def test_looks_like_country_follow_up_accepts_add_pattern(self) -> None:
         """'Add Germany' should be recognized as a country follow-up."""

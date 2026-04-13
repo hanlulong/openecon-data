@@ -45,6 +45,21 @@ _GEOGRAPHY_DIMENSION_KEYS = {
     "countries",
 }
 
+_CRYPTO_INDICATOR_TO_COIN_ID = {
+    "bitcoin": "bitcoin",
+    "btc": "bitcoin",
+    "ethereum": "ethereum",
+    "eth": "ethereum",
+    "dogecoin": "dogecoin",
+    "doge": "dogecoin",
+    "solana": "solana",
+    "sol": "solana",
+    "cardano": "cardano",
+    "ada": "cardano",
+    "ripple": "ripple",
+    "xrp": "ripple",
+}
+
 
 def _normalize_country_to_iso2(name: str) -> str:
     """Normalize a country name/code to ISO2 for reliable comparison.
@@ -64,6 +79,18 @@ def _normalize_country_to_iso2(name: str) -> str:
     if len(name.strip()) == 2 and name.strip().isalpha():
         return name.strip().upper()
     return key
+
+
+def _indicator_to_coin_id(indicator: Optional[str]) -> Optional[str]:
+    """Return the CoinGecko asset id implied by an indicator label, if any."""
+    indicator_text = str(indicator or "").lower().strip()
+    if not indicator_text:
+        return None
+    parts = indicator_text.split()
+    if parts and parts[-1] in {"price", "coin", "crypto", "token", "currency"}:
+        parts = parts[:-1]
+    indicator_key = " ".join(parts).strip()
+    return _CRYPTO_INDICATOR_TO_COIN_ID.get(indicator_key)
 
 
 def _interpret_dimension_breakdown(
@@ -128,6 +155,7 @@ class ConversationState(BaseModel):
     country: Optional[str] = None
     countries: Optional[List[str]] = None
     provider: Optional[str] = None
+    provider_locked: bool = False
     start_date: Optional[str] = None
     end_date: Optional[str] = None
 
@@ -232,6 +260,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             country=delta.changed_country,
             countries=delta.changed_countries,
             provider=delta.changed_provider,
+            provider_locked=bool(delta.changed_provider),
             start_date=delta.changed_start_date,
             end_date=delta.changed_end_date,
             chart_type=delta.changed_chart_type,
@@ -257,23 +286,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.base_indicator = None
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
+        merged.coin_ids = None
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
             merged.statscan_cube_metadata = None  # Clear stale cube metadata when indicator changes
         # Auto-detect crypto indicator switches and update coin_ids/provider
-        _crypto_map = {
-            "bitcoin": "bitcoin", "btc": "bitcoin",
-            "ethereum": "ethereum", "eth": "ethereum",
-            "dogecoin": "dogecoin", "doge": "dogecoin",
-            "solana": "solana", "sol": "solana",
-            "cardano": "cardano", "ada": "cardano",
-            "ripple": "ripple", "xrp": "ripple",
-        }
-        _indicator_key = delta.changed_indicator.lower().strip()
-        # Strip common suffixes so "ethereum price" → "ethereum" matches the map
-        for _suffix in ("price", "coin", "crypto", "token", "currency"):
-            _indicator_key = _indicator_key.removesuffix(_suffix).strip()
-        _coin = _crypto_map.get(_indicator_key)
+        _coin = _indicator_to_coin_id(delta.changed_indicator)
         if _coin:
             merged.coin_ids = [_coin]
             merged.provider = "COINGECKO"
@@ -287,6 +305,15 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         # Keep the first indicator as the primary
         if not merged.indicator and merged_list:
             merged.indicator = merged_list[0]
+        crypto_coin_ids = list(merged.coin_ids or [])
+        for indicator in delta.added_indicators:
+            coin_id = _indicator_to_coin_id(indicator)
+            if coin_id and coin_id not in crypto_coin_ids:
+                crypto_coin_ids.append(coin_id)
+        if crypto_coin_ids:
+            merged.coin_ids = crypto_coin_ids
+            merged.provider = "COINGECKO"
+            merged.routed_provider = "COINGECKO"
 
     # --- Country ---
     if delta.changed_country:
@@ -329,6 +356,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     # --- Provider ---
     if delta.changed_provider:
         merged.provider = delta.changed_provider
+        merged.provider_locked = True
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
 
@@ -420,6 +448,17 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["coinIds"] = state.coin_ids
     if state.vs_currency:
         parameters["vsCurrency"] = state.vs_currency
+    if (
+        not parameters.get("coinIds")
+        and (state.provider or state.routed_provider or "").upper() == "COINGECKO"
+    ):
+        derived_coin_ids: list[str] = []
+        for indicator in state.last_indicators_resolved or ([state.indicator] if state.indicator else []):
+            coin_id = _indicator_to_coin_id(indicator)
+            if coin_id and coin_id not in derived_coin_ids:
+                derived_coin_ids.append(coin_id)
+        if derived_coin_ids:
+            parameters["coinIds"] = derived_coin_ids
 
     # Dimensions (Phase 3: pass through to data_fetcher for StatsCan etc.)
     if state.dimensions:
@@ -459,6 +498,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
 
     # Provider: use explicit provider if set, otherwise default
     provider = state.provider or state.routed_provider or "WorldBank"
+    if state.provider_locked:
+        parameters["__semantic_provider_locked"] = True
 
     # Decomposition
     needs_decomp = state.decomposition is not None
@@ -656,6 +697,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         country=country,
         countries=countries,
         provider=normalize_provider_name(intent.apiProvider or ""),
+        provider_locked=bool(params.get("__semantic_provider_locked")),
         routed_provider=normalize_provider_name(intent.apiProvider or ""),
         start_date=start_date,
         end_date=end_date,
@@ -700,6 +742,11 @@ def merge_new_state_with_previous(
 
     new_state.turn_number = previous.turn_number + 1
     explicit_geo_in_new_state = bool(new_state.country or new_state.countries)
+    indicator_changed = bool(
+        new_state.indicator
+        and previous.indicator
+        and str(new_state.indicator).strip().lower() != str(previous.indicator).strip().lower()
+    )
 
     # --- Geography ---
     _new_has_geo = new_state.country or new_state.countries
@@ -711,6 +758,8 @@ def merge_new_state_with_previous(
     # --- Provider ---
     if not new_state.provider and previous.provider:
         new_state.provider = previous.provider
+    if not new_state.provider_locked and previous.provider_locked:
+        new_state.provider_locked = True
     if not new_state.routed_provider and previous.routed_provider:
         new_state.routed_provider = previous.routed_provider
 
@@ -721,19 +770,31 @@ def merge_new_state_with_previous(
         new_state.end_date = previous.end_date
 
     # --- Indicator resolution ---
-    if not new_state.resolved_indicator_code and previous.resolved_indicator_code:
+    if (
+        not indicator_changed
+        and not new_state.resolved_indicator_code
+        and previous.resolved_indicator_code
+    ):
         new_state.resolved_indicator_code = previous.resolved_indicator_code
-    if not new_state.base_indicator and previous.base_indicator:
+    if not indicator_changed and not new_state.base_indicator and previous.base_indicator:
         new_state.base_indicator = previous.base_indicator
-    if not new_state.last_indicators_resolved and previous.last_indicators_resolved:
+    if (
+        not indicator_changed
+        and not new_state.last_indicators_resolved
+        and previous.last_indicators_resolved
+    ):
         new_state.last_indicators_resolved = previous.last_indicators_resolved
 
     # --- StatsCanada dimension context ---
     if not new_state.dimensions and previous.dimensions:
         new_state.dimensions = previous.dimensions
-    if not new_state.statscan_product_id and previous.statscan_product_id:
+    if not indicator_changed and not new_state.statscan_product_id and previous.statscan_product_id:
         new_state.statscan_product_id = previous.statscan_product_id
-    if not new_state.statscan_cube_metadata and previous.statscan_cube_metadata:
+    if (
+        not indicator_changed
+        and not new_state.statscan_cube_metadata
+        and previous.statscan_cube_metadata
+    ):
         new_state.statscan_cube_metadata = previous.statscan_cube_metadata
     if not new_state.decomposition and previous.decomposition:
         _, _, has_specific_geography_filter = _interpret_dimension_breakdown(new_state.dimensions)
@@ -751,7 +812,7 @@ def merge_new_state_with_previous(
         new_state.trade_commodity = previous.trade_commodity
 
     # --- Crypto fields ---
-    if not new_state.coin_ids and previous.coin_ids:
+    if not indicator_changed and not new_state.coin_ids and previous.coin_ids:
         new_state.coin_ids = previous.coin_ids
     if not new_state.vs_currency and previous.vs_currency:
         new_state.vs_currency = previous.vs_currency

@@ -183,7 +183,24 @@ class TestMergeState:
         delta = FollowUpDelta(changed_provider="WORLDBANK")
         merged = merge_state(state, delta)
         assert merged.provider == "WORLDBANK"
+        assert merged.provider_locked is True
         assert merged.last_indicators_resolved is None
+
+    def test_provider_lock_carries_forward_in_context_merge(self):
+        previous = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            provider_locked=True,
+            country="US",
+        )
+        new_state = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            country="US",
+        )
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.provider == "IMF"
+        assert merged.provider_locked is True
 
     def test_time_change_preserves_everything_else(self):
         state = ConversationState(
@@ -315,6 +332,32 @@ class TestMergeState:
             assert merged.coin_ids == [expected_coin], f"Failed for '{indicator}'"
             assert merged.provider == "COINGECKO", f"Failed for '{indicator}'"
 
+    def test_indicator_change_to_non_crypto_clears_stale_coin_ids(self):
+        state = ConversationState(
+            indicator="bitcoin price",
+            coin_ids=["bitcoin"],
+            provider="COINGECKO",
+        )
+        merged = merge_state(state, FollowUpDelta(changed_indicator="inflation rate"))
+        assert merged.coin_ids is None
+
+    def test_additive_crypto_indicators_merge_coin_ids(self):
+        state = ConversationState(
+            indicator="bitcoin price",
+            coin_ids=["bitcoin"],
+            provider="COINGECKO",
+        )
+        merged = merge_state(
+            state,
+            FollowUpDelta(added_indicators=["ethereum price", "dogecoin price"]),
+        )
+        assert merged.coin_ids == ["bitcoin", "ethereum", "dogecoin"]
+        assert merged.last_indicators_resolved == [
+            "bitcoin price",
+            "ethereum price",
+            "dogecoin price",
+        ]
+
 
 # ─── materialize_intent ─────────────────────────────────────────────
 
@@ -366,6 +409,17 @@ class TestMaterializeIntent:
         intent = materialize_intent(state)
         assert intent.apiProvider == "WorldBank"
 
+    def test_provider_lock_materializes_to_parameters(self):
+        state = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            provider_locked=True,
+            country="US",
+        )
+        intent = materialize_intent(state)
+        assert intent.apiProvider == "IMF"
+        assert intent.parameters["__semantic_provider_locked"] is True
+
     def test_trade_parameters(self):
         state = ConversationState(
             indicator="trade",
@@ -389,6 +443,15 @@ class TestMaterializeIntent:
         intent = materialize_intent(state)
         assert intent.parameters["coinIds"] == ["bitcoin"]
         assert intent.parameters["vsCurrency"] == "usd"
+
+    def test_crypto_parameters_derive_coin_ids_from_indicator_state(self):
+        state = ConversationState(
+            indicator="bitcoin price",
+            last_indicators_resolved=["bitcoin price", "ethereum price"],
+            provider="COINGECKO",
+        )
+        intent = materialize_intent(state)
+        assert intent.parameters["coinIds"] == ["bitcoin", "ethereum"]
 
     def test_decomposition(self):
         state = ConversationState(
@@ -470,6 +533,18 @@ class TestExtractStateFromIntent:
         assert state.trade_flow == "EXPORT"
         assert state.trade_commodity == "electronics"
 
+    def test_provider_lock_extraction(self):
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["GDP growth rate"],
+            parameters={"__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="GDP growth rate from IMF",
+        )
+        state = extract_state_from_intent(intent)
+        assert state.provider == "IMF"
+        assert state.provider_locked is True
+
     def test_decomposition_extraction(self):
         intent = ParsedIntent(
             apiProvider="STATSCAN",
@@ -543,18 +618,29 @@ class TestDeltaExtractor:
         assert delta.delta_type == "country_change"
         assert delta.changed_countries == ["US", "DE"]
 
-    def test_indicator_switch_deferred_to_llm(self, extractor):
-        """Indicator switches are now handled by LLM (extract_with_llm), not regex."""
+    def test_indicator_switch_detected_structurally(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
-        # Regex extract returns None — LLM tier handles indicator switches
         delta = extractor.extract("what about inflation", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.changed_indicator == "inflation"
 
-    def test_bare_indicator_deferred_to_llm(self, extractor):
-        """Bare indicator names are now handled by LLM, not regex."""
+    def test_bare_indicator_without_switch_marker_stays_with_llm(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract("unemployment", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is None
+
+    def test_additive_crypto_indicator_detected_structurally(self, extractor):
+        state = ConversationState(indicator="bitcoin price", provider="COINGECKO")
+        delta = extractor.extract("add Ethereum for comparison", state)
+        assert delta is not None
+        assert delta.added_indicators == ["ethereum price"]
+
+    def test_multi_crypto_replacement_detected_structurally(self, extractor):
+        state = ConversationState(indicator="solana price", provider="COINGECKO")
+        delta = extractor.extract("show only Ethereum and Dogecoin", state)
+        assert delta is not None
+        assert delta.changed_indicator == "ethereum price"
+        assert delta.added_indicators == ["dogecoin price"]
 
     def test_long_query_not_matched(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
@@ -668,7 +754,7 @@ class TestDeltaExtractorDimensionModifier:
         return _make
 
     def test_female_after_unemployment_is_dimension(self, _build_extractor):
-        """'show female' after unemployment rate → dimension modifier, not indicator switch."""
+        """'show female' after unemployment rate → dimension modifier."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -684,13 +770,13 @@ class TestDeltaExtractorDimensionModifier:
             statscan_product_id="14100287",
             statscan_cube_metadata=_cube,
         )
-        # Dimension detection is now handled by LLM (extract_with_llm),
-        # not regex. The sync extract() returns None for these.
         delta = extractor.extract("show female", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.added_dimensions == {"sex": "female"}
+        assert delta.is_dimension_modifier_change is True
 
-    def test_shelter_after_cpi_deferred_to_llm(self, _build_extractor):
-        """Dimension modifiers are now handled by LLM, not regex."""
+    def test_shelter_after_cpi_detected_structurally(self, _build_extractor):
+        """Dimension modifiers should be detected before the LLM fallback."""
         _cube = {"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"CPI": 41690973},
@@ -707,10 +793,11 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show shelter", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.added_dimensions == {"products": "Shelter"}
 
-    def test_inflation_after_unemployment_deferred_to_llm(self, _build_extractor):
-        """Indicator switches are now handled by LLM, not regex."""
+    def test_inflation_after_unemployment_switches_indicator(self, _build_extractor):
+        """Explicit switch-style follow-ups should be captured before the LLM fallback."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -727,7 +814,8 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show inflation", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.changed_indicator == "inflation"
 
     def test_non_statscan_provider_deferred_to_llm(self, _build_extractor):
         """Non-structural follow-ups are now handled by LLM."""
@@ -740,8 +828,8 @@ class TestDeltaExtractorDimensionModifier:
         delta = extractor.extract("female", state)
         assert delta is None  # Deferred to LLM
 
-    def test_dimension_modifier_deferred_to_llm(self, _build_extractor):
-        """Dimension modifiers are now handled by LLM."""
+    def test_dimension_modifier_detected_structurally(self, _build_extractor):
+        """Dimension modifiers should be detected structurally when metadata is present."""
         _cube = {"dimension": []}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -758,10 +846,11 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show youth", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.added_dimensions == {"age": "youth"}
 
-    def test_coordinate_mapping_deferred_to_llm(self, _build_extractor):
-        """Province-based follow-ups are now handled by LLM."""
+    def test_coordinate_mapping_detected_structurally(self, _build_extractor):
+        """Province-based follow-ups should be captured as dimension changes."""
         _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
         extractor = _build_extractor(
             coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
@@ -777,7 +866,8 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show Ontario", state)
-        assert delta is None  # Deferred to LLM
+        assert delta is not None
+        assert delta.added_dimensions == {"geography": "Ontario"}
 
 
 # ─── materialize_intent with dimensions ─────────────────────────────
@@ -1269,6 +1359,34 @@ class TestResolvedIndicatorCodePreservation:
         merged = merge_state(state, delta)
         assert merged.resolved_indicator_code == "FP.CPI.TOTL.ZG"
         assert merged.start_date == "2010-01-01"
+
+    def test_context_merge_does_not_carry_resolved_code_across_indicator_change(self):
+        previous = ConversationState(
+            indicator="GDP per capita",
+            resolved_indicator_code="NY.GDP.PCAP.CD",
+            provider="WORLDBANK",
+            country="US",
+        )
+        new_state = ConversationState(
+            indicator="GDP growth rate",
+            provider="WORLDBANK",
+            country="US",
+        )
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.resolved_indicator_code is None
+
+    def test_context_merge_does_not_carry_crypto_coin_ids_across_indicator_change(self):
+        previous = ConversationState(
+            indicator="bitcoin price",
+            coin_ids=["bitcoin"],
+            provider="COINGECKO",
+        )
+        new_state = ConversationState(
+            indicator="ethereum price",
+            provider="COINGECKO",
+        )
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.coin_ids is None
 
     def test_resolved_code_survives_redis_round_trip(self, monkeypatch):
         """resolved_indicator_code survives Redis serialization."""

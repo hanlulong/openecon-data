@@ -45,6 +45,7 @@ _FILLER_WORDS = {
     "keep", "filter", "display", "plot", "use", "from", "with",
     "compare", "add", "include", "plus", "get", "give", "tell",
     "look", "at", "up", "see", "that", "this", "it", "its", "my",
+    "switch", "back", "again", "comparison",
     # Removal words (country-level operations, not indicator terms)
     "remove", "exclude", "without", "drop", "delete", "minus",
     # Time-related words (not indicator terms)
@@ -90,6 +91,21 @@ _DECOMPOSITION_VALUE_TO_TYPE = {
     "regions": "regions",
     "country": "countries",
     "countries": "countries",
+}
+
+_CRYPTO_ASSET_ALIASES = {
+    "bitcoin": "bitcoin price",
+    "btc": "bitcoin price",
+    "ethereum": "ethereum price",
+    "eth": "ethereum price",
+    "dogecoin": "dogecoin price",
+    "doge": "dogecoin price",
+    "solana": "solana price",
+    "sol": "solana price",
+    "cardano": "cardano price",
+    "ada": "cardano price",
+    "ripple": "ripple price",
+    "xrp": "ripple price",
 }
 
 _GEOGRAPHY_DIMENSION_KEYS = {
@@ -202,9 +218,14 @@ class DeltaExtractor:
         if delta:
             return delta
 
-        # Dimension modifier and indicator switch are now handled by
-        # LLM delta extraction (extract_with_llm) for better accuracy.
-        # The regex handlers remain as code but are bypassed here.
+        delta = self._try_dimension_modifier(query_text, state)
+        if delta:
+            return self._promote_decomposition_semantics(delta, state)
+
+        delta = self._try_indicator_switch(query_text, state)
+        if delta:
+            return delta
+
         return None
 
     async def extract_with_llm(
@@ -556,7 +577,7 @@ Output the query_type and any changed fields as JSON."""
         # Check for explicit switch markers
         switch_markers = {
             "what about", "show", "how about", "switch to",
-            "instead", "what is", "what's",
+            "instead", "what is", "what's", "back to",
         }
         has_marker = any(marker in query_lower for marker in switch_markers)
 
@@ -564,6 +585,45 @@ Output the query_type and any changed fields as JSON."""
         extracted_countries = CountryResolver.detect_all_countries_in_query(query)
         if extracted_countries:
             return None
+
+        query_words = set(query_lower.split())
+        is_removal = bool(query_words & _REMOVAL_MARKERS)
+        is_additive = bool(query_words & _ADDITIVE_MARKERS) and not bool(
+            query_words & _REPLACEMENT_MARKERS
+        ) and not is_removal
+
+        detected_crypto_indicators: list[str] = []
+        for alias, indicator_name in _CRYPTO_ASSET_ALIASES.items():
+            if re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", query_lower):
+                if indicator_name not in detected_crypto_indicators:
+                    detected_crypto_indicators.append(indicator_name)
+        if detected_crypto_indicators:
+            if is_additive:
+                logger.info(
+                    "Delta: additive crypto indicators %s",
+                    detected_crypto_indicators,
+                )
+                return FollowUpDelta(
+                    added_indicators=detected_crypto_indicators,
+                    raw_query=query,
+                    delta_type="indicator_switch",
+                )
+            changed_indicator = detected_crypto_indicators[0]
+            added_indicators = (
+                detected_crypto_indicators[1:] if len(detected_crypto_indicators) > 1 else None
+            )
+            logger.info(
+                "Delta: crypto indicator switch '%s' → '%s' (+%s)",
+                state.indicator,
+                changed_indicator,
+                added_indicators,
+            )
+            return FollowUpDelta(
+                changed_indicator=changed_indicator,
+                added_indicators=added_indicators,
+                raw_query=query,
+                delta_type="indicator_switch",
+            )
 
         # Collect non-filler tokens — these are the candidate indicator
         candidate_tokens = [t for t in tokens if t not in _FILLER_WORDS]
@@ -573,8 +633,12 @@ Output the query_type and any changed fields as JSON."""
         # The candidate indicator is the non-filler tokens joined
         candidate_indicator = " ".join(candidate_tokens)
 
-        # If no switch marker, only allow very short queries (1-3 non-filler words)
-        if not has_marker and len(candidate_tokens) > 3:
+        # If no switch/add marker, defer to the LLM for ambiguous bare nouns.
+        if not has_marker and not is_additive:
+            return None
+
+        # If a marker exists, only allow reasonably short follow-ups.
+        if len(candidate_tokens) > 3:
             return None
 
         # If the candidate indicator is the same as the current one, skip
@@ -585,6 +649,18 @@ Output the query_type and any changed fields as JSON."""
         # Avoid matching provider names as indicators
         if candidate_indicator in _PROVIDER_NAMES:
             return None
+
+        if is_additive:
+            logger.info(
+                "Delta: additive indicator '%s' + '%s'",
+                state.indicator,
+                candidate_indicator,
+            )
+            return FollowUpDelta(
+                added_indicators=[candidate_indicator],
+                raw_query=query,
+                delta_type="indicator_switch",
+            )
 
         logger.info(
             "Delta: indicator switch '%s' → '%s'",
@@ -612,8 +688,9 @@ Output the query_type and any changed fields as JSON."""
             return None
 
         provider_raw = m.group(1).strip()
-        # Normalize
-        from .query import normalize_provider_name
+        # Normalize without importing QueryService (keeps extractor testable
+        # even when optional runtime dependencies are unavailable).
+        from ..utils.providers import normalize_provider_name
         provider = normalize_provider_name(provider_raw)
 
         if provider == (state.provider or state.routed_provider or "").upper():

@@ -85,6 +85,9 @@ class QueryPipeline:
                     explicit_provider,
                 )
             parsed_intent.apiProvider = explicit_provider
+            params = dict(parsed_intent.parameters or {})
+            params["__semantic_provider_locked"] = True
+            parsed_intent.parameters = params
             routed_provider = explicit_provider
         else:
             routed_provider = await self.query_service._select_routed_provider(parsed_intent, query)
