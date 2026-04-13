@@ -134,3 +134,4 @@ packages/frontend/dist-data/
 # OpenAI embedding index (build locally with EmbeddingRetrieval.build_index())
 backend/data/openai_embeddings/
 backend/data/chroma_db/
+.omx/

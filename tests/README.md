@@ -46,6 +46,12 @@ python3 tests/test_statscan_comprehensive.py
 
 # Run the opt-in live production smoke test
 OPENECON_LIVE_SMOKE=1 backend/.venv/bin/pytest tests/test_live_chat_smoke.py -q
+
+# Run the canonical multiround benchmark
+backend/.venv/bin/python scripts/test_multiround.py --report .omx/reports/phase6-multiround-10x10.json
+
+# Run the alternative 10x10 multiround benchmark
+backend/.venv/bin/python scripts/test_multiround.py --suite alternative --report .omx/reports/phase6-multiround-10x10-alt.json
 ```
 
 ## Test Structure

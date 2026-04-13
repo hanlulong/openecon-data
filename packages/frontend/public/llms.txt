@@ -1,5 +1,5 @@
 # OpenEcon.ai - AI Economic Data Platform
-# https://openecon.ai
+# https://data.openecon.ai
 # https://data.openecon.ai/chat
 # Source: https://github.com/hanlulong/openecon-data
 
@@ -42,7 +42,7 @@ OpenEcon.ai provides an MCP (Model Context Protocol) server endpoint at:
 
 ## Contact
 Email: hanlulong@gmail.com
-Website: https://openecon.ai
+Website: https://data.openecon.ai
 
 ## Technical Details
 - Frontend: React/TypeScript with Vite

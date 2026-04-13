@@ -29,6 +29,8 @@ def test_frontend_public_assets_use_data_openecon_ai() -> None:
         "packages/frontend/public/robots.txt",
         "packages/frontend/public/sitemap.xml",
         "packages/frontend/public/llms.txt",
+        "packages/frontend/public/.well-known/ai-plugin.json",
+        "packages/frontend/public/.well-known/security.txt",
         "packages/frontend/src/components/LandingPage.tsx",
         "packages/frontend/src/pages/ExamplesPage.tsx",
         "packages/frontend/src/pages/DocsPage.tsx",

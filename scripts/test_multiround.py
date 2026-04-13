@@ -33,6 +33,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://localhost:3001")
     parser.add_argument("--report", required=True)
+    parser.add_argument("--suite", default="baseline")
     parser.add_argument("--min-effective-rate", type=float, default=0.90)
     parser.add_argument("--max-fails", type=int, default=0)
     parser.add_argument("--timeout-seconds", type=int, default=120)
@@ -48,6 +49,7 @@ def main() -> int:
     env = os.environ.copy()
     env["OPENECON_MULTIROUND_BASE_URL"] = str(args.base_url).rstrip("/")
     env["OPENECON_MULTIROUND_REPORT"] = str(report_path)
+    env["OPENECON_MULTIROUND_SUITE"] = str(args.suite)
     env["OPENECON_MULTIROUND_MIN_EFFECTIVE_RATE"] = str(args.min_effective_rate)
     env["OPENECON_MULTIROUND_MAX_FAILS"] = str(args.max_fails)
     env["OPENECON_MULTIROUND_REQUEST_TIMEOUT"] = str(args.request_timeout)
@@ -62,6 +64,8 @@ def main() -> int:
         str(args.base_url),
         "--report",
         str(report_path),
+        "--suite",
+        str(args.suite),
         "--min-effective-rate",
         str(args.min_effective_rate),
         "--max-fails",

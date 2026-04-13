@@ -15,10 +15,21 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.multiround_suites import (  # noqa: E402
+    DEFAULT_SUITE_NAME,
+    get_suite_description,
+    list_suite_descriptions,
+    load_suite,
+)
+
 REPORT_DIR = ROOT / "docs" / "testing" / "reports"
 BASE_URL = os.environ.get("OPENECON_MULTIROUND_BASE_URL", "http://localhost:3001").rstrip("/")
 TIMEOUT = 90
 DEFAULT_REPORT_PATH = os.environ.get("OPENECON_MULTIROUND_REPORT")
+DEFAULT_SUITE = os.environ.get("OPENECON_MULTIROUND_SUITE", DEFAULT_SUITE_NAME)
 MIN_EFFECTIVE_RATE = float(os.environ.get("OPENECON_MULTIROUND_MIN_EFFECTIVE_RATE", "0.90"))
 MAX_FAILS = int(os.environ.get("OPENECON_MULTIROUND_MAX_FAILS", "0"))
 REQUEST_TIMEOUT = int(os.environ.get("OPENECON_MULTIROUND_REQUEST_TIMEOUT", str(TIMEOUT)))
@@ -29,163 +40,6 @@ ROUND_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_ROUND_DELAY_SECO
 BETWEEN_TEST_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_BETWEEN_TEST_DELAY_SECONDS", "3"))
 HEALTH_RETRIES = int(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRIES", "3"))
 HEALTH_RETRY_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRY_DELAY_SECONDS", "5"))
-
-# Per-cycle rotation: one query in each test changes based on the day of year
-# so each cycle exercises slightly different code paths instead of running the
-# identical 100-round suite repeatedly.
-import datetime as _dt
-_DAY_OF_YEAR = _dt.datetime.now().timetuple().tm_yday
-_ROTATION_INDEX = _DAY_OF_YEAR % 5  # 5 variants per rotating slot
-
-# ── Test definitions ────────────────────────────────────────────────────────
-
-# Rotating queries per test slot — one round changes per cycle
-_ROTATIONS = {
-    "test1_r10": [
-        "Switch to bar chart",
-        "Show as scatter plot",
-        "Show only top 3",
-        "Convert to billions",
-        "Show year-over-year change",
-    ],
-    "test2_r10": [
-        "Change to monthly frequency",
-        "Show core inflation only",
-        "Convert to annualized rate",
-        "Show 12-month moving average",
-        "Compare to ECB target of 2%",
-    ],
-    "test3_r10": [
-        "Add Ethereum again",
-        "Show market cap instead",
-        "Show 24h volume",
-        "Compare price to all-time high",
-        "Show in EUR",
-    ],
-}
-
-TESTS = {
-    "Test 1: GDP Deep Dive": [
-        "US GDP",
-        "Add China GDP",
-        "Add Germany GDP",
-        "Switch to per capita GDP",
-        "Remove China",
-        "Switch to GDP growth rate",
-        "Show from IMF instead",
-        "Change time range to 2015-2024",
-        "Add Japan",
-        _ROTATIONS["test1_r10"][_ROTATION_INDEX],  # rotates per cycle
-    ],
-    "Test 2: Inflation Multi-Provider": [
-        "Germany inflation rate",
-        "Switch to France inflation",
-        "Add Italy inflation",
-        "Switch to US inflation from FRED",
-        "Add UK inflation",
-        "Change to 2020-2025",
-        "Switch to World Bank data",
-        "Show only US and UK",
-        "Switch to core inflation",
-        _ROTATIONS["test2_r10"][_ROTATION_INDEX],  # rotates per cycle
-    ],
-    "Test 3: Crypto Cycling": [
-        "Bitcoin price",
-        "Switch to Ethereum price",
-        "Switch to Solana price",
-        "Back to Bitcoin price last 90 days",
-        "Add Ethereum for comparison",
-        "Switch to Cardano price",
-        "Switch to Dogecoin price",
-        "Back to Bitcoin price",
-        "Change to last 30 days",
-        "Add Ethereum price again",
-    ],
-    "Test 4: Canada StatsCan Dimensions": [
-        "Canada unemployment rate",
-        "Show by province",
-        "Just Ontario unemployment",
-        "Switch to Alberta unemployment",
-        "Switch to employment rate",
-        "Show by age group",
-        "Show 15-24 age group only",
-        "Switch back to unemployment rate",
-        "Show all provinces",
-        "Change to 2020-2025",
-    ],
-    "Test 5: Trade Data Complex": [
-        "US exports to China",
-        "Switch to US imports from China",
-        "Change partner to Japan",
-        "Switch to trade balance US and Japan",
-        "Change to Germany exports to China",
-        "Add France exports to China",
-        "Switch to 2020-2024",
-        "Switch back to US exports",
-        "Change partner to Canada",
-        "Show total trade US and Canada",
-    ],
-    "Test 6: Exchange Rate Switching": [
-        "USD to EUR exchange rate",
-        "Switch to USD to GBP",
-        "Switch to USD to JPY",
-        "Switch to EUR to GBP",
-        "Back to USD to EUR",
-        "Change to last 30 days",
-        "Switch to USD to CAD",
-        "Switch to USD to CHF",
-        "Back to USD to EUR",
-        "Change to last year",
-    ],
-    "Test 7: BIS + IMF Financial": [
-        "BIS credit to GDP ratio",
-        "Narrow to US credit to GDP",
-        "Add China credit to GDP",
-        "Switch to IMF GDP growth rate",
-        "Add Germany GDP growth",
-        "Switch to current account balance",
-        "Change to 2018-2024",
-        "Remove Germany",
-        "Switch to government debt to GDP",
-        "Add Japan government debt",
-    ],
-    "Test 8: Eurostat Deep Dive": [
-        "France unemployment rate from Eurostat",
-        "Switch to Germany unemployment",
-        "Add Spain unemployment",
-        "Switch to inflation rate",
-        "Switch to GDP growth rate",
-        "Remove Spain",
-        "Add Italy",
-        "Switch to government debt to GDP",
-        "Change to 2015-2024",
-        "Switch back to unemployment rate",
-    ],
-    "Test 9: Mixed Provider Stress": [
-        "US GDP from FRED",
-        "Japan GDP from World Bank",
-        "Germany GDP from Eurostat",
-        "China GDP from IMF",
-        "Canada GDP from Statistics Canada",
-        "Switch all to GDP growth rate",
-        "Change to 2020-2025",
-        "Show only US and China",
-        "Switch to per capita GDP",
-        "Add Germany back",
-    ],
-    "Test 10: Indicator Variant Cycling": [
-        "US real GDP",
-        "Switch to nominal GDP",
-        "Switch to GDP per capita",
-        "Switch to GDP growth rate",
-        "Switch to GDP deflator",
-        "Back to real GDP",
-        "Add UK real GDP",
-        "Switch to PPP GDP",
-        "Change to 2018-2024",
-        "Switch to constant prices GDP",
-    ],
-}
 
 
 def classify_response(resp_json):
@@ -356,6 +210,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=BASE_URL)
     parser.add_argument("--report", default=DEFAULT_REPORT_PATH)
+    parser.add_argument("--suite", default=DEFAULT_SUITE)
+    parser.add_argument("--list-suites", action="store_true")
     parser.add_argument("--min-effective-rate", type=float, default=MIN_EFFECTIVE_RATE)
     parser.add_argument("--max-fails", type=int, default=MAX_FAILS)
     parser.add_argument("--request-timeout", type=int, default=REQUEST_TIMEOUT)
@@ -367,6 +223,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.list_suites:
+        for suite_name, description in list_suite_descriptions().items():
+            print(f"{suite_name}: {description}")
+        return
+
     base_url = str(args.base_url).rstrip("/")
     global BASE_URL, REQUEST_TIMEOUT, ROUND_DELAY_SECONDS, BETWEEN_TEST_DELAY_SECONDS, MAX_RETRIES
     BASE_URL = base_url
@@ -374,11 +235,14 @@ def main():
     ROUND_DELAY_SECONDS = args.round_delay_seconds
     BETWEEN_TEST_DELAY_SECONDS = args.between_test_delay_seconds
     MAX_RETRIES = args.max_retries
+    tests = load_suite(args.suite)
+    suite_description = get_suite_description(args.suite)
 
     print(f"Multi-Round Conversation Test Suite")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Target: {base_url}")
-    print(f"Tests: {len(TESTS)} x 10 rounds = {sum(len(v) for v in TESTS.values())} total rounds")
+    print(f"Suite: {args.suite} — {suite_description}")
+    print(f"Tests: {len(tests)} x 10 rounds = {sum(len(v) for v in tests.values())} total rounds")
 
     # Verify backend is up
     try:
@@ -394,7 +258,7 @@ def main():
     all_results = {}
     overall_start = time.time()
 
-    for idx, (test_name, queries) in enumerate(TESTS.items()):
+    for idx, (test_name, queries) in enumerate(tests.items()):
         # Check backend health between tests
         if idx > 0:
             print(f"\n  ... waiting {BETWEEN_TEST_DELAY_SECONDS}s between tests ...")
@@ -477,6 +341,8 @@ def main():
     report = {
         "timestamp": datetime.now().isoformat(),
         "base_url": base_url,
+        "suite": args.suite,
+        "suite_description": suite_description,
         "total_rounds": total_rounds,
         "pass": total_pass,
         "warn": total_warn,
@@ -495,9 +361,15 @@ def main():
     for test_name, results in all_results.items():
         report["tests"][test_name] = results
 
-    report_path = args.report or (
-        str(REPORT_DIR / f"multiround_10x10_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    )
+    if args.report:
+        report_path = args.report
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if args.suite == DEFAULT_SUITE_NAME:
+            filename = f"multiround_10x10_{timestamp}.json"
+        else:
+            filename = f"multiround_10x10_{args.suite}_{timestamp}.json"
+        report_path = str(REPORT_DIR / filename)
     try:
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
         with open(report_path, "w") as f:

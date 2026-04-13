@@ -9,9 +9,9 @@
   },
   "api": {
     "type": "openapi",
-    "url": "https://openecon.ai/api/openapi.json"
+    "url": "https://data.openecon.ai/api/openapi.json"
   },
-  "logo_url": "https://openecon.ai/logo.png",
+  "logo_url": "https://data.openecon.ai/logo.png",
   "contact_email": "hanlulong@gmail.com",
-  "legal_info_url": "https://openecon.ai/docs"
+  "legal_info_url": "https://data.openecon.ai/docs"
 }

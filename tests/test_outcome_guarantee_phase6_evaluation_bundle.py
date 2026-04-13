@@ -29,7 +29,15 @@ def test_phase6_canonical_multiround_wrapper_exists() -> None:
     script = (REPO_ROOT / "scripts" / "test_multiround.py").read_text(encoding="utf-8")
     assert "test_multiround_10x10.py" in script
     assert "--report" in script
+    assert "--suite" in script
     assert "OPENECON_MULTIROUND_BASE_URL" in script
+
+
+def test_phase6_multiround_harness_supports_named_suites() -> None:
+    script = (REPO_ROOT / "scripts" / "test_multiround_10x10.py").read_text(encoding="utf-8")
+    assert "list_suite_descriptions" in script
+    assert "load_suite(args.suite)" in script
+    assert '"suite": args.suite' in script
 
 
 def test_phase6_exact_output_validator_accepts_catalog_concept_for_decomposition() -> None:
