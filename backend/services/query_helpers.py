@@ -808,7 +808,11 @@ def build_intent_from_semantic_clarification(
         countries=params.get("countries"),
         llm_provider=None,
     )
-    api_provider = normalize_provider_name(routing_decision.provider)
+    api_provider = normalize_provider_name(selected_option.provider or routing_decision.provider)
+    if selected_option.code:
+        params["indicator"] = str(selected_option.code)
+    if selected_option.provider:
+        params["__semantic_provider_locked"] = True
     if (
         params.get("countries")
         and len(params["countries"]) > 1

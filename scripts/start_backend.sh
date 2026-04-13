@@ -42,9 +42,17 @@ fi
 
 nohup "${CMD[@]}" > "$LOG_PATH" 2>&1 &
 BACKEND_PID=$!
-sleep 5
 
-if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+HEALTH_OK=0
+for _attempt in $(seq 1 30); do
+  if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 2
+done
+
+if [ "$HEALTH_OK" -eq 1 ]; then
   echo "✅ Backend started successfully"
   echo "   PID: $BACKEND_PID"
   echo "   Mode: $MODE"

@@ -2496,14 +2496,44 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options_payload[0].provider, "IMF")
         self.assertEqual(options_payload[1].provider, "WORLDBANK")
 
-    def test_process_query_skips_group_scope_clarification_for_specific_indicator(self) -> None:
-        """Queries with specific indicators + group name should NOT ask for group scope."""
+    def test_specific_indicator_group_query_still_allows_group_scope_clarification(self) -> None:
+        """Specific indicators no longer imply explicit group scope by themselves."""
         conv_id = "conv-process-group-scope"
         conversation_manager.clear_pending_semantic_clarification(conv_id)
 
-        # "employment rate in G20" has a specific indicator → skip group scope clarification
         result = self.service._has_explicit_group_scope("employment rate in G20")
-        self.assertTrue(result, "Specific indicator 'employment' should imply comparison scope")
+        self.assertFalse(result)
+
+    def test_build_structured_semantic_clarification_from_llm_questions(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-semantic-clar")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "Canada", "indicator": "14100287", "__catalog_concept": "employment"},
+            clarificationNeeded=True,
+            clarificationQuestions=[
+                "Do you want the employment rate (percentage of labor force employed) for Canada?",
+                "Do you want the total number of employed persons in Canada?",
+                "Do you want the employment-to-population ratio for Canada?",
+            ],
+            originalQuery="employment in Canada",
+        )
+
+        response = self.service._build_structured_semantic_clarification(  # pylint: disable=protected-access
+            conversation_id=conv_id,
+            query="employment in Canada",
+            intent=intent,
+            processing_steps=None,
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        labels = [option.label for option in (response.clarificationOptions or [])]
+        self.assertIn("employment rate", labels)
+        self.assertIn("number employed", labels)
+        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+        self.assertIsNotNone(pending)
 
     def test_group_scope_clarification_detects_vague_group_query(self) -> None:
         """Vague group queries without specific indicators should trigger group scope clarification."""
@@ -2517,6 +2547,80 @@ class QueryServiceTests(unittest.TestCase):
         )
         self.assertIsNotNone(clarification)
         self.assertTrue(clarification.clarificationNeeded)
+
+    def test_group_scope_clarification_detects_specific_indicator_group_query(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["imports as % of GDP"],
+            parameters={"countries": ["US", "DE", "JP"]},
+            clarificationNeeded=False,
+            originalQuery="imports share of gdp in G20",
+        )
+
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-group-scope-specific",
+            query="imports share of gdp in G20",
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIsNotNone(clarification.clarificationOptions)
+
+    def test_build_catalog_concept_clarification_for_employment(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-employment-broad")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "Canada", "__catalog_concept": "employment", "indicator": "14100287"},
+            clarificationNeeded=False,
+            originalQuery="employment in Canada",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="STATSCAN",
+            routed_provider="STATSCAN",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(
+            self.service,
+            "_build_prefetch_indicator_choice_clarification",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            clarification = run(
+                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="employment in Canada",
+                    parse_result=parse_result,
+                    validation=validation,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        labels = [option.label for option in (clarification.clarificationOptions or [])]
+        self.assertIn("employment rate", labels)
+        self.assertIn("number employed", labels)
+        options_payload = clarification.clarificationOptions or []
+        employment_rate = next(option for option in options_payload if option.label == "employment rate")
+        self.assertEqual(employment_rate.provider, "OECD")
+        self.assertEqual(employment_rate.code, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
 
     def test_process_query_includes_clarification_context_for_llm(self) -> None:
         """Phase 4: When a pending semantic clarification exists, the LLM receives
@@ -2561,6 +2665,126 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(ctx["kind"], "group_scope")
         self.assertIn("Choose the scope you want:", ctx["question"])
         self.assertIn("compare member countries", ctx["options"])
+
+    def test_process_query_resolves_pending_semantic_clarification_by_number(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-semantic-choice")
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "semantic_metric",
+                "original_query": "employment in Canada",
+                "question_lines": [
+                    "Do you want the employment rate for Canada?",
+                    "Do you want the total number of employed persons in Canada?",
+                ],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "employment rate",
+                        "value": "employment rate in Canada",
+                        "provider": "OECD",
+                        "code": "DSD_LFS@DF_IALFS_EMP_WAP_Q",
+                    },
+                    {
+                        "id": "2",
+                        "label": "number employed",
+                        "value": "number employed in Canada",
+                        "provider": "STATSCAN",
+                        "code": "14100287",
+                    },
+                ],
+            },
+        )
+
+        with patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[sample_series()]), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=ValidationResult(
+                 is_multi_indicator=False,
+                 is_valid=True,
+                 validation_error=None,
+                 suggestions=None,
+                 is_confident=True,
+                 confidence_reason=None,
+             )), \
+             patch.object(self.service, "_maybe_recover_from_uncertain_match", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=([sample_series()], None)), \
+             patch.object(self.service, "_build_uncertain_result_clarification", return_value=None), \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None):
+            response = run(self.service.process_query("1", conversation_id=conv_id))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertIsNotNone(response.intent)
+        assert response.intent is not None
+        self.assertEqual(response.intent.apiProvider, "OECD")
+        self.assertEqual(response.intent.parameters.get("indicator"), "DSD_LFS@DF_IALFS_EMP_WAP_Q")
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
+    def test_process_query_resolves_pending_group_scope_by_country_follow_up(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-group-followup")
+        pending_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NE.IMP.GNFS.ZS"],
+            parameters={"countries": sorted(CountryResolver.G20_MEMBERS), "indicator": "NE.IMP.GNFS.ZS"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Choose scope"],
+            originalQuery="imports share of gdp in G20",
+        )
+        conversation_manager.add_message_safe(
+            conv_id,
+            "user",
+            "imports share of gdp in G20",
+            intent=pending_intent,
+        )
+        conversation_manager.set_pending_semantic_clarification(
+            conv_id,
+            {
+                "kind": "group_scope",
+                "region": "G20",
+                "original_query": "imports share of gdp in G20",
+                "question_lines": ["Choose scope"],
+                "options": [
+                    {
+                        "id": "1",
+                        "label": "compare member countries",
+                        "value": "imports share of gdp across G20 member countries",
+                    },
+                    {
+                        "id": "2",
+                        "label": "one overall group value (aggregate/average if available)",
+                        "value": "imports share of gdp for the G20 group as a whole",
+                    },
+                ],
+            },
+        )
+
+        us_series = sample_series_with(
+            indicator="Imports of goods and services (% of GDP)",
+            country="US",
+            series_id="NE.IMP.GNFS.ZS",
+        )
+        with patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[us_series]), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=ValidationResult(
+                 is_multi_indicator=False,
+                 is_valid=True,
+                 validation_error=None,
+                 suggestions=None,
+                 is_confident=True,
+                 confidence_reason=None,
+             )), \
+             patch.object(self.service, "_maybe_recover_from_uncertain_match", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=([us_series], None)), \
+             patch.object(self.service, "_build_uncertain_result_clarification", return_value=None), \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None):
+            response = run(self.service.process_query("show only US", conversation_id=conv_id))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertIsNotNone(response.intent)
+        assert response.intent is not None
+        self.assertEqual(response.intent.apiProvider, "WORLDBANK")
+        self.assertEqual(response.intent.parameters.get("country"), "US")
+        self.assertEqual(response.intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
     def test_prefetch_clarification_allows_direct_worldbank_translation(self) -> None:
         intent = ParsedIntent(

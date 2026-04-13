@@ -1766,16 +1766,6 @@ def has_explicit_group_scope(qs: Any, query: str) -> bool:
     if any(marker in query_lower for marker in explicit_markers):
         return True
 
-    specific_indicators = [
-        "gdp", "inflation", "unemployment", "trade openness",
-        "trade balance", "debt", "cpi", "interest rate", "policy rate",
-        "population", "life expectancy", "fertility", "reserves",
-        "savings", "investment", "exports", "imports", "employment",
-        "labor force", "current account", "fiscal balance",
-    ]
-    if any(ind in query_lower for ind in specific_indicators):
-        return True
-
     return False
 
 
@@ -1908,6 +1898,163 @@ def build_group_scope_clarification(
         intent=intent,
         clarificationNeeded=True,
         clarificationQuestions=clarification_questions,
+        clarificationOptions=options,
+        processingSteps=processing_steps,
+    )
+
+
+_AMBIGUOUS_CONCEPT_OPTIONS = {
+    "employment": [
+        {
+            "label": "employment rate",
+            "provider": "OECD",
+            "code": "DSD_LFS@DF_IALFS_EMP_WAP_Q",
+        },
+        {
+            "label": "number employed",
+            "provider": "STATSCAN",
+            "code": "14100287",
+        },
+        {
+            "label": "employment-to-population ratio",
+            "provider": "WORLDBANK",
+            "code": "SL.EMP.TOTL.SP.ZS",
+        },
+    ],
+}
+
+
+def build_catalog_concept_clarification(
+    qs: Any,
+    conversation_id: str,
+    query: str,
+    intent: Optional[ParsedIntent],
+    processing_steps: Optional[List[Any]] = None,
+) -> Optional[QueryResponse]:
+    """Ask for a specific metric when a catalog concept is still too broad."""
+    if not intent:
+        return None
+
+    concept_name = str((intent.parameters or {}).get("__catalog_concept") or "").strip().lower()
+    if not concept_name or concept_name not in _AMBIGUOUS_CONCEPT_OPTIONS:
+        return None
+
+    query_text = str(query or "").strip()
+    query_lower = query_text.lower()
+    option_specs = _AMBIGUOUS_CONCEPT_OPTIONS[concept_name]
+    labels = [str(spec["label"]).strip() for spec in option_specs]
+    if any(label in query_lower for label in labels):
+        return None
+
+    options = [
+        ClarificationOption(
+            id=str(idx),
+            label=str(spec["label"]).strip(),
+            value=_semantic_metric_option_value(query_text, str(spec["label"]).strip()),
+            provider=str(spec.get("provider") or "") or None,
+            code=str(spec.get("code") or "") or None,
+        )
+        for idx, spec in enumerate(option_specs, start=1)
+    ]
+
+    clarification_questions = [
+        f"Your query uses the broad concept '{concept_name}', which can mean several different metrics.",
+        "Please choose the exact metric you want:",
+    ]
+    clarification_questions.extend(f"{option.id}. {option.label}" for option in options)
+    clarification_questions.append("Reply with the option number, or type the exact metric you want.")
+
+    payload = {
+        "kind": f"{concept_name}_metric",
+        "original_query": query_text,
+        "question_lines": clarification_questions,
+        "options": [option.model_dump() for option in options],
+    }
+    store_pending_semantic_clarification(conversation_id, payload)
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        intent=intent,
+        clarificationNeeded=True,
+        clarificationQuestions=clarification_questions,
+        clarificationOptions=options,
+        processingSteps=processing_steps,
+    )
+
+
+def _semantic_metric_option_value(original_query: str, label: str) -> str:
+    query_text = str(original_query or "").strip()
+    label_text = str(label or "").strip()
+    if not query_text or not label_text:
+        return label_text or query_text
+
+    replaced = re.sub(r"\bemployment\b", label_text, query_text, count=1, flags=re.IGNORECASE)
+    if replaced != query_text:
+        return replaced
+    replaced = re.sub(r"\btrade data\b", label_text, query_text, count=1, flags=re.IGNORECASE)
+    if replaced != query_text:
+        return replaced
+    return f"{label_text} {query_text}".strip()
+
+
+def _extract_semantic_metric_label(question: str) -> Optional[str]:
+    text = str(question or "").strip().rstrip("?")
+    if not text.lower().startswith("do you want"):
+        return None
+
+    text = re.sub(r"^Do you want\s+(?:the\s+)?", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+for\s+.+$", "", text).strip()
+    label = re.sub(r"\s*\([^)]*\)", "", text).strip()
+    lowered = label.lower()
+    if "employed person" in lowered or "number of employed" in lowered:
+        return "number employed"
+    return label or None
+
+
+def build_structured_semantic_clarification(
+    qs: Any,
+    conversation_id: str,
+    query: str,
+    intent: Optional[ParsedIntent],
+    processing_steps: Optional[List[Any]] = None,
+) -> Optional[QueryResponse]:
+    """Convert LLM clarification questions into structured semantic options when possible."""
+    if not intent or not intent.clarificationNeeded:
+        return None
+
+    questions = [str(item).strip() for item in (intent.clarificationQuestions or []) if str(item).strip()]
+    if len(questions) < 2:
+        return None
+
+    options: List[ClarificationOption] = []
+    for idx, question in enumerate(questions, start=1):
+        label = _extract_semantic_metric_label(question)
+        if not label:
+            continue
+        options.append(
+            ClarificationOption(
+                id=str(idx),
+                label=label,
+                value=_semantic_metric_option_value(query, label),
+            )
+        )
+
+    if len(options) < 2:
+        return None
+
+    payload = {
+        "kind": "semantic_metric",
+        "original_query": str(query or "").strip(),
+        "question_lines": questions,
+        "options": [option.model_dump() for option in options],
+    }
+    store_pending_semantic_clarification(conversation_id, payload)
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        intent=intent,
+        clarificationNeeded=True,
+        clarificationQuestions=questions,
         clarificationOptions=options,
         processingSteps=processing_steps,
     )
@@ -2423,6 +2570,16 @@ async def build_post_parse_clarification(
     )
     if multi_concept_clarification:
         return multi_concept_clarification
+
+    concept_clarification = build_catalog_concept_clarification(
+        qs=qs,
+        conversation_id=conversation_id,
+        query=query,
+        intent=intent,
+        processing_steps=processing_steps,
+    )
+    if concept_clarification:
+        return concept_clarification
 
     group_scope_clarification = build_group_scope_clarification(
         qs=qs,

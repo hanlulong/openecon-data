@@ -1571,7 +1571,7 @@ async def fetch_data(
     if params.get("__catalog_resolved"):
         object.__setattr__(intent, "_catalog_resolved", True)
 
-    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved", "__delta_indicator_changed"}
+    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved", "__delta_indicator_changed", "__semantic_provider_locked"}
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params

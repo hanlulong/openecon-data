@@ -162,6 +162,7 @@ from ..services.indicator_clarification import (
     has_explicit_group_scope as _ic_has_explicit_group_scope,
     rewrite_group_scope_query as _ic_rewrite_group_scope_query,
     build_group_scope_clarification as _ic_build_group_scope_clarification,
+    build_structured_semantic_clarification as _ic_build_structured_semantic_clarification,
     filter_viable_indicator_choice_options as _ic_filter_viable_indicator_choice_options,
     build_failed_indicator_choice_response as _ic_build_failed_indicator_choice_response,
     build_prefetch_indicator_choice_clarification as _ic_build_prefetch_indicator_choice_clarification,
@@ -830,6 +831,22 @@ class QueryService:
         """Delegates to :func:`indicator_clarification.try_resolve_pending_indicator_choice`."""
         return await _ic_try_resolve_pending_indicator_choice(self, query, conversation_id, tracker)
 
+    def _build_structured_semantic_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: Optional[ParsedIntent],
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """Delegates to :func:`indicator_clarification.build_structured_semantic_clarification`."""
+        return _ic_build_structured_semantic_clarification(
+            self,
+            conversation_id,
+            query,
+            intent,
+            processing_steps,
+        )
+
     async def _maybe_recover_from_uncertain_match(
         self,
         query: str,
@@ -1116,6 +1133,14 @@ class QueryService:
                 logger.warning("Dual-write conversation_state failed: %s", _sw_err, exc_info=True)
 
         if intent.clarificationNeeded:
+            semantic_clarification = self._build_structured_semantic_clarification(
+                conversation_id=conv_id,
+                query=query,
+                intent=intent,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if semantic_clarification is not None:
+                return semantic_clarification
             conversation_manager.clear_pending_indicator_options(conv_id)
             conversation_manager.clear_pending_semantic_clarification(conv_id)
             return QueryResponse(
@@ -2489,6 +2514,68 @@ class QueryService:
             if pending_choice_response is not None:
                 return pending_choice_response
 
+            pending_semantic = conversation_manager.get_pending_semantic_clarification(conv_id)
+            if pending_semantic:
+                structured_options = [
+                    ClarificationOption.model_validate(option)
+                    for option in (pending_semantic.get("options") or [])
+                    if isinstance(option, dict)
+                ]
+                selected_option = self._match_structured_clarification_option(query, structured_options)
+                if selected_option is not None:
+                    refined_query = str(selected_option.value or query).strip()
+                    semantic_intent = self._build_intent_from_semantic_clarification(
+                        pending=pending_semantic,
+                        selected_option=selected_option,
+                        refined_query=refined_query,
+                    )
+                    conversation_manager.clear_pending_semantic_clarification(conv_id)
+                    if semantic_intent is not None:
+                        semantic_parse_result = ParseRouteResult(
+                            intent=semantic_intent,
+                            explicit_provider=semantic_intent.apiProvider,
+                            routed_provider=semantic_intent.apiProvider,
+                            validation_warning=None,
+                        )
+                        return await self._execute_resolved_intent(
+                            query=refined_query,
+                            conversation_id=conv_id,
+                            intent=semantic_intent,
+                            parse_result=semantic_parse_result,
+                            tracker=tracker,
+                            skip_prefetch_clarification=True,
+                        )
+                if str(pending_semantic.get("kind") or "").strip() == "group_scope":
+                    pending_intent = conversation_manager.get_last_intent(conv_id)
+                    follow_up_countries = self._extract_countries_from_query(query)
+                    if pending_intent is not None and follow_up_countries:
+                        narrowed_intent = pending_intent.model_copy(deep=True)
+                        narrowed_intent.clarificationNeeded = False
+                        narrowed_intent.clarificationQuestions = None
+                        narrowed_params = dict(narrowed_intent.parameters or {})
+                        if len(follow_up_countries) == 1:
+                            narrowed_params["country"] = follow_up_countries[0]
+                            narrowed_params.pop("countries", None)
+                        else:
+                            narrowed_params["countries"] = follow_up_countries
+                            narrowed_params.pop("country", None)
+                        narrowed_intent.parameters = narrowed_params
+                        conversation_manager.clear_pending_semantic_clarification(conv_id)
+                        narrowed_parse_result = ParseRouteResult(
+                            intent=narrowed_intent,
+                            explicit_provider=narrowed_intent.apiProvider,
+                            routed_provider=narrowed_intent.apiProvider,
+                            validation_warning=None,
+                        )
+                        return await self._execute_resolved_intent(
+                            query=query,
+                            conversation_id=conv_id,
+                            intent=narrowed_intent,
+                            parse_result=narrowed_parse_result,
+                            tracker=tracker,
+                            skip_prefetch_clarification=True,
+                        )
+
             # ── Combined Classification + Delta Extraction ──────────────
             # Single LLM call classifies AND extracts delta in one shot.
             # The FollowUpDelta model includes a query_type field that the
@@ -2957,6 +3044,14 @@ class QueryService:
                 logger.warning("Dual-write conversation_state failed in process_query: %s", _sw_err)
 
             if intent.clarificationNeeded:
+                semantic_clarification = self._build_structured_semantic_clarification(
+                    conversation_id=conv_id,
+                    query=query,
+                    intent=intent,
+                    processing_steps=tracker.to_list(),
+                )
+                if semantic_clarification is not None:
+                    return semantic_clarification
                 conversation_manager.clear_pending_indicator_options(conv_id)
                 conversation_manager.clear_pending_semantic_clarification(conv_id)
                 return QueryResponse(
@@ -3456,6 +3551,14 @@ class QueryService:
             self._maybe_expand_multi_concept_intent(query, intent)
 
             if intent.clarificationNeeded:
+                semantic_clarification = self._build_structured_semantic_clarification(
+                    conversation_id=conversation_id,
+                    query=query,
+                    intent=intent,
+                    processing_steps=tracker.to_list() if tracker else None,
+                )
+                if semantic_clarification is not None:
+                    return semantic_clarification
                 # Store the clarification intent so Phase 4 LLM-based resolution
                 # can build conversation context on the next turn.
                 conversation_manager.add_message_safe(
@@ -4577,6 +4680,14 @@ class QueryService:
             )
 
         if intent.clarificationNeeded:
+            semantic_clarification = self._build_structured_semantic_clarification(
+                conversation_id=conversation_id,
+                query=query,
+                intent=intent,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if semantic_clarification is not None:
+                return semantic_clarification
             return QueryResponse(
                 conversationId=conversation_id,
                 intent=intent,

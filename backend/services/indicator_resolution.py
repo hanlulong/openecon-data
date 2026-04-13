@@ -638,6 +638,8 @@ def apply_concept_provider_override(
     explicit_provider_locked = bool(
         explicit_provider_requested and explicit_provider_requested == provider
     )
+    if params.get("__semantic_provider_locked"):
+        explicit_provider_locked = True
 
     blocked_override_providers = {
         _normalize_provider_name(str(candidate))
@@ -1010,6 +1012,10 @@ def apply_catalog_availability_override(
 
     original_query = intent.originalQuery or ""
     explicit_provider_requested = _normalize_provider_name(svc._detect_explicit_provider(original_query) or "")
+    if params.get("__semantic_provider_locked"):
+        logger.info(f"📋 Skipping catalog override - semantic clarification locked {provider}")
+        return provider, params
+
     if explicit_provider_requested and explicit_provider_requested == provider:
         logger.info(f"📋 Skipping catalog override - user explicitly requested {provider}")
         return provider, params
