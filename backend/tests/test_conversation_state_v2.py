@@ -618,11 +618,10 @@ class TestDeltaExtractor:
         assert delta.delta_type == "country_change"
         assert delta.changed_countries == ["US", "DE"]
 
-    def test_indicator_switch_detected_structurally(self, extractor):
+    def test_indicator_switch_deferred_to_llm(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract("what about inflation", state)
-        assert delta is not None
-        assert delta.changed_indicator == "inflation"
+        assert delta is None
 
     def test_bare_indicator_without_switch_marker_stays_with_llm(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
@@ -754,7 +753,7 @@ class TestDeltaExtractorDimensionModifier:
         return _make
 
     def test_female_after_unemployment_is_dimension(self, _build_extractor):
-        """'show female' after unemployment rate → dimension modifier."""
+        """'show female' after unemployment rate stays on the LLM path for now."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -771,12 +770,10 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show female", state)
-        assert delta is not None
-        assert delta.added_dimensions == {"sex": "female"}
-        assert delta.is_dimension_modifier_change is True
+        assert delta is None
 
-    def test_shelter_after_cpi_detected_structurally(self, _build_extractor):
-        """Dimension modifiers should be detected before the LLM fallback."""
+    def test_shelter_after_cpi_deferred_to_llm(self, _build_extractor):
+        """Dimension modifiers stay on the LLM path until typed dimension actions land."""
         _cube = {"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"CPI": 41690973},
@@ -793,11 +790,10 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show shelter", state)
-        assert delta is not None
-        assert delta.added_dimensions == {"products": "Shelter"}
+        assert delta is None
 
-    def test_inflation_after_unemployment_switches_indicator(self, _build_extractor):
-        """Explicit switch-style follow-ups should be captured before the LLM fallback."""
+    def test_inflation_after_unemployment_deferred_to_llm(self, _build_extractor):
+        """Generic non-crypto indicator switches remain on the LLM path."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -814,8 +810,7 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show inflation", state)
-        assert delta is not None
-        assert delta.changed_indicator == "inflation"
+        assert delta is None
 
     def test_non_statscan_provider_deferred_to_llm(self, _build_extractor):
         """Non-structural follow-ups are now handled by LLM."""
@@ -828,8 +823,8 @@ class TestDeltaExtractorDimensionModifier:
         delta = extractor.extract("female", state)
         assert delta is None  # Deferred to LLM
 
-    def test_dimension_modifier_detected_structurally(self, _build_extractor):
-        """Dimension modifiers should be detected structurally when metadata is present."""
+    def test_dimension_modifier_deferred_to_llm(self, _build_extractor):
+        """Dimension modifiers remain on the LLM path until the dimension-action contract exists."""
         _cube = {"dimension": []}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -846,11 +841,10 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show youth", state)
-        assert delta is not None
-        assert delta.added_dimensions == {"age": "youth"}
+        assert delta is None
 
-    def test_coordinate_mapping_detected_structurally(self, _build_extractor):
-        """Province-based follow-ups should be captured as dimension changes."""
+    def test_coordinate_mapping_deferred_to_llm(self, _build_extractor):
+        """Province-based follow-ups remain on the LLM path for now."""
         _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
         extractor = _build_extractor(
             coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
@@ -866,8 +860,7 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show Ontario", state)
-        assert delta is not None
-        assert delta.added_dimensions == {"geography": "Ontario"}
+        assert delta is None
 
 
 # ─── materialize_intent with dimensions ─────────────────────────────

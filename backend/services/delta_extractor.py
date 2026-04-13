@@ -218,10 +218,6 @@ class DeltaExtractor:
         if delta:
             return delta
 
-        delta = self._try_dimension_modifier(query_text, state)
-        if delta:
-            return self._promote_decomposition_semantics(delta, state)
-
         delta = self._try_indicator_switch(query_text, state)
         if delta:
             return delta
@@ -625,53 +621,7 @@ Output the query_type and any changed fields as JSON."""
                 delta_type="indicator_switch",
             )
 
-        # Collect non-filler tokens — these are the candidate indicator
-        candidate_tokens = [t for t in tokens if t not in _FILLER_WORDS]
-        if not candidate_tokens:
-            return None
-
-        # The candidate indicator is the non-filler tokens joined
-        candidate_indicator = " ".join(candidate_tokens)
-
-        # If no switch/add marker, defer to the LLM for ambiguous bare nouns.
-        if not has_marker and not is_additive:
-            return None
-
-        # If a marker exists, only allow reasonably short follow-ups.
-        if len(candidate_tokens) > 3:
-            return None
-
-        # If the candidate indicator is the same as the current one, skip
-        current_lower = (state.indicator or "").lower()
-        if candidate_indicator == current_lower:
-            return None
-
-        # Avoid matching provider names as indicators
-        if candidate_indicator in _PROVIDER_NAMES:
-            return None
-
-        if is_additive:
-            logger.info(
-                "Delta: additive indicator '%s' + '%s'",
-                state.indicator,
-                candidate_indicator,
-            )
-            return FollowUpDelta(
-                added_indicators=[candidate_indicator],
-                raw_query=query,
-                delta_type="indicator_switch",
-            )
-
-        logger.info(
-            "Delta: indicator switch '%s' → '%s'",
-            state.indicator,
-            candidate_indicator,
-        )
-        return FollowUpDelta(
-            changed_indicator=candidate_indicator,
-            raw_query=query,
-            delta_type="indicator_switch",
-        )
+        return None
 
     # ------------------------------------------------------------------
     # Handler: Provider change
