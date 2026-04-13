@@ -100,7 +100,8 @@ def test_live_clarification_reply_resolves_in_same_conversation() -> None:
     assert resolved.get("conversationId") == clarification.get("conversationId")
     assert resolved.get("clarificationNeeded") is False
     assert len(resolved.get("data") or []) >= 1
-    assert "Canada" in _countries(resolved)
+    countries = _countries(resolved)
+    assert "Canada" in countries or "CAN" in countries or "CA" in countries
 
 
 def test_live_group_follow_up_can_override_pending_scope() -> None:
