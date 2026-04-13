@@ -6,53 +6,125 @@ import pytest
 
 from scripts.multiround_suites import (
     DEFAULT_SUITE_NAME,
+    RoundCase,
+    RoundOracle,
+    SUITES_VERSION,
     get_suite_description,
     list_suite_names,
     load_suite,
 )
+from scripts.test_multiround_10x10 import evaluate_round
 
 
 @pytest.mark.unit
 def test_multiround_suite_catalog_exposes_baseline_and_alternative() -> None:
     assert DEFAULT_SUITE_NAME == "baseline"
+    assert SUITES_VERSION >= 2
     assert list_suite_names() == ["baseline", "alternative"]
     assert "Alternative 10x10 benchmark" in get_suite_description("alternative")
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("suite_name", ["baseline", "alternative"])
-def test_each_multiround_suite_has_ten_named_tests_with_ten_rounds(suite_name: str) -> None:
+def test_each_multiround_suite_has_ten_named_tests_with_ten_oracle_rounds(suite_name: str) -> None:
     suite = load_suite(suite_name, now=datetime(2026, 4, 12, 12, 0, 0))
     assert len(suite) == 10
 
     for test_name, rounds in suite.items():
         assert test_name
         assert len(rounds) == 10
-        assert all(isinstance(query, str) and query.strip() for query in rounds)
+        for round_case in rounds:
+            assert isinstance(round_case, RoundCase)
+            assert round_case.query.strip()
+            assert isinstance(round_case.oracle, RoundOracle)
+            assert round_case.oracle.min_series_count >= 1
+            assert (
+                round_case.oracle.accepted_providers
+                or round_case.oracle.required_countries
+                or round_case.oracle.accepted_series_ids
+                or round_case.oracle.required_indicator_cues
+                or round_case.oracle.expect_clarification
+            )
 
 
 @pytest.mark.unit
-def test_baseline_suite_preserves_existing_phase6_queries() -> None:
+def test_baseline_suite_preserves_existing_phase6_queries_with_oracles() -> None:
     suite = load_suite("baseline", now=datetime(2026, 4, 12, 12, 0, 0))
 
-    assert suite["Test 1: GDP Deep Dive"][:3] == [
+    assert [round_case.query for round_case in suite["Test 1: GDP Deep Dive"][:3]] == [
         "US GDP",
         "Add China GDP",
         "Add Germany GDP",
     ]
-    assert suite["Test 4: Canada StatsCan Dimensions"][0] == "Canada unemployment rate"
+    first_statscan = suite["Test 4: Canada StatsCan Dimensions"][0]
+    assert first_statscan.query == "Canada unemployment rate"
+    assert first_statscan.oracle.accepted_providers == ("STATSCAN",)
+    assert "unemployment" in first_statscan.oracle.required_indicator_cues
 
 
 @pytest.mark.unit
 def test_alternative_suite_targets_different_conversation_stress_patterns() -> None:
     suite = load_suite("alternative")
 
-    assert suite["Alt 4: StatsCan Province and Age"][:3] == [
+    assert [case.query for case in suite["Alt 4: StatsCan Province and Age"][:3]] == [
         "Canada employment rate",
         "Show by province",
         "Show only Ontario",
     ]
-    assert suite["Alt 9: Bilateral Trade Direction"][-2:] == [
+    assert [case.query for case in suite["Alt 9: Bilateral Trade Direction"][-2:]] == [
         "Switch to imports",
         "Show total trade Germany and United States",
     ]
+
+
+@pytest.mark.unit
+def test_oracle_evaluator_fails_data_presence_without_semantic_match() -> None:
+    case = RoundCase(
+        query="US GDP growth rate",
+        oracle=RoundOracle(
+            accepted_providers=("IMF",),
+            required_countries=("US",),
+            required_indicator_cues=("gdp", "growth"),
+            exact_series_count=1,
+        ),
+    )
+    resp_json = {
+        "data": [
+            {
+                "metadata": {
+                    "source": "World Bank",
+                    "country": "United States",
+                    "indicator": "GDP per capita (current US$)",
+                    "seriesId": "NY.GDP.PCAP.CD",
+                },
+                "data": [{"date": "2024", "value": 1.0}],
+            }
+        ]
+    }
+
+    status, _, _, reasons, observed = evaluate_round(case, resp_json)
+    assert status == "FAIL"
+    assert any(reason.startswith("provider_mismatch") for reason in reasons)
+    assert any(reason.startswith("missing_indicator_cue=growth") for reason in reasons)
+    assert observed["series_count"] == 1
+
+
+@pytest.mark.unit
+def test_oracle_evaluator_accepts_expected_clarification_path() -> None:
+    case = RoundCase(
+        query="employment in Canada",
+        oracle=RoundOracle(expect_clarification=True, required_option_cues=("employment rate", "number employed")),
+    )
+    resp_json = {
+        "clarificationNeeded": True,
+        "clarificationOptions": [
+            {"label": "employment rate", "value": "employment rate in Canada"},
+            {"label": "number employed", "value": "number employed in Canada"},
+        ],
+        "response": "Could you clarify which employment metric you want?",
+    }
+
+    status, _, _, reasons, observed = evaluate_round(case, resp_json)
+    assert status == "PASS"
+    assert reasons == []
+    assert observed["clarification_detected"] is True
