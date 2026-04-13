@@ -638,6 +638,17 @@ Output the query_type and any changed fields as JSON."""
             return None
 
         provider_raw = m.group(1).strip()
+        # Provider-only follow-ups are safe to handle structurally, but
+        # richer utterances like "Japan GDP from World Bank" should fall back
+        # to the LLM/action path so country + metric semantics are not lost.
+        stripped_query = _PROVIDER_SWITCH_RE.sub(" ", query)
+        residual_tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", stripped_query.lower())
+            if token not in _FILLER_WORDS and token not in {"from", "use", "switch", "to", "via", "using", "through", "data"}
+        ]
+        if residual_tokens:
+            return None
         # Normalize without importing QueryService (keeps extractor testable
         # even when optional runtime dependencies are unavailable).
         from ..utils.providers import normalize_provider_name

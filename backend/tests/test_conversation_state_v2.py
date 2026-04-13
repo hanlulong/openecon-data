@@ -733,6 +733,11 @@ class TestDeltaExtractor:
         assert delta.delta_type == "provider_change"
         assert delta.changed_provider == "FRED"
 
+    def test_provider_change_with_country_and_metric_defers_to_llm(self, extractor):
+        state = ConversationState(indicator="GDP", country="US", provider="FRED")
+        delta = extractor.extract("Japan GDP from World Bank", state)
+        assert delta is None
+
     def test_time_change_from_to(self, extractor):
         state = ConversationState(
             indicator="GDP", country="US",
