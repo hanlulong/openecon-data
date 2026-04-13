@@ -2023,8 +2023,7 @@ def build_structured_semantic_clarification(
         return None
 
     questions = [str(item).strip() for item in (intent.clarificationQuestions or []) if str(item).strip()]
-    if len(questions) < 2:
-        return None
+    concept_name = str((intent.parameters or {}).get("__catalog_concept") or "").strip().lower()
 
     options: List[ClarificationOption] = []
     for idx, question in enumerate(questions, start=1):
@@ -2038,6 +2037,18 @@ def build_structured_semantic_clarification(
                 value=_semantic_metric_option_value(query, label),
             )
         )
+
+    if len(options) < 2 and concept_name in _AMBIGUOUS_CONCEPT_OPTIONS:
+        options = [
+            ClarificationOption(
+                id=str(idx),
+                label=str(spec["label"]).strip(),
+                value=_semantic_metric_option_value(query, str(spec["label"]).strip()),
+                provider=str(spec.get("provider") or "") or None,
+                code=str(spec.get("code") or "") or None,
+            )
+            for idx, spec in enumerate(_AMBIGUOUS_CONCEPT_OPTIONS[concept_name], start=1)
+        ]
 
     if len(options) < 2:
         return None

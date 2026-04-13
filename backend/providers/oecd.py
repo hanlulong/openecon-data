@@ -310,6 +310,28 @@ class OECDProvider(BaseProvider):
         # Default: return uppercase country code
         return country_upper
 
+    def _country_label(self, country_code: str) -> str:
+        """Convert OECD country codes back to a human-readable country label."""
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            iso2 = CountryResolver.to_iso2(country_code.upper()) or CountryResolver.normalize(country_code)
+            if iso2:
+                preferred = None
+                for alias, code in CountryResolver.COUNTRY_ALIASES.items():
+                    if code != iso2.upper():
+                        continue
+                    alias_text = str(alias).strip()
+                    if len(alias_text) <= 2:
+                        continue
+                    if preferred is None or len(alias_text) > len(preferred):
+                        preferred = alias_text
+                if preferred:
+                    return preferred.title()
+        except Exception:
+            pass
+        return country_code
+
     def expand_countries(self, country_or_region: str) -> List[str]:
         """Expand a country or region name to a list of country codes.
 
@@ -1550,7 +1572,7 @@ class OECDProvider(BaseProvider):
         metadata = Metadata(
             source="OECD",
             indicator=structure.get("name", indicator) if structure else indicator,
-            country=country_code,
+            country=self._country_label(country_code),
             frequency=frequency,
             unit=unit,
             lastUpdated=last_updated,
