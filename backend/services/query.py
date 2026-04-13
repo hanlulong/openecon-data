@@ -2668,6 +2668,10 @@ class QueryService:
                         _merged_state.provider_locked
                         or (_delta_intent.parameters or {}).get("__semantic_provider_locked")
                     )
+                    if _provider_locked:
+                        if _delta_intent.parameters is None:
+                            _delta_intent.parameters = {}
+                        _delta_intent.parameters["__semantic_provider_locked"] = True
                     _delta_scope_changed = (
                         _delta.changed_country is not None
                         or _delta.changed_countries is not None
@@ -2683,6 +2687,8 @@ class QueryService:
                     _skip_reroute = (
                         _merged_state.provider
                         and (
+                            _delta.changed_provider is not None
+                            or
                             not _delta_changes_routing_params
                             or (
                                 _provider_locked
@@ -2716,6 +2722,12 @@ class QueryService:
                                     _target_countries,
                                 )
                                 _delta_intent.apiProvider = "WORLDBANK"
+                                _merged_state.resolved_indicator_code = None
+                                _merged_state.last_indicators_resolved = None
+                                if _delta_intent.parameters is None:
+                                    _delta_intent.parameters = {}
+                                _delta_intent.parameters.pop("indicator", None)
+                                _delta_intent.parameters.pop("__semantic_provider_locked", None)
                     else:
                         try:
                             _delta_routing = self.unified_router.route(

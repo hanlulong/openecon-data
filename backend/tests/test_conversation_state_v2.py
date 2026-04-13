@@ -186,6 +186,36 @@ class TestMergeState:
         assert merged.provider_locked is True
         assert merged.last_indicators_resolved is None
 
+    def test_geography_mutation_preserves_resolution_snapshot_until_runtime_validates_scope(self):
+        state = ConversationState(
+            indicator="GDP growth rate",
+            countries=["US"],
+            provider="FRED",
+            provider_locked=False,
+            resolved_indicator_code="A191RL1Q225SBEA",
+            last_indicators_resolved=["A191RL1Q225SBEA"],
+        )
+        delta = FollowUpDelta(added_countries=["CA"])
+        merged = merge_state(state, delta)
+        assert merged.countries == ["US", "CA"]
+        assert merged.resolved_indicator_code == "A191RL1Q225SBEA"
+        assert merged.last_indicators_resolved == ["A191RL1Q225SBEA"]
+
+    def test_geography_mutation_preserves_resolution_snapshot_when_provider_locked(self):
+        state = ConversationState(
+            indicator="GDP growth rate",
+            countries=["US"],
+            provider="IMF",
+            provider_locked=True,
+            resolved_indicator_code="NGDP_RPCH",
+            last_indicators_resolved=["NGDP_RPCH"],
+        )
+        delta = FollowUpDelta(added_countries=["CA"])
+        merged = merge_state(state, delta)
+        assert merged.countries == ["US", "CA"]
+        assert merged.resolved_indicator_code == "NGDP_RPCH"
+        assert merged.last_indicators_resolved == ["NGDP_RPCH"]
+
     def test_provider_lock_carries_forward_in_context_merge(self):
         previous = ConversationState(
             indicator="GDP growth rate",
@@ -419,6 +449,7 @@ class TestMaterializeIntent:
         intent = materialize_intent(state)
         assert intent.apiProvider == "IMF"
         assert intent.parameters["__semantic_provider_locked"] is True
+        assert intent.parameters["__semantic_indicator_label"] == "GDP growth rate"
 
     def test_trade_parameters(self):
         state = ConversationState(
@@ -492,6 +523,42 @@ class TestExtractStateFromIntent:
         assert state.provider == "FRED"
         assert state.routed_provider == "FRED"
         assert state.original_query == "GDP in US"
+
+    def test_extract_state_prefers_semantic_indicator_from_query_over_provider_code(self):
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["A191RL1Q225SBEA"],
+            parameters={"country": "US", "indicator": "A191RL1Q225SBEA"},
+            clarificationNeeded=False,
+            originalQuery="US GDP growth rate",
+        )
+        state = extract_state_from_intent(intent)
+        assert state.indicator == "GDP growth rate"
+        assert state.resolved_indicator_code == "A191RL1Q225SBEA"
+
+    def test_extract_state_prefers_query_semantic_indicator_when_parser_label_drifts(self):
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["deflation"],
+            parameters={"countries": ["US", "Canada", "United Kingdom"], "indicator": "FP.CPI.TOTL.ZG"},
+            clarificationNeeded=False,
+            originalQuery="Add United Kingdom inflation rate",
+        )
+        state = extract_state_from_intent(intent)
+        assert state.indicator == "inflation rate"
+        assert state.resolved_indicator_code == "FP.CPI.TOTL.ZG"
+
+    def test_extract_state_prefers_explicit_semantic_indicator_label_param(self):
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["NGDP_RPCH"],
+            parameters={"country": "CA", "indicator": "NGDP_RPCH", "__semantic_indicator_label": "GDP growth rate"},
+            clarificationNeeded=False,
+            originalQuery="Show only Canada",
+        )
+        state = extract_state_from_intent(intent)
+        assert state.indicator == "GDP growth rate"
+        assert state.resolved_indicator_code == "NGDP_RPCH"
 
     def test_multi_country_extraction(self):
         intent = ParsedIntent(

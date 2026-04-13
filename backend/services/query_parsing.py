@@ -34,6 +34,24 @@ def infer_multi_concept_indicators_from_query(query: str) -> List[str]:
     elif "unemployment" in cues:
         inferred.append("unemployment rate")
 
+    if "gdp" in cues:
+        if "per capita" in query_lower:
+            inferred.append("GDP per capita")
+        elif "ppp" in query_lower:
+            inferred.append("PPP GDP")
+        elif "deflator" in query_lower:
+            inferred.append("GDP deflator")
+        elif "constant price" in query_lower or "constant prices" in query_lower:
+            inferred.append("constant prices GDP")
+        elif "real" in query_lower:
+            inferred.append("real GDP")
+        elif "nominal" in query_lower or "current us$" in query_lower:
+            inferred.append("nominal GDP")
+        elif "growth" in query_lower:
+            inferred.append("GDP growth rate")
+        else:
+            inferred.append("GDP")
+
     if "producer_price" in cues:
         inferred.append("producer price inflation")
     elif "inflation" in cues:

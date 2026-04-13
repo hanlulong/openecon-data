@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from ..models import ParsedIntent
 from ..utils.providers import normalize_provider_name
+from .query_parsing import infer_multi_concept_indicators_from_query
 
 logger = logging.getLogger(__name__)
 
@@ -495,6 +496,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # normal follow-ups and forcing an unnecessary re-resolution cycle.
     if state.resolved_indicator_code and "indicator" not in parameters:
         parameters["indicator"] = state.resolved_indicator_code
+    if state.indicator:
+        parameters["__semantic_indicator_label"] = state.indicator
 
     # Provider: use explicit provider if set, otherwise default
     provider = state.provider or state.routed_provider or "WorldBank"
@@ -551,10 +554,30 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     start_date = params.get("startDate")
     end_date = params.get("endDate")
 
+    original_query = str(intent.originalQuery or "").strip()
+
     # Indicator
     indicator: Optional[str] = None
     if intent.indicators:
         indicator = intent.indicators[0]
+    semantic_indicator_label = str(params.get("__semantic_indicator_label") or "").strip()
+    semantic_candidates = [semantic_indicator_label] if semantic_indicator_label else infer_multi_concept_indicators_from_query(original_query)
+    if semantic_candidates:
+        semantic_indicator = semantic_candidates[0]
+        indicator_looks_like_code = bool(
+            indicator
+            and (
+                "." in indicator
+                or "_" in indicator
+                or indicator.isupper()
+            )
+        )
+        if (
+            not indicator
+            or indicator_looks_like_code
+            or semantic_indicator.lower() != str(indicator or "").lower()
+        ):
+            indicator = semantic_indicator
 
     # Resolved indicator code: the provider-specific code (e.g., "NY.GDP.PCAP.CD")
     # populated by the data_fetcher's resolution pipeline. This is stored

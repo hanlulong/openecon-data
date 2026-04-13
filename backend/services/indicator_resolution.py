@@ -1482,9 +1482,10 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         return indicator_query
 
     distilled_original = build_distilled_indicator_query(svc, original_query)
+    semantic_indicator_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
 
     def _fallback_to_original_or_distilled() -> str:
-        return distilled_original or original_query
+        return semantic_indicator_label or distilled_original or original_query
 
     # If the indicator looks like a provider-specific code, never use it
     # for cross-provider resolution -- prefer the original query text.

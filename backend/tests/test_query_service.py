@@ -2377,6 +2377,7 @@ class QueryServiceTests(unittest.TestCase):
             target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
             self.assertIn("DE", [c.upper() for c in target_countries])
             self.assertEqual(refined_intent.apiProvider, "WORLDBANK")
+            self.assertNotIn("indicator", params)
 
     def test_delta_path_preserves_locked_provider_on_scope_follow_up(self) -> None:
         from backend.services.conversation_state_v2 import ConversationState
@@ -2406,6 +2407,36 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response, expected_response)
         route_mock.assert_not_called()
         execute_intent.assert_awaited_once()
+        refined_intent = execute_intent.call_args.kwargs["intent"]
+        self.assertEqual(refined_intent.apiProvider, "IMF")
+        self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
+
+    def test_delta_path_preserves_explicit_provider_change_without_reroute(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        conv_id = conversation_manager.get_or_create("conv-provider-change-follow-up")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="GDP growth rate",
+                countries=["US", "CA"],
+                provider="WORLDBANK",
+                original_query="GDP growth rate",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+
+        with patch.object(self.service.unified_router, "route") as route_mock, \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("Switch to IMF", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        route_mock.assert_not_called()
         refined_intent = execute_intent.call_args.kwargs["intent"]
         self.assertEqual(refined_intent.apiProvider, "IMF")
         self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
@@ -4203,6 +4234,22 @@ class QueryServiceTests(unittest.TestCase):
         # Should prefer the original query, not the WorldBank code
         self.assertNotEqual(result, "NE.EXP.GNFS.ZS")
         self.assertIn("export", result.lower())
+
+    def test_select_indicator_query_prefers_semantic_indicator_label_for_short_follow_up(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["deflation"],
+            parameters={
+                "countries": ["CA", "GB"],
+                "indicator": "NY.GDP.MKTP.IN",
+                "__semantic_indicator_label": "inflation rate",
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only Canada and United Kingdom",
+            isFollowUp=True,
+        )
+        result = self.service._select_indicator_query_for_resolution(intent)
+        self.assertEqual(result, "inflation rate")
 
     def test_get_fallback_providers_passes_country_context_to_resolver(self) -> None:
         class _Resolved:
