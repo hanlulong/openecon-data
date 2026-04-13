@@ -20,6 +20,8 @@ DEPLOY_COMMIT_SHA="$(git rev-parse HEAD)"
 echo "DEPLOY_COMMIT_SHA=$DEPLOY_COMMIT_SHA"
 
 npm run build:frontend
+mkdir -p "${PROJECT_ROOT}/packages/frontend/dist-data"
+rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/"
 "$SCRIPT_DIR/start_backend.sh" production
 
 curl -fsS https://data.openecon.ai/api/health

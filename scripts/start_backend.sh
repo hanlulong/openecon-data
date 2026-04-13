@@ -28,6 +28,9 @@ source "${VENV_PATH}/bin/activate"
 
 LOG_PATH="${LOG_DIR}/backend-${MODE}.log"
 CMD=(uvicorn backend.main:app --host 0.0.0.0 --port 3001)
+HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-2}"
+HEALTH_MAX_WAIT_SECONDS="${HEALTH_MAX_WAIT_SECONDS:-180}"
+MAX_ATTEMPTS=$(( HEALTH_MAX_WAIT_SECONDS / HEALTH_POLL_SECONDS ))
 
 if [ "$MODE" = "production" ]; then
   echo "🚀 Starting backend in PRODUCTION mode (no auto-reload)..."
@@ -44,12 +47,12 @@ nohup "${CMD[@]}" > "$LOG_PATH" 2>&1 &
 BACKEND_PID=$!
 
 HEALTH_OK=0
-for _attempt in $(seq 1 30); do
+for _attempt in $(seq 1 "$MAX_ATTEMPTS"); do
   if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
     HEALTH_OK=1
     break
   fi
-  sleep 2
+  sleep "$HEALTH_POLL_SECONDS"
 done
 
 if [ "$HEALTH_OK" -eq 1 ]; then
@@ -61,6 +64,7 @@ if [ "$HEALTH_OK" -eq 1 ]; then
   echo "Monitor with: ps aux | grep uvicorn"
 else
   echo "❌ Backend failed to start"
+  echo "   Waited up to ${HEALTH_MAX_WAIT_SECONDS}s for /api/health"
   echo "Check logs: tail -50 $LOG_PATH"
   exit 1
 fi
