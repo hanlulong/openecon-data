@@ -1,0 +1,67 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
+            "statusMessage": "Loading OMX session context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
+            "statusMessage": "Running OMX Bash preflight"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
+            "statusMessage": "Running OMX tool review"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
+            "statusMessage": "Applying OMX prompt routing"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"/home/hanlulong/OpenEcon/scripts/execution_gate.py\" --check-stop",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

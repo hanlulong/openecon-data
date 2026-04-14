@@ -141,3 +141,10 @@ validation_private/*
 !validation_private/.gitkeep
 validation/reports/*
 !validation/reports/.gitkeep
+
+# Local Codex runtime artifacts (keep only shared hook config)
+.codex/*
+!.codex/hooks.json
+
+# Generated test reports under docs/testing/reports
+docs/testing/reports/*.json
