@@ -22,7 +22,7 @@ import time
 from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
-from ..utils.providers import ALL_PROVIDERS
+from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
@@ -277,6 +277,10 @@ async def fetch_from_coingecko(
                         coin_ids.append(cid)
             if not coin_ids:
                 coin_ids = ["bitcoin"]
+
+    # Remove duplicates while preserving order so comparison follow-ups do not
+    # duplicate series for the same asset.
+    coin_ids = list(dict.fromkeys(coin_ids))
 
     logger.info(f"   - Resolved coins: {coin_ids}, vs={vs_currency}")
 
@@ -710,7 +714,14 @@ async def fetch_from_provider_dispatch(
 
     if provider == "COMTRADE":
         indicators = [indicator.lower() for indicator in intent.indicators]
-        if any("balance" in indicator for indicator in indicators):
+        flow_value = str(params.get("flow") or "").strip().upper()
+        original_query_lower = str(intent.originalQuery or "").lower()
+        explicit_trade_balance_query = (
+            "trade balance" in original_query_lower
+            or "balance of trade" in original_query_lower
+            or flow_value == "BALANCE"
+        )
+        if (any("balance" in indicator for indicator in indicators) and flow_value not in {"EXPORT", "IMPORT"}) or explicit_trade_balance_query:
             series = await svc.comtrade_provider.fetch_trade_balance(
                 reporter=params.get("reporter") or params.get("country") or "US",
                 partner=params.get("partner"),
@@ -721,11 +732,43 @@ async def fetch_from_provider_dispatch(
             return [series]
         reporter_value = params.get("reporter") or params.get("country")
         reporters_value = params.get("reporters") or params.get("countries")
-        # If an explicit reporter is present (common for bilateral queries),
-        # ignore broad countries[] context to avoid duplicate/misaligned fan-out.
+        if isinstance(reporters_value, list):
+            reporters_clean = [str(value).strip() for value in reporters_value if str(value or "").strip()]
+        else:
+            reporters_clean = []
+        partner_value = str(params.get("partner") or "").strip()
+
+        def _norm_country(value: str) -> str:
+            if not value:
+                return ""
+            try:
+                return str(svc._normalize_country_to_iso2(value) or value).upper()
+            except Exception:
+                return value.upper()
+
+        partner_norm = _norm_country(partner_value)
+        if partner_norm:
+            reporters_clean = [
+                value for value in reporters_clean
+                if _norm_country(value) != partner_norm
+            ]
         if reporter_value:
+            reporter_clean = str(reporter_value).strip()
+            reporter_norm = _norm_country(reporter_clean)
+            if reporter_clean and reporter_norm not in {_norm_country(value) for value in reporters_clean}:
+                reporters_clean.insert(0, reporter_clean)
+        if len(reporters_clean) > 1:
+            if not reporter_value:
+                reporter_value = reporters_clean[0]
+            reporters_value = reporters_clean
+        elif len(reporters_clean) == 1 and not reporter_value:
+            reporter_value = reporters_clean[0]
             reporters_value = None
-        return await svc.comtrade_provider.fetch_trade_data(
+        elif reporter_value:
+            # If there is only a single effective reporter, ignore broad
+            # countries[] context to avoid duplicate/misaligned fan-out.
+            reporters_value = None
+        series_list = await svc.comtrade_provider.fetch_trade_data(
             reporter=reporter_value,
             reporters=reporters_value,
             partner=params.get("partner"),
@@ -735,6 +778,24 @@ async def fetch_from_provider_dispatch(
             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
             frequency=params.get("frequency", "annual"),
         )
+        deduped: dict[tuple[str, str, str, str], Any] = {}
+        for series in series_list:
+            meta = getattr(series, "metadata", None)
+            country = str(getattr(meta, "country", "") or "").strip()
+            try:
+                country_key = str(svc._normalize_country_to_iso2(country) or country).upper()
+            except Exception:
+                country_key = country.upper()
+            key = (
+                normalize_provider_name(getattr(meta, "source", "") or "UN Comtrade"),
+                country_key,
+                str(getattr(meta, "indicator", "") or "").strip().lower(),
+                str(getattr(meta, "seriesId", "") or "").strip().upper(),
+            )
+            existing = deduped.get(key)
+            if existing is None or len(country) > len(str(getattr(existing.metadata, "country", "") or "")):
+                deduped[key] = series
+        return list(deduped.values())
 
     if provider in {"STATSCAN", "STATISTICS CANADA"}:
         return await _fetch_from_statscan(svc, intent, params)
@@ -788,6 +849,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
 
     entity = params.get("entity")
     indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)
+    state_product_id = params.get("__statscan_product_id")
 
     # --- Framework fix: resolve numeric table/product IDs to vector mapping keys ---
     # When the catalog or conversation state provides a numeric table ID (e.g., "14100287")
@@ -843,11 +905,13 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 return dim_name
         return None
 
+    dimension_decomposition_axis = str(params.get("__statscan_decomposition_axis") or "").strip()
+
     # EARLY DISPATCH: When __dimensions comes from the delta/merge path,
     # route directly to fetch_with_dimensions or fetch_multi_province_data.
     # This MUST happen before any other dispatch path (industry breakdown,
     # dynamic discovery, etc.) that could divert to the wrong table.
-    if dimensions and params.get("__dimensions"):
+    if (dimensions and params.get("__dimensions")) or dimension_decomposition_axis:
         _base = params.get("__base_indicator") or (indicator or "").upper().replace(" ", "_").replace("-", "_")
         _is_known = (
             _base in svc.statscan_provider.VECTOR_MAPPINGS
@@ -861,19 +925,65 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 _base = _resolved_key
                 _is_known = True
 
+        if dimension_decomposition_axis and (_is_known or state_product_id):
+            try:
+                _product_id_dim = (
+                    svc.statscan_provider._normalize_metadata_product_id(state_product_id)
+                    if state_product_id else None
+                )
+                _vec_dim = svc.statscan_provider.VECTOR_MAPPINGS.get(_base)
+                _coord_dim = svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_base)
+                if not _product_id_dim and _coord_dim:
+                    _product_id_dim = svc.statscan_provider._normalize_metadata_product_id(_coord_dim[0])
+                elif not _product_id_dim and _vec_dim is not None:
+                    _cached_dim = svc.statscan_provider.PRODUCT_ID_CACHE.get(_vec_dim)
+                    if _cached_dim:
+                        _product_id_dim = svc.statscan_provider._normalize_metadata_product_id(_cached_dim)
+                if not _product_id_dim and indicator:
+                    try:
+                        int(indicator)
+                        _product_id_dim = svc.statscan_provider._normalize_metadata_product_id(indicator)
+                    except (ValueError, TypeError):
+                        pass
+
+                if _product_id_dim:
+                    decomposition_params = {
+                        "productId": _product_id_dim,
+                        "indicator": _base,
+                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
+                        "axis": dimension_decomposition_axis,
+                        "periods": params.get("periods", 60),
+                        "dimensions": dimensions,
+                        "startDate": params.get("startDate"),
+                        "endDate": params.get("endDate"),
+                    }
+                    logger.info(
+                        "StatsCan EARLY dimension decomposition dispatch: %s product=%s axis=%s",
+                        _base,
+                        _product_id_dim,
+                        dimension_decomposition_axis,
+                    )
+                    results = await svc.statscan_provider.fetch_multi_dimension_data(decomposition_params)
+                    return results if isinstance(results, list) else [results]
+            except Exception as e:
+                logger.warning(f"StatsCan dimension decomposition dispatch failed: {e}. Falling through.")
+
         # Check if this is a dimension BREAKDOWN (e.g., Geography="Province")
         # vs a dimension FILTER (e.g., Geography="Ontario")
         _breakdown_dim = _is_dimension_breakdown(dimensions)
-        if _breakdown_dim and _is_known:
+        if _breakdown_dim and (_is_known or state_product_id):
             try:
                 # Resolve product ID for multi-province fetch
                 _indicator_key_bp = _base
-                _product_id = None
+                _product_id = (
+                    svc.statscan_provider._normalize_metadata_product_id(state_product_id)
+                    if state_product_id else None
+                )
                 _vec = svc.statscan_provider.VECTOR_MAPPINGS.get(_indicator_key_bp)
                 _coord = svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key_bp)
-                if _coord:
+                if not _product_id and _coord:
                     _product_id = svc.statscan_provider._normalize_metadata_product_id(_coord[0])
-                elif _vec is not None:
+                elif not _product_id and _vec is not None:
                     _cached = svc.statscan_provider.PRODUCT_ID_CACHE.get(_vec)
                     if _cached:
                         _product_id = svc.statscan_provider._normalize_metadata_product_id(_cached)
@@ -891,6 +1001,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     province_params = {
                         "productId": _product_id,
                         "indicator": _base,
+                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                         "provinces": "all",
                         "periods": params.get("periods", 60),
                         "dimensions": _non_breakdown_dims,
@@ -910,6 +1021,23 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             try:
                 start_year = int(params["startDate"][:4]) if params.get("startDate") else None
                 end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                if state_product_id:
+                    categorical_params = {
+                        "productId": state_product_id,
+                        "indicator": indicator or _base,
+                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or _base),
+                        "periods": params.get("periods", 240),
+                        "dimensions": dimensions,
+                        "startDate": params.get("startDate"),
+                        "endDate": params.get("endDate"),
+                    }
+                    logger.info(
+                        "StatsCan EARLY product-preserving dimension dispatch: product=%s dimensions=%s",
+                        state_product_id,
+                        dimensions,
+                    )
+                    series = await svc.statscan_provider.fetch_categorical_data(categorical_params)
+                    return [series]
                 logger.info(f"StatsCan EARLY dimension dispatch: {_base} + {dimensions}")
                 series = await svc.statscan_provider.fetch_with_dimensions(
                     base_indicator=_base,
@@ -917,6 +1045,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     start_year=start_year,
                     end_year=end_year,
                     periods=params.get("periods", 240),
+                    indicator_label=params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                 )
                 return [series]
             except Exception as e:
@@ -1083,6 +1212,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     province_params_fb = {
                         "productId": _product_id_fb,
                         "indicator": _indicator_key_for_dim,
+                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _indicator_key_for_dim),
                         "provinces": "all",
                         "periods": params.get("periods", 60),
                         "dimensions": _non_breakdown_dims_fb,
@@ -1102,12 +1232,30 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             try:
                 start_year = int(params["startDate"][:4]) if params.get("startDate") else None
                 end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                if state_product_id:
+                    categorical_params = {
+                        "productId": state_product_id,
+                        "indicator": indicator or _indicator_key_for_dim,
+                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or _indicator_key_for_dim),
+                        "periods": params.get("periods", 240),
+                        "dimensions": dimensions,
+                        "startDate": params.get("startDate"),
+                        "endDate": params.get("endDate"),
+                    }
+                    logger.info(
+                        "StatsCan product-preserving dimension dispatch: product=%s dimensions=%s",
+                        state_product_id,
+                        dimensions,
+                    )
+                    series = await svc.statscan_provider.fetch_categorical_data(categorical_params)
+                    return [series]
                 series = await svc.statscan_provider.fetch_with_dimensions(
                     base_indicator=_indicator_key_for_dim,
                     modifiers=dimensions,
                     start_year=start_year,
                     end_year=end_year,
                     periods=params.get("periods", 240),
+                    indicator_label=params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _indicator_key_for_dim),
                 )
                 return [series]
             except Exception as e:
@@ -1142,7 +1290,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             logger.info(f"Using dynamic discovery for StatsCan indicator: {indicator}")
             dynamic_params = {
                 "indicator": indicator,
-                "indicatorLabel": str(intent.indicators[0] if intent.indicators else indicator),
+                "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator),
                 "geography": params.get("geography"),
                 "periods": params.get("periods", 240),
             }
@@ -1575,6 +1723,15 @@ async def fetch_data(
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params
+
+    # Ensure cache identity distinguishes semantically different requests even
+    # when the provider-specific resolution pipeline leaves params["indicator"]
+    # unset (common for dynamic providers and some follow-up deltas).
+    if "indicator" not in params and intent.indicators and len(intent.indicators) == 1:
+        indicator_for_cache = str(intent.indicators[0] or "").strip()
+        if indicator_for_cache:
+            params["indicator"] = indicator_for_cache
+            intent.parameters = params
 
     # Apply smart default time ranges based on provider
     logger.info(f"Before defaults - provider={provider}, startDate={params.get('startDate')}, endDate={params.get('endDate')}")

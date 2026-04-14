@@ -191,6 +191,74 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(data.data[0].date, "2020-01-01")
         self.assertEqual(data.data[0].value, 21000000000000)
 
+    def test_worldbank_small_multi_country_prefers_parallel_single_country_fetch(self) -> None:
+        provider = WorldBankProvider()
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self._responses = list(responses)
+                self.urls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.urls.append(str(url))
+                if not self._responses:
+                    raise AssertionError("No more mock responses available")
+                response = self._responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        usa_response = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {"id": "FP.CPI.TOTL.ZG", "value": "Inflation, consumer prices (annual %)"},
+                        "country": {"id": "USA", "value": "United States"},
+                        "countryiso3code": "USA",
+                        "date": "2020",
+                        "value": 1.2,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 1,
+                    }
+                ],
+            ]
+        )
+        can_response = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {"id": "FP.CPI.TOTL.ZG", "value": "Inflation, consumer prices (annual %)"},
+                        "country": {"id": "CAN", "value": "Canada"},
+                        "countryiso3code": "CAN",
+                        "date": "2020",
+                        "value": 0.8,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 1,
+                    }
+                ],
+            ]
+        )
+        client = RecordingClient([usa_response, can_response])
+
+        with patch("backend.providers.worldbank.get_http_client", return_value=client):
+            results = run(
+                provider.fetch_indicator(
+                    indicator="FP.CPI.TOTL.ZG",
+                    countries=["US", "CA"],
+                    start_date="2020-01-01",
+                    end_date="2020-12-31",
+                )
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual({result.metadata.country for result in results}, {"United States", "Canada"})
+        self.assertTrue(all(";" not in url for url in client.urls))
+        self.assertTrue(any("/country/US/" in url for url in client.urls))
+        self.assertTrue(any("/country/CA/" in url for url in client.urls))
+
     def test_comtrade_fetch_trade_data(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 
@@ -387,6 +455,16 @@ class ProviderTests(unittest.TestCase):
         assert label is not None
         self.assertIn("debt", label.lower())
 
+    def test_imf_gdp_resolves_to_level_code_not_growth(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        code, label = run(provider._resolve_indicator_code("GDP"))
+
+        self.assertEqual(code, "NGDPD")
+        self.assertIsNotNone(label)
+        assert label is not None
+        self.assertIn("gdp", label.lower())
+
     def test_imf_fetch_batch_uses_alternative_code_when_primary_missing(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
@@ -416,6 +494,38 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(len(result), 2)
         self.assertTrue(all(series.metadata.seriesId == "PPPIA_IX" for series in result))
+
+    def test_imf_fetch_batch_retries_on_invalid_json_body(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _InvalidJSONResponse(MockAsyncResponse):
+            def json(self):
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        responses = [
+            _InvalidJSONResponse({}),
+            MockAsyncResponse(
+                {
+                    "values": {
+                        "NGDP_RPCH": {
+                            "USA": {"2020": 2.1, "2021": 5.8}
+                        }
+                    }
+                }
+            ),
+        ]
+
+        with patch.object(provider, "_resolve_indicator_code", return_value=("NGDP_RPCH", "Real GDP growth")), \
+             patch("backend.providers.imf.get_http_client", return_value=MockAsyncClient(responses)):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="GDP growth rate",
+                    countries=["USA"],
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "NGDP_RPCH")
 
     def test_bis_metadata_discovery(self) -> None:
         class StubMetadata:

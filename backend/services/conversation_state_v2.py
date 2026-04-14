@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from ..models import ParsedIntent
+from ..models import NormalizedData, ParsedIntent
 from ..utils.providers import normalize_provider_name
 from .query_parsing import infer_multi_concept_indicators_from_query
 
@@ -44,6 +44,21 @@ _GEOGRAPHY_DIMENSION_KEYS = {
     "regions",
     "country",
     "countries",
+}
+
+_DIMENSION_DECOMPOSITION_AXIS_ALIASES = {
+    "age": "Age group",
+    "age group": "Age group",
+    "ages": "Age group",
+    "gender": "Gender",
+    "sex": "Gender",
+    "genders": "Gender",
+    "labour force characteristic": "Labour force characteristics",
+    "labour force characteristics": "Labour force characteristics",
+    "labor force characteristic": "Labour force characteristics",
+    "labor force characteristics": "Labour force characteristics",
+    "characteristic": "Labour force characteristics",
+    "characteristics": "Labour force characteristics",
 }
 
 _CRYPTO_INDICATOR_TO_COIN_ID = {
@@ -94,6 +109,249 @@ def _indicator_to_coin_id(indicator: Optional[str]) -> Optional[str]:
     return _CRYPTO_INDICATOR_TO_COIN_ID.get(indicator_key)
 
 
+def _looks_like_provider_code(provider: str, value: Optional[str]) -> bool:
+    """Best-effort provider-code detection for persisted answer members."""
+    text = str(value or "").strip()
+    if not provider or not text:
+        return False
+    return bool("." in text or "_" in text or text.isupper())
+
+
+def _normalize_member_country_list(countries: Optional[List[str]]) -> Optional[List[str]]:
+    if not countries:
+        return None
+    deduped = [str(country).strip() for country in countries if str(country or "").strip()]
+    if not deduped:
+        return None
+    return list(dict.fromkeys(deduped))
+
+
+def _answer_member_key(member: "AnswerSetMember") -> tuple[str, str, str, tuple[str, ...]]:
+    provider = normalize_provider_name(member.provider or "")
+    provider_code = str(member.provider_code or member.series_id or "").strip().upper()
+    indicator_label = str(member.indicator_label or "").strip().lower()
+    canonical_identifier = provider_code or indicator_label
+    return (
+        provider,
+        canonical_identifier,
+        str(member.country or "").strip().upper(),
+        tuple(country.upper() for country in (member.countries or [])),
+    )
+
+
+def _extract_statscan_product_id_from_member(member: "AnswerSetMember") -> Optional[str]:
+    if normalize_provider_name(member.provider or "") != "STATSCAN":
+        return None
+    for candidate in (member.series_id, member.provider_code):
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        head = text.split(":", 1)[0]
+        digits = "".join(ch for ch in head if ch.isdigit())
+        if len(digits) >= 8:
+            return digits[:8]
+    return None
+
+
+def build_answer_set_members_from_data(
+    data: Optional[List[NormalizedData]],
+    *,
+    intent: Optional[ParsedIntent] = None,
+    turn_number: int = 0,
+) -> List["AnswerSetMember"]:
+    """Project successful response data into provider/country/member history."""
+    if not data:
+        return []
+
+    params = (intent.parameters or {}) if intent is not None else {}
+    semantic_indicator_label = str(params.get("__semantic_indicator_label") or "").strip()
+    fallback_countries = _normalize_member_country_list(params.get("countries"))
+    if not fallback_countries and params.get("country"):
+        fallback_countries = [str(params.get("country")).strip()]
+
+    members: List[AnswerSetMember] = []
+    for dataset in data:
+        metadata = getattr(dataset, "metadata", None)
+        provider = normalize_provider_name(str(getattr(metadata, "source", "") or getattr(intent, "apiProvider", "") or ""))
+        if not provider:
+            continue
+
+        series_id = str(getattr(metadata, "seriesId", "") or "").strip() or None
+        indicator_text = str(getattr(metadata, "indicator", "") or "").strip()
+        indicator_label = semantic_indicator_label or indicator_text or (
+            str((intent.indicators or [""])[0]).strip() if intent is not None else ""
+        )
+        country = str(getattr(metadata, "country", "") or "").strip() or None
+        countries = [country] if country else fallback_countries
+        provider_code = series_id
+        if provider_code is None and _looks_like_provider_code(provider, indicator_text):
+            provider_code = indicator_text
+
+        members.append(
+            AnswerSetMember(
+                provider=provider,
+                indicator_label=indicator_label or None,
+                provider_code=provider_code,
+                series_id=series_id,
+                country=country,
+                countries=_normalize_member_country_list(countries),
+                source_turn=turn_number or None,
+            )
+        )
+
+    deduped: List[AnswerSetMember] = []
+    seen: set[tuple[str, str, str, tuple[str, ...], str]] = set()
+    for member in members:
+        key = _answer_member_key(member)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(member)
+    return deduped
+
+
+def _canonical_dimension_decomposition_axis(
+    raw_key: str,
+    raw_value: str,
+) -> Optional[str]:
+    """Map a category-style dimension request to a canonical decomposition axis."""
+    key_lower = str(raw_key or "").strip().lower()
+    value_lower = str(raw_value or "").strip().lower()
+
+    if key_lower in _GEOGRAPHY_DIMENSION_KEYS:
+        return None
+
+    key_axis = _DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(key_lower)
+    value_axis = _DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(value_lower)
+    if key_axis and value_axis and key_axis == value_axis:
+        return key_axis
+
+    category_values = {
+        value_lower,
+        value_lower.removeprefix("by ").strip(),
+        value_lower.removesuffix("s").strip(),
+    }
+    if key_axis and key_lower in category_values:
+        return key_axis
+    if key_axis and any(value == key_lower for value in category_values):
+        return key_axis
+    if key_axis and value_axis == key_axis:
+        return key_axis
+    return None
+
+
+def _dimensions_target_decomposition_axis(
+    dimensions: Optional[Dict[str, str]],
+    decomposition: Optional[Dict[str, Any]],
+) -> bool:
+    """Whether specific dimension filters should replace the current decomposition."""
+    if not dimensions or not decomposition:
+        return False
+
+    decomp_type = str(decomposition.get("type") or "").strip().lower()
+    decomp_axis = str(decomposition.get("axis") or "").strip().lower()
+    for raw_key, raw_value in dimensions.items():
+        key_lower = str(raw_key or "").strip().lower()
+        value_lower = str(raw_value or "").strip().lower()
+        if key_lower in _GEOGRAPHY_DIMENSION_KEYS:
+            if decomp_type in {"provinces", "states", "regions", "countries"}:
+                return True
+            continue
+        axis = _canonical_dimension_decomposition_axis(key_lower, value_lower)
+        if axis is not None:
+            continue
+        if decomp_type == "dimension" and decomp_axis:
+            candidate_axis = _DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(key_lower, key_lower)
+            candidate_axis_lower = str(candidate_axis).strip().lower()
+            if candidate_axis_lower == decomp_axis:
+                return True
+            if decomp_axis in {"demographic", "demographics"} and candidate_axis_lower in {
+                "age group",
+                "gender",
+                "labour force characteristics",
+            }:
+                return True
+    return False
+
+
+def _canonicalize_decomposition_payload(
+    decomposition: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Normalize decomposition payloads into the canonical state contract."""
+    if decomposition is None:
+        return None
+
+    payload = dict(decomposition)
+    decomp_type = str(payload.get("type") or "").strip().lower()
+    axis = str(payload.get("axis") or "").strip()
+    axis_lower = axis.lower()
+
+    if decomp_type in {"age groups", "age_group", "age_groups", "ages"}:
+        payload["type"] = "dimension"
+        payload["axis"] = "Age group"
+    elif decomp_type in {"sex", "gender"}:
+        payload["type"] = "dimension"
+        payload["axis"] = "Gender"
+    elif decomp_type == "dimension" and axis:
+        canonical_axis = _DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(axis_lower)
+        if canonical_axis:
+            payload["axis"] = canonical_axis
+
+    return payload
+
+
+def update_answer_members_from_data(
+    state: ConversationState,
+    data: Optional[List[NormalizedData]],
+    *,
+    intent: Optional[ParsedIntent] = None,
+    recent_limit: int = 24,
+) -> ConversationState:
+    """Persist current and recent answer members after a successful fetch."""
+    current_members = build_answer_set_members_from_data(
+        data,
+        intent=intent,
+        turn_number=state.turn_number,
+    )
+    if not current_members:
+        return state
+
+    state.active_answer_members = current_members
+
+    recent_members = list(state.recent_answer_members or [])
+    recent_by_key = {_answer_member_key(member): member for member in recent_members}
+    ordered_keys = [_answer_member_key(member) for member in recent_members]
+    for member in current_members:
+        key = _answer_member_key(member)
+        recent_by_key[key] = member
+        if key in ordered_keys:
+            ordered_keys = [existing for existing in ordered_keys if existing != key]
+        ordered_keys.append(key)
+    if recent_limit > 0:
+        ordered_keys = ordered_keys[-recent_limit:]
+    state.recent_answer_members = [recent_by_key[key] for key in ordered_keys]
+
+    latest_statscan_product = None
+    for member in current_members:
+        latest_statscan_product = _extract_statscan_product_id_from_member(member)
+        if latest_statscan_product:
+            break
+    if latest_statscan_product:
+        if state.statscan_product_id != latest_statscan_product:
+            state.statscan_cube_metadata = None
+        state.statscan_product_id = latest_statscan_product
+
+    latest_coin_ids = [
+        str(member.series_id).strip().lower()
+        for member in current_members
+        if normalize_provider_name(member.provider or "") == "COINGECKO"
+        and str(member.series_id or "").strip()
+    ]
+    if latest_coin_ids:
+        state.coin_ids = list(dict.fromkeys(latest_coin_ids))
+    return state
+
+
 def _interpret_dimension_breakdown(
     dimensions: Optional[Dict[str, str]],
 ) -> tuple[Optional[Dict[str, str]], Optional[Dict[str, Any]], bool]:
@@ -127,6 +385,15 @@ def _interpret_dimension_breakdown(
                 }
                 continue
             has_specific_geography_filter = True
+        else:
+            dimension_axis = _canonical_dimension_decomposition_axis(key_lower, value_lower)
+            if decomposition is None and dimension_axis:
+                decomposition = {
+                    "type": "dimension",
+                    "entities": None,
+                    "axis": dimension_axis,
+                }
+                continue
 
         remaining[key] = value
 
@@ -189,6 +456,20 @@ class ConversationState(BaseModel):
     turn_number: int = 0
     routed_provider: Optional[str] = None
     last_indicators_resolved: Optional[List[str]] = None
+    active_answer_members: Optional[List["AnswerSetMember"]] = None
+    recent_answer_members: Optional[List["AnswerSetMember"]] = None
+
+
+class AnswerSetMember(BaseModel):
+    """One verified series/member captured from a successful answer."""
+
+    provider: str
+    indicator_label: Optional[str] = None
+    provider_code: Optional[str] = None
+    series_id: Optional[str] = None
+    country: Optional[str] = None
+    countries: Optional[List[str]] = None
+    source_turn: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +569,8 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         merged.coin_ids = None
+        if str(delta.changed_indicator).strip().lower() in {"trade balance", "total trade"} and delta.changed_trade_flow is None:
+            merged.trade_flow = None
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
             merged.statscan_cube_metadata = None  # Clear stale cube metadata when indicator changes
@@ -297,6 +580,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             merged.coin_ids = [_coin]
             merged.provider = "COINGECKO"
             merged.routed_provider = "COINGECKO"
+
+        if delta.changed_indicator:
+            next_trade_reporter = delta.changed_trade_reporter or merged.trade_reporter
+            if next_trade_reporter:
+                merged.country = next_trade_reporter
+                merged.countries = None
 
     # Additive indicators: "also show inflation" adds to existing indicators
     if delta.added_indicators:
@@ -354,6 +643,22 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             logger.warning("merge_state: all countries removed, keeping last state")
         # If empty after removal, keep the last state (edge case)
 
+    if (merged.provider or merged.routed_provider or "").upper() == "COMTRADE" or merged.trade_reporter:
+        if delta.changed_country:
+            merged.trade_reporter = delta.changed_country
+        elif delta.changed_countries:
+            merged.trade_reporter = delta.changed_countries[0] if delta.changed_countries else None
+        elif delta.removed_countries:
+            if merged.country:
+                merged.trade_reporter = merged.country
+            elif merged.countries:
+                merged.trade_reporter = merged.countries[0]
+        elif delta.added_countries and not merged.trade_reporter:
+            if merged.country:
+                merged.trade_reporter = merged.country
+            elif merged.countries:
+                merged.trade_reporter = merged.countries[0]
+
     # --- Provider ---
     if delta.changed_provider:
         merged.provider = delta.changed_provider
@@ -376,7 +681,10 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             merged.dimensions = {**(merged.dimensions or {}), **remaining_dimensions}
         if decomposition_from_dimensions and delta.changed_decomposition is None:
             merged.decomposition = decomposition_from_dimensions
-        elif has_specific_geography_filter and merged.decomposition is not None:
+        elif (
+            (has_specific_geography_filter or _dimensions_target_decomposition_axis(remaining_dimensions, merged.decomposition))
+            and merged.decomposition is not None
+        ):
             merged.decomposition = None
     if delta.removed_dimensions:
         if merged.dimensions:
@@ -391,7 +699,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
 
     # --- Decomposition ---
     if delta.changed_decomposition is not None:
-        merged.decomposition = delta.changed_decomposition
+        merged.decomposition = _canonicalize_decomposition_payload(delta.changed_decomposition)
 
     # --- Trade fields ---
     if delta.changed_trade_flow:
@@ -435,7 +743,24 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["endDate"] = state.end_date
 
     # Trade
-    if state.trade_reporter:
+    provider_name = (state.provider or state.routed_provider or "").upper()
+    if provider_name == "COMTRADE":
+        reporter_scope: List[str] = []
+        if state.countries:
+            reporter_scope = list(state.countries)
+        elif state.country:
+            reporter_scope = [state.country]
+
+        if reporter_scope:
+            if len(reporter_scope) > 1:
+                parameters["reporters"] = reporter_scope
+            if state.trade_reporter and state.trade_reporter in reporter_scope:
+                parameters["reporter"] = state.trade_reporter
+            else:
+                parameters["reporter"] = reporter_scope[0]
+        elif state.trade_reporter:
+            parameters["reporter"] = state.trade_reporter
+    elif state.trade_reporter:
         parameters["reporter"] = state.trade_reporter
     if state.trade_partner:
         parameters["partner"] = state.trade_partner
@@ -470,6 +795,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
             parameters["__base_indicator"] = state.base_indicator
             # Also set indicator in params so data_fetcher uses the vector key
             parameters["indicator"] = state.base_indicator
+    if state.statscan_product_id:
+        parameters["__statscan_product_id"] = state.statscan_product_id
 
     # Indicator: use base_indicator (vector key like "UNEMPLOYMENT_RATE") when
     # dimensions are active, so the StatsCan provider routes correctly.
@@ -508,6 +835,10 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     needs_decomp = state.decomposition is not None
     decomp_type = state.decomposition.get("type") if state.decomposition else None
     decomp_entities = state.decomposition.get("entities") if state.decomposition else None
+    if state.decomposition and str(decomp_type or "").lower() == "dimension":
+        axis = str(state.decomposition.get("axis") or "").strip()
+        if axis:
+            parameters["__statscan_decomposition_axis"] = axis
 
     return ParsedIntent(
         apiProvider=provider,
@@ -611,6 +942,28 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     trade_reporter = params.get("reporter")
     trade_partner = params.get("partner")
     trade_commodity = params.get("commodity")
+    provider_name = normalize_provider_name(intent.apiProvider or "")
+
+    if provider_name == "COMTRADE":
+        raw_reporters = params.get("reporters")
+        reporter_list: List[str] = []
+        if isinstance(raw_reporters, list):
+            reporter_list.extend(str(value) for value in raw_reporters if str(value or "").strip())
+        if trade_reporter and str(trade_reporter).strip():
+            reporter_value = str(trade_reporter).strip()
+            if reporter_value not in reporter_list:
+                reporter_list.insert(0, reporter_value)
+        if reporter_list:
+            reporter_list = list(dict.fromkeys(reporter_list))
+            if len(reporter_list) == 1:
+                country = reporter_list[0]
+                countries = None
+            else:
+                countries = reporter_list
+                country = None
+        elif trade_reporter and str(trade_reporter).strip():
+            country = str(trade_reporter).strip()
+            countries = None
 
     # Crypto
     coin_ids = params.get("coinIds")
@@ -628,6 +981,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
             "type": intent.decompositionType,
             "entities": intent.decompositionEntities,
         }
+        decomposition_axis = str(params.get("__statscan_decomposition_axis") or "").strip()
+        if decomposition_axis:
+            decomposition["axis"] = decomposition_axis
     elif decomposition_from_dimensions:
         decomposition = decomposition_from_dimensions
 
@@ -676,6 +1032,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # during R1's data fetch). This avoids async API calls in the delta extractor.
     statscan_product_id: Optional[str] = None
     statscan_cube_metadata_val: Optional[Dict[str, Any]] = None
+    explicit_statscan_product = str(params.get("__statscan_product_id") or "").strip()
+    if explicit_statscan_product:
+        statscan_product_id = "".join(ch for ch in explicit_statscan_product if ch.isdigit())[:8] or None
     if base_indicator:
         try:
             from ..providers.statscan import StatsCanProvider
@@ -710,6 +1069,20 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         except Exception:
             pass
 
+    if not statscan_product_id:
+        for candidate in (
+            params.get("indicator"),
+            resolved_indicator_code,
+            indicator,
+        ):
+            candidate_text = str(candidate or "").strip()
+            if ":" in candidate_text:
+                candidate_text = candidate_text.split(":", 1)[0]
+            candidate_digits = "".join(ch for ch in candidate_text if ch.isdigit())
+            if len(candidate_digits) >= 8:
+                statscan_product_id = candidate_digits[:8]
+                break
+
     return ConversationState(
         indicator=indicator,
         base_indicator=base_indicator,
@@ -719,9 +1092,9 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         statscan_cube_metadata=statscan_cube_metadata_val,
         country=country,
         countries=countries,
-        provider=normalize_provider_name(intent.apiProvider or ""),
+        provider=provider_name,
         provider_locked=bool(params.get("__semantic_provider_locked")),
-        routed_provider=normalize_provider_name(intent.apiProvider or ""),
+        routed_provider=provider_name,
         start_date=start_date,
         end_date=end_date,
         original_query=intent.originalQuery,
@@ -821,7 +1194,11 @@ def merge_new_state_with_previous(
         new_state.statscan_cube_metadata = previous.statscan_cube_metadata
     if not new_state.decomposition and previous.decomposition:
         _, _, has_specific_geography_filter = _interpret_dimension_breakdown(new_state.dimensions)
-        if not has_specific_geography_filter and not explicit_geo_in_new_state:
+        if (
+            not has_specific_geography_filter
+            and not explicit_geo_in_new_state
+            and not _dimensions_target_decomposition_axis(new_state.dimensions, previous.decomposition)
+        ):
             new_state.decomposition = previous.decomposition
 
     # --- Trade fields ---
@@ -844,4 +1221,13 @@ def merge_new_state_with_previous(
     if not new_state.chart_type and previous.chart_type:
         new_state.chart_type = previous.chart_type
 
+    # --- Answer-set provenance ---
+    if not new_state.active_answer_members and previous.active_answer_members:
+        new_state.active_answer_members = previous.active_answer_members
+    if not new_state.recent_answer_members and previous.recent_answer_members:
+        new_state.recent_answer_members = previous.recent_answer_members
+
     return new_state
+
+
+ConversationState.model_rebuild()

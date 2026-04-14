@@ -41,6 +41,21 @@ def normalize_country_to_iso2(country: Optional[str]) -> Optional[str]:
     if normalized:
         return normalized
 
+    simplified = re.sub(r"[^a-z0-9]+", " ", country_text.lower()).strip()
+    if simplified:
+        normalized = CountryResolver.normalize(simplified)
+        if normalized:
+            return normalized
+
+    worldbank_style_aliases = {
+        "korea rep": "KR",
+        "korea rep of": "KR",
+        "iran isl rep": "IR",
+        "egypt arab rep": "EG",
+    }
+    if simplified in worldbank_style_aliases:
+        return worldbank_style_aliases[simplified]
+
     # Allow ISO3 inputs (e.g., GBR) and normalize to ISO2 when known.
     iso2 = CountryResolver.to_iso2(country_text.upper())
     if iso2:

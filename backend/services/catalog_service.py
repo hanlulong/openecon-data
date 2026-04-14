@@ -172,12 +172,14 @@ def find_concept_by_term(term: str) -> Optional[str]:
             if not candidate_lower:
                 continue
 
+            candidate_tokens = _tokenize(candidate_lower)
+
             # Direct phrase containment is a strong signal.
             if len(candidate_lower) >= 4 and candidate_lower in term_lower:
-                concept_score = max(concept_score, 0.95)
+                phrase_bonus = min(0.03, 0.01 * max(len(candidate_tokens) - 1, 0))
+                concept_score = max(concept_score, 0.95 + phrase_bonus)
                 continue
 
-            candidate_tokens = _tokenize(candidate_lower)
             if not candidate_tokens:
                 continue
 

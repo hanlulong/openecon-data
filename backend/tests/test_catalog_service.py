@@ -38,6 +38,18 @@ def test_unemployment_rate_not_blocked_by_employment_exclusion():
     assert concept == "unemployment"
 
 
+def test_employment_rate_maps_to_employment_rate_concept():
+    reload_catalog()
+    concept = find_concept_by_term("Canada employment rate")
+    assert concept == "employment_rate"
+
+
+def test_employment_to_population_ratio_maps_to_specific_ratio_concept():
+    reload_catalog()
+    concept = find_concept_by_term("employment to population ratio in Canada")
+    assert concept == "employment_to_population_ratio"
+
+
 def test_federal_funds_target_rate_maps_to_interest_rate():
     reload_catalog()
     concept = find_concept_by_term("Federal funds target rate history since 2005")

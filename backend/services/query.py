@@ -31,6 +31,7 @@ from ..services.conversation_state_v2 import (
     materialize_intent,
     merge_new_state_with_previous,
     merge_state,
+    update_answer_members_from_data,
 )
 from ..services.delta_extractor import DeltaExtractor
 from ..services.openrouter import OpenRouterService
@@ -293,7 +294,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-04-13.1"
+    CACHE_KEY_VERSION = "2026-04-14.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -1158,6 +1159,7 @@ class QueryService:
                 intent.decompositionEntities,
                 fill_missing_territories=True
             )
+        await self._maybe_expand_statscan_dimension_decomposition_entities(conv_id, intent)
 
         if intent.needsDecomposition and intent.decompositionEntities:
             if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):
@@ -1186,7 +1188,12 @@ class QueryService:
                     message=verification_error,
                     processing_steps=tracker.to_list() if tracker else None,
                 )
-            self._commit_staged_conversation_state(conv_id, pending_state)
+            self._persist_verified_conversation_state(
+                conv_id,
+                pending_state,
+                data,
+                intent=intent,
+            )
 
             conv_id = conversation_manager.add_message_safe(
                 conv_id,
@@ -1290,7 +1297,12 @@ class QueryService:
                             message=verification_error,
                             processing_steps=tracker.to_list() if tracker else None,
                         )
-                    self._commit_staged_conversation_state(conv_id, pending_state)
+                    self._persist_verified_conversation_state(
+                        conv_id,
+                        pending_state,
+                        fallback_data,
+                        intent=intent,
+                    )
                     return QueryResponse(
                         conversationId=conv_id,
                         intent=intent,
@@ -1327,7 +1339,12 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list() if tracker else None,
                     )
-                self._commit_staged_conversation_state(conv_id, pending_state)
+                self._persist_verified_conversation_state(
+                    conv_id,
+                    pending_state,
+                    recovered_data,
+                    intent=intent,
+                )
                 return QueryResponse(
                     conversationId=conv_id,
                     intent=intent,
@@ -1413,7 +1430,12 @@ class QueryService:
                 message=verification_error,
                 processing_steps=tracker.to_list() if tracker else None,
             )
-        self._commit_staged_conversation_state(conv_id, pending_state)
+        self._persist_verified_conversation_state(
+            conv_id,
+            pending_state,
+            data,
+            intent=intent,
+        )
 
         conv_id = conversation_manager.add_message_safe(
             conv_id,
@@ -1648,6 +1670,629 @@ class QueryService:
         if state is None or not self._use_staged_state_commit():
             return
         conversation_manager.set_conversation_state(conversation_id, state)
+
+    def _persist_verified_conversation_state(
+        self,
+        conversation_id: str,
+        state: Optional[Any],
+        data: Optional[List[NormalizedData]] = None,
+        *,
+        intent: Optional[ParsedIntent] = None,
+    ) -> None:
+        """Persist post-verification conversation state, including answer members.
+
+        The standard path, delta path, and fallback paths all need the same
+        guarantee: once a response is accepted as the current answer, the
+        durable conversation state must reflect the exact returned member set.
+        """
+        if state is None:
+            return
+        params = (intent.parameters or {}) if intent is not None else {}
+        semantic_indicator_label = str(params.get("__semantic_indicator_label") or "").strip()
+        if semantic_indicator_label:
+            state.indicator = semantic_indicator_label
+        if intent is not None and intent.indicators:
+            state.last_indicators_resolved = list(intent.indicators)
+        resolved_indicator = str(params.get("indicator") or "").strip()
+        if resolved_indicator:
+            state.resolved_indicator_code = resolved_indicator
+        provider_name = ""
+        if data:
+            data_providers = {
+                normalize_provider_name(
+                    getattr(getattr(series, "metadata", None), "source", "") or ""
+                )
+                for series in data
+                if normalize_provider_name(
+                    getattr(getattr(series, "metadata", None), "source", "") or ""
+                )
+            }
+            if len(data_providers) == 1:
+                provider_name = next(iter(data_providers))
+        if not provider_name:
+            provider_name = normalize_provider_name(
+                getattr(intent, "apiProvider", "") or getattr(state, "provider", "") or getattr(state, "routed_provider", "") or ""
+            )
+        if provider_name:
+            state.provider = provider_name
+            state.routed_provider = provider_name
+        if data:
+            update_answer_members_from_data(
+                state,
+                data,
+                intent=intent,
+            )
+        conversation_manager.set_conversation_state(conversation_id, state)
+
+    @staticmethod
+    def _member_country_list(member: Any) -> List[str]:
+        countries = list(getattr(member, "countries", None) or [])
+        if not countries and getattr(member, "country", None):
+            countries = [getattr(member, "country")]
+        return [str(country).strip() for country in countries if str(country or "").strip()]
+
+    def _member_country_keys(self, member: Any) -> List[str]:
+        keys: List[str] = []
+        for country in self._member_country_list(member):
+            iso2 = self._normalize_country_to_iso2(country)
+            keys.append((iso2 or country).upper())
+        return list(dict.fromkeys(keys))
+
+    def _current_collective_indicator_label(self, state: Any) -> str:
+        labels = [
+            str(getattr(member, "indicator_label", "") or "").strip()
+            for member in (getattr(state, "active_answer_members", None) or [])
+            if str(getattr(member, "indicator_label", "") or "").strip()
+        ]
+        if labels:
+            return labels[0]
+        return str(getattr(state, "indicator", "") or "").strip()
+
+    def _distinct_member_scope_count(self, members: List[Any]) -> int:
+        scope_keys = {
+            key
+            for member in members
+            for key in self._member_country_keys(member)
+        }
+        return len(scope_keys)
+
+    @staticmethod
+    def _looks_like_collective_indicator_switch(raw_query: Optional[str]) -> bool:
+        text = str(raw_query or "").strip().lower()
+        if not text:
+            return False
+        return bool(
+            re.search(r"\b(all|everything|everyone|entire set|whole set)\b", text)
+            or "switch all" in text
+            or "change all" in text
+        )
+
+    def _should_preserve_current_provider_for_delta(
+        self,
+        state: Optional[Any],
+        delta: Optional[Any],
+        delta_intent: Optional[ParsedIntent],
+        query: str,
+    ) -> bool:
+        if state is None or delta is None or delta_intent is None:
+            return False
+        if delta.changed_provider is not None or delta.is_new_query:
+            return False
+        if (
+            delta.changed_decomposition is not None
+            or delta.added_dimensions is not None
+            or delta.removed_dimensions is not None
+        ):
+            return False
+
+        current_provider = normalize_provider_name(
+            getattr(state, "provider", "") or getattr(state, "routed_provider", "") or ""
+        )
+        if not current_provider:
+            return False
+
+        params = delta_intent.parameters or {}
+        semantic_label = str(
+            params.get("__semantic_indicator_label")
+            or getattr(delta, "changed_indicator", None)
+            or (delta_intent.indicators[0] if delta_intent.indicators else "")
+            or getattr(state, "indicator", "")
+            or query
+        ).strip()
+
+        if current_provider == "COMTRADE":
+            bilateral_trade_context = bool(
+                getattr(state, "trade_reporter", None)
+                or getattr(state, "trade_partner", None)
+                or getattr(delta, "changed_trade_partner", None)
+                or getattr(delta, "changed_trade_flow", None)
+                or "trade" in semantic_label.lower()
+                or "export" in semantic_label.lower()
+                or "import" in semantic_label.lower()
+            )
+            if bilateral_trade_context:
+                return True
+
+        try:
+            from .catalog_service import find_concept_by_term, is_provider_available
+
+            concept = find_concept_by_term(semantic_label)
+            if concept and is_provider_available(concept, current_provider):
+                return True
+        except Exception as exc:
+            logger.debug("Delta provider preservation lookup failed: %s", exc)
+
+        return False
+
+    def _should_use_collective_answer_member_delta(
+        self,
+        state: Optional[Any],
+        delta: Optional[Any],
+    ) -> bool:
+        if state is None or delta is None:
+            return False
+
+        active_members = list(getattr(state, "active_answer_members", None) or [])
+        recent_members = list(getattr(state, "recent_answer_members", None) or [])
+        if max(len(active_members), len(recent_members)) < 2:
+            return False
+
+        geography_delta = bool(
+            delta.changed_country is not None
+            or delta.changed_countries is not None
+            or delta.added_countries is not None
+            or delta.removed_countries is not None
+        )
+
+        active_scope_count = len(active_members)
+        if (
+            delta.changed_indicator
+            and not geography_delta
+            and active_scope_count < 2
+        ):
+            recent_scope_count = self._distinct_member_scope_count(recent_members)
+            if not (
+                self._looks_like_collective_indicator_switch(getattr(delta, "raw_query", None))
+                and recent_scope_count >= 2
+            ):
+                return False
+
+        if any(
+            getattr(state, field, None)
+            for field in ("dimensions", "trade_flow", "trade_reporter", "trade_partner", "trade_commodity", "coin_ids")
+        ):
+            return False
+
+        if getattr(state, "provider_locked", False) and not delta.changed_indicator:
+            return False
+
+        if delta.is_new_query or delta.changed_provider is not None or delta.added_indicators is not None:
+            return False
+
+        return bool(
+            delta.changed_indicator
+            or delta.changed_start_date
+            or delta.changed_end_date
+            or geography_delta
+        )
+
+    def _prefer_imf_like_provider_for_growth_members(
+        self,
+        members: List[Any],
+        collective_indicator_label: str,
+    ) -> List[Any]:
+        """Prefer IMF-preserving members for GDP growth chains when available."""
+        label = str(collective_indicator_label or "").strip().lower()
+        if "growth" not in label or "gdp" not in label:
+            return members
+
+        imf_members = [
+            member for member in members
+            if normalize_provider_name(getattr(member, "provider", "") or "") == "IMF"
+        ]
+        if not imf_members:
+            return members
+
+        by_country: Dict[str, Any] = {}
+        for member in imf_members:
+            keys = self._member_country_keys(member)
+            if not keys:
+                continue
+            for key in keys:
+                by_country[key] = member
+
+        rewritten: List[Any] = []
+        for member in members:
+            keys = self._member_country_keys(member)
+            replacement = None
+            for key in keys:
+                if key in by_country:
+                    replacement = by_country[key].model_copy(deep=True)
+                    break
+            rewritten.append(replacement or member)
+        return rewritten
+
+    def _collective_member_query(
+        self,
+        member: Any,
+        collective_indicator_label: str,
+        fallback_query: str,
+    ) -> str:
+        member_countries = [
+            self._normalize_country_to_iso2(country) or country
+            for country in self._member_country_list(member)
+        ]
+        member_scope = ", ".join(member_countries) or str(getattr(member, "provider", "") or "member")
+        return " ".join(
+            part for part in [member_scope, collective_indicator_label] if str(part).strip()
+        ).strip() or fallback_query
+
+    def _select_collective_answer_members(
+        self,
+        state: Any,
+        delta: Any,
+        collective_indicator_label: str,
+    ) -> List[Any]:
+        active_members = [
+            member.model_copy(deep=True)
+            for member in (getattr(state, "active_answer_members", None) or [])
+        ]
+        recent_members = [
+            member.model_copy(deep=True)
+            for member in (getattr(state, "recent_answer_members", None) or [])
+        ]
+        base_members = active_members or recent_members
+        if not base_members:
+            return []
+
+        normalized_collective_label = collective_indicator_label.strip().lower()
+
+        def _member_label_score(member: Any) -> int:
+            member_label = str(getattr(member, "indicator_label", "") or "").strip().lower()
+            if not normalized_collective_label or not member_label:
+                return 0
+            if member_label == normalized_collective_label:
+                return 3
+            if normalized_collective_label in member_label or member_label in normalized_collective_label:
+                return 2
+            return 0
+
+        def _member_template_score(member: Any, *, is_active_snapshot: bool) -> tuple[int, int, int, int]:
+            return (
+                _member_label_score(member),
+                int(bool(is_active_snapshot)),
+                int(getattr(member, "source_turn", 0) or 0),
+                int(bool(getattr(member, "provider_code", None) or getattr(member, "series_id", None))),
+            )
+
+        def _coerce_member_for_country(country: str) -> Optional[Any]:
+            key = (self._normalize_country_to_iso2(country) or str(country or "").strip()).upper()
+            candidates: List[tuple[tuple[int, int, int, int], Any]] = []
+            for member in active_members:
+                if key in self._member_country_keys(member):
+                    candidates.append((_member_template_score(member, is_active_snapshot=True), member))
+            for member in recent_members:
+                if key in self._member_country_keys(member):
+                    candidates.append((_member_template_score(member, is_active_snapshot=False), member))
+            if candidates:
+                candidates.sort(key=lambda item: item[0], reverse=True)
+                return candidates[0][1].model_copy(deep=True)
+            if not base_members:
+                return None
+            fallback_seed = max(
+                base_members,
+                key=lambda member: _member_template_score(member, is_active_snapshot=(member in active_members)),
+            )
+            cloned = fallback_seed.model_copy(deep=True)
+            cloned.country = str(country).strip()
+            cloned.countries = [str(country).strip()]
+            cloned.provider_code = None
+            cloned.series_id = None
+            return cloned
+
+        geography_delta = bool(
+            delta.changed_country is not None
+            or delta.changed_countries is not None
+            or delta.added_countries is not None
+            or delta.removed_countries is not None
+        )
+        collective_indicator_switch = bool(
+            delta.changed_indicator
+            and not geography_delta
+            and self._looks_like_collective_indicator_switch(getattr(delta, "raw_query", None))
+            and self._distinct_member_scope_count(recent_members) >= 2
+        )
+        if delta.added_countries:
+            seed_members = active_members or recent_members
+        elif geography_delta:
+            seed_members = active_members or recent_members
+        elif collective_indicator_switch:
+            seed_members = recent_members or active_members
+        else:
+            seed_members = active_members
+        members = seed_members or [member.model_copy(deep=True) for member in recent_members]
+        if delta.changed_country or delta.changed_countries:
+            requested = []
+            if delta.changed_country:
+                requested.append(delta.changed_country)
+            requested.extend(delta.changed_countries or [])
+            members = [
+                member
+                for country in requested
+                if (member := _coerce_member_for_country(str(country)))
+            ]
+
+        if delta.removed_countries:
+            removed = {
+                (self._normalize_country_to_iso2(country) or str(country or "").strip()).upper()
+                for country in delta.removed_countries
+            }
+            members = [
+                member
+                for member in members
+                if not removed.intersection(self._member_country_keys(member))
+            ]
+
+        if delta.added_countries:
+            existing_keys = {
+                key
+                for member in members
+                for key in self._member_country_keys(member)
+            }
+            for country in delta.added_countries:
+                key = (self._normalize_country_to_iso2(country) or str(country or "").strip()).upper()
+                if key in existing_keys:
+                    continue
+                member = _coerce_member_for_country(str(country))
+                if member is not None:
+                    members.append(member)
+                    existing_keys.update(self._member_country_keys(member))
+
+        if collective_indicator_label:
+            normalized_label = collective_indicator_label.lower()
+            for member in members:
+                existing_label = str(getattr(member, "indicator_label", "") or "").strip().lower()
+                if existing_label != normalized_label:
+                    member.indicator_label = collective_indicator_label
+                    member.provider_code = None
+                    member.series_id = None
+
+        members = self._prefer_imf_like_provider_for_growth_members(
+            members,
+            collective_indicator_label,
+        )
+
+        return members
+
+    def _build_collective_member_intent(
+        self,
+        query: str,
+        member_query: str,
+        state: Any,
+        member: Any,
+        delta: Any,
+        collective_indicator_label: str,
+    ) -> ParsedIntent:
+        countries = [
+            self._normalize_country_to_iso2(country) or country
+            for country in self._member_country_list(member)
+        ]
+        params: Dict[str, Any] = {
+            "__delta_resolved": True,
+        }
+        if not delta.changed_indicator:
+            params["__semantic_provider_locked"] = True
+        if countries:
+            if len(countries) == 1:
+                params["country"] = countries[0]
+            else:
+                params["countries"] = countries
+
+        start_date = delta.changed_start_date or getattr(state, "start_date", None)
+        end_date = delta.changed_end_date or getattr(state, "end_date", None)
+        if start_date:
+            params["startDate"] = start_date
+        if end_date:
+            params["endDate"] = end_date
+
+        indicator_changed = bool(delta.changed_indicator or not getattr(member, "provider_code", None))
+        params["__delta_indicator_changed"] = indicator_changed
+        if collective_indicator_label:
+            params["__semantic_indicator_label"] = collective_indicator_label
+
+        indicator_token = (
+            collective_indicator_label
+            if indicator_changed
+            else str(getattr(member, "provider_code", None) or getattr(member, "series_id", None) or collective_indicator_label or "unknown")
+        )
+
+        return ParsedIntent(
+            apiProvider=str(getattr(member, "provider", "") or getattr(state, "provider", "") or "WorldBank"),
+            indicators=[indicator_token],
+            parameters=params,
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery=query,
+            resolvedQuery=member_query,
+            isFollowUp=True,
+            followUpType=delta.delta_type,
+        )
+
+    async def _execute_collective_answer_member_delta(
+        self,
+        query: str,
+        conversation_id: str,
+        tracker: Optional["ProcessingTracker"],
+        state: Any,
+        delta: Any,
+    ) -> Optional[QueryResponse]:
+        collective_indicator_label = str(
+            delta.changed_indicator or self._current_collective_indicator_label(state)
+        ).strip()
+        target_members = self._select_collective_answer_members(
+            state,
+            delta,
+            collective_indicator_label,
+        )
+        if not target_members:
+            return None
+
+        combined_data: List[NormalizedData] = []
+        failed_members: List[str] = []
+
+        for member in target_members:
+            member_query = self._collective_member_query(
+                member,
+                collective_indicator_label,
+                query,
+            )
+            member_intent = self._build_collective_member_intent(
+                query=query,
+                member_query=member_query,
+                state=state,
+                member=member,
+                delta=delta,
+                collective_indicator_label=collective_indicator_label,
+            )
+            member_countries = self._member_country_list(member)
+            member_scope = ", ".join(member_countries) or str(getattr(member, "provider", "") or "member")
+
+            try:
+                member_data = await retry_async(
+                    lambda intent=member_intent: self._fetch_data(intent),
+                    max_attempts=2,
+                    initial_delay=0.3,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Collective delta fetch failed for %s via %s: %s",
+                    member_scope,
+                    member_intent.apiProvider,
+                    exc,
+                )
+                failed_members.append(member_scope)
+                continue
+
+            if not member_data:
+                failed_members.append(member_scope)
+                continue
+
+            member_data = self._rerank_data_by_query_relevance(member_query, member_data)
+            if self._is_ranking_query(member_query):
+                member_data = self._apply_ranking_projection(member_query, member_data)
+            requires_fresh_semantic_verification = bool(
+                delta.changed_indicator or not getattr(member, "provider_code", None)
+            )
+            if requires_fresh_semantic_verification:
+                verification_error = await self._verify_execution_result(
+                    member_query,
+                    member_intent,
+                    self._build_minimal_execution_plan(member_query, member_intent),
+                    member_data,
+                )
+                if verification_error or self._needs_indicator_clarification(member_query, member_data, member_intent):
+                    logger.warning(
+                        "Collective delta verification failed for %s via %s: %s",
+                        member_scope,
+                        member_intent.apiProvider,
+                        verification_error or "uncertain match",
+                    )
+                    failed_members.append(member_scope)
+                    continue
+
+            combined_data.extend(member_data)
+
+        if failed_members:
+            return QueryResponse(
+                conversationId=conversation_id,
+                clarificationNeeded=False,
+                error="verification_failed",
+                message=(
+                    "⚠️ **Couldn't preserve the full collective result set**\n\n"
+                    "This follow-up needs a collection-wide rewrite, but one or more preserved members "
+                    f"could not be re-resolved safely: {', '.join(failed_members[:6])}."
+                ),
+                processingSteps=tracker.to_list() if tracker else None,
+            )
+
+        response_provider = (
+            str(getattr(target_members[0], "provider", "") or "WorldBank")
+            if len({str(getattr(member, "provider", "") or "") for member in target_members}) == 1
+            else "MULTI"
+        )
+        response_countries = list(
+            dict.fromkeys(
+                country
+                for member in target_members
+                for country in self._member_country_list(member)
+            )
+        )
+        response_params: Dict[str, Any] = {}
+        if len(response_countries) == 1:
+            response_params["country"] = response_countries[0]
+        elif response_countries:
+            response_params["countries"] = response_countries
+        if delta.changed_start_date or getattr(state, "start_date", None):
+            response_params["startDate"] = delta.changed_start_date or getattr(state, "start_date", None)
+        if delta.changed_end_date or getattr(state, "end_date", None):
+            response_params["endDate"] = delta.changed_end_date or getattr(state, "end_date", None)
+        if collective_indicator_label:
+            response_params["__semantic_indicator_label"] = collective_indicator_label
+
+        response_intent = ParsedIntent(
+            apiProvider=response_provider,
+            indicators=[collective_indicator_label or str(getattr(state, "indicator", "") or "unknown")],
+            parameters=response_params,
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery=query,
+            isFollowUp=True,
+            followUpType=delta.delta_type,
+        )
+
+        conv_id = conversation_manager.add_message_safe(
+            conversation_id,
+            "user",
+            query,
+            intent=response_intent,
+        )
+
+        updated_state = state.model_copy(deep=True)
+        updated_state.turn_number = getattr(state, "turn_number", 0) + 1
+        updated_state.original_query = query
+        updated_state.start_date = delta.changed_start_date or getattr(state, "start_date", None)
+        updated_state.end_date = delta.changed_end_date or getattr(state, "end_date", None)
+        if collective_indicator_label:
+            updated_state.indicator = collective_indicator_label
+            updated_state.base_indicator = None
+            updated_state.resolved_indicator_code = None
+            updated_state.last_indicators_resolved = [collective_indicator_label]
+        if len(response_countries) == 1:
+            updated_state.country = response_countries[0]
+            updated_state.countries = None
+        elif response_countries:
+            updated_state.country = None
+            updated_state.countries = response_countries
+        updated_state.provider = None if response_provider == "MULTI" else response_provider
+        updated_state.routed_provider = updated_state.provider
+        updated_state.provider_locked = response_provider != "MULTI"
+        update_answer_members_from_data(updated_state, combined_data, intent=response_intent)
+        conversation_manager.set_conversation_state(conv_id, updated_state)
+
+        conv_id = conversation_manager.add_message_safe(
+            conv_id,
+            "assistant",
+            f"Retrieved {len(combined_data)} data series across {len(updated_state.active_answer_members or [])} preserved result members",
+        )
+
+        return QueryResponse(
+            conversationId=conv_id,
+            intent=response_intent,
+            data=combined_data,
+            clarificationNeeded=False,
+            processingSteps=tracker.to_list() if tracker else None,
+            delta_state_saved=True,
+        )
 
     def _extract_series_provider_and_code(self, series: Any) -> tuple[str, str]:
         """Delegates to :func:`indicator_resolution.extract_series_provider_and_code`."""
@@ -1981,6 +2626,135 @@ class QueryService:
         Delegates to :func:`provider_fallback.normalize_country_to_iso2`.
         """
         return _pf_normalize_country_to_iso2(country)
+
+    @staticmethod
+    def _extract_statscan_product_id(value: Optional[str]) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        head = text.split(":", 1)[0]
+        digits = "".join(ch for ch in head if ch.isdigit())
+        if len(digits) >= 8:
+            return digits[:8]
+        return None
+
+    def _infer_statscan_product_id_for_followup(
+        self,
+        conversation_id: Optional[str],
+        intent: Optional[ParsedIntent],
+    ) -> Optional[str]:
+        params = (intent.parameters or {}) if intent is not None else {}
+        candidates = [
+            params.get("productId"),
+            params.get("indicator"),
+        ]
+        for indicator in (intent.indicators or []) if intent is not None else []:
+            candidates.append(indicator)
+
+        state = conversation_manager.get_conversation_state(conversation_id) if conversation_id else None
+        if state is not None:
+            candidates.append(getattr(state, "resolved_indicator_code", None))
+            candidates.append(getattr(state, "statscan_product_id", None))
+            for member in list(getattr(state, "active_answer_members", None) or []) + list(getattr(state, "recent_answer_members", None) or []):
+                if normalize_provider_name(getattr(member, "provider", "") or "") != "STATSCAN":
+                    continue
+                candidates.append(getattr(member, "series_id", None))
+                candidates.append(getattr(member, "provider_code", None))
+
+        for candidate in candidates:
+            product_id = self._extract_statscan_product_id(candidate)
+            if product_id:
+                return product_id
+        return None
+
+    def _should_preserve_statscan_followup_provider(
+        self,
+        state: Optional[Any],
+        intent: Optional[ParsedIntent],
+    ) -> bool:
+        if state is None or intent is None:
+            return False
+        params = intent.parameters or {}
+        has_dimension_or_decomposition_signal = bool(
+            intent.needsDecomposition
+            or params.get("__dimensions")
+            or params.get("__statscan_decomposition_axis")
+        )
+        if not has_dimension_or_decomposition_signal:
+            return False
+        provider = normalize_provider_name(getattr(state, "provider", "") or getattr(state, "routed_provider", "") or "")
+        statscan_member_present = any(
+            normalize_provider_name(getattr(member, "provider", "") or "") == "STATSCAN"
+            for member in list(getattr(state, "active_answer_members", None) or []) + list(getattr(state, "recent_answer_members", None) or [])
+        )
+        if (
+            provider != "STATSCAN"
+            and not statscan_member_present
+            and not getattr(state, "statscan_product_id", None)
+            and not params.get("__statscan_product_id")
+        ):
+            return False
+
+        return True
+
+    async def _maybe_expand_statscan_dimension_decomposition_entities(
+        self,
+        conversation_id: Optional[str],
+        intent: Optional[ParsedIntent],
+    ) -> None:
+        if intent is None or not intent.needsDecomposition or intent.decompositionEntities:
+            return
+        if normalize_provider_name(intent.apiProvider or "") != "STATSCAN":
+            return
+
+        params = dict(intent.parameters or {})
+        axis = str(params.get("__statscan_decomposition_axis") or "").strip()
+        if not axis:
+            decomp_type = str(intent.decompositionType or "").strip().lower()
+            if decomp_type in {"age groups", "age_group", "age_groups", "ages"}:
+                axis = "Age group"
+            elif decomp_type in {"sex", "gender"}:
+                axis = "Sex"
+        if not axis:
+            return
+
+        product_id = self._infer_statscan_product_id_for_followup(conversation_id, intent)
+        if not product_id:
+            return
+
+        axis_keyword = "age" if "age" in axis.lower() else "sex" if any(token in axis.lower() for token in ("sex", "gender")) else None
+        if axis_keyword is None:
+            return
+
+        try:
+            members = await self.statscan_provider.get_dimension_members(product_id, axis_keyword)
+        except Exception as exc:
+            logger.warning("Failed to expand StatsCan decomposition axis %s for product %s: %s", axis, product_id, exc)
+            return
+
+        entities = []
+        for _, name in members:
+            label = str(name or "").strip()
+            lowered = label.lower()
+            if not label:
+                continue
+            if axis_keyword == "age" and (
+                "total" in lowered
+                or "all ages" in lowered
+                or "15 years and over" in lowered
+            ):
+                continue
+            if axis_keyword == "sex" and lowered in {"both sexes", "total"}:
+                continue
+            entities.append(label)
+
+        if entities:
+            intent.decompositionEntities = entities
+            params["__statscan_decomposition_axis"] = axis
+            params["__statscan_product_id"] = product_id
+            intent.parameters = params
+            if str(intent.decompositionType or "").strip().lower() in {"age groups", "age_group", "ages", "sex", "gender"}:
+                intent.decompositionType = "dimension"
 
     # ------------------------------------------------------------------
     # Pre-flight geographic split
@@ -2502,6 +3276,7 @@ class QueryService:
             tracker_token = activate_processing_tracker(tracker)
         try:
             conv_id = conversation_manager.get_or_create(conversation_id)
+            conversation_manager.refresh_from_redis(conv_id)
             history = conversation_manager.get_history(conv_id)
 
             # ── Pending indicator choice (numeric "1", "2" responses) ───
@@ -2654,6 +3429,17 @@ class QueryService:
 
             # ── Dispatch: Parameter Delta ───────────────────────────────
             if _delta is not None:
+                    if self._should_use_collective_answer_member_delta(_current_conv_state, _delta):
+                        _collective_response = await self._execute_collective_answer_member_delta(
+                            query=query,
+                            conversation_id=conv_id,
+                            tracker=tracker,
+                            state=_current_conv_state,
+                            delta=_delta,
+                        )
+                        if _collective_response is not None:
+                            return _collective_response
+
                     _merged_state = merge_state(_current_conv_state, _delta)
                     _delta_intent = materialize_intent(_merged_state)
 
@@ -2668,10 +3454,36 @@ class QueryService:
                         _merged_state.provider_locked
                         or (_delta_intent.parameters or {}).get("__semantic_provider_locked")
                     )
+                    _preserve_current_provider = self._should_preserve_current_provider_for_delta(
+                        _current_conv_state,
+                        _delta,
+                        _delta_intent,
+                        query,
+                    )
+                    if _preserve_current_provider:
+                        _provider_locked = True
+                        _delta_intent.apiProvider = normalize_provider_name(
+                            _current_conv_state.provider or _current_conv_state.routed_provider or _delta_intent.apiProvider
+                        )
+                    _preserve_statscan_delta_provider = bool(
+                        normalize_provider_name(_current_conv_state.provider or _current_conv_state.routed_provider or "") == "STATSCAN"
+                        and (
+                            _delta.changed_decomposition is not None
+                            or _delta.added_dimensions is not None
+                            or _delta.removed_dimensions is not None
+                            or _delta_intent.parameters.get("__statscan_product_id")
+                            or _merged_state.statscan_product_id
+                        )
+                    )
+                    if _preserve_statscan_delta_provider:
+                        _provider_locked = True
+                        _delta_intent.apiProvider = "STATSCAN"
                     if _provider_locked:
                         if _delta_intent.parameters is None:
                             _delta_intent.parameters = {}
                         _delta_intent.parameters["__semantic_provider_locked"] = True
+                    if _preserve_statscan_delta_provider and _merged_state.statscan_product_id:
+                        _delta_intent.parameters["__statscan_product_id"] = _merged_state.statscan_product_id
                     _delta_scope_changed = (
                         _delta.changed_country is not None
                         or _delta.changed_countries is not None
@@ -2682,6 +3494,9 @@ class QueryService:
                         _delta.changed_indicator is not None
                         or _delta.added_indicators is not None
                         or _delta.changed_provider is not None
+                        or _delta.changed_decomposition is not None
+                        or _delta.added_dimensions is not None
+                        or _delta.removed_dimensions is not None
                         or _delta.is_new_query
                     )
                     _skip_reroute = (
@@ -2758,6 +3573,7 @@ class QueryService:
                     _indicator_changed = (
                         _delta.changed_indicator is not None
                         or _delta.added_indicators is not None
+                        or _delta.changed_trade_flow is not None
                         or _provider_changed
                     )
                     _delta_intent.parameters["__delta_resolved"] = True
@@ -2828,9 +3644,21 @@ class QueryService:
                         and not _delta_response.clarificationNeeded
                     ):
                         try:
+                            _merged_state.provider = normalize_provider_name(_delta_intent.apiProvider or _merged_state.provider or _merged_state.routed_provider or "")
+                            _merged_state.routed_provider = _merged_state.provider
+                            _merged_state.provider_locked = bool(
+                                (_delta_intent.parameters or {}).get("__semantic_provider_locked")
+                                or _merged_state.provider_locked
+                            )
                             _resolved_code = (_delta_intent.parameters or {}).get("indicator")
                             if _resolved_code:
                                 _merged_state.resolved_indicator_code = str(_resolved_code)
+                            if _delta_response.data:
+                                update_answer_members_from_data(
+                                    _merged_state,
+                                    _delta_response.data,
+                                    intent=_delta_intent,
+                                )
                             conversation_manager.set_conversation_state(conv_id, _merged_state)
                         except Exception as _persist_exc:
                             logger.warning("Failed to persist resolved_indicator_code in delta path: %s", _persist_exc)
@@ -3002,33 +3830,51 @@ class QueryService:
                     "indicators": intent.indicators,
                 })
 
-            # Framework: UnifiedRouter determines the provider (overrides LLM).
-            # The LLM may guess wrong (e.g., NOT_AVAILABLE for gold price,
-            # WorldBank for "from Eurostat"). UnifiedRouter is deterministic
-            # and handles explicit mentions, country context, and catalog concepts.
-            try:
-                router_decision = self.unified_router.route(
-                    query=query,
-                    indicators=intent.indicators or [],
-                    llm_provider=intent.apiProvider,
-                    country=intent.parameters.get("country") if intent.parameters else None,
-                    countries=intent.parameters.get("countries") if intent.parameters else None,
+            preserve_statscan_followup = self._should_preserve_statscan_followup_provider(
+                _current_conv_state,
+                intent,
+            )
+            if preserve_statscan_followup:
+                logger.info(
+                    "Preserving StatsCan provider for dimension/decomposition follow-up (llm=%s)",
+                    intent.apiProvider,
                 )
-                if router_decision and router_decision.provider:
-                    routed = normalize_provider_name(router_decision.provider)
-                    llm_prov = normalize_provider_name(intent.apiProvider or "")
-                    if routed != llm_prov:
-                        logger.info(
-                            "🎯 UnifiedRouter override: LLM=%s → Router=%s (type=%s, conf=%.2f)",
-                            intent.apiProvider, routed, router_decision.match_type, router_decision.confidence,
-                        )
-                        intent.apiProvider = routed
-                    # Fix NOT_AVAILABLE — LLM says not available but router found a provider
-                    if llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", ""):
-                        intent.apiProvider = routed
-                        logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
-            except Exception as e:
-                logger.debug("UnifiedRouter override failed: %s", e)
+                intent.apiProvider = "STATSCAN"
+                preserved_params = dict(intent.parameters or {})
+                preserved_params["__semantic_provider_locked"] = True
+                if _current_conv_state and _current_conv_state.statscan_product_id and not preserved_params.get("__statscan_product_id"):
+                    preserved_params["__statscan_product_id"] = _current_conv_state.statscan_product_id
+                if _current_conv_state and _current_conv_state.indicator and not preserved_params.get("__semantic_indicator_label"):
+                    preserved_params["__semantic_indicator_label"] = _current_conv_state.indicator
+                intent.parameters = preserved_params
+            else:
+                # Framework: UnifiedRouter determines the provider (overrides LLM).
+                # The LLM may guess wrong (e.g., NOT_AVAILABLE for gold price,
+                # WorldBank for "from Eurostat"). UnifiedRouter is deterministic
+                # and handles explicit mentions, country context, and catalog concepts.
+                try:
+                    router_decision = self.unified_router.route(
+                        query=query,
+                        indicators=intent.indicators or [],
+                        llm_provider=intent.apiProvider,
+                        country=intent.parameters.get("country") if intent.parameters else None,
+                        countries=intent.parameters.get("countries") if intent.parameters else None,
+                    )
+                    if router_decision and router_decision.provider:
+                        routed = normalize_provider_name(router_decision.provider)
+                        llm_prov = normalize_provider_name(intent.apiProvider or "")
+                        if routed != llm_prov:
+                            logger.info(
+                                "🎯 UnifiedRouter override: LLM=%s → Router=%s (type=%s, conf=%.2f)",
+                                intent.apiProvider, routed, router_decision.match_type, router_decision.confidence,
+                            )
+                            intent.apiProvider = routed
+                        # Fix NOT_AVAILABLE — LLM says not available but router found a provider
+                        if llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", ""):
+                            intent.apiProvider = routed
+                            logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
+                except Exception as e:
+                    logger.debug("UnifiedRouter override failed: %s", e)
 
             # Framework enrichment: recover from avoidable parser clarifications and
             # auto-expand clear multi-concept comparisons to multi-indicator intents.
@@ -3116,6 +3962,7 @@ class QueryService:
                     intent.decompositionEntities,
                     fill_missing_territories=True
                 )
+            await self._maybe_expand_statscan_dimension_decomposition_entities(conv_id, intent)
 
             # Note: Query decomposition now uses batch methods when available (see _decompose_and_aggregate)
             # This avoids timeouts by making single API calls instead of 10-13 parallel requests
@@ -3149,7 +3996,12 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list(),
                     )
-                self._commit_staged_conversation_state(conv_id, _pending_conv_state)
+                self._persist_verified_conversation_state(
+                    conv_id,
+                    _pending_conv_state,
+                    data,
+                    intent=intent,
+                )
 
                 conv_id = conversation_manager.add_message_safe(
                     conv_id,
@@ -3246,6 +4098,12 @@ class QueryService:
                             intent,
                             fallback_data,
                         )
+                        self._persist_verified_conversation_state(
+                            conv_id,
+                            _pending_conv_state,
+                            fallback_data,
+                            intent=intent,
+                        )
                         return QueryResponse(
                             conversationId=conv_id,
                             intent=intent,
@@ -3265,6 +4123,12 @@ class QueryService:
                         query,
                         intent,
                         recovered_data,
+                    )
+                    self._persist_verified_conversation_state(
+                        conv_id,
+                        _pending_conv_state,
+                        recovered_data,
+                        intent=intent,
                     )
                     return QueryResponse(
                         conversationId=conv_id,
@@ -3349,6 +4213,12 @@ class QueryService:
                 "assistant",
                 f"Retrieved {len(data)} data series from {intent.apiProvider}",
             )
+            self._persist_verified_conversation_state(
+                conv_id,
+                _pending_conv_state,
+                data,
+                intent=intent,
+            )
 
             return QueryResponse(
                 conversationId=conv_id,
@@ -3375,6 +4245,12 @@ class QueryService:
                             intent,
                             fallback_data,
                         )
+                        self._persist_verified_conversation_state(
+                            conv_id,
+                            _pending_conv_state,
+                            fallback_data,
+                            intent=intent,
+                        )
                         return QueryResponse(
                             conversationId=conv_id,
                             intent=intent,
@@ -3394,6 +4270,12 @@ class QueryService:
                 )
                 if stale_data:
                     stale_list = stale_data if isinstance(stale_data, list) else [stale_data]
+                    self._persist_verified_conversation_state(
+                        conv_id,
+                        _pending_conv_state,
+                        stale_list,
+                        intent=intent,
+                    )
                     return QueryResponse(
                         conversationId=conv_id,
                         intent=intent,
@@ -3806,8 +4688,20 @@ class QueryService:
                             except Exception as _cube_exc:
                                 logger.debug("Non-critical: statscan cube metadata fetch failed (QueryResponse branch): %s", _cube_exc)
                         if self._use_staged_state_commit():
+                            if result.data:
+                                update_answer_members_from_data(
+                                    _qs,
+                                    result.data,
+                                    intent=intent,
+                                )
                             conversation_manager.set_conversation_state(conv_id, _qs)
                         else:
+                            if result.data:
+                                update_answer_members_from_data(
+                                    _qs,
+                                    result.data,
+                                    intent=intent,
+                                )
                             conversation_manager.set_conversation_state(conv_id, _qs)
                     except Exception as _state_exc:
                         logger.warning("Failed to save conversation state (QueryResponse branch): %s", _state_exc)
@@ -3866,6 +4760,11 @@ class QueryService:
                                     _new_state.statscan_cube_metadata = _cube
                             except Exception as _cube_exc:
                                 logger.debug("Non-critical: statscan cube metadata fetch failed (list branch): %s", _cube_exc)
+                        update_answer_members_from_data(
+                            _new_state,
+                            result,
+                            intent=intent,
+                        )
                         conversation_manager.set_conversation_state(conv_id, _new_state)
                     except Exception as _state_exc:
                         logger.warning("Failed to save conversation state (list branch): %s", _state_exc)
@@ -3910,8 +4809,12 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list() if tracker else None,
                     )
-                if self._use_staged_state_commit() and _pending_conv_state is not None:
-                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
+                self._persist_verified_conversation_state(
+                    conv_id,
+                    _pending_conv_state,
+                    fallback_data,
+                    intent=intent,
+                )
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -3948,8 +4851,12 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list() if tracker else None,
                     )
-                if self._use_staged_state_commit() and _pending_conv_state is not None:
-                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
+                self._persist_verified_conversation_state(
+                    conv_id,
+                    _pending_conv_state,
+                    recovered_data,
+                    intent=intent,
+                )
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -3985,8 +4892,12 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list() if tracker else None,
                     )
-                if self._use_staged_state_commit() and _pending_conv_state is not None:
-                    conversation_manager.set_conversation_state(conv_id, _pending_conv_state)
+                self._persist_verified_conversation_state(
+                    conv_id,
+                    _pending_conv_state,
+                    stale_list,
+                    intent=intent,
+                )
                 return QueryResponse(
                     conversationId=conversation_id,
                     intent=intent,
@@ -5174,6 +6085,30 @@ class QueryService:
         logger.info("🔄 Starting query decomposition for %d %s",
                    len(intent.decompositionEntities), intent.decompositionType)
 
+        if normalize_provider_name(intent.apiProvider) == "STATSCAN" and intent.decompositionType in ["age groups", "age_group", "ages"]:
+            if not intent.decompositionEntities:
+                try:
+                    product_id = self._infer_statscan_product_id_for_followup(conversation_id, intent)
+                    if product_id:
+                        age_members = await self.statscan_provider.get_dimension_members(product_id, "age")
+                        age_entities = [
+                            name for _, name in age_members
+                            if name
+                            and str(name).strip()
+                            and "total" not in str(name).lower()
+                            and "all ages" not in str(name).lower()
+                            and "15 years and over" not in str(name).lower()
+                        ]
+                        if age_entities:
+                            intent.decompositionEntities = age_entities
+                            logger.info(
+                                "Resolved StatsCan age-group decomposition entities from product %s: %d entities",
+                                product_id,
+                                len(age_entities),
+                            )
+                except Exception as exc:
+                    logger.warning("Failed to resolve StatsCan age-group decomposition entities: %s", exc)
+
         # Check if provider has batch method for efficient multi-entity queries
         # This avoids timeouts by making single API call instead of N parallel requests
         if normalize_provider_name(intent.apiProvider) == "STATSCAN" and intent.decompositionType in ["provinces", "regions", "territories"]:
@@ -5182,37 +6117,56 @@ class QueryService:
                            len(intent.decompositionEntities), intent.decompositionType)
 
                 try:
+                    resolved_provider = normalize_provider_name(intent.apiProvider)
+                    resolved_params = dict(intent.parameters or {})
+                    resolved_provider, resolved_params = self._apply_concept_provider_override(
+                        resolved_provider,
+                        intent,
+                        resolved_params,
+                    )
+                    intent.apiProvider = resolved_provider
+                    intent.parameters = await self._resolve_indicator_for_fetch(
+                        resolved_provider,
+                        intent,
+                        resolved_params,
+                    )
+
                     # Resolve indicator to a product ID for the batch method.
                     # Check COORDINATE_PRODUCT_MAPPINGS first (handles CPI, housing,
                     # immigration, labour force), then fall back to _vector_id.
                     indicator_name = intent.indicators[0] if intent.indicators else "Population"
-                    _indicator_key = indicator_name.upper().replace(" ", "_").replace("-", "_")
-                    _coord = self.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key)
-                    if _coord:
-                        # Use product ID from coordinate mapping
-                        product_id = self.statscan_provider._normalize_metadata_product_id(_coord[0])
-                        logger.info("Decomposition: using COORDINATE_PRODUCT_MAPPINGS for %s → product %s", _indicator_key, product_id)
+                    product_id = self._infer_statscan_product_id_for_followup(conversation_id, intent)
+                    if product_id:
+                        logger.info("Decomposition: using follow-up product %s from saved StatsCan execution state", product_id)
                     else:
-                        # Fall back to vector ID → product ID resolution.
-                        # _vector_id returns a vector ID (e.g., 2062815).
-                        # fetch_multi_province_data needs a product ID (e.g., 14100287).
-                        # Use PRODUCT_ID_CACHE to map vector → product.
-                        _vec_id = await self.statscan_provider._vector_id(
-                            indicator_name,
-                            intent.parameters.get("vectorId")
-                        )
-                        _cached_pid = self.statscan_provider.PRODUCT_ID_CACHE.get(_vec_id)
-                        if _cached_pid:
-                            product_id = self.statscan_provider._normalize_metadata_product_id(_cached_pid)
-                            logger.info("Decomposition: vector %s → product %s", _vec_id, product_id)
+                        _indicator_key = indicator_name.upper().replace(" ", "_").replace("-", "_")
+                        _coord = self.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key)
+                        if _coord:
+                            # Use product ID from coordinate mapping
+                            product_id = self.statscan_provider._normalize_metadata_product_id(_coord[0])
+                            logger.info("Decomposition: using COORDINATE_PRODUCT_MAPPINGS for %s → product %s", _indicator_key, product_id)
                         else:
-                            product_id = str(_vec_id)
-                            logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
+                            # Fall back to vector ID → product ID resolution.
+                            # _vector_id returns a vector ID (e.g., 2062815).
+                            # fetch_multi_province_data needs a product ID (e.g., 14100287).
+                            # Use PRODUCT_ID_CACHE to map vector → product.
+                            _vec_id = await self.statscan_provider._vector_id(
+                                indicator_name,
+                                intent.parameters.get("vectorId")
+                            )
+                            _cached_pid = self.statscan_provider.PRODUCT_ID_CACHE.get(_vec_id)
+                            if _cached_pid:
+                                product_id = self.statscan_provider._normalize_metadata_product_id(_cached_pid)
+                                logger.info("Decomposition: vector %s → product %s", _vec_id, product_id)
+                            else:
+                                product_id = str(_vec_id)
+                                logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
 
                     # Build parameters for batch method
                     params = {
                         "productId": product_id,
                         "indicator": indicator_name,
+                        "indicatorLabel": str((intent.parameters or {}).get("__semantic_indicator_label") or indicator_name),
                         "provinces": intent.decompositionEntities,
                         "periods": intent.parameters.get("periods", 20),
                         "dimensions": intent.parameters.get("dimensions", {})
@@ -5330,15 +6284,39 @@ class QueryService:
                 **(original_intent.parameters or {}),
                 "entity": entity,  # Preserve for providers that support entity directly
             }
+            sub_indicators = list(original_intent.indicators or [])
             if original_intent.decompositionType == "countries":
                 # Country decomposition must bind each sub-query to a single country.
                 sub_params["country"] = entity
                 sub_params.pop("countries", None)
+            elif normalize_provider_name(original_intent.apiProvider) == "STATSCAN":
+                existing_dimensions = dict(sub_params.get("__dimensions") or sub_params.get("dimensions") or {})
+                decomposition_axis = str(sub_params.get("__statscan_decomposition_axis") or "").strip().lower()
+                if (
+                    original_intent.decompositionType in {"age groups", "age_group", "age_groups", "ages"}
+                    or (original_intent.decompositionType == "dimension" and "age" in decomposition_axis)
+                ):
+                    existing_dimensions["age"] = entity
+                elif (
+                    original_intent.decompositionType in {"sex", "gender"}
+                    or (original_intent.decompositionType == "dimension" and any(token in decomposition_axis for token in ("sex", "gender")))
+                ):
+                    existing_dimensions["sex"] = entity
+                if existing_dimensions:
+                    sub_params["__dimensions"] = existing_dimensions
+                    sub_params["dimensions"] = existing_dimensions
+                    sub_params.pop("__statscan_decomposition_axis", None)
+                product_id = self._infer_statscan_product_id_for_followup(conversation_id, original_intent)
+                if product_id:
+                    sub_params["indicator"] = product_id
+                semantic_label = str(sub_params.get("__semantic_indicator_label") or "").strip()
+                if semantic_label:
+                    sub_indicators = [semantic_label]
 
             # Create a modified intent for this entity
             sub_intent = ParsedIntent(
                 apiProvider=original_intent.apiProvider,
-                indicators=original_intent.indicators,
+                indicators=sub_indicators or original_intent.indicators,
                 parameters=sub_params,
                 clarificationNeeded=False,
                 needsDecomposition=False,  # Don't re-decompose

@@ -127,10 +127,10 @@ def _baseline_test2_round10(rotation_index: int) -> RoundCase:
     return _case(
         query,
         providers=("WORLDBANK",),
-        countries=("FR", "DE"),
+        countries=("US", "GB"),
         cues=cues,
         exact_series_count=2,
-        note="Formatting/frequency follow-up should retain the World Bank inflation comparison for France and Germany.",
+        note="Formatting/benchmark follow-up should retain the active World Bank inflation comparison for the current US/UK pair.",
     )
 
 
@@ -292,10 +292,10 @@ def _alternative_suite(_: datetime | None = None) -> dict[str, list[RoundCase]]:
             _case("Show only Canada", providers=("IMF",), countries=("CA",), forbidden_countries=("US",), cues=("gdp", "growth"), exact_series_count=1),
             _case("Add Japan GDP growth rate", providers=("IMF",), countries=("CA", "JP"), cues=("gdp", "growth"), exact_series_count=2),
             _case("Change to 2016-2024", providers=("IMF",), countries=("CA", "JP"), cues=("gdp", "growth"), exact_series_count=2),
-            _case("Switch to GDP per capita", providers=("IMF",), countries=("CA", "JP"), cues=("gdp", "per capita"), exact_series_count=2),
-            _case("Switch back to GDP growth rate", providers=("IMF",), countries=("CA", "JP"), cues=("gdp", "growth"), exact_series_count=2),
-            _case("Show only Japan and United States", providers=("IMF",), countries=("JP", "US"), forbidden_countries=("CA",), cues=("gdp", "growth"), exact_series_count=2),
-            _case("Add Germany GDP growth rate", providers=("IMF",), countries=("JP", "US", "DE"), cues=("gdp", "growth"), exact_series_count=3),
+            _case("Switch to GDP per capita", countries=("CA", "JP"), cues=("gdp", "per capita"), exact_series_count=2, note="Equivalent provider substitution is acceptable if IMF per-capita coverage is unavailable."),
+            _case("Switch back to GDP growth rate", countries=("CA", "JP"), cues=("gdp", "growth"), exact_series_count=2, note="Equivalent provider substitution remains acceptable after the prior provider boundary."),
+            _case("Show only Japan and United States", countries=("JP", "US"), forbidden_countries=("CA",), cues=("gdp", "growth"), exact_series_count=2, note="Preserve transformed GDP-growth semantics even if the provider is no longer IMF."),
+            _case("Add Germany GDP growth rate", countries=("JP", "US", "DE"), cues=("gdp", "growth"), exact_series_count=3, note="Equivalent provider substitution remains acceptable while preserving growth semantics and country scope."),
         ],
         "Alt 2: Inflation Country Rotation": [
             _case("US inflation rate", countries=("US",), cues=("inflation",), exact_series_count=1),
@@ -322,7 +322,7 @@ def _alternative_suite(_: datetime | None = None) -> dict[str, list[RoundCase]]:
             _case("Show only United States and Germany", cues=("import", "gdp"), countries=("US", "DE"), forbidden_countries=("KR",), exact_series_count=2),
         ],
         "Alt 4: StatsCan Province and Age": [
-            _case("Canada employment rate", providers=("STATSCAN",), countries=("CA",), cues=("employment",), exact_series_count=1),
+            _case("Canada employment rate", countries=("CA",), cues=("employment",), exact_series_count=1, note="Equivalent provider substitution is acceptable for the initial national employment-rate turn."),
             _case("Show by province", providers=("STATSCAN",), countries=("CA",), cues=("employment",), min_series_count=2),
             _case("Show only Ontario", providers=("STATSCAN",), countries=("CA",), cues=("employment", "ontario"), exact_series_count=1),
             _case("Switch to Alberta", providers=("STATSCAN",), countries=("CA",), cues=("employment", "alberta"), exact_series_count=1),

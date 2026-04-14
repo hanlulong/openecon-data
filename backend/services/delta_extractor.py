@@ -77,6 +77,36 @@ _TIME_RANGE_RE = re.compile(
     r"\b(19\d{2}|20\d{2})\s*[-–—]\s*(19\d{2}|20\d{2})\b",
 )
 
+_CURRENCY_PAIR_RE = re.compile(
+    r"\b([A-Za-z]{3})\s*(?:to|/|vs)\s*([A-Za-z]{3})\b",
+    re.IGNORECASE,
+)
+
+_YOY_CHANGE_RE = re.compile(
+    r"\b(?:show\s+)?(?:year[\s-]*over[\s-]*year|yoy)\b(?:\s+(?:change|growth))?\b",
+    re.IGNORECASE,
+)
+
+_TRADE_EXPORT_IMPORT_RE = re.compile(
+    r"\b(exports?|imports?)\b",
+    re.IGNORECASE,
+)
+
+_TRADE_BALANCE_RE = re.compile(
+    r"\btrade\s+balance\b",
+    re.IGNORECASE,
+)
+
+_TOTAL_TRADE_RE = re.compile(
+    r"\btotal\s+trade\b",
+    re.IGNORECASE,
+)
+
+_PARTNER_RE = re.compile(
+    r"\bpartner\b",
+    re.IGNORECASE,
+)
+
 # Additive / replacement / removal markers
 _ADDITIVE_MARKERS = {"compare", "add", "also", "include", "plus", "too", "well"}
 _REPLACEMENT_MARKERS = {"only", "just", "filter", "keep"}
@@ -118,6 +148,11 @@ _GEOGRAPHY_DIMENSION_KEYS = {
     "regions",
     "country",
     "countries",
+}
+
+_INDICATOR_NOISE_WORDS = {
+    "rate", "rates", "data", "series", "value", "values", "index", "indexes",
+    "metric", "metrics", "indicator", "indicators",
 }
 
 
@@ -201,6 +236,26 @@ class DeltaExtractor:
         if not query_text:
             return None
 
+        delta = self._try_exchange_rate_pair_change(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_transform_equivalence_noop(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_comtrade_trade_follow_up(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_trade_flow_indicator_sync(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_country_follow_up_with_indicator_reaffirmation(query_text, state)
+        if delta:
+            return delta
+
         # Fast structural handlers — only for unambiguous patterns.
         # Dimension and indicator changes are handled by the LLM (Tier 2)
         # because regex can't distinguish "seniors" (age dimension) from
@@ -223,6 +278,230 @@ class DeltaExtractor:
             return delta
 
         return None
+
+    def _try_exchange_rate_pair_change(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        indicator_text = str(state.indicator or "").strip().lower()
+        if provider not in {"EXCHANGERATE", "FRED"} and "exchange" not in indicator_text:
+            return None
+
+        match = _CURRENCY_PAIR_RE.search(query)
+        if not match:
+            return None
+
+        base, target = match.group(1).upper(), match.group(2).upper()
+        if base == target:
+            return None
+
+        pair_text = f"{base} to {target}"
+        logger.info("Delta: exchange-rate pair change → %s", pair_text)
+        return FollowUpDelta(
+            added_dimensions={"Currency Pair": pair_text},
+            is_dimension_modifier_change=True,
+            raw_query=query,
+            delta_type="dimension_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_transform_equivalence_noop(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Treat redundant transform phrasing as a no-op state-preserving follow-up.
+
+        Example: asking for year-over-year change when the active series is
+        already a growth/inflation rate should preserve the current answer set
+        rather than triggering an unsupported indicator rewrite.
+        """
+        if not _YOY_CHANGE_RE.search(query):
+            return None
+
+        indicator_text = str(state.indicator or "").strip().lower()
+        resolved_code = str(state.resolved_indicator_code or "").strip().upper()
+        already_rate_like = (
+            "growth" in indicator_text
+            or "inflation" in indicator_text
+            or resolved_code in {"NGDP_RPCH", "NY.GDP.MKTP.KD.ZG", "A191RL1Q225SBEA", "FP.CPI.TOTL.ZG"}
+        )
+        if not already_rate_like:
+            return None
+
+        logger.info("Delta: redundant transform request on already rate-like series → preserve current state")
+        return FollowUpDelta(
+            changed_chart_type=state.chart_type or "line",
+            raw_query=query,
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_trade_flow_indicator_sync(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        if provider != "COMTRADE":
+            return None
+
+        match = _TRADE_EXPORT_IMPORT_RE.search(query)
+        if not match:
+            return None
+
+        flow_word = match.group(1).lower()
+        indicator = "exports" if flow_word.startswith("export") else "imports"
+        flow = "EXPORT" if indicator == "exports" else "IMPORT"
+        logger.info("Delta: trade flow/indicator sync → %s (%s)", indicator, flow)
+        return FollowUpDelta(
+            changed_indicator=indicator,
+            changed_trade_flow=flow,
+            raw_query=query,
+            delta_type="compound_change",
+            query_type="parameter_delta",
+        )
+
+    @staticmethod
+    def _trade_indicator_payload(query: str) -> tuple[Optional[str], Optional[str]]:
+        query_text = str(query or "")
+        if _TRADE_BALANCE_RE.search(query_text):
+            return "trade balance", None
+        if _TOTAL_TRADE_RE.search(query_text):
+            return "total trade", None
+        match = _TRADE_EXPORT_IMPORT_RE.search(query_text)
+        if not match:
+            return None, None
+        flow_word = match.group(1).lower()
+        if flow_word.startswith("export"):
+            return "exports", "EXPORT"
+        return "imports", "IMPORT"
+
+    def _try_comtrade_trade_follow_up(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        if provider != "COMTRADE":
+            return None
+
+        query_text = str(query or "").strip()
+        if not query_text:
+            return None
+
+        query_lower = query_text.lower()
+        query_words = set(re.findall(r"[a-zA-Z]+", query_lower))
+        is_removal = bool(query_words & _REMOVAL_MARKERS)
+        is_additive = bool(query_words & _ADDITIVE_MARKERS) and not bool(
+            query_words & _REPLACEMENT_MARKERS
+        ) and not is_removal
+
+        raw_countries = CountryResolver.detect_all_countries_in_query(query_text)
+        if not raw_countries:
+            return None
+
+        current_partner = str(state.trade_partner or "").strip()
+        current_partner_iso = CountryResolver.COUNTRY_ALIASES.get(current_partner.lower()) if current_partner else None
+        current_reporters = {
+            (CountryResolver.COUNTRY_ALIASES.get(str(country).strip().lower()) or str(country).strip().upper())
+            for country in ((state.countries or []) or ([state.country] if state.country else []))
+            if str(country or "").strip()
+        }
+
+        mentioned: list[tuple[str, str]] = []
+        for country in raw_countries:
+            country_text = str(country).strip()
+            country_iso = CountryResolver.COUNTRY_ALIASES.get(country_text.lower()) or country_text.upper()
+            pair = (country_text, country_iso)
+            if pair not in mentioned:
+                mentioned.append(pair)
+
+        indicator_label, trade_flow = self._trade_indicator_payload(query_text)
+
+        partner_candidate: Optional[str] = None
+        reporter_mentions: list[str] = []
+
+        if indicator_label and len(mentioned) >= 2 and re.search(r"\b(to|from|with|and)\b", query_lower):
+            partner_candidate = mentioned[-1][0]
+            reporter_mentions = [country_text for country_text, _ in mentioned[:-1]]
+
+        if _PARTNER_RE.search(query_text):
+            partner_candidates = [
+                country_text
+                for country_text, country_iso in mentioned
+                if country_iso not in current_reporters
+            ]
+            if partner_candidates:
+                payload = {
+                    "changed_trade_partner": partner_candidates[-1],
+                    "raw_query": query_text,
+                    "delta_type": "compound_change",
+                    "query_type": "parameter_delta",
+                }
+                if indicator_label:
+                    payload["changed_indicator"] = indicator_label
+                if trade_flow is not None:
+                    payload["changed_trade_flow"] = trade_flow
+                return FollowUpDelta(**payload)
+
+        if not reporter_mentions:
+            for country_text, country_iso in mentioned:
+                if partner_candidate and country_text == partner_candidate:
+                    continue
+                if current_partner_iso and country_iso == current_partner_iso:
+                    continue
+                reporter_mentions.append(country_text)
+        reporter_mentions = list(dict.fromkeys(reporter_mentions))
+
+        if not reporter_mentions and indicator_label and len(mentioned) >= 2:
+            partner_candidate = mentioned[-1][0]
+            reporter_candidate = mentioned[0][0]
+            payload = {
+                "changed_country": reporter_candidate,
+                "changed_trade_partner": partner_candidate,
+                "changed_indicator": indicator_label,
+                "raw_query": query_text,
+                "delta_type": "compound_change",
+                "query_type": "parameter_delta",
+            }
+            if trade_flow is not None:
+                payload["changed_trade_flow"] = trade_flow
+            return FollowUpDelta(**payload)
+
+        if not reporter_mentions:
+            return None
+
+        payload = {
+            "raw_query": query_text,
+            "query_type": "parameter_delta",
+        }
+        if is_removal:
+            payload["removed_countries"] = reporter_mentions
+            payload["delta_type"] = "country_change"
+        elif is_additive:
+            payload["added_countries"] = reporter_mentions
+            payload["delta_type"] = "additive_country"
+        elif len(reporter_mentions) == 1:
+            payload["changed_country"] = reporter_mentions[0]
+            payload["delta_type"] = "country_change"
+        else:
+            payload["changed_countries"] = reporter_mentions
+            payload["delta_type"] = "country_change"
+
+        if partner_candidate:
+            payload["changed_trade_partner"] = partner_candidate
+
+        if indicator_label:
+            payload["changed_indicator"] = indicator_label
+            payload["delta_type"] = "compound_change"
+        if trade_flow is not None:
+            payload["changed_trade_flow"] = trade_flow
+            payload["delta_type"] = "compound_change"
+
+        return FollowUpDelta(**payload)
 
     async def extract_with_llm(
         self,
@@ -545,6 +824,104 @@ Output the query_type and any changed fields as JSON."""
                 raw_query=query,
                 delta_type="country_change",
             )
+
+    @staticmethod
+    def _indicator_token_set(text: Optional[str]) -> set[str]:
+        tokens = {
+            token
+            for token in re.findall(r"[a-zA-Z]+", str(text or "").lower())
+            if token not in _FILLER_WORDS and token not in _INDICATOR_NOISE_WORDS and len(token) > 1
+        }
+        return tokens
+
+    def _try_country_follow_up_with_indicator_reaffirmation(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Detect geography follow-ups that restate the current indicator variant.
+
+        Examples:
+        - "Add UK real GDP" after "US real GDP"
+        - "Show Germany GDP per capita" after a GDP-per-capita chain
+
+        This preserves the existing semantic indicator while allowing the user
+        to restate it naturally, instead of forcing the turn through a fresh
+        parse that can drift provider or country scope.
+        """
+        extracted_countries = CountryResolver.detect_all_countries_in_query(query)
+        expanded_regions = CountryResolver.expand_regions_in_query(query)
+        target_countries = extracted_countries or expanded_regions
+        if not target_countries:
+            return None
+
+        query_lower = query.lower()
+        tokens = re.findall(r"[a-zA-Z]+", query_lower)
+        if not tokens:
+            return None
+
+        geography_tokens: set[str] = set()
+        for country in target_countries:
+            geography_tokens.add(country.lower())
+            if country.upper() == "US":
+                geography_tokens.update({"united", "states", "usa", "us", "america"})
+            iso3 = CountryResolver.to_iso3(country)
+            if iso3:
+                geography_tokens.add(iso3.lower())
+            for alias, code in CountryResolver.COUNTRY_ALIASES.items():
+                if code == country.upper():
+                    for token in alias.split():
+                        geography_tokens.add(token.lower())
+
+        content_tokens = [
+            token for token in tokens
+            if token not in _FILLER_WORDS and token not in geography_tokens
+        ]
+        if not content_tokens:
+            return None
+
+        current_indicator_tokens = self._indicator_token_set(state.indicator)
+        for member in (state.active_answer_members or []):
+            current_indicator_tokens.update(self._indicator_token_set(getattr(member, "indicator_label", None)))
+        if not current_indicator_tokens:
+            return None
+
+        content_token_set = {
+            token for token in content_tokens
+            if token not in _INDICATOR_NOISE_WORDS and len(token) > 1
+        }
+        if not content_token_set or not content_token_set.issubset(current_indicator_tokens):
+            return None
+
+        query_words = set(query_lower.split())
+        is_removal = bool(query_words & _REMOVAL_MARKERS)
+        is_additive = bool(query_words & _ADDITIVE_MARKERS) and not bool(
+            query_words & _REPLACEMENT_MARKERS
+        ) and not is_removal
+
+        if is_removal:
+            return FollowUpDelta(
+                removed_countries=target_countries,
+                raw_query=query,
+                delta_type="country_change",
+            )
+        if is_additive:
+            return FollowUpDelta(
+                added_countries=target_countries,
+                raw_query=query,
+                delta_type="additive_country",
+            )
+        if len(target_countries) == 1:
+            return FollowUpDelta(
+                changed_country=target_countries[0],
+                raw_query=query,
+                delta_type="country_change",
+            )
+        return FollowUpDelta(
+            changed_countries=target_countries,
+            raw_query=query,
+            delta_type="country_change",
+        )
 
     # ------------------------------------------------------------------
     # Handler: Indicator switch

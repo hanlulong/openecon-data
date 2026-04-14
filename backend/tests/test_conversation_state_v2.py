@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import pytest
 
-from backend.models import ParsedIntent
+from backend.models import Metadata, NormalizedData, ParsedIntent
 from backend.services.conversation_state_v2 import (
+    AnswerSetMember,
     ConversationState,
     FollowUpDelta,
+    build_answer_set_members_from_data,
     extract_state_from_intent,
     materialize_intent,
     merge_state,
     merge_new_state_with_previous,
+    update_answer_members_from_data,
 )
 
 
@@ -112,6 +115,100 @@ class TestMergeState:
         merged = merge_state(state, delta)
         assert merged.decomposition is None
         assert merged.dimensions == {"Geography": "Ontario"}
+
+    def test_age_breakdown_promotes_to_first_class_dimension_decomposition(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"Age group": "age group"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
+        assert merged.dimensions == {"Geography": "Ontario"}
+
+    def test_specific_age_filter_clears_dimension_decomposition(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+            decomposition={"type": "dimension", "entities": None, "axis": "Age group"},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"Age group": "25 to 54 years"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition is None
+        assert merged.dimensions == {
+            "Geography": "Ontario",
+            "Age group": "25 to 54 years",
+        }
+
+    def test_specific_age_filter_clears_generic_demographic_decomposition(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+            decomposition={"type": "dimension", "entities": None, "axis": "Demographic"},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"Age group": "25 to 54 years"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition is None
+        assert merged.dimensions == {
+            "Geography": "Ontario",
+            "Age group": "25 to 54 years",
+        }
+
+    def test_age_group_decomposition_payload_is_canonicalized_to_dimension_axis(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "age groups", "entities": None, "axis": "Age"},
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
+
+    def test_age_groups_decomposition_payload_with_underscore_is_canonicalized(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "age_groups", "entities": None, "axis": "Age group"},
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
 
     def test_additive_country(self):
         state = ConversationState(
@@ -495,6 +592,19 @@ class TestMaterializeIntent:
         assert intent.decompositionType == "provinces"
         assert intent.decompositionEntities == ["Ontario", "Quebec"]
 
+    def test_dimension_decomposition_materializes_axis_contract(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            dimensions={"Geography": "Ontario"},
+            decomposition={"type": "dimension", "entities": None, "axis": "Age group"},
+        )
+        intent = materialize_intent(state)
+        assert intent.needsDecomposition is True
+        assert intent.decompositionType == "dimension"
+        assert intent.parameters["__statscan_decomposition_axis"] == "Age group"
+        assert intent.parameters["__dimensions"] == {"Geography": "Ontario"}
+
     def test_follow_up_flag(self):
         state = ConversationState(indicator="GDP", turn_number=0)
         intent = materialize_intent(state)
@@ -643,6 +753,41 @@ class TestExtractStateFromIntent:
         }
         assert state.dimensions is None
 
+    def test_dimension_axis_extraction_preserves_generic_decomposition_contract(self):
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["employment rate"],
+            parameters={
+                "country": "CA",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_decomposition_axis": "Age group",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+        )
+        state = extract_state_from_intent(intent)
+        assert state.decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
+        assert state.dimensions == {"Geography": "Ontario"}
+
+    def test_statscan_product_id_extraction_from_numeric_indicator_parameters(self):
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100330"],
+            parameters={
+                "country": "CA",
+                "indicator": "14100330",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+        )
+        state = extract_state_from_intent(intent)
+        assert state.statscan_product_id == "14100330"
+
 
 # ─── DeltaExtractor ─────────────────────────────────────────────────
 
@@ -677,6 +822,13 @@ class TestDeltaExtractor:
         assert delta is not None
         assert delta.delta_type == "additive_country"
         assert delta.added_countries == ["FR"]
+
+    def test_additive_country_with_current_indicator_reaffirmation(self, extractor):
+        state = ConversationState(indicator="real GDP", country="US")
+        delta = extractor.extract("Add UK real GDP", state)
+        assert delta is not None
+        assert delta.delta_type == "additive_country"
+        assert delta.added_countries == ["GB"]
 
     def test_multi_country_replacement(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
@@ -761,6 +913,101 @@ class TestDeltaExtractor:
         assert delta is not None
         assert delta.delta_type == "time_change"
         assert delta.changed_start_date is not None
+
+    def test_exchange_rate_pair_change_detected_structurally(self, extractor):
+        state = ConversationState(indicator="exchange rate", provider="EXCHANGERATE")
+        delta = extractor.extract("Switch to USD to JPY", state)
+        assert delta is not None
+        assert delta.delta_type == "dimension_change"
+        assert delta.added_dimensions == {"Currency Pair": "USD to JPY"}
+        assert delta.is_dimension_modifier_change is True
+
+    def test_exchange_rate_pair_slash_notation_detected_structurally(self, extractor):
+        state = ConversationState(indicator="exchange rate", provider="EXCHANGERATE")
+        delta = extractor.extract("Switch to EUR/GBP", state)
+        assert delta is not None
+        assert delta.added_dimensions == {"Currency Pair": "EUR to GBP"}
+
+    def test_year_over_year_change_on_growth_series_is_noop_chart_change(self, extractor):
+        state = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            resolved_indicator_code="NGDP_RPCH",
+        )
+        delta = extractor.extract("Show year-over-year change", state)
+        assert delta is not None
+        assert delta.delta_type == "chart_change"
+        assert delta.changed_chart_type == "line"
+
+    def test_trade_flow_indicator_sync_detected_structurally(self, extractor):
+        state = ConversationState(
+            indicator="trade balance",
+            provider="COMTRADE",
+            trade_flow="EXPORT",
+        )
+        delta = extractor.extract("Switch back to US exports", state)
+        assert delta is not None
+        assert delta.changed_indicator == "exports"
+        assert delta.changed_trade_flow == "EXPORT"
+
+    def test_comtrade_additive_reporter_follow_up_detected_structurally(self, extractor):
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="US",
+            trade_reporter="US",
+            trade_partner="CN",
+            trade_flow="EXPORT",
+        )
+        delta = extractor.extract("Add Germany exports to China", state)
+        assert delta is not None
+        assert delta.added_countries == ["DE"]
+        assert delta.changed_indicator == "exports"
+        assert delta.changed_trade_flow == "EXPORT"
+
+    def test_comtrade_partner_change_detected_structurally(self, extractor):
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="US",
+            trade_reporter="US",
+            trade_partner="CN",
+            trade_flow="EXPORT",
+        )
+        delta = extractor.extract("Change partner to Canada", state)
+        assert delta is not None
+        assert delta.changed_trade_partner == "CA"
+
+    def test_comtrade_change_to_country_exports_sets_partner_from_phrase(self, extractor):
+        state = ConversationState(
+            indicator="trade balance",
+            provider="COMTRADE",
+            country="US",
+            trade_reporter="US",
+            trade_partner="JP",
+            trade_flow=None,
+        )
+        delta = extractor.extract("Change to Germany exports to China", state)
+        assert delta is not None
+        assert delta.changed_country == "DE"
+        assert delta.changed_trade_partner == "CN"
+        assert delta.changed_indicator == "exports"
+        assert delta.changed_trade_flow == "EXPORT"
+
+    def test_comtrade_total_trade_switch_detected_structurally(self, extractor):
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="US",
+            trade_reporter="US",
+            trade_partner="CA",
+            trade_flow="EXPORT",
+        )
+        delta = extractor.extract("Show total trade US and Canada", state)
+        assert delta is not None
+        assert delta.changed_country == "US"
+        assert delta.changed_indicator == "total trade"
+        assert delta.changed_trade_flow is None
 
     def test_no_prior_state_returns_none(self, extractor):
         state = ConversationState()  # No indicator
@@ -1117,6 +1364,28 @@ class TestMergeAndMaterialize:
         merged = merge_new_state_with_previous(new_state, previous)
         assert merged.decomposition is None
         assert merged.dimensions == {"Geography": "Ontario"}
+
+    def test_merge_new_state_with_previous_does_not_preserve_dimension_decomposition_when_axis_filter_added(self):
+        previous = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+            decomposition={"type": "dimension", "entities": None, "axis": "Age group"},
+            turn_number=1,
+        )
+        new_state = ConversationState(
+            indicator="employment rate",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario", "Age group": "25 to 54 years"},
+        )
+
+        merged = merge_new_state_with_previous(new_state, previous)
+        assert merged.decomposition is None
+        assert merged.dimensions == {
+            "Geography": "Ontario",
+            "Age group": "25 to 54 years",
+        }
 
 
 # ─── ConversationManager state methods ──────────────────────────────
@@ -1490,3 +1759,414 @@ class TestResolvedIndicatorCodePreservation:
         assert retrieved is not None
         assert retrieved.resolved_indicator_code == "NY.GDP.PCAP.CD"
         assert retrieved.indicator == "GDP per capita"
+
+    def test_build_answer_set_members_from_data_projects_provider_country_and_code(self):
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP growth rate"],
+            parameters={"__semantic_indicator_label": "GDP growth rate", "country": "JP"},
+            clarificationNeeded=False,
+            originalQuery="Japan GDP growth rate",
+        )
+        data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="World Bank",
+                    indicator="NY.GDP.MKTP.KD.ZG",
+                    country="JP",
+                    frequency="annual",
+                    unit="%",
+                    seriesId="NY.GDP.MKTP.KD.ZG",
+                ),
+                data=[],
+            )
+        ]
+
+        members = build_answer_set_members_from_data(data, intent=intent, turn_number=3)
+
+        assert members == [
+            AnswerSetMember(
+                provider="WORLDBANK",
+                indicator_label="GDP growth rate",
+                provider_code="NY.GDP.MKTP.KD.ZG",
+                series_id="NY.GDP.MKTP.KD.ZG",
+                country="JP",
+                countries=["JP"],
+                source_turn=3,
+            )
+        ]
+
+    def test_update_answer_members_from_data_accumulates_recent_history_across_turns(self):
+        initial_state = ConversationState(
+            indicator="GDP",
+            provider="FRED",
+            country="US",
+            turn_number=1,
+        )
+        fred_intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            originalQuery="US GDP from FRED",
+        )
+        fred_data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="FRED",
+                    indicator="GDP",
+                    country="US",
+                    frequency="quarterly",
+                    unit="USD",
+                    seriesId="GDP",
+                ),
+                data=[],
+            )
+        ]
+
+        update_answer_members_from_data(initial_state, fred_data, intent=fred_intent)
+
+        next_state = merge_new_state_with_previous(
+            ConversationState(
+                indicator="GDP",
+                provider="WORLDBANK",
+                country="JP",
+                turn_number=2,
+            ),
+            initial_state,
+        )
+        wb_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP"],
+            parameters={"country": "JP"},
+            clarificationNeeded=False,
+            originalQuery="Japan GDP from World Bank",
+        )
+        wb_data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="World Bank",
+                    indicator="NY.GDP.MKTP.CD",
+                    country="JP",
+                    frequency="annual",
+                    unit="USD",
+                    seriesId="NY.GDP.MKTP.CD",
+                ),
+                data=[],
+            )
+        ]
+
+        update_answer_members_from_data(next_state, wb_data, intent=wb_intent)
+
+        assert next_state.active_answer_members == [
+            AnswerSetMember(
+                provider="WORLDBANK",
+                indicator_label="NY.GDP.MKTP.CD",
+                provider_code="NY.GDP.MKTP.CD",
+                series_id="NY.GDP.MKTP.CD",
+                country="JP",
+                countries=["JP"],
+                source_turn=2,
+            )
+        ]
+        assert next_state.recent_answer_members == [
+            AnswerSetMember(
+                provider="FRED",
+                indicator_label="GDP",
+                provider_code="GDP",
+                series_id="GDP",
+                country="US",
+                countries=["US"],
+                source_turn=1,
+            ),
+            AnswerSetMember(
+                provider="WORLDBANK",
+                indicator_label="NY.GDP.MKTP.CD",
+                provider_code="NY.GDP.MKTP.CD",
+                series_id="NY.GDP.MKTP.CD",
+                country="JP",
+                countries=["JP"],
+                source_turn=2,
+            ),
+        ]
+
+    def test_update_answer_members_from_data_refreshes_statscan_product_id_from_series(self):
+        state = ConversationState(
+            indicator="employment rate",
+            provider="STATSCAN",
+            country="Canada",
+            statscan_product_id="14100362",
+            statscan_cube_metadata={"dimension": [{"dimensionNameEn": "Old"}]},
+            turn_number=4,
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "Canada", "__semantic_indicator_label": "employment rate"},
+            clarificationNeeded=False,
+            originalQuery="Show by province",
+        )
+        data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="Statistics Canada",
+                    indicator="Ontario employment rate",
+                    country="Canada",
+                    frequency="monthly",
+                    unit="%",
+                    seriesId="14100287:7.9.1.1.1.1.0.0.0.0",
+                ),
+                data=[],
+            )
+        ]
+
+        update_answer_members_from_data(state, data, intent=intent)
+
+        assert state.statscan_product_id == "14100287"
+        assert state.statscan_cube_metadata is None
+
+    def test_update_answer_members_from_data_refreshes_coingecko_coin_ids_from_series(self):
+        state = ConversationState(
+            indicator="bitcoin price",
+            provider="COINGECKO",
+            coin_ids=["bitcoin"],
+            turn_number=4,
+        )
+        intent = ParsedIntent(
+            apiProvider="COINGECKO",
+            indicators=["dynamic", "ethereum price"],
+            parameters={"coinIds": ["ethereum"]},
+            clarificationNeeded=False,
+            originalQuery="Add Ethereum for comparison",
+        )
+        data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="CoinGecko",
+                    indicator="Bitcoin Price",
+                    country=None,
+                    frequency="daily",
+                    unit="USD",
+                    seriesId="bitcoin",
+                ),
+                data=[],
+            ),
+            NormalizedData(
+                metadata=Metadata(
+                    source="CoinGecko",
+                    indicator="Ethereum Price",
+                    country=None,
+                    frequency="daily",
+                    unit="USD",
+                    seriesId="ethereum",
+                ),
+                data=[],
+            ),
+        ]
+
+        update_answer_members_from_data(state, data, intent=intent)
+
+        assert state.coin_ids == ["bitcoin", "ethereum"]
+
+    def test_extract_state_from_intent_preserves_comtrade_reporter_scope(self):
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={
+                "countries": ["United States", "China"],
+                "reporter": "United States",
+                "partner": "China",
+                "flow": "EXPORT",
+            },
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+
+        state = extract_state_from_intent(intent)
+
+        assert state.provider == "COMTRADE"
+        assert state.country == "United States"
+        assert state.countries is None
+        assert state.trade_reporter == "United States"
+        assert state.trade_partner == "China"
+
+    def test_extract_state_from_intent_comtrade_ignores_partner_in_generic_countries_scope(self):
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={
+                "countries": ["US", "CN"],
+                "reporter": "United States",
+                "partner": "China",
+                "flow": "EXPORT",
+            },
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+
+        state = extract_state_from_intent(intent)
+
+        assert state.country == "United States"
+        assert state.countries is None
+        assert state.trade_reporter == "United States"
+        assert state.trade_partner == "China"
+
+    def test_materialize_intent_uses_comtrade_reporters_for_multi_reporter_scope(self):
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            countries=["Germany", "France"],
+            trade_reporter="Germany",
+            trade_partner="China",
+            trade_flow="EXPORT",
+            turn_number=4,
+        )
+
+        intent = materialize_intent(state)
+
+        assert intent.parameters["reporters"] == ["Germany", "France"]
+        assert intent.parameters["reporter"] == "Germany"
+        assert intent.parameters["partner"] == "China"
+        assert intent.parameters["flow"] == "EXPORT"
+
+    def test_materialize_intent_prefers_current_comtrade_country_scope_over_stale_reporter(self):
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="United States",
+            trade_reporter="Germany",
+            trade_partner="Canada",
+            trade_flow="EXPORT",
+            turn_number=4,
+        )
+
+        intent = materialize_intent(state)
+
+        assert intent.parameters["country"] == "United States"
+        assert intent.parameters["reporter"] == "United States"
+        assert intent.parameters["partner"] == "Canada"
+
+    def test_indicator_change_with_trade_reporter_resets_country_scope_to_reporter(self):
+        current = ConversationState(
+            indicator="trade balance",
+            provider="COMTRADE",
+            countries=["Germany", "France"],
+            trade_reporter="Germany",
+            trade_partner="China",
+            trade_flow="EXPORT",
+        )
+        delta = FollowUpDelta(
+            changed_indicator="total trade",
+            raw_query="Show total trade US and Canada",
+        )
+
+        merged = merge_state(current, delta)
+
+        assert merged.country == "Germany"
+        assert merged.countries is None
+        assert merged.trade_reporter == "Germany"
+
+    def test_indicator_change_to_total_trade_clears_trade_flow(self):
+        current = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="United States",
+            trade_reporter="United States",
+            trade_partner="Canada",
+            trade_flow="EXPORT",
+        )
+        delta = FollowUpDelta(
+            changed_indicator="total trade",
+            raw_query="Show total trade US and Canada",
+        )
+
+        merged = merge_state(current, delta)
+
+        assert merged.trade_flow is None
+
+    def test_comtrade_country_change_updates_trade_reporter(self):
+        current = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            country="Germany",
+            trade_reporter="Germany",
+            trade_partner="Canada",
+            trade_flow="EXPORT",
+        )
+        delta = FollowUpDelta(
+            changed_country="US",
+            raw_query="Switch back to US exports",
+        )
+
+        merged = merge_state(current, delta)
+
+        assert merged.country == "US"
+        assert merged.trade_reporter == "US"
+
+    def test_answer_member_history_survives_redis_round_trip(self, monkeypatch):
+        import backend.services.conversation as conv_mod
+
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+            def setex(self, key, ttl, value):
+                self._store[key] = value
+            def get(self, key):
+                return self._store.get(key)
+            def delete(self, key):
+                self._store.pop(key, None)
+
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        from backend.services.conversation import ConversationManager
+        mgr = ConversationManager()
+        cid = mgr.get_or_create(None)
+
+        state = ConversationState(
+            indicator="GDP",
+            provider="WORLDBANK",
+            country="US",
+            turn_number=2,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="US",
+                    countries=["US"],
+                    source_turn=2,
+                )
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=1,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="US",
+                    countries=["US"],
+                    source_turn=2,
+                ),
+            ],
+        )
+        mgr.set_conversation_state(cid, state)
+
+        mgr2 = ConversationManager()
+        mgr2.get_or_create(cid)
+        retrieved = mgr2.get_conversation_state(cid)
+        assert retrieved is not None
+        assert retrieved.active_answer_members is not None
+        assert retrieved.active_answer_members[0].provider == "WORLDBANK"
+        assert retrieved.recent_answer_members is not None
+        assert [member.provider for member in retrieved.recent_answer_members] == ["FRED", "WORLDBANK"]

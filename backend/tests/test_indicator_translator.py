@@ -159,6 +159,18 @@ def test_translate_trade_openness_query_to_worldbank():
     assert code == "NE.TRD.GNFS.ZS"
 
 
+def test_translate_gdp_to_imf_uses_level_not_growth_code():
+    translator = IndicatorTranslator()
+
+    code, concept = translator.translate_indicator(
+        "GDP",
+        target_provider="IMF",
+    )
+
+    assert concept == "gdp"
+    assert code == "NGDPD"
+
+
 def test_translate_reer_query_to_worldbank_series_code():
     translator = IndicatorTranslator()
 

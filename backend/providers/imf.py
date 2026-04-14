@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, TYPE_CHECKING
 import asyncio
+import json
 import logging
 import re
 
@@ -691,13 +692,33 @@ class IMFProvider(BaseProvider):
         url = f"{self.base_url}/{indicator_code}"
 
         try:
-            response = await self._retry_request(url, max_retries=3, initial_delay=1.0)
-            payload = response.json()
+            payload = None
+            json_error = None
+            for parse_attempt in range(5):
+                response = await self._retry_request(url, max_retries=4, initial_delay=1.0)
+                try:
+                    payload = response.json()
+                    json_error = None
+                    break
+                except (ValueError, json.JSONDecodeError) as exc:
+                    json_error = exc
+                    if parse_attempt < 4:
+                        logger.warning(
+                            "IMF API returned invalid JSON for %s (attempt %s/5): %s. Retrying...",
+                            indicator_code,
+                            parse_attempt + 1,
+                            exc,
+                        )
+                        await asyncio.sleep(0.5 * (parse_attempt + 1))
+                    else:
+                        raise
+            if payload is None and json_error is not None:
+                raise json_error
         except Exception as e:
-            raise RuntimeError(
+            raise DataNotAvailableError(
                 f"Failed to fetch IMF indicator {indicator_code} after retries. "
                 f"Error: {e}. The IMF API may be temporarily unavailable."
-            )
+            ) from e
 
         # Extract data for the indicator
         if "values" not in payload or indicator_code not in payload["values"]:

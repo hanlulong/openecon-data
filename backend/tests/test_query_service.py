@@ -11,6 +11,7 @@ from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
 from backend.services.cache import cache_service
 from backend.services.conversation import conversation_manager
+from backend.services.conversation_state_v2 import AnswerSetMember, ConversationState, FollowUpDelta
 from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
 from backend.services.semantic_match_judge import ExecutionResultJudgment
@@ -46,6 +47,7 @@ def sample_series_with(
     series_id: str | None = None,
     description: str | None = None,
     unit: str | None = None,
+    source: str | None = None,
 ) -> NormalizedData:
     series = sample_series().model_copy(deep=True)
     if indicator is not None:
@@ -58,6 +60,8 @@ def sample_series_with(
         series.metadata.description = description
     if unit is not None:
         series.metadata.unit = unit
+    if source is not None:
+        series.metadata.source = source
     return series
 
 
@@ -785,6 +789,46 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(provider, "BIS")
         self.assertEqual(params.get("indicator"), "WS_EER")
+
+    def test_apply_concept_provider_override_preserves_comtrade_for_bilateral_exports(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["dynamic"],
+            parameters={"reporter": "US", "partner": "CN", "flow": "EXPORT"},
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+
+        with patch("backend.services.catalog_service.find_concept_by_term", return_value="exports"):
+            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+                "COMTRADE",
+                intent,
+                dict(intent.parameters),
+            )
+
+        self.assertEqual(provider, "COMTRADE")
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertNotIn("indicator", params)
+
+    def test_apply_concept_provider_override_preserves_comtrade_for_bilateral_trade_balance(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["dynamic"],
+            parameters={"reporter": "US", "partner": "JP", "flow": "BALANCE"},
+            clarificationNeeded=False,
+            originalQuery="trade balance US and Japan",
+        )
+
+        with patch("backend.services.catalog_service.find_concept_by_term", return_value="trade_balance"):
+            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+                "COMTRADE",
+                intent,
+                dict(intent.parameters),
+            )
+
+        self.assertEqual(provider, "COMTRADE")
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertNotIn("indicator", params)
 
     def test_select_routed_provider_locks_catalog_override_before_semantic_reroute(self) -> None:
         intent = ParsedIntent(
@@ -2470,6 +2514,1086 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(persisted.provider, "IMF")
         self.assertEqual(persisted.countries, ["US", "CA"])
 
+    def test_delta_decomposition_follow_up_can_reroute_to_statscan(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-delta-decomposition-reroute")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="employment rate",
+                country="Canada",
+                provider="OECD",
+                original_query="Canada employment rate",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            delta_type="decomposition_change",
+            raw_query="Show by province",
+        )
+        route_decision = RoutingDecision(
+            provider="StatsCan",
+            confidence=0.9,
+            match_type="region",
+            reasoning="Canadian provinces routed to StatsCan",
+            matched_pattern="Canadian provinces",
+        )
+
+        with patch("backend.services.query.DeltaExtractor.extract", return_value=delta), \
+             patch.object(self.service.unified_router, "route", return_value=route_decision) as route_mock, \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("Show by province", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        route_mock.assert_called_once()
+        refined_intent = execute_intent.call_args.kwargs["intent"]
+        self.assertEqual(refined_intent.apiProvider, "STATSCAN")
+        self.assertTrue(refined_intent.parameters.get("__delta_indicator_changed"))
+
+    def test_delta_path_persists_statscan_provider_after_decomposition_followup(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-delta-persist-statscan-provider")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="employment rate",
+                provider="OECD",
+                country="Canada",
+                statscan_product_id="14100362",
+                original_query="Canada employment rate",
+            ),
+        )
+
+        success_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            delta_type="decomposition_change",
+            raw_query="Show by province",
+        )
+
+        with patch("backend.services.query.DeltaExtractor.extract", return_value=delta), \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=success_response)):
+            response = run(self.service.process_query("Show by province", conversation_id=conv_id))
+
+        self.assertEqual(response.message, "ok")
+        persisted = conversation_manager.get_conversation_state(conv_id)
+        assert persisted is not None
+        self.assertEqual(persisted.provider, "STATSCAN")
+        self.assertEqual(persisted.routed_provider, "STATSCAN")
+
+    def test_process_query_preserves_statscan_provider_for_dimension_follow_up_parse(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-statscan-dimension-follow-up")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="employment rate",
+                provider="STATSCAN",
+                country="Canada",
+                dimensions={"Geography": "Ontario"},
+                statscan_product_id="14100287",
+                original_query="Show only Ontario",
+            ),
+        )
+
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["14100287"],
+            parameters={
+                "country": "Canada",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_decomposition_axis": "Age group",
+                "indicator": "14100287",
+            },
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery="Show by age group",
+            needsDecomposition=True,
+            decompositionType="age groups",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service.unified_router, "route", return_value=RoutingDecision(provider="STATSCAN", confidence=0.9, match_type="state", reasoning="preserve StatsCan", matched_pattern="state")) as route_mock, \
+             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[sample_series_with(source="Statistics Canada", indicator="employment rate", country="Canada", series_id="14100287:7.9.1.1.1.1.0.0.0.0")]) as fetch_mock:
+            response = run(self.service.process_query("Show by age group", conversation_id=conv_id))
+
+        self.assertFalse(response.error)
+        fetched_intent = fetch_mock.await_args.args[0]
+        self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
+        self.assertEqual(fetched_intent.parameters.get("__statscan_product_id"), "14100287")
+
+    def test_should_preserve_statscan_followup_provider_requires_dimension_signal(self) -> None:
+        state = ConversationState(
+            indicator="employment rate",
+            provider="OECD",
+            country="Canada",
+            statscan_product_id="14100287",
+        )
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["BCA_NGDPD"],
+            parameters={"country": "Canada"},
+            clarificationNeeded=False,
+            originalQuery="Switch to current account balance",
+        )
+
+        self.assertFalse(
+            self.service._should_preserve_statscan_followup_provider(  # pylint: disable=protected-access
+                state,
+                intent,
+            )
+        )
+
+    def test_process_query_preserves_statscan_dimension_followup_from_answer_members(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-statscan-member-follow-up")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="employment rate",
+                provider="OECD",
+                country="Canada",
+                active_answer_members=[
+                    AnswerSetMember(
+                        provider="STATSCAN",
+                        indicator_label="employment rate",
+                        provider_code="14100287:7.7.1.1.1.1.0.0.0.0",
+                        series_id="14100287:7.7.1.1.1.1.0.0.0.0",
+                        country="Canada",
+                        countries=["Canada"],
+                        source_turn=3,
+                    )
+                ],
+                statscan_product_id="14100287",
+                dimensions={"Geography": "Ontario"},
+                original_query="Show only Ontario",
+            ),
+        )
+
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["14100287"],
+            parameters={
+                "country": "Canada",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_decomposition_axis": "Age group",
+                "indicator": "14100287",
+            },
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery="Show by age group",
+            needsDecomposition=True,
+            decompositionType="age groups",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[sample_series_with(source="Statistics Canada", indicator="employment rate", country="Canada", series_id="14100287:7.9.1.1.1.1.0.0.0.0")]) as fetch_mock:
+            response = run(self.service.process_query("Show by age group", conversation_id=conv_id))
+
+        self.assertFalse(response.error)
+        fetched_intent = fetch_mock.await_args.args[0]
+        self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
+        self.assertEqual(fetched_intent.parameters.get("__statscan_product_id"), "14100287")
+
+    def test_process_query_persists_answer_members_after_direct_standard_success(self) -> None:
+        self.service.settings.use_staged_state_commit = True
+        conv_id = conversation_manager.get_or_create("conv-standard-direct-answer-members")
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery="US GDP from FRED",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fetched = [sample_series_with(
+            source="FRED",
+            indicator="Gross Domestic Product",
+            country="US",
+            series_id="GDP",
+        )]
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_recover_from_uncertain_match", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=(fetched, None)), \
+             patch.object(self.service, "_build_uncertain_result_clarification", return_value=None), \
+             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=fetched):
+            response = run(self.service.process_query("US GDP from FRED", conversation_id=conv_id))
+
+        self.assertFalse(response.error)
+        persisted = conversation_manager.get_conversation_state(response.conversationId)
+        assert persisted is not None
+        assert persisted.active_answer_members is not None
+        assert persisted.recent_answer_members is not None
+        self.assertEqual(
+            [(member.provider, member.country, member.provider_code) for member in persisted.active_answer_members],
+            [("FRED", "US", "GDP")],
+        )
+        self.assertEqual(
+            [(member.provider, member.country, member.provider_code) for member in persisted.recent_answer_members],
+            [("FRED", "US", "GDP")],
+        )
+
+    def test_process_query_persists_answer_members_after_fallback_success(self) -> None:
+        self.service.settings.use_staged_state_commit = True
+        conv_id = conversation_manager.get_or_create("conv-standard-fallback-answer-members")
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={"country": "US"},
+            clarificationNeeded=False,
+            confidence=0.9,
+            originalQuery="US GDP from FRED",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="FRED",
+            routed_provider="FRED",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        fallback_data = [sample_series_with(
+            source="World Bank",
+            indicator="GDP (current US$)",
+            country="United States",
+            series_id="NY.GDP.MKTP.CD",
+        )]
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=(fallback_data, None)), \
+             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[]), \
+             patch.object(self.service, "_try_with_fallback", new_callable=AsyncMock, return_value=fallback_data):
+            response = run(self.service.process_query("US GDP from FRED", conversation_id=conv_id))
+
+        self.assertFalse(response.error)
+        persisted = conversation_manager.get_conversation_state(response.conversationId)
+        assert persisted is not None
+        assert persisted.active_answer_members is not None
+        assert persisted.recent_answer_members is not None
+        self.assertEqual(
+            [(member.provider, member.country, member.provider_code) for member in persisted.active_answer_members],
+            [("WORLDBANK", "United States", "NY.GDP.MKTP.CD")],
+        )
+        self.assertEqual(
+            [(member.provider, member.country, member.provider_code) for member in persisted.recent_answer_members],
+            [("WORLDBANK", "United States", "NY.GDP.MKTP.CD")],
+        )
+
+    def test_persist_verified_conversation_state_refreshes_semantic_indicator_and_provider(self) -> None:
+        state = ConversationState(
+            indicator="GDP",
+            provider="FRED",
+            country="Japan",
+            turn_number=1,
+        )
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NE.EXP.GNFS.ZS"],
+            parameters={
+                "country": "Japan",
+                "__semantic_indicator_label": "exports share of GDP",
+                "indicator": "NE.EXP.GNFS.ZS",
+            },
+            clarificationNeeded=False,
+            originalQuery="Exports share of GDP in Japan",
+        )
+        data = [sample_series_with(
+            source="World Bank",
+            indicator="Exports of goods and services (% of GDP)",
+            country="Japan",
+            series_id="NE.EXP.GNFS.ZS",
+        )]
+
+        self.service._persist_verified_conversation_state(  # pylint: disable=protected-access
+            "conv-semantic-refresh",
+            state,
+            data,
+            intent=intent,
+        )
+
+        self.assertEqual(state.indicator, "exports share of GDP")
+        self.assertEqual(state.provider, "WORLDBANK")
+        self.assertEqual(state.routed_provider, "WORLDBANK")
+        self.assertEqual(state.resolved_indicator_code, "NE.EXP.GNFS.ZS")
+        self.assertEqual(state.last_indicators_resolved, ["NE.EXP.GNFS.ZS"])
+
+    def test_persist_verified_conversation_state_prefers_single_data_provider_over_stale_intent_provider(self) -> None:
+        state = ConversationState(
+            indicator="GDP growth rate",
+            provider="STATSCAN",
+            country="United States",
+            turn_number=1,
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["BCA_NGDPD"],
+            parameters={"indicator": "BCA_NGDPD"},
+            clarificationNeeded=False,
+            originalQuery="Switch to current account balance",
+        )
+        data = [sample_series_with(
+            source="IMF",
+            indicator="Current account balance (% of GDP)",
+            country="United States",
+            series_id="BCA_NGDPD",
+        )]
+
+        self.service._persist_verified_conversation_state(  # pylint: disable=protected-access
+            "conv-semantic-provider-from-data",
+            state,
+            data,
+            intent=intent,
+        )
+
+        self.assertEqual(state.provider, "IMF")
+        self.assertEqual(state.routed_provider, "IMF")
+
+    def test_delta_path_marks_trade_flow_change_as_indicator_changed(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-delta-trade-flow-indicator-changed")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="exports",
+                provider="COMTRADE",
+                country="United States",
+                trade_reporter="United States",
+                trade_partner="China",
+                trade_flow="EXPORT",
+            ),
+        )
+
+        delta = FollowUpDelta(
+            changed_indicator="imports",
+            changed_trade_flow="IMPORT",
+            delta_type="compound_change",
+            raw_query="Switch to US imports from China",
+            query_type="parameter_delta",
+        )
+
+        captured_intent = {}
+
+        async def _fake_execute(**kwargs):
+            intent = kwargs["intent"]
+            captured_intent["intent"] = intent
+            return QueryResponse(
+                conversationId=conv_id,
+                intent=intent,
+                data=[sample_series_with(source="UN Comtrade", indicator="Imports - Total Trade", country="United States")],
+                clarificationNeeded=False,
+            )
+
+        with patch.object(self.service, "_execute_resolved_intent", new=AsyncMock(side_effect=_fake_execute)):
+            response = run(self.service.process_query("Switch to US imports from China", conversation_id=conv_id))
+
+        self.assertFalse(response.error)
+        intent = captured_intent["intent"]
+        self.assertTrue(intent.parameters.get("__delta_indicator_changed"))
+
+    def test_collective_answer_member_delta_preserves_provider_members_on_indicator_switch(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-answer-members")
+        state = ConversationState(
+            indicator="GDP",
+            turn_number=4,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=4,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="JP",
+                    countries=["JP"],
+                    source_turn=4,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=4,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="JP",
+                    countries=["JP"],
+                    source_turn=4,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP growth rate",
+            delta_type="indicator_switch",
+            raw_query="Switch all to GDP growth rate",
+        )
+
+        captured_intents: list[ParsedIntent] = []
+
+        async def _fake_fetch(intent: ParsedIntent):
+            captured_intents.append(intent)
+            provider = intent.apiProvider
+            country = (intent.parameters or {}).get("country")
+            semantic_label = (intent.parameters or {}).get("__semantic_indicator_label") or intent.indicators[0]
+            if provider == "FRED":
+                return [
+                    sample_series_with(
+                        source="FRED",
+                        indicator=str(semantic_label),
+                        country=country,
+                        series_id="A191RL1Q225SBEA",
+                    )
+                ]
+            return [
+                sample_series_with(
+                    source="World Bank",
+                    indicator=str(semantic_label),
+                    country=country,
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                )
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Switch all to GDP growth rate",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.clarificationNeeded)
+        self.assertFalse(response.error)
+        self.assertTrue(response.delta_state_saved)
+        self.assertEqual(response.intent.apiProvider, "MULTI")
+        self.assertEqual(
+            [series.metadata.source for series in (response.data or [])],
+            ["FRED", "World Bank"],
+        )
+        self.assertEqual(
+            {intent.resolvedQuery for intent in captured_intents},
+            {"US GDP growth rate", "JP GDP growth rate"},
+        )
+
+        persisted = conversation_manager.get_conversation_state(response.conversationId)
+        assert persisted is not None
+        assert persisted.active_answer_members is not None
+        self.assertEqual(
+            {(member.provider, member.country) for member in persisted.active_answer_members},
+            {("FRED", "US"), ("WORLDBANK", "JP")},
+        )
+        self.assertEqual(
+            {member.indicator_label for member in persisted.active_answer_members},
+            {"GDP growth rate"},
+        )
+
+    def test_collective_answer_member_delta_rehydrates_recent_country_with_current_indicator(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-answer-members-add-back")
+        state = ConversationState(
+            indicator="GDP per capita",
+            turn_number=6,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP per capita",
+                    provider_code="A939RX0Q048SBEA",
+                    series_id="A939RX0Q048SBEA",
+                    country="US",
+                    countries=["US"],
+                    source_turn=6,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="CN",
+                    countries=["CN"],
+                    source_turn=6,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP per capita",
+                    provider_code="A939RX0Q048SBEA",
+                    series_id="A939RX0Q048SBEA",
+                    country="US",
+                    countries=["US"],
+                    source_turn=6,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="CN",
+                    countries=["CN"],
+                    source_turn=6,
+                ),
+                AnswerSetMember(
+                    provider="EUROSTAT",
+                    indicator_label="GDP growth rate",
+                    provider_code="TEC00115",
+                    series_id="TEC00115",
+                    country="DE",
+                    countries=["DE"],
+                    source_turn=5,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            added_countries=["DE"],
+            delta_type="additive_country",
+            raw_query="Add Germany back",
+        )
+
+        captured_intents: list[ParsedIntent] = []
+
+        async def _fake_fetch(intent: ParsedIntent):
+            captured_intents.append(intent)
+            provider = intent.apiProvider
+            country = (intent.parameters or {}).get("country")
+            semantic_label = (intent.parameters or {}).get("__semantic_indicator_label") or intent.indicators[0]
+            series_map = {
+                "FRED": ("FRED", "A939RX0Q048SBEA"),
+                "WORLDBANK": ("World Bank", "NY.GDP.PCAP.CD"),
+                "EUROSTAT": ("Eurostat", "PRC_PPP_IND"),
+            }
+            source, series_id = series_map[provider]
+            return [
+                sample_series_with(
+                    source=source,
+                    indicator=str(semantic_label),
+                    country=country,
+                    series_id=series_id,
+                )
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Add Germany back",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.error)
+        germany_intent = next(intent for intent in captured_intents if intent.apiProvider == "EUROSTAT")
+        self.assertEqual(germany_intent.parameters.get("__semantic_indicator_label"), "GDP per capita")
+        self.assertEqual(germany_intent.indicators, ["GDP per capita"])
+        self.assertEqual(germany_intent.resolvedQuery, "DE GDP per capita")
+        self.assertEqual(
+            {(series.metadata.source, series.metadata.country) for series in (response.data or [])},
+            {("FRED", "US"), ("World Bank", "CN"), ("Eurostat", "DE")},
+        )
+
+    def test_collective_answer_member_delta_add_back_prefers_latest_semantic_match(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-answer-members-add-back-latest-match")
+        state = ConversationState(
+            indicator="GDP per capita",
+            turn_number=8,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP per capita",
+                    provider_code="A939RX0Q048SBEA",
+                    series_id="A939RX0Q048SBEA",
+                    country="US",
+                    countries=["US"],
+                    source_turn=8,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="CN",
+                    countries=["CN"],
+                    source_turn=8,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP per capita",
+                    provider_code="A939RX0Q048SBEA",
+                    series_id="A939RX0Q048SBEA",
+                    country="US",
+                    countries=["US"],
+                    source_turn=8,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="CN",
+                    countries=["CN"],
+                    source_turn=8,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="DE",
+                    countries=["DE"],
+                    source_turn=7,
+                ),
+                AnswerSetMember(
+                    provider="EUROSTAT",
+                    indicator_label="GDP per capita",
+                    provider_code="PRC_PPP_IND",
+                    series_id="PRC_PPP_IND",
+                    country="DE",
+                    countries=["DE"],
+                    source_turn=8,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            added_countries=["DE"],
+            delta_type="additive_country",
+            raw_query="Add Germany back",
+        )
+
+        captured_intents: list[ParsedIntent] = []
+
+        async def _fake_fetch(intent: ParsedIntent):
+            captured_intents.append(intent)
+            provider = intent.apiProvider
+            country = (intent.parameters or {}).get("country")
+            semantic_label = (intent.parameters or {}).get("__semantic_indicator_label") or intent.indicators[0]
+            source, series_id = {
+                "FRED": ("FRED", "A939RX0Q048SBEA"),
+                "WORLDBANK": ("World Bank", "NY.GDP.PCAP.CD"),
+                "EUROSTAT": ("Eurostat", "PRC_PPP_IND"),
+            }[provider]
+            return [
+                sample_series_with(
+                    source=source,
+                    indicator=str(semantic_label),
+                    country=country,
+                    series_id=series_id,
+                )
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Add Germany back",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        germany_intent = next(intent for intent in captured_intents if (intent.parameters or {}).get("country") == "DE")
+        self.assertEqual(germany_intent.apiProvider, "EUROSTAT")
+        self.assertEqual(germany_intent.parameters.get("__semantic_indicator_label"), "GDP per capita")
+        self.assertEqual(germany_intent.indicators, ["PRC_PPP_IND"])
+        self.assertEqual(germany_intent.resolvedQuery, "DE GDP per capita")
+        self.assertEqual(
+            {(series.metadata.source, series.metadata.country) for series in (response.data or [])},
+            {("FRED", "US"), ("World Bank", "CN"), ("Eurostat", "DE")},
+        )
+
+    def test_collective_answer_member_delta_prefers_imf_members_for_gdp_growth_when_available(self) -> None:
+        state = ConversationState(
+            indicator="GDP growth rate",
+            turn_number=5,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=5,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=5,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=5,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="Japan",
+                    countries=["Japan"],
+                    source_turn=5,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            added_countries=["Japan"],
+            delta_type="additive_country",
+            raw_query="Add Japan GDP growth rate",
+        )
+
+        members = self.service._select_collective_answer_members(  # pylint: disable=protected-access
+            state,
+            delta,
+            "GDP growth rate",
+        )
+
+        providers_by_country = {
+            (member.country or (member.countries or [None])[0]): member.provider
+            for member in members
+        }
+        self.assertEqual(providers_by_country.get("Canada"), "IMF")
+        self.assertEqual(providers_by_country.get("United States"), "IMF")
+        self.assertEqual(providers_by_country.get("Japan"), "IMF")
+
+    def test_collective_path_skips_provider_locked_additive_country_followup(self) -> None:
+        state = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            provider_locked=True,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=4,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=4,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            added_countries=["Japan"],
+            delta_type="additive_country",
+            raw_query="Add Japan GDP growth rate",
+        )
+        self.assertFalse(
+            self.service._should_use_collective_answer_member_delta(  # pylint: disable=protected-access
+                state,
+                delta,
+            )
+        )
+
+    def test_should_preserve_current_provider_for_delta_keeps_worldbank_variant_chain(self) -> None:
+        state = ConversationState(
+            indicator="GDP per capita",
+            provider="WORLDBANK",
+            routed_provider="WORLDBANK",
+            country="US",
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP growth rate",
+            delta_type="indicator_switch",
+            raw_query="Switch to GDP growth rate",
+        )
+        delta_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["GDP growth rate"],
+            parameters={"country": "US", "__semantic_indicator_label": "GDP growth rate"},
+            clarificationNeeded=False,
+            originalQuery="Switch to GDP growth rate",
+        )
+
+        self.assertTrue(
+            self.service._should_preserve_current_provider_for_delta(  # pylint: disable=protected-access
+                state,
+                delta,
+                delta_intent,
+                "Switch to GDP growth rate",
+            )
+        )
+
+    def test_should_preserve_current_provider_for_delta_keeps_comtrade_bilateral_chain(self) -> None:
+        state = ConversationState(
+            indicator="exports",
+            provider="COMTRADE",
+            routed_provider="COMTRADE",
+            country="US",
+            trade_reporter="US",
+            trade_partner="China",
+            trade_flow="EXPORT",
+        )
+        delta = FollowUpDelta(
+            changed_indicator="imports",
+            changed_trade_flow="IMPORT",
+            delta_type="compound_change",
+            raw_query="Switch to US imports from China",
+        )
+        delta_intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["imports"],
+            parameters={
+                "country": "US",
+                "reporter": "US",
+                "partner": "China",
+                "flow": "IMPORT",
+                "__semantic_indicator_label": "imports",
+            },
+            clarificationNeeded=False,
+            originalQuery="Switch to US imports from China",
+        )
+
+        self.assertTrue(
+            self.service._should_preserve_current_provider_for_delta(  # pylint: disable=protected-access
+                state,
+                delta,
+                delta_intent,
+                "Switch to US imports from China",
+            )
+        )
+
+    def test_collective_path_skips_indicator_switch_when_only_recent_members_are_multiple(self) -> None:
+        state = ConversationState(
+            indicator="GDP per capita",
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="US",
+                    countries=["US"],
+                    source_turn=3,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=2,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=3,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP growth rate",
+            delta_type="indicator_switch",
+            raw_query="Switch to GDP growth rate",
+        )
+
+        self.assertFalse(
+            self.service._should_use_collective_answer_member_delta(  # pylint: disable=protected-access
+                state,
+                delta,
+            )
+        )
+
+    def test_collective_path_uses_recent_multi_country_scope_for_explicit_switch_all(self) -> None:
+        state = ConversationState(
+            indicator="GDP",
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="STATSCAN",
+                    indicator_label="GDP",
+                    provider_code="65201210",
+                    series_id="65201210",
+                    country="CA",
+                    countries=["CA"],
+                    source_turn=5,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=1,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="JP",
+                    countries=["JP"],
+                    source_turn=2,
+                ),
+                AnswerSetMember(
+                    provider="EUROSTAT",
+                    indicator_label="GDP",
+                    provider_code="NAMA_10_GDP",
+                    series_id="NAMA_10_GDP",
+                    country="DE",
+                    countries=["DE"],
+                    source_turn=3,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP",
+                    provider_code="NGDPD",
+                    series_id="NGDPD",
+                    country="CN",
+                    countries=["CN"],
+                    source_turn=4,
+                ),
+                AnswerSetMember(
+                    provider="STATSCAN",
+                    indicator_label="GDP",
+                    provider_code="65201210",
+                    series_id="65201210",
+                    country="CA",
+                    countries=["CA"],
+                    source_turn=5,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP growth rate",
+            delta_type="indicator_switch",
+            raw_query="Switch all to GDP growth rate",
+        )
+
+        self.assertTrue(
+            self.service._should_use_collective_answer_member_delta(  # pylint: disable=protected-access
+                state,
+                delta,
+            )
+        )
+
+        members = self.service._select_collective_answer_members(  # pylint: disable=protected-access
+            state,
+            delta,
+            "GDP growth rate",
+        )
+        self.assertEqual(
+            {country for member in members for country in (member.countries or ([member.country] if member.country else []))},
+            {"US", "JP", "DE", "CN", "CA"},
+        )
+
     def test_looks_like_country_follow_up_accepts_add_pattern(self) -> None:
         """'Add Germany' should be recognized as a country follow-up."""
         result = self.service._looks_like_country_follow_up("Add Germany", ["DE"])
@@ -3789,6 +4913,119 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(imf_fetch.called)
         self.assertEqual(imf_fetch.call_args.kwargs.get("indicator"), "EREER")
 
+    def test_fetch_data_routes_statscan_dimension_decomposition_to_multi_dimension_fetch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["employment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "EMPLOYMENT_RATE",
+                "__base_indicator": "EMPLOYMENT_RATE",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_product_id": "14100287",
+                "__statscan_decomposition_axis": "Age group",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            originalQuery="Show by age group",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment rate - Ontario, 25 to 54 years",
+                country="Canada",
+                series_id="14100287:7.9.1.7.1.1.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment rate - Ontario, 55 to 64 years",
+                country="Canada",
+                series_id="14100287:7.9.1.8.1.1.0.0.0.0",
+            ),
+        ]
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=returned) as fetch_multi_dim, \
+             patch.object(self.service.statscan_provider, "fetch_with_dimensions", new_callable=AsyncMock, side_effect=AssertionError("should not use scalar dimension fetch")):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 2)
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["axis"], "Age group")
+        self.assertEqual(params["dimensions"], {"Geography": "Ontario"})
+
+    def test_fetch_data_preserves_statscan_product_for_dimension_filter_follow_up(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["employment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "14100287",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_product_id": "14100330",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only Ontario",
+        )
+
+        returned = sample_series_with(
+            source="Statistics Canada",
+            indicator="Ontario employment rate",
+            country="Ontario",
+            series_id="14100330:120.1.0.0.0.0.0.0.0.0",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_categorical_data", new_callable=AsyncMock, return_value=returned) as fetch_categorical, \
+             patch.object(self.service.statscan_provider, "fetch_with_dimensions", new_callable=AsyncMock, side_effect=AssertionError("should not use base-indicator dimension fetch")):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(fetch_categorical.await_count, 1)
+        params = fetch_categorical.await_args.args[0]
+        self.assertEqual(params["productId"], "14100330")
+        self.assertEqual(params["dimensions"], {"Geography": "Ontario"})
+
+    def test_execute_sub_query_clears_statscan_axis_when_materializing_dimension_member(self) -> None:
+        original_intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["employment rate"],
+            parameters={
+                "country": "Canada",
+                "__dimensions": {"Geography": "Ontario"},
+                "__statscan_decomposition_axis": "Age group",
+                "__statscan_product_id": "14100287",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["25 to 54 years"],
+            originalQuery="Show by age group",
+        )
+
+        with patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[] ) as fetch_mock:
+            run(
+                self.service._execute_sub_query(  # pylint: disable=protected-access
+                    entity="25 to 54 years",
+                    sub_query="employment rate Ontario 25 to 54 years",
+                    original_intent=original_intent,
+                    conversation_id="conv-statscan-age-subquery",
+                )
+            )
+
+        sub_intent = fetch_mock.await_args.args[0]
+        self.assertNotIn("__statscan_decomposition_axis", sub_intent.parameters)
+        self.assertEqual(
+            sub_intent.parameters.get("__dimensions"),
+            {"Geography": "Ontario", "age": "25 to 54 years"},
+        )
+        self.assertEqual(sub_intent.indicators, ["employment rate"])
+
     def test_process_query_enforces_explicit_provider_request(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -4159,7 +5396,30 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("seriesId", fallback_intent.parameters)
         # Stale catalog state must be cleared
         self.assertNotIn("__catalog_resolved", fallback_intent.parameters)
-        self.assertNotIn("__catalog_concept", fallback_intent.parameters)
+
+    def test_country_coverage_does_not_expand_bilateral_comtrade_with_worldbank_fallback(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={"reporter": "United States", "partner": "China", "flow": "EXPORT"},
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+        comtrade_data = [sample_series_with(source="UN Comtrade", indicator="Exports - Total Trade", country="United States")]
+
+        with patch.object(self.service, "_assess_country_coverage", return_value={"complete": False, "covered_count": 1, "requested_count": 2, "missing_display": ["CN"]}), \
+             patch.object(self.service, "_try_with_fallback", new_callable=AsyncMock) as fallback_mock:
+            improved, warning = run(
+                self.service._maybe_improve_country_coverage(  # pylint: disable=protected-access
+                    "US exports to China",
+                    intent,
+                    comtrade_data,
+                )
+            )
+
+        self.assertEqual(improved, comtrade_data)
+        self.assertIsNone(warning)
+        fallback_mock.assert_not_called()
 
     def test_try_with_fallback_uses_catalog_concept_for_resolution(self) -> None:
         """When __catalog_concept is available, use it to resolve the fallback indicator."""
@@ -4560,6 +5820,110 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(historical_mock.call_args.kwargs.get("coin_id"), "solana")
         self.assertEqual(historical_mock.call_args.kwargs.get("metric"), "volume")
         self.assertEqual(historical_mock.call_args.kwargs.get("days"), 90)
+
+    def test_fetch_data_coingecko_dedupes_coin_ids_for_comparisons(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="CoinGecko",
+            indicators=["bitcoin price", "ethereum price"],
+            parameters={"coinIds": ["bitcoin", "ethereum", "bitcoin", "ethereum"]},
+            clarificationNeeded=False,
+            originalQuery="Add Ethereum for comparison",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.coingecko_provider, "get_simple_price", return_value=[sample_series(), sample_series_with(series_id="ethereum", indicator="Ethereum", source="CoinGecko")]) as simple_mock, \
+             patch.object(self.service.coingecko_provider, "get_historical_data_range", return_value=[sample_series()]) as range_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        if simple_mock.called:
+            self.assertEqual(simple_mock.call_args.kwargs.get("coin_ids"), ["bitcoin", "ethereum"])
+        else:
+            self.assertTrue(range_mock.called)
+            called_coin_ids = [call.kwargs.get("coin_id") for call in range_mock.call_args_list]
+            self.assertEqual(called_coin_ids, ["bitcoin", "ethereum"])
+
+    def test_fetch_data_comtrade_trade_balance_uses_balance_fetch_despite_stale_flow(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["trade balance"],
+            parameters={"reporter": "United States", "partner": "Japan", "flow": "IMPORT"},
+            clarificationNeeded=False,
+            originalQuery="Switch to trade balance US and Japan",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_balance", new_callable=AsyncMock, return_value=sample_series()) as balance_mock, \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock) as trade_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(balance_mock.called)
+        trade_mock.assert_not_called()
+
+    def test_fetch_data_comtrade_bilateral_exports_does_not_treat_partner_as_second_reporter(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={
+                "countries": ["US", "CN"],
+                "reporter": "United States",
+                "partner": "China",
+                "flow": "EXPORT",
+            },
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, return_value=[sample_series()]) as trade_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(trade_mock.called)
+        self.assertEqual(trade_mock.call_args.kwargs.get("reporter"), "United States")
+        self.assertIsNone(trade_mock.call_args.kwargs.get("reporters"))
+
+    def test_fetch_data_comtrade_preserves_multi_reporter_scope_when_primary_reporter_present(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={
+                "countries": ["US", "DE"],
+                "reporters": ["US", "DE"],
+                "reporter": "US",
+                "partner": "China",
+                "flow": "EXPORT",
+            },
+            clarificationNeeded=False,
+            originalQuery="Add Germany exports to China",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, return_value=[sample_series()]) as trade_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertTrue(trade_mock.called)
+        self.assertEqual(trade_mock.call_args.kwargs.get("reporter"), "US")
+        self.assertEqual(trade_mock.call_args.kwargs.get("reporters"), ["US", "DE"])
+
+    def test_fetch_data_comtrade_dedupes_alias_reporter_series(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={"reporter": "United States", "partner": "China", "flow": "EXPORT"},
+            clarificationNeeded=False,
+            originalQuery="US exports to China",
+        )
+        us_full = sample_series_with(source="UN Comtrade", indicator="Exports - Total Trade", country="United States", series_id=None)
+        us_alias = sample_series_with(source="UN Comtrade", indicator="Exports - Total Trade", country="US", series_id=None)
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, return_value=[us_full, us_alias]):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "United States")
 
     # ── Issue 1: Follow-up after unanswered clarification ──────────────
 

@@ -459,6 +459,28 @@ class StatsCanProvider(BaseProvider):
     def _extract_member_name(member: Dict[str, Any]) -> str:
         return str(member.get("memberNameEn", "")).strip()
 
+    @staticmethod
+    def _normalize_dimension_filters(dimensions: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Canonicalize loose dimension keys into provider-friendly hints."""
+        normalized: Dict[str, Any] = {}
+        for raw_key, raw_value in (dimensions or {}).items():
+            key = str(raw_key or "").strip().lower()
+            if not key:
+                continue
+            if "geogr" in key or "province" in key or "territor" in key:
+                normalized["geography"] = raw_value
+            elif "gender" in key or "sex" in key:
+                normalized["gender"] = raw_value
+            elif "age" in key:
+                normalized["age"] = raw_value
+            elif "labour force characteristic" in key or "labor force characteristic" in key:
+                normalized["labour_characteristic"] = raw_value
+            elif "characteristic" in key:
+                normalized["characteristic"] = raw_value
+            else:
+                normalized[key] = raw_value
+        return normalized
+
     # Common aliases mapping user-friendly terms to terms that appear in StatsCan metadata.
     # Used by _find_member_id_by_keywords to expand search terms before matching.
     MEMBER_KEYWORD_ALIASES: Dict[str, List[str]] = {
@@ -613,6 +635,41 @@ class StatsCanProvider(BaseProvider):
                 for m in members
             ]
         return []
+
+    @staticmethod
+    def _decomposition_axis_keywords(axis_hint: str) -> List[str]:
+        axis_lower = str(axis_hint or "").strip().lower()
+        if "geogr" in axis_lower or "province" in axis_lower or "region" in axis_lower:
+            return ["geogr"]
+        if "age" in axis_lower:
+            return ["age"]
+        if "gender" in axis_lower or "sex" in axis_lower:
+            return ["gender", "sex"]
+        if "labour" in axis_lower or "labor" in axis_lower or "characteristic" in axis_lower:
+            return ["labour force", "labor force", "characteristic"]
+        return [axis_lower]
+
+    @staticmethod
+    def _is_aggregate_decomposition_member(axis_hint: str, member_name: str) -> bool:
+        axis_lower = str(axis_hint or "").strip().lower()
+        name_lower = str(member_name or "").strip().lower()
+        if not name_lower:
+            return True
+        if "geogr" in axis_lower or "province" in axis_lower or "region" in axis_lower:
+            return name_lower in {"canada", "total", "all"}
+        if "age" in axis_lower:
+            return name_lower in {
+                "15 years and over",
+                "all ages",
+                "total",
+                "25 years and over",
+                "55 years and over",
+            }
+        if "gender" in axis_lower or "sex" in axis_lower:
+            return name_lower in {"both sexes", "total - gender", "total", "all"}
+        if "labour" in axis_lower or "labor" in axis_lower or "characteristic" in axis_lower:
+            return name_lower in {"population", "labour force", "labor force", "employment", "unemployment"}
+        return name_lower in {"total", "all"}
 
     def _select_default_member_id(
         self,
@@ -1950,9 +2007,10 @@ class StatsCanProvider(BaseProvider):
         """
         product_id = params.get("productId", self.POPULATION_DEMOGRAPHICS_PRODUCT)
         indicator = params.get("indicator", "Population")
+        display_indicator = str(params.get("indicatorLabel") or indicator or "").strip() or str(indicator or "")
         periods = params.get("periods", 20)
-        dim_values = params.get("dimensions", {})
-        indicator_lower = indicator.lower().replace("_", " ") if indicator else ""
+        dim_values = self._normalize_dimension_filters(params.get("dimensions", {}))
+        indicator_lower = display_indicator.lower().replace("_", " ") if display_indicator else ""
 
         # Extract user-supplied dimension values
         geography = dim_values.get("geography")
@@ -2104,7 +2162,11 @@ class StatsCanProvider(BaseProvider):
         source_url = self._get_table_viewer_url(product_id)
 
         # Build indicator name
-        indicator_name = f"{description} {indicator}" if description != "Canada (all categories)" else indicator
+        indicator_name = (
+            f"{description} {display_indicator}"
+            if description != "Canada (all categories)"
+            else display_indicator
+        )
 
         # Build data points first (needed for startDate/endDate)
         data_points = [
@@ -2135,7 +2197,7 @@ class StatsCanProvider(BaseProvider):
         metadata = Metadata(
             source="Statistics Canada",
             indicator=indicator_name,
-            country="Canada",
+            country=geography or "Canada",
             frequency=frequency,
             unit=unit if unit else "persons",
             lastUpdated=vector_data[-1].get("releaseTime", "") if vector_data else "",
@@ -2518,6 +2580,7 @@ class StatsCanProvider(BaseProvider):
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
         periods: int = 240,
+        indicator_label: Optional[str] = None,
     ) -> NormalizedData:
         """Fetch data with specific dimension values discovered from table metadata.
 
@@ -2674,8 +2737,11 @@ class StatsCanProvider(BaseProvider):
             data_points = self._filter_by_date_range(data_points, start_date, end_date)
 
         # Build descriptive indicator name
-        desc = ", ".join(matched_descriptions) if matched_descriptions else "Canada"
-        indicator_name = f"Canadian {base_indicator.replace('_', ' ').title()} - {desc}"
+        semantic_label = str(indicator_label or "").strip() or base_indicator.replace("_", " ").title()
+        desc = ", ".join(matched_descriptions) if matched_descriptions else ""
+        indicator_name = f"Canadian {semantic_label}"
+        if desc:
+            indicator_name = f"{indicator_name} - {desc}"
 
         detailed_meta = self._extract_detailed_metadata(metadata, coordinate)
         source_url = self._get_table_viewer_url(product_id)
@@ -2904,9 +2970,10 @@ class StatsCanProvider(BaseProvider):
         """
         product_id_param = params.get("productId", self.POPULATION_DEMOGRAPHICS_PRODUCT)
         indicator = params.get("indicator", "Population")
+        display_indicator = str(params.get("indicatorLabel") or indicator or "").strip() or str(indicator or "")
         periods = params.get("periods", 20)
         provinces_param = params.get("provinces", "all")
-        dimensions = params.get("dimensions", {})
+        dimensions = self._normalize_dimension_filters(params.get("dimensions", {}))
         start_date = params.get("startDate")
         end_date = params.get("endDate")
 
@@ -3008,7 +3075,7 @@ class StatsCanProvider(BaseProvider):
                 pass
 
         # ---------- Build coordinate requests for each province ----------
-        indicator_lower = indicator.lower().replace("_", " ") if indicator else ""
+        indicator_lower = display_indicator.lower().replace("_", " ") if display_indicator else ""
         coordinate_requests = []
         province_map = {}  # Map coordinate -> province name for response parsing
 
@@ -3169,7 +3236,7 @@ class StatsCanProvider(BaseProvider):
                 data_points = self._filter_by_date_range(data_points, start_date, end_date)
 
             # Determine dataType from indicator name
-            indicator_name = f"{province_name} {indicator}"
+            indicator_name = f"{province_name} {display_indicator}".strip()
             indicator_upper = indicator_name.upper()
             if "RATE" in indicator_upper or "PERCENT" in indicator_upper:
                 data_type = "Rate"
@@ -3216,5 +3283,170 @@ class StatsCanProvider(BaseProvider):
                           f"Failed: {', '.join(failed_provinces[:5])}")
         else:
             logger.info(f"✅ Successfully fetched data for {len(results)} provinces")
+
+        return results
+
+    async def fetch_multi_dimension_data(
+        self, params: Dict[str, Any]
+    ) -> List[NormalizedData]:
+        """Fetch one series per member of a target StatsCan dimension axis.
+
+        This generalizes decomposition beyond geography so follow-ups like
+        "show by age group" can expand the current filtered slice instead of
+        being misinterpreted as a scalar dimension filter.
+        """
+        product_id = self._normalize_metadata_product_id(
+            params.get("productId", self.POPULATION_DEMOGRAPHICS_PRODUCT)
+        )
+        indicator = str(params.get("indicator") or "Population")
+        display_indicator = str(params.get("indicatorLabel") or indicator).strip() or indicator
+        axis_hint = str(params.get("axis") or "").strip()
+        fixed_dimensions = self._normalize_dimension_filters(params.get("dimensions", {}) or {})
+        periods = params.get("periods", 20)
+        start_date = params.get("startDate")
+        end_date = params.get("endDate")
+
+        if not axis_hint:
+            raise ValueError("fetch_multi_dimension_data requires an axis hint")
+
+        metadata = await self._get_cube_metadata(product_id)
+        dimensions_list = metadata.get("dimension", [])
+        if not dimensions_list:
+            raise ValueError(f"Product {product_id} has no dimensions")
+
+        axis_keywords = self._decomposition_axis_keywords(axis_hint)
+        axis_dim_idx: Optional[int] = None
+        axis_dim_info: Optional[Dict[str, Any]] = None
+        for dim_idx, dim_info in enumerate(dimensions_list):
+            dim_name_lower = str(dim_info.get("dimensionNameEn", "")).lower()
+            if any(keyword in dim_name_lower for keyword in axis_keywords):
+                axis_dim_idx = dim_idx
+                axis_dim_info = dim_info
+                break
+
+        if axis_dim_idx is None or axis_dim_info is None:
+            raise ValueError(f"Product {product_id} has no dimension matching axis '{axis_hint}'")
+
+        axis_members_raw = axis_dim_info.get("member", [])
+        axis_members = [
+            (member.get("memberId"), member.get("memberNameEn", ""))
+            for member in axis_members_raw
+            if member.get("memberId") is not None
+            and not self._is_aggregate_decomposition_member(axis_hint, member.get("memberNameEn", ""))
+        ]
+        if not axis_members:
+            raise DataNotAvailableError(
+                f"No non-aggregate members found for axis '{axis_hint}' in product {product_id}"
+            )
+
+        indicator_lower = display_indicator.lower().replace("_", " ")
+        coordinate_requests: List[Dict[str, Any]] = []
+        member_name_by_coordinate: Dict[str, str] = {}
+
+        for member_id, member_name in axis_members:
+            coordinate_parts: List[str] = []
+            for dim_idx, dim_info in enumerate(dimensions_list):
+                dim_name = str(dim_info.get("dimensionNameEn", "") or "")
+                dim_name_lower = dim_name.lower()
+                members = dim_info.get("member", [])
+
+                if dim_idx == axis_dim_idx:
+                    coordinate_parts.append(str(member_id))
+                    continue
+
+                matched = False
+                for hint, search_term in fixed_dimensions.items():
+                    hint_lower = str(hint or "").strip().lower()
+                    if hint_lower in dim_name_lower or dim_name_lower in hint_lower:
+                        mid = self._find_member_id_by_keywords(members, [str(search_term)])
+                        if mid is not None:
+                            coordinate_parts.append(str(mid))
+                            matched = True
+                            break
+
+                if matched:
+                    continue
+
+                coordinate_parts.append(
+                    str(self._select_default_member_id(dim_name, members, indicator_lower))
+                )
+
+            while len(coordinate_parts) < 10:
+                coordinate_parts.append("0")
+
+            coordinate = ".".join(coordinate_parts[:10])
+            coordinate_requests.append(
+                {"productId": product_id, "coordinate": coordinate, "latestN": periods}
+            )
+            member_name_by_coordinate[coordinate] = str(member_name or "").strip()
+
+        client = get_http_client()
+        response = await client.post(
+            f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            json=coordinate_requests,
+            headers={"Content-Type": "application/json"},
+            timeout=300.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        results: List[NormalizedData] = []
+        for idx, result_obj in enumerate(payload):
+            data_object = result_obj.get("object", {})
+            coordinate = data_object.get("coordinate", "")
+            member_name = member_name_by_coordinate.get(coordinate, f"Member {idx + 1}")
+            if result_obj.get("status") != "SUCCESS":
+                continue
+
+            vector_data = data_object.get("vectorDataPoint", [])
+            if not vector_data:
+                continue
+
+            frequency_code = vector_data[0].get("frequencyCode", 6)
+            frequency = self.FREQUENCY_MAP.get(frequency_code, "unknown")
+            scalar_factor = vector_data[0].get("scalarFactorCode", 0)
+            unit = self.SCALAR_FACTOR_MAP.get(scalar_factor, "")
+            data_points = [
+                {
+                    "date": point["refPer"],
+                    "value": point["value"] if point["value"] is not None else None,
+                }
+                for point in vector_data
+            ]
+            if start_date or end_date:
+                data_points = self._filter_by_date_range(data_points, start_date, end_date)
+
+            fixed_labels = [
+                str(value).strip()
+                for value in fixed_dimensions.values()
+                if str(value or "").strip()
+            ]
+            label_parts = [part for part in [*fixed_labels, member_name] if part]
+            indicator_name = display_indicator
+            if label_parts:
+                indicator_name = f"{display_indicator} - {', '.join(label_parts)}"
+
+            metadata = Metadata(
+                source="Statistics Canada",
+                indicator=indicator_name,
+                country="Canada",
+                frequency=frequency,
+                unit=unit if unit else "persons",
+                lastUpdated=(vector_data[-1].get("releaseTime") or "") if vector_data else "",
+                seriesId=f"{product_id}:{coordinate}",
+                apiUrl=f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+                sourceUrl=self._get_table_viewer_url(product_id),
+                dataType="Rate" if "rate" in indicator_name.lower() or "percent" in indicator_name.lower() else "Level",
+                description=indicator_name,
+                scaleFactor=self._map_scalar_factor(scalar_factor) if scalar_factor else None,
+                startDate=data_points[0]["date"] if data_points else None,
+                endDate=data_points[-1]["date"] if data_points else None,
+            )
+            results.append(NormalizedData(metadata=metadata, data=data_points))
+
+        if not results:
+            raise DataNotAvailableError(
+                f"No data returned for axis '{axis_hint}' on product {product_id}."
+            )
 
         return results

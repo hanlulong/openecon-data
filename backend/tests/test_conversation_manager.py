@@ -539,6 +539,49 @@ class TestRedisPersistence:
         history = mgr2.get_history(cid)
         assert history == ["persisted message"]
 
+    def test_refresh_from_redis_overwrites_stale_in_memory_context(self, monkeypatch):
+        from backend.models import ParsedIntent
+        from backend.services.conversation_state_v2 import ConversationState
+
+        fake = _FakeRedis()
+        monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)
+
+        mgr1 = _fresh_manager()
+        cid = mgr1.get_or_create(None)
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["NGDP_RPCH"],
+            clarificationNeeded=False,
+            parameters={"country": "CA"},
+        )
+        state = ConversationState(
+            indicator="GDP growth",
+            provider="IMF",
+            country="Canada",
+            provider_locked=True,
+        )
+        mgr1.add_message(cid, "user", "Show only Canada", intent=intent)
+        mgr1.set_conversation_state(cid, state)
+
+        mgr2 = _fresh_manager()
+        # Seed stale in-memory context that differs from Redis.
+        mgr2._conversations[cid] = conv_mod.ConversationContext(id=cid)
+        mgr2._conversations[cid].last_intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["NY.GDP.MKTP.KD.ZG"],
+            clarificationNeeded=False,
+            parameters={"country": "US"},
+        )
+
+        refreshed = mgr2.refresh_from_redis(cid)
+        assert refreshed is True
+        last_intent = mgr2.get_last_intent(cid)
+        assert last_intent is not None
+        assert last_intent.apiProvider == "IMF"
+        conv_state = mgr2.get_conversation_state(cid)
+        assert conv_state is not None
+        assert conv_state.provider == "IMF"
+
     def test_pending_state_persists_to_redis(self, monkeypatch):
         fake = _FakeRedis()
         monkeypatch.setattr(conv_mod, "_get_sync_redis", lambda: fake)

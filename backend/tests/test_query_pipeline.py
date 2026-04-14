@@ -92,6 +92,22 @@ def test_validate_intent_multi_indicator_short_circuit() -> None:
     assert result.is_confident is True
 
 
+def test_validate_intent_coingecko_multi_asset_comparison_is_not_multi_indicator() -> None:
+    intent = ParsedIntent(
+        apiProvider="COINGECKO",
+        indicators=["dynamic", "ethereum price"],
+        parameters={"coinIds": ["bitcoin", "ethereum"]},
+        clarificationNeeded=False,
+    )
+    service = _ServiceStub(intent)
+    pipeline = QueryPipeline(service)
+
+    result = pipeline.validate_intent(intent)
+    assert result.is_multi_indicator is False
+    assert result.is_valid is True
+    assert result.is_confident is True
+
+
 def test_validate_intent_invalid() -> None:
     intent = _intent()
     service = _ServiceStub(intent)

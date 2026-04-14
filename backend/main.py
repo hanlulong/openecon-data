@@ -691,9 +691,11 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
         try:
             from .services.conversation_state_v2 import extract_state_from_intent as _extract_state
             from .services.conversation_state_v2 import merge_new_state_with_previous as _merge_with_prev
+            from .services.conversation_state_v2 import update_answer_members_from_data as _update_answer_members
             _state = _extract_state(result.intent, statscan_provider=query_service.statscan_provider)
             _existing = conversation_manager.get_conversation_state(result.conversationId)
             _state = _merge_with_prev(_state, _existing)
+            _update_answer_members(_state, result.data, intent=result.intent)
             conversation_manager.set_conversation_state(result.conversationId, _state)
             logger.info("State saved for %s: indicator=%s, country=%s/%s, provider=%s",
                         result.conversationId, _state.indicator, _state.country, _state.countries, _state.provider)

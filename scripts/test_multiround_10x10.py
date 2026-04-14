@@ -50,6 +50,9 @@ BETWEEN_TEST_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_BETWEEN_T
 HEALTH_RETRIES = int(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRIES", "3"))
 HEALTH_RETRY_DELAY_SECONDS = float(os.environ.get("OPENECON_MULTIROUND_HEALTH_RETRY_DELAY_SECONDS", "5"))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 
 def normalize_provider_name(value: Any) -> str:
     text = str(value or "").strip()
@@ -105,13 +108,48 @@ def normalize_country(value: Any) -> str:
     return text.upper()
 
 
+_CANADA_SUBNATIONALS = {
+    "ALBERTA",
+    "BRITISH COLUMBIA",
+    "MANITOBA",
+    "NEW BRUNSWICK",
+    "NEWFOUNDLAND AND LABRADOR",
+    "NOVA SCOTIA",
+    "ONTARIO",
+    "PRINCE EDWARD ISLAND",
+    "QUEBEC",
+    "SASKATCHEWAN",
+    "NUNAVUT",
+    "YUKON",
+    "NORTHWEST TERRITORIES",
+}
+
+
+def augment_scope_countries(provider: str, country: str) -> set[str]:
+    countries = set()
+    normalized = normalize_country(country)
+    if normalized:
+        countries.add(normalized)
+    if provider == "STATSCAN" and normalized in _CANADA_SUBNATIONALS:
+        countries.add("CA")
+    return countries
+
+
+def normalize_cue_text(text: str) -> str:
+    normalized = text.lower().replace("_", " ")
+    normalized = re.sub(r"(\d+)\s+to\s+(\d+)", r"\1-\2", normalized)
+    normalized = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
 def semantic_tags_from_observed(
     *,
     providers: list[str],
     series_ids: list[str],
     cue_text: str,
 ) -> set[str]:
-    text = cue_text.lower().replace("_", " ")
+    text = normalize_cue_text(cue_text)
     tags: set[str] = set()
 
     if "gdp" in text or "gross domestic product" in text or any("GDP" in series_id for series_id in series_ids):
@@ -126,7 +164,11 @@ def semantic_tags_from_observed(
         tags.add("employment")
     if "unemployment" in text:
         tags.add("unemployment")
-    if "per capita" in text or any(".PCAP." in series_id for series_id in series_ids):
+    if "per capita" in text or any(
+        ".PCAP." in series_id
+        or series_id in {"NGDPDPC", "NY.GDP.PCAP.CD", "TEC00114", "A939RX0Q048SBEA"}
+        for series_id in series_ids
+    ):
         tags.add("per capita")
     if "ppp" in text or any(".PP." in series_id for series_id in series_ids):
         tags.add("ppp")
@@ -210,8 +252,7 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
         provider = normalize_provider_name(meta.get("source") or meta.get("provider"))
         if provider:
             providers.add(provider)
-        country = normalize_country(meta.get("country"))
-        if country:
+        for country in augment_scope_countries(provider, str(meta.get("country") or "")):
             countries.add(country)
         series_id = str(meta.get("seriesId") or meta.get("series_id") or "").strip().upper()
         if series_id:
@@ -227,11 +268,23 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
     response_text = str(resp_json.get("response") or "")
     text_parts.append(response_text)
     text_parts.extend(str(option.get("label") or "") for option in (resp_json.get("clarificationOptions") or []) if isinstance(option, dict))
+    text_parts.extend(str(value) for value in (intent.get("indicators") or []) if value)
+    params = intent.get("parameters") or {}
+    if isinstance(params, dict):
+        for key, value in params.items():
+            if isinstance(value, list):
+                text_parts.extend(str(item) for item in value if item)
+            elif isinstance(value, dict):
+                text_parts.extend(str(v) for v in value.values() if v)
+            elif value:
+                text_parts.append(str(value))
 
     populated_series_count = sum(1 for dataset in datasets if dataset_has_values(dataset))
     if populated_series_count == 0 and datasets:
         populated_series_count = len(datasets)
-    scope_cardinality = max(populated_series_count, len(countries))
+    scope_cardinality = max(populated_series_count, len(series_ids))
+    if scope_cardinality == 0:
+        scope_cardinality = len(countries)
     semantic_tags = semantic_tags_from_observed(
         providers=sorted(providers),
         series_ids=sorted(series_ids),
@@ -245,7 +298,7 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
         "series_count": populated_series_count,
         "scope_cardinality": scope_cardinality,
         "clarification_detected": detect_clarification(resp_json),
-        "cue_text": " ".join(part for part in text_parts if part).lower(),
+        "cue_text": normalize_cue_text(" ".join(part for part in text_parts if part)),
         "semantic_tags": sorted(semantic_tags),
     }
 
@@ -415,6 +468,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_report_payload(
+    *,
+    base_url: str,
+    suite: str,
+    suite_description: str,
+    total_elapsed: float,
+    all_results: dict[str, list[dict[str, Any]]],
+    min_effective_rate: float,
+    max_fails: int,
+    completed: bool,
+) -> dict[str, Any]:
+    total_pass = 0
+    total_warn = 0
+    total_clarify = 0
+    total_fail = 0
+    total_rounds = 0
+
+    for results in all_results.values():
+        total_pass += sum(1 for r in results if r["status"] == "PASS")
+        total_warn += sum(1 for r in results if r["status"] == "WARN")
+        total_clarify += sum(1 for r in results if r["status"] == "CLARIFY")
+        total_fail += sum(1 for r in results if r["status"] == "FAIL")
+        total_rounds += len(results)
+
+    effective_rate_ratio = ((total_pass + total_warn) / total_rounds) if total_rounds else 0.0
+    strict_pass_rate_ratio = (total_pass / total_rounds) if total_rounds else 0.0
+    ok = completed and total_fail <= max_fails and effective_rate_ratio >= min_effective_rate
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "base_url": base_url,
+        "suite": suite,
+        "suite_version": SUITES_VERSION,
+        "suite_description": suite_description,
+        "oracle_bearing": True,
+        "completed": completed,
+        "total_rounds": total_rounds,
+        "pass": total_pass,
+        "warn": total_warn,
+        "clarify": total_clarify,
+        "fail": total_fail,
+        "effective_rate": f"{effective_rate_ratio*100:.1f}%",
+        "effective_rate_ratio": round(effective_rate_ratio, 4),
+        "strict_pass_rate": f"{strict_pass_rate_ratio*100:.1f}%",
+        "strict_pass_rate_ratio": round(strict_pass_rate_ratio, 4),
+        "min_effective_rate": min_effective_rate,
+        "max_fails": max_fails,
+        "ok": ok,
+        "total_time_seconds": round(total_elapsed, 1),
+        "tests": all_results,
+    }
+
+
+def write_progress_report(report_path: str, payload: dict[str, Any]) -> None:
+    progress_path = f"{report_path}.inprogress"
+    os.makedirs(os.path.dirname(progress_path), exist_ok=True)
+    with open(progress_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
 def main() -> None:
     args = parse_args()
     if args.list_suites:
@@ -452,6 +565,14 @@ def main() -> None:
     all_results: dict[str, list[dict[str, Any]]] = {}
     overall_start = time.time()
 
+    report_path = None
+    if args.report:
+        report_path = args.report
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"multiround_10x10_{args.suite}_{timestamp}.json" if args.suite != DEFAULT_SUITE_NAME else f"multiround_10x10_{timestamp}.json"
+        report_path = str(REPORT_DIR / filename)
+
     for idx, (test_name, rounds) in enumerate(tests.items()):
         if idx > 0:
             print(f"\n  ... waiting {BETWEEN_TEST_DELAY_SECONDS}s between tests ...")
@@ -466,6 +587,21 @@ def main() -> None:
                 print(f"  ... backend not ready, waiting {HEALTH_RETRY_DELAY_SECONDS}s (retry {retry+1}) ...")
                 time.sleep(HEALTH_RETRY_DELAY_SECONDS)
         all_results[test_name] = run_test(test_name, rounds)
+        if report_path:
+            try:
+                progress_payload = build_report_payload(
+                    base_url=base_url,
+                    suite=args.suite,
+                    suite_description=suite_description,
+                    total_elapsed=time.time() - overall_start,
+                    all_results=all_results,
+                    min_effective_rate=args.min_effective_rate,
+                    max_fails=args.max_fails,
+                    completed=False,
+                )
+                write_progress_report(report_path, progress_payload)
+            except Exception as exc:  # pragma: no cover - progress guard
+                print(f"  ... progress write failed: {exc}")
 
     total_elapsed = time.time() - overall_start
 
@@ -522,45 +658,27 @@ def main() -> None:
             print(f"  [{short_test}] R{result['round']:2d}: {result['query']}")
             print(f"         reasons={'; '.join(result['reasons'])}")
 
-    effective_rate_ratio = (total_pass + total_warn) / total_rounds
-    strict_pass_rate_ratio = total_pass / total_rounds
-    ok = total_fail <= args.max_fails and effective_rate_ratio >= args.min_effective_rate
-
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "base_url": base_url,
-        "suite": args.suite,
-        "suite_version": SUITES_VERSION,
-        "suite_description": suite_description,
-        "oracle_bearing": True,
-        "total_rounds": total_rounds,
-        "pass": total_pass,
-        "warn": total_warn,
-        "clarify": total_clarify,
-        "fail": total_fail,
-        "effective_rate": f"{effective_rate_ratio*100:.1f}%",
-        "effective_rate_ratio": round(effective_rate_ratio, 4),
-        "strict_pass_rate": f"{strict_pass_rate_ratio*100:.1f}%",
-        "strict_pass_rate_ratio": round(strict_pass_rate_ratio, 4),
-        "min_effective_rate": args.min_effective_rate,
-        "max_fails": args.max_fails,
-        "ok": ok,
-        "total_time_seconds": round(total_elapsed, 1),
-        "tests": all_results,
-    }
-
-    if args.report:
-        report_path = args.report
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"multiround_10x10_{args.suite}_{timestamp}.json" if args.suite != DEFAULT_SUITE_NAME else f"multiround_10x10_{timestamp}.json"
-        report_path = str(REPORT_DIR / filename)
+    report = build_report_payload(
+        base_url=base_url,
+        suite=args.suite,
+        suite_description=suite_description,
+        total_elapsed=total_elapsed,
+        all_results=all_results,
+        min_effective_rate=args.min_effective_rate,
+        max_fails=args.max_fails,
+        completed=True,
+    )
+    effective_rate_ratio = report["effective_rate_ratio"]
+    ok = report["ok"]
 
     try:
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
         with open(report_path, "w", encoding="utf-8") as handle:
             json.dump(report, handle, indent=2)
         print(f"\nReport saved: {report_path}")
+        progress_path = f"{report_path}.inprogress"
+        if os.path.exists(progress_path):
+            os.remove(progress_path)
     except Exception as exc:  # pragma: no cover - disk guard
         print(f"\nFailed to save report: {exc}")
 

@@ -1,0 +1,63 @@
+# Employment Rate Indicator Catalog
+concept: employment_rate
+category: labor_market
+domain: macroeconomics
+
+description: |
+  Employment rate - the share of the working-age population that is employed.
+  Semantically equivalent provider variants such as employment-to-population
+  ratio are acceptable when they preserve the same concept and scope.
+
+synonyms:
+  primary:
+    - employment rate
+    - employment rates
+  secondary:
+    - rate of employment
+    - employed share
+    - employment share
+
+explicit_exclusions:
+  - unemployment rate
+  - number employed
+  - employment level
+  - labor force participation
+
+providers:
+  OECD:
+    primary:
+      code: DSD_LFS@DF_IALFS_EMP_WAP_Q
+      name: "Employment rate"
+      confidence: 0.95
+      coverage: oecd_members
+      frequency: quarterly
+
+  WorldBank:
+    primary:
+      code: SL.EMP.TOTL.SP.ZS
+      name: "Employment to population ratio, 15+, total (%) (modeled ILO estimate)"
+      confidence: 0.93
+      coverage: global
+      frequency: annual
+
+  Eurostat:
+    primary:
+      code: LFSI_EMP_A
+      name: "Employment rates by sex, age and citizenship"
+      confidence: 0.90
+      coverage: eu_members
+      frequency: annual
+
+  StatsCan:
+    primary:
+      code: "14100287"
+      name: "Labour force characteristics, monthly, seasonally adjusted and trend-cycle"
+      confidence: 0.88
+      coverage: [CA]
+      frequency: monthly
+
+not_available:
+  - Comtrade
+  - CoinGecko
+  - ExchangeRate
+  - BIS

@@ -685,6 +685,26 @@ def apply_concept_provider_override(
         if not concept_name:
             return provider, params
 
+        query_lower = original_query.lower()
+        bilateral_trade_request = False
+        if provider == "COMTRADE":
+            router = getattr(svc, "unified_router", None)
+            if router is not None and original_query:
+                try:
+                    bilateral_trade_request = bool(
+                        router._is_bilateral_trade_query(query_lower, original_query)
+                    )
+                except Exception:
+                    bilateral_trade_request = False
+            if not bilateral_trade_request:
+                bilateral_trade_request = bool(params.get("partner") or params.get("reporter"))
+            if bilateral_trade_request and concept_name in {"trade", "exports", "imports", "trade_balance"}:
+                logger.info(
+                    "📋 Concept override skipped: preserving COMTRADE for bilateral trade concept '%s'",
+                    concept_name,
+                )
+                return provider, params
+
         # Large-catalog country-specific providers (e.g. StatsCan with 40K+
         # tables) often have data the catalog hasn't mapped yet.  When the
         # concept doesn't *explicitly* exclude the current provider (i.e. it's
@@ -1027,6 +1047,24 @@ def apply_catalog_availability_override(
         from .catalog_service import find_concept_by_term, get_best_provider, is_provider_available
         concept = find_concept_by_term(indicator_term)
         logger.info(f"📋 Catalog concept: '{concept}' for term '{indicator_term}'")
+        bilateral_trade_request = False
+        if provider == "COMTRADE":
+            router = getattr(svc, "unified_router", None)
+            if router is not None and original_query:
+                try:
+                    bilateral_trade_request = bool(
+                        router._is_bilateral_trade_query(original_query.lower(), original_query)
+                    )
+                except Exception:
+                    bilateral_trade_request = False
+            if not bilateral_trade_request:
+                bilateral_trade_request = bool(params.get("reporter") or params.get("partner"))
+            if bilateral_trade_request and concept in {"trade", "exports", "imports", "trade_balance"}:
+                logger.info(
+                    "📋 Catalog availability override skipped: preserving COMTRADE for bilateral trade concept '%s'",
+                    concept,
+                )
+                return provider, params
         if concept and not is_provider_available(concept, provider):
             countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
             if not countries_ctx:
@@ -1105,6 +1143,20 @@ async def resolve_indicator_for_fetch(
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
 
+    def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
+        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        if not semantic_label:
+            semantic_label = (
+                select_indicator_query_for_resolution(svc, intent)
+                or _effective_original_query(intent)
+                or str(intent.indicators[0] if intent.indicators else "")
+            ).strip()
+
+        merged = {**params, "indicator": indicator_value, **extra}
+        if semantic_label and not svc._looks_like_provider_indicator_code(provider, semantic_label):
+            merged["__semantic_indicator_label"] = semantic_label
+        return merged
+
     # --- StatsCan fast-path: if intent.indicators match a known vector or coordinate
     # mapping, lock the indicator immediately and skip the IndicatorSelector.
     if provider in {"STATSCAN", "STATISTICS CANADA"}:
@@ -1117,7 +1169,10 @@ async def resolve_indicator_for_fetch(
                     "skipping IndicatorSelector to use verified vector/coordinate",
                     hr_indicator, hr_key,
                 )
-                params = {**params, "indicator": hr_key, "__catalog_resolved": True}
+                params = _apply_indicator_with_semantic_label(
+                    hr_key,
+                    __catalog_resolved=True,
+                )
                 intent.parameters = params
                 return params
 
@@ -1162,7 +1217,11 @@ async def resolve_indicator_for_fetch(
                 if aug_code and aug_code != existing_indicator:
                     existing_indicator = aug_code
                     has_explicit_code = True
-                    params = {**params, "indicator": aug_code, "__catalog_resolved": True, "__qualifier_checked": True}
+                    params = _apply_indicator_with_semantic_label(
+                        aug_code,
+                        __catalog_resolved=True,
+                        __qualifier_checked=True,
+                    )
                     intent.parameters = params
                     logger.info(
                         "📝 Qualifier recovered: '%s' + '%s' → %s",
@@ -1210,7 +1269,7 @@ async def resolve_indicator_for_fetch(
                 "🔒 Keeping catalog-resolved %s indicator: %s",
                 provider, existing_indicator,
             )
-            params = {**params, "indicator": existing_indicator}
+            params = _apply_indicator_with_semantic_label(existing_indicator)
             intent.parameters = params
             return params
         else:
@@ -1252,7 +1311,7 @@ async def resolve_indicator_for_fetch(
             provider,
             existing_indicator,
         )
-        params = {**params, "indicator": existing_indicator}
+        params = _apply_indicator_with_semantic_label(existing_indicator)
         intent.parameters = params
         return params
 
@@ -1304,7 +1363,7 @@ async def resolve_indicator_for_fetch(
                 "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
                 indicator_query, selection.code, selection.source,
             )
-            params = {**params, "indicator": selection.code}
+            params = _apply_indicator_with_semantic_label(selection.code)
             intent.parameters = params
             return params
         if selection.needs_user_choice:
@@ -1332,7 +1391,7 @@ async def resolve_indicator_for_fetch(
                 "🔒 IndicatorSelector unavailable; falling back to catalog-resolved code: %s (error: %s)",
                 _catalog_variant_fallback, e,
             )
-            params = {**params, "indicator": _catalog_variant_fallback}
+            params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
             intent.parameters = params
             return params
         logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
@@ -1346,7 +1405,7 @@ async def resolve_indicator_for_fetch(
             "keeping catalog-resolved code: %s",
             _catalog_variant_fallback,
         )
-        params = {**params, "indicator": _catalog_variant_fallback}
+        params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
         intent.parameters = params
         return params
 
@@ -1438,7 +1497,7 @@ async def resolve_indicator_for_fetch(
 
     # Path 4: Apply best result or fall back to raw query
     if accepted_resolved and resolved:
-        params = {**params, "indicator": resolved.code}
+        params = _apply_indicator_with_semantic_label(resolved.code)
         if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
             logger.info(
                 "🔎 Collapsing World Bank multi-indicator intent to resolved indicator '%s' after semantic override",
@@ -1446,7 +1505,7 @@ async def resolve_indicator_for_fetch(
             )
             intent.indicators = [resolved.code]
     else:
-        params = {**params, "indicator": indicator_query}
+        params = _apply_indicator_with_semantic_label(indicator_query)
 
     intent.parameters = params
     return params

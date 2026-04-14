@@ -4,13 +4,12 @@ category: labor_market
 domain: macroeconomics
 
 description: |
-  Employment to population ratio - the proportion of a country's working-age
-  population that is employed. A key measure of labor market health.
+  Employment level / number employed. This broad concept should be used for
+  count-style employment questions, not percentage rates or population ratios.
 
 synonyms:
   primary:
-    - employment rate
-    - employment to population ratio
+    - employment
   secondary:
     - jobs
     - employed
@@ -18,12 +17,15 @@ synonyms:
     - total employment
     - number employed
     - labor market
-    - employment ratio
+    - employment level
 
 explicit_exclusions:
   - unemployment
   - jobless
   - underemployment
+  - employment rate
+  - employment to population ratio
+  - employment ratio
 
 providers:
   WorldBank:

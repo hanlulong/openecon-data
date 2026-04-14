@@ -580,3 +580,117 @@ class TestFetchWithDimensionsCoordinates:
             f"Expected 'Ontario' in indicator name, got: {result.metadata.indicator}"
         )
         assert result.metadata.source == "Statistics Canada"
+
+
+class TestFetchMultiDimensionData:
+    @pytest.mark.asyncio
+    async def test_age_group_decomposition_preserves_fixed_geography(self, monkeypatch, statscan_provider):
+        metadata = _get_labour_metadata(statscan_provider)
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                payload = []
+                for idx, request in enumerate(captured_requests[0]):
+                    payload.append(
+                        {
+                            "status": "SUCCESS",
+                            "object": {
+                                "coordinate": request["coordinate"],
+                                "vectorDataPoint": [
+                                    {
+                                        "refPer": "2024-01-01",
+                                        "value": 60.0 + idx,
+                                        "frequencyCode": 6,
+                                        "scalarFactorCode": 0,
+                                        "releaseTime": "2024-02-01",
+                                    }
+                                ],
+                            },
+                        }
+                    )
+                return payload
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        results = await statscan_provider.fetch_multi_dimension_data(
+            {
+                "productId": "14100287",
+                "indicator": "EMPLOYMENT_RATE",
+                "indicatorLabel": "employment rate",
+                "axis": "Age group",
+                "dimensions": {"Geography": "Ontario"},
+                "periods": 24,
+            }
+        )
+
+        assert len(results) >= 2
+        coords = [request["coordinate"] for request in captured_requests[0]]
+        geo_idx = next(i for i, d in enumerate(metadata["dimension"]) if "geogr" in d["dimensionNameEn"].lower())
+        age_idx = next(i for i, d in enumerate(metadata["dimension"]) if "age" in d["dimensionNameEn"].lower())
+        age_members = {coord.split(".")[age_idx] for coord in coords}
+        assert all(coord.split(".")[geo_idx] == "7" for coord in coords)
+        assert "1" not in age_members  # excludes aggregate "15 years and over"
+        assert len(age_members) >= 2
+        assert any("Ontario" in result.metadata.indicator for result in results)
+        assert any("25 to 54 years" in result.metadata.indicator for result in results)
+
+
+class TestFetchCategoricalData:
+    @pytest.mark.asyncio
+    async def test_capitalized_dimension_keys_preserve_semantic_indicator_label(self, monkeypatch, statscan_provider):
+        metadata = _get_labour_metadata(statscan_provider)
+
+        class _MockResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [{
+                    "status": "SUCCESS",
+                    "object": {
+                        "vectorDataPoint": [
+                            {
+                                "refPer": "2024-01-01",
+                                "value": 63.2,
+                                "frequencyCode": 6,
+                                "scalarFactorCode": 0,
+                                "releaseTime": "2024-02-01",
+                            }
+                        ]
+                    }
+                }]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        result = await statscan_provider.fetch_categorical_data(
+            {
+                "productId": "14100287",
+                "indicator": "14100287",
+                "indicatorLabel": "employment rate",
+                "dimensions": {"Geography": "Ontario", "Age group": "25 to 54 years"},
+                "periods": 24,
+            }
+        )
+
+        assert result.metadata.indicator == "Ontario aged 25 to 54 years employment rate"
+        assert result.metadata.description == "Ontario aged 25 to 54 years employment rate"
+        assert result.metadata.country == "Ontario"

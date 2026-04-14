@@ -27,7 +27,7 @@ async def test_all_improvements():
     print("-" * 80)
 
     test_cases = [
-        ("Spain", "GDP", "ESP", "NGDP_RPCH"),
+        ("Spain", "GDP", "ESP", "NGDPD"),
         ("Portugal", "debt to GDP", "PRT", "GGXWDG_NGDP"),
         ("Greece", "debt", "GRC", "GGXWDG_NGDP"),  # Was failing: wrong country code + missing indicator
         ("Italy", "inflation", "ITA", "PCPIPCH"),
@@ -118,7 +118,7 @@ async def test_all_improvements():
         error_msg = str(e)
         # Check if error message is informative
         has_available_countries = "available" in error_msg.lower()
-        has_indicator_info = "GDP" in error_msg or "NGDP_RPCH" in error_msg
+        has_indicator_info = "GDP" in error_msg or "NGDPD" in error_msg
 
         if has_available_countries and has_indicator_info:
             print(f"✅ Error message is informative")

@@ -432,6 +432,23 @@ class ConversationManager:
             conversation.conversation_state = state
             self._redis_save(conversation)
 
+    def refresh_from_redis(self, conversation_id: str) -> bool:
+        """Refresh in-memory context from Redis when persisted state exists.
+
+        This keeps long-lived server memory from drifting behind the
+        persisted conversation source of truth across requests.
+        """
+        with self._lock:
+            redis_ctx = self._redis_load(conversation_id)
+            if redis_ctx is None:
+                return False
+            if self._is_expired(redis_ctx):
+                self._conversations.pop(conversation_id, None)
+                self._redis_delete(conversation_id)
+                return False
+            self._conversations[conversation_id] = redis_ctx
+            return True
+
     def get_pending_clarification_context(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Return pending clarification details for LLM context building.
 

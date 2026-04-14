@@ -443,6 +443,21 @@ async def maybe_improve_country_coverage(
     if not intent or not current_data:
         return current_data, None
 
+    provider = normalize_provider_name(intent.apiProvider or "")
+    params = intent.parameters or {}
+    if provider == "COMTRADE":
+        bilateral_trade_query = False
+        router = getattr(svc, "unified_router", None)
+        if router is not None:
+            try:
+                bilateral_trade_query = bool(
+                    router._is_bilateral_trade_query(query.lower(), query)
+                )
+            except Exception:
+                bilateral_trade_query = False
+        if bilateral_trade_query or params.get("reporter") or params.get("partner"):
+            return current_data, None
+
     initial_coverage = svc._assess_country_coverage(intent, current_data)
     if not initial_coverage or initial_coverage.get("complete"):
         return current_data, None

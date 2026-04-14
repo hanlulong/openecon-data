@@ -641,6 +641,7 @@ class WorldBankProvider(BaseProvider):
 
         batch_codes = ";".join(resolved_codes.keys())
         url = f"{self.base_url}/country/{batch_codes}/indicator/{indic}"
+        prefer_parallel_small_group = 1 < len(country_list) <= 3
 
         date_param = None
         if start_date and end_date:
@@ -667,47 +668,54 @@ class WorldBankProvider(BaseProvider):
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
-        try:
-            for _attempt in range(3):
-                batch_response = await client.get(url, params=params, headers=headers, timeout=effective_timeout(25.0))
-                logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
-                if batch_response.status_code != 502:
-                    break
-                logger.warning(f"WorldBank 502 Bad Gateway (attempt {_attempt+1}/3), retrying...")
-                await asyncio.sleep(1.0)
-            batch_response.raise_for_status()
-            payload = batch_response.json()
+        if prefer_parallel_small_group:
+            logger.info(
+                "WorldBank: skipping batched multi-country request for small group (%d countries); "
+                "using per-country parallel fetch for better reliability",
+                len(country_list),
+            )
+        else:
+            try:
+                for _attempt in range(3):
+                    batch_response = await client.get(url, params=params, headers=headers, timeout=effective_timeout(25.0))
+                    logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
+                    if batch_response.status_code != 502:
+                        break
+                    logger.warning(f"WorldBank 502 Bad Gateway (attempt {_attempt+1}/3), retrying...")
+                    await asyncio.sleep(1.0)
+                batch_response.raise_for_status()
+                payload = batch_response.json()
 
-            if isinstance(payload, list) and len(payload) > 0:
-                if isinstance(payload[0], dict) and "message" in payload[0]:
-                    error_msg = payload[0]["message"]
-                    if isinstance(error_msg, list) and len(error_msg) > 0:
-                        error_detail = error_msg[0].get("value", "Unknown error")
-                        logger.warning(f"World Bank API error: {error_detail}")
-                        payload = None
+                if isinstance(payload, list) and len(payload) > 0:
+                    if isinstance(payload[0], dict) and "message" in payload[0]:
+                        error_msg = payload[0]["message"]
+                        if isinstance(error_msg, list) and len(error_msg) > 0:
+                            error_detail = error_msg[0].get("value", "Unknown error")
+                            logger.warning(f"World Bank API error: {error_detail}")
+                            payload = None
 
-            if payload and (len(payload) < 2 or not payload[1]):
-                logger.debug(f"No data for {batch_codes} indicator {indic}")
+                if payload and (len(payload) < 2 or not payload[1]):
+                    logger.debug(f"No data for {batch_codes} indicator {indic}")
+                    payload = None
+
+                # Detect pagination truncation: if API says there are more pages,
+                # the batch response is incomplete — fall back to sequential fetch.
+                if payload and isinstance(payload[0], dict):
+                    total_pages = payload[0].get("pages", 1)
+                    if total_pages > 1:
+                        total_records = payload[0].get("total", 0)
+                        returned = len(payload[1]) if len(payload) > 1 and payload[1] else 0
+                        logger.warning(
+                            f"WorldBank pagination truncation: got {returned}/{total_records} records "
+                            f"(page 1/{total_pages}). Falling back to sequential fetch."
+                        )
+                        payload = None  # Force fallback to per-country sequential fetch
+            except httpx.HTTPError as e:
+                logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
                 payload = None
-
-            # Detect pagination truncation: if API says there are more pages,
-            # the batch response is incomplete — fall back to sequential fetch.
-            if payload and isinstance(payload[0], dict):
-                total_pages = payload[0].get("pages", 1)
-                if total_pages > 1:
-                    total_records = payload[0].get("total", 0)
-                    returned = len(payload[1]) if len(payload) > 1 and payload[1] else 0
-                    logger.warning(
-                        f"WorldBank pagination truncation: got {returned}/{total_records} records "
-                        f"(page 1/{total_pages}). Falling back to sequential fetch."
-                    )
-                    payload = None  # Force fallback to per-country sequential fetch
-        except httpx.HTTPError as e:
-            logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
-            payload = None
-        except Exception as e:
-            logger.warning(f"Error fetching batched data: {e}")
-            payload = None
+            except Exception as e:
+                logger.warning(f"Error fetching batched data: {e}")
+                payload = None
 
         # If batch request failed, fall back to parallel per-country fetch.
         # Accumulate ALL country records into a single payload so the

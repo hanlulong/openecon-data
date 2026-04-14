@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from ..models import ParsedIntent
 from .parameter_validator import ParameterValidator
 from ..routing.unified_router import validate_routing as unified_validate_routing
+from ..utils.providers import normalize_provider_name
 
 if TYPE_CHECKING:
     from .query import QueryService
@@ -117,7 +118,19 @@ class QueryPipeline:
         Multi-indicator queries skip strict validation/confidence checks because
         they are validated during individual fetch attempts.
         """
-        is_multi_indicator = len(intent.indicators) > 1
+        params = intent.parameters or {}
+        provider = normalize_provider_name(intent.apiProvider or "")
+        coin_ids = params.get("coinIds") or []
+        if not isinstance(coin_ids, list):
+            coin_ids = []
+
+        # Some providers encode a single semantic request as multiple asset
+        # members in provider params.  Treat those as one comparison request,
+        # not as a multi-indicator query.
+        is_asset_comparison = provider == "COINGECKO" and len(coin_ids) > 1
+        is_fx_pair_request = provider == "EXCHANGERATE" and bool(params.get("targetCurrency"))
+
+        is_multi_indicator = len(intent.indicators) > 1 and not is_asset_comparison and not is_fx_pair_request
         if is_multi_indicator:
             return ValidationResult(
                 is_multi_indicator=True,
