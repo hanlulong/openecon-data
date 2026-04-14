@@ -32,6 +32,26 @@ def structural_pass(result: dict[str, Any]) -> bool:
     return int(result.get('status_code') or 0) == 200 and not result.get('error') and int(result.get('series_count') or 0) > 0
 
 
+def kish_effective_n(weights: list[float]) -> float | None:
+    if not weights:
+        return None
+    total = sum(weights)
+    denom = sum(w * w for w in weights)
+    if total <= 0 or denom <= 0:
+        return None
+    return (total * total) / denom
+
+
+def wilson_lower(successes: int, total: int, z: float = 1.96) -> float | None:
+    if total <= 0:
+        return None
+    p = successes / total
+    denom = 1 + z * z / total
+    center = (p + z * z / (2 * total)) / denom
+    margin = (z * ((p * (1 - p) + z * z / (4 * total)) / total) ** 0.5) / denom
+    return center - margin
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Score raw certification execution results with a provisional structural scorer.')
     parser.add_argument('--dataset', action='append', type=Path, required=True)
@@ -53,8 +73,8 @@ def main() -> int:
     counts_by_type = Counter()
     counts_by_tier = Counter()
     provisional_pass_by_type = Counter()
-    provisional_weight_pass = 0.0
-    provisional_weight_total = 0.0
+    direct_weights: list[float] = []
+    direct_pass_weights: list[float] = []
 
     for sid, session in sessions.items():
         kind = dataset_type(session)
@@ -83,9 +103,19 @@ def main() -> int:
         if kind == 'direct':
             weight = float(((session.get('provenance') or {}).get('selection_weight')) or 0.0)
             if weight > 0:
-                provisional_weight_total += weight
+                direct_weights.append(weight)
                 if all_pass:
-                    provisional_weight_pass += weight
+                    direct_pass_weights.append(weight)
+
+    direct_weight_total = sum(direct_weights)
+    direct_weight_pass = sum(direct_pass_weights)
+    direct_weighted_success = (direct_weight_pass / direct_weight_total) if direct_weight_total else None
+    direct_effective_n = kish_effective_n(direct_weights)
+    direct_unweighted_successes = sum(1 for r in session_results if r['dataset_type'] == 'direct' and r['provisional_structural_pass'])
+    direct_unweighted_total = sum(1 for r in session_results if r['dataset_type'] == 'direct')
+    direct_lower95_unweighted = wilson_lower(direct_unweighted_successes, direct_unweighted_total)
+    direct_weighted_successes_approx = round((direct_weighted_success or 0.0) * direct_effective_n) if direct_effective_n else None
+    direct_lower95_effective_n = wilson_lower(int(direct_weighted_successes_approx), int(round(direct_effective_n))) if direct_effective_n and direct_weighted_successes_approx is not None else None
 
     metrics = {
         'provisional_structural_session_success': {
@@ -101,9 +131,10 @@ def main() -> int:
                 for tier in counts_by_tier
             },
         },
-        'direct_weighted_provisional_success': (
-            provisional_weight_pass / provisional_weight_total if provisional_weight_total else None
-        ),
+        'direct_weighted_provisional_success': direct_weighted_success,
+        'direct_weighted_effective_n': direct_effective_n,
+        'direct_unweighted_lower95': direct_lower95_unweighted,
+        'direct_weighted_lower95_approx': direct_lower95_effective_n,
     }
 
     report = {
@@ -120,6 +151,7 @@ def main() -> int:
         'session_results': session_results,
         'limitations': [
             'This scorer only checks provisional structural success (status/error/non-empty result).',
+            'Weighted lower95 is only an approximation using Kish effective sample size and is not a full design-based variance estimator.',
             'It does not yet perform semantic adjudication or claim-grade weighted inference.',
             'A public 99% claim must not rely on this report alone.'
         ],
