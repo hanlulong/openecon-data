@@ -135,3 +135,9 @@ packages/frontend/dist-data/
 backend/data/openai_embeddings/
 backend/data/chroma_db/
 .omx/
+
+# Validation artifacts
+validation_private/*
+!validation_private/.gitkeep
+validation/reports/*
+!validation/reports/.gitkeep

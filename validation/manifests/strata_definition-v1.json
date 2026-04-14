@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "generated_at_utc": "2026-04-14T19:43:12.779924+00:00",
+  "catalog_db_path": "backend/data/indicators.db",
+  "indicator_count": 330050,
+  "query_families": [
+    "direct_single_series",
+    "direct_multi_country",
+    "direct_multi_provider",
+    "provider_switch",
+    "transform_switch",
+    "additive_geography",
+    "remove_geography",
+    "time_range_change",
+    "bilateral_trade",
+    "decomposition_subnational",
+    "ambiguity_clarification"
+  ],
+  "transform_families": [
+    "level",
+    "real",
+    "nominal",
+    "growth",
+    "per_capita",
+    "ppp",
+    "deflator",
+    "ratio_percent_of_gdp",
+    "imports",
+    "exports",
+    "trade_balance",
+    "current_account",
+    "debt_credit",
+    "rate_yield"
+  ],
+  "scope_families": [
+    "single_country",
+    "multi_country",
+    "bilateral",
+    "subnational",
+    "region_group",
+    "mixed_provider_scope"
+  ],
+  "ambiguity_classes": [
+    "clearly_answerable",
+    "provider_ambiguous",
+    "transform_ambiguous",
+    "scope_ambiguous",
+    "decomposition_ambiguous",
+    "terminology_ambiguous"
+  ],
+  "direct_session_plan": {
+    "total_sessions": 8000,
+    "provider_min_floor": 150,
+    "provider_allocation": {
+      "FRED": 2883,
+      "IMF": 2422,
+      "WorldBank": 726,
+      "CoinGecko": 526,
+      "Comtrade": 315,
+      "Eurostat": 310,
+      "StatsCan": 309,
+      "OECD": 207,
+      "BIS": 151,
+      "ExchangeRate": 151
+    }
+  },
+  "multiround_session_plan": {
+    "total_sessions": 3000,
+    "family_allocation": {
+      "provider_switch_chains": 600,
+      "transform_switch_chains": 500,
+      "ambiguity_to_clarification_chains": 450,
+      "multi_country_add_remove_chains": 400,
+      "comtrade_bilateral_chains": 350,
+      "statscan_decomposition_chains": 300,
+      "crypto_fx_rapid_switch_chains": 200,
+      "mixed_provider_stress_chains": 200
+    }
+  },
+  "ambiguity_session_plan": {
+    "total_sessions": 2000,
+    "family_allocation": {
+      "transform_ambiguity": 500,
+      "provider_ambiguity": 350,
+      "scope_ambiguity": 350,
+      "decomposition_ambiguity": 300,
+      "terminology_ambiguity": 300,
+      "dominant_interpretation_cases": 200
+    }
+  }
+}

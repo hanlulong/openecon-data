@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/multiround_session.schema.json",
+  "title": "Multiround validation session",
+  "type": "object",
+  "required": ["id", "family", "rounds"],
+  "properties": {
+    "id": { "type": "string" },
+    "family": { "type": "string" },
+    "risk_class": { "type": ["string", "null"] },
+    "rounds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["query", "gold"],
+        "properties": {
+          "query": { "type": "string" },
+          "gold": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/adjudication.schema.json",
+  "title": "Validation adjudication record",
+  "type": "object",
+  "required": ["session_id", "final_label"],
+  "properties": {
+    "session_id": { "type": "string" },
+    "round_index": { "type": ["integer", "null"], "minimum": 1 },
+    "automated_label": { "type": ["string", "null"] },
+    "reviewer_1": { "type": ["object", "null"] },
+    "reviewer_2": { "type": ["object", "null"] },
+    "final_label": { "type": "string" },
+    "notes": { "type": ["string", "null"] },
+    "failure_class": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

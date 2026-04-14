@@ -1,0 +1,77 @@
+{
+  "generated_at_utc": "2026-04-14T19:43:12.619218+00:00",
+  "catalog_db_path": "backend/data/indicators.db",
+  "indicator_count": 330050,
+  "distribution": [
+    {
+      "provider": "FRED",
+      "count": 138774,
+      "share": 0.4204635661263445,
+      "cumulative_count": 138774,
+      "cumulative_share": 0.4204635661263445
+    },
+    {
+      "provider": "IMF",
+      "count": 115381,
+      "share": 0.34958642629904557,
+      "cumulative_count": 254155,
+      "cumulative_share": 0.7700499924253901
+    },
+    {
+      "provider": "WorldBank",
+      "count": 29269,
+      "share": 0.08868050295409786,
+      "cumulative_count": 283424,
+      "cumulative_share": 0.858730495379488
+    },
+    {
+      "provider": "CoinGecko",
+      "count": 19079,
+      "share": 0.057806392970762004,
+      "cumulative_count": 302503,
+      "cumulative_share": 0.9165368883502499
+    },
+    {
+      "provider": "Comtrade",
+      "count": 8362,
+      "share": 0.025335555218906226,
+      "cumulative_count": 310865,
+      "cumulative_share": 0.9418724435691562
+    },
+    {
+      "provider": "Eurostat",
+      "count": 8118,
+      "share": 0.024596273291925465,
+      "cumulative_count": 318983,
+      "cumulative_share": 0.9664687168610816
+    },
+    {
+      "provider": "StatsCan",
+      "count": 8058,
+      "share": 0.02441448265414331,
+      "cumulative_count": 327041,
+      "cumulative_share": 0.990883199515225
+    },
+    {
+      "provider": "OECD",
+      "count": 2899,
+      "share": 0.008783517648841084,
+      "cumulative_count": 329940,
+      "cumulative_share": 0.9996667171640661
+    },
+    {
+      "provider": "BIS",
+      "count": 61,
+      "share": 0.00018482048174519014,
+      "cumulative_count": 330001,
+      "cumulative_share": 0.9998515376458113
+    },
+    {
+      "provider": "ExchangeRate",
+      "count": 49,
+      "share": 0.00014846235418875927,
+      "cumulative_count": 330050,
+      "cumulative_share": 1.0
+    }
+  ]
+}

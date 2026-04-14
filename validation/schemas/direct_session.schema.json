@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/direct_session.schema.json",
+  "title": "Direct validation session",
+  "type": "object",
+  "required": [
+    "id",
+    "query",
+    "provider_stratum",
+    "query_family",
+    "transform_family",
+    "scope_family",
+    "gold"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "provider_stratum": { "type": "string" },
+    "query_family": { "type": "string" },
+    "transform_family": { "type": "string" },
+    "scope_family": { "type": "string" },
+    "ambiguity_class": { "type": ["string", "null"] },
+    "query": { "type": "string" },
+    "origin": {
+      "type": ["object", "null"],
+      "properties": {
+        "source_indicator_code": { "type": ["string", "null"] },
+        "source_provider": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "gold": {
+      "type": "object",
+      "required": [
+        "required_concept_tags",
+        "required_transform_tags",
+        "accepted_providers",
+        "clarification_expected"
+      ],
+      "properties": {
+        "required_concept_tags": { "type": "array", "items": { "type": "string" } },
+        "required_transform_tags": { "type": "array", "items": { "type": "string" } },
+        "required_country_scope": { "type": ["array", "null"], "items": { "type": "string" } },
+        "required_time_scope": { "type": ["object", "null"] },
+        "accepted_providers": { "type": "array", "items": { "type": "string" } },
+        "provider_equivalence_allowed": { "type": ["boolean", "null"] },
+        "clarification_expected": { "type": "boolean" },
+        "clarification_allowed": { "type": ["boolean", "null"] },
+        "forbidden_tags": { "type": ["array", "null"], "items": { "type": "string" } },
+        "forbidden_scopes": { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

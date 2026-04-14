@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/ambiguity_session.schema.json",
+  "title": "Ambiguity validation session",
+  "type": "object",
+  "required": ["id", "query", "expected_behavior", "gold"],
+  "properties": {
+    "id": { "type": "string" },
+    "query": { "type": "string" },
+    "expected_behavior": {
+      "type": "string",
+      "enum": ["direct_answer", "clarify", "multiround_clarify"]
+    },
+    "gold": {
+      "type": "object",
+      "required": ["acceptable_outcomes"],
+      "properties": {
+        "acceptable_outcomes": { "type": "array", "items": { "type": "string" } },
+        "required_option_tags": { "type": ["array", "null"], "items": { "type": "string" } },
+        "unnecessary_clarification": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
