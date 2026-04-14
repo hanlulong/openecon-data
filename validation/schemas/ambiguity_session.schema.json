@@ -3,21 +3,105 @@
   "$id": "https://openecon.ai/schemas/validation/ambiguity_session.schema.json",
   "title": "Ambiguity validation session",
   "type": "object",
-  "required": ["id", "query", "expected_behavior", "gold"],
+  "required": [
+    "id",
+    "query",
+    "expected_behavior",
+    "gold"
+  ],
   "properties": {
-    "id": { "type": "string" },
-    "query": { "type": "string" },
+    "id": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
     "expected_behavior": {
       "type": "string",
-      "enum": ["direct_answer", "clarify", "multiround_clarify"]
+      "enum": [
+        "direct_answer",
+        "clarify",
+        "multiround_clarify"
+      ]
     },
     "gold": {
       "type": "object",
-      "required": ["acceptable_outcomes"],
+      "required": [
+        "acceptable_outcomes"
+      ],
       "properties": {
-        "acceptable_outcomes": { "type": "array", "items": { "type": "string" } },
-        "required_option_tags": { "type": ["array", "null"], "items": { "type": "string" } },
-        "unnecessary_clarification": { "type": ["boolean", "null"] }
+        "acceptable_outcomes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_option_tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "unnecessary_clarification": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "dataset_tier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provenance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sampler_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sampling_probability": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "selection_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "holdout_split": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     }

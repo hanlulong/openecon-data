@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-04-14T19:43:12.619218+00:00",
+  "generated_at_utc": "2026-04-14T19:53:05.344333+00:00",
   "catalog_db_path": "backend/data/indicators.db",
   "indicator_count": 330050,
   "distribution": [
@@ -73,5 +73,9 @@
       "cumulative_count": 330050,
       "cumulative_share": 1.0
     }
-  ]
+  ],
+  "git_sha": "888f85b79645d1e7cedd7aa1485eb6eff78eacab",
+  "catalog_db_sha256": "cd4e6113416dbc8ef1d2bba21c7a283bd52ab6bf9e57555d4a91ceed52becff1",
+  "snapshot_manifest_path": "validation/manifests/catalog_snapshot-2026-04-14.json",
+  "snapshot_id": "2026-04-14:888f85b7:330050"
 }

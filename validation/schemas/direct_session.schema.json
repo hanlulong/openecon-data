@@ -13,18 +13,48 @@
     "gold"
   ],
   "properties": {
-    "id": { "type": "string" },
-    "provider_stratum": { "type": "string" },
-    "query_family": { "type": "string" },
-    "transform_family": { "type": "string" },
-    "scope_family": { "type": "string" },
-    "ambiguity_class": { "type": ["string", "null"] },
-    "query": { "type": "string" },
+    "id": {
+      "type": "string"
+    },
+    "provider_stratum": {
+      "type": "string"
+    },
+    "query_family": {
+      "type": "string"
+    },
+    "transform_family": {
+      "type": "string"
+    },
+    "scope_family": {
+      "type": "string"
+    },
+    "ambiguity_class": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "query": {
+      "type": "string"
+    },
     "origin": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "source_indicator_code": { "type": ["string", "null"] },
-        "source_provider": { "type": ["string", "null"] }
+        "source_indicator_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     },
@@ -37,16 +67,123 @@
         "clarification_expected"
       ],
       "properties": {
-        "required_concept_tags": { "type": "array", "items": { "type": "string" } },
-        "required_transform_tags": { "type": "array", "items": { "type": "string" } },
-        "required_country_scope": { "type": ["array", "null"], "items": { "type": "string" } },
-        "required_time_scope": { "type": ["object", "null"] },
-        "accepted_providers": { "type": "array", "items": { "type": "string" } },
-        "provider_equivalence_allowed": { "type": ["boolean", "null"] },
-        "clarification_expected": { "type": "boolean" },
-        "clarification_allowed": { "type": ["boolean", "null"] },
-        "forbidden_tags": { "type": ["array", "null"], "items": { "type": "string" } },
-        "forbidden_scopes": { "type": ["array", "null"], "items": { "type": "string" } }
+        "required_concept_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_transform_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_country_scope": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_time_scope": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "accepted_providers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "provider_equivalence_allowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "clarification_expected": {
+          "type": "boolean"
+        },
+        "clarification_allowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "forbidden_tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "forbidden_scopes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "dataset_tier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provenance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sampler_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sampling_probability": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "selection_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "holdout_split": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     }

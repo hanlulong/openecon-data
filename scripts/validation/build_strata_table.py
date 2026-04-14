@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
 DEFAULT_OUTPUT = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
+DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_DIRECT_TOTAL = 8000
 DEFAULT_PROVIDER_FLOOR = 150
 
@@ -86,6 +87,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='Build validation strata definition and direct-set allocation baseline')
     parser.add_argument('--db-path', type=Path, default=DEFAULT_DB)
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument('--snapshot', type=Path, default=DEFAULT_SNAPSHOT)
     parser.add_argument('--direct-total', type=int, default=DEFAULT_DIRECT_TOTAL)
     parser.add_argument('--provider-floor', type=int, default=DEFAULT_PROVIDER_FLOOR)
     args = parser.parse_args()
@@ -99,6 +101,11 @@ def main() -> int:
     total_indicators = int(cur.execute('SELECT COUNT(*) FROM indicators').fetchone()[0])
     con.close()
 
+    snapshot_path = args.snapshot.resolve() if args.snapshot else None
+    snapshot = None
+    if snapshot_path and snapshot_path.exists():
+        snapshot = json.loads(snapshot_path.read_text(encoding='utf-8'))
+
     provider_allocation = direct_provider_allocation(rows, args.direct_total, args.provider_floor)
 
     payload = {
@@ -106,6 +113,10 @@ def main() -> int:
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
         'catalog_db_path': str(db_path.relative_to(ROOT)),
         'indicator_count': total_indicators,
+        'git_sha': snapshot.get('git_sha') if snapshot else None,
+        'catalog_db_sha256': snapshot.get('catalog_db_sha256') if snapshot else None,
+        'snapshot_manifest_path': str(snapshot_path.relative_to(ROOT)) if snapshot else None,
+        'snapshot_id': (f"{snapshot['snapshot_date']}:{str(snapshot['git_sha'])[:8]}:{snapshot['indicator_count']}" if snapshot else None),
         'query_families': QUERY_FAMILIES,
         'transform_families': TRANSFORM_FAMILIES,
         'scope_families': SCOPE_FAMILIES,

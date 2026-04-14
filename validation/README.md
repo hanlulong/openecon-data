@@ -22,6 +22,9 @@ The goal is to support a defensible claim such as:
   scope still match user intent.
 - **Production replay required**: a local certification pass is not enough for a
   claim about the deployed system.
+- **Weighted inference for top-line claims**: if provider floors or risk-weighted
+  oversampling are used, the top-line catalog claim must rely on design-aware
+  weights rather than naive unweighted accuracy.
 
 ## Directory layout
 
@@ -75,6 +78,11 @@ The initial scripts under `scripts/validation/` currently support:
 - building provider-distribution summaries from the catalog DB
 - generating a tracked strata definition with a direct-session provider
   allocation baseline
+- generating direct / multiround / ambiguity candidate datasets with provenance
+  fields
+- freezing a split manifest and writing deterministic non-overlapping split
+  files
+- dry-running a certification runner skeleton against those split datasets
 
-Further phases should add dataset generation, execution, scoring, adjudication,
-production replay, and final claim gating.
+Further phases should add semantic scoring, adjudication workflows, weighted
+claim estimation, production replay, and final claim gating.

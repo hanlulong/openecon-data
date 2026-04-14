@@ -3,13 +3,53 @@
   "$id": "https://openecon.ai/schemas/validation/cert_report.schema.json",
   "title": "Certification summary report",
   "type": "object",
-  "required": ["snapshot", "metrics"],
+  "required": [
+    "snapshot",
+    "metrics"
+  ],
   "properties": {
-    "snapshot": { "type": "object" },
-    "metrics": { "type": "object" },
-    "strata": { "type": ["object", "null"] },
-    "failures": { "type": ["array", "null"] },
-    "claim_decision": { "type": ["object", "null"] }
+    "snapshot": {
+      "type": "object"
+    },
+    "metrics": {
+      "type": "object"
+    },
+    "strata": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "failures": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "claim_decision": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshot_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dataset_tier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   },
   "additionalProperties": true
 }

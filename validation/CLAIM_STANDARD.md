@@ -37,11 +37,12 @@ A claim is valid only if all of the following are true:
 
 ## Required statistical gates
 
-- weighted session success **>= 99.2%**
+- weighted session success **>= 99.2%** (or a stricter threshold such as 99.25% when the effective sample size is smaller than nominal due to clustering)
 - **95% lower confidence bound > 99.0%**
 - wrong-confident-answer rate **<= 0.5%**
 - unnecessary clarification rate **<= 5%**
 - ambiguity-resolution success **>= 99%**
+- if provider floors or risk-weighted oversampling are used, the estimator must be design-aware; naive unweighted binomial scoring is not sufficient for the top-line catalog claim
 
 ## Required stratum gates
 
