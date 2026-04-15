@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.validation.common import audit_direct_query_shape, default_query_for_row
+from scripts.validation.common import audit_direct_query_shape, category_success_adjustment, default_query_for_row
 
 
 def test_default_query_for_row_naturalizes_imf_indicator_names():
@@ -368,6 +368,11 @@ def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
 
     assert audit["risk_level"] == "high"
     assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
+def test_category_success_adjustment_uses_probe_history():
+    assert category_success_adjustment("WorldBank", "Education Statistics") < 0
+    assert category_success_adjustment("WorldBank", "Disability Data Hub (DDH)") >= 0
 
 
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():

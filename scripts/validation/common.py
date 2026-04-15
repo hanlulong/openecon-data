@@ -17,6 +17,8 @@ except Exception:  # pragma: no cover - fallback for lightweight script usage
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
+VALIDATION_PRIVATE = ROOT / 'validation_private'
+_EMPIRICAL_CATEGORY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 
 DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'FRED': ['US'],
@@ -150,6 +152,73 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     with path.open('w', encoding='utf-8') as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+
+def _load_empirical_category_priors() -> dict[tuple[str, str], tuple[int, int]]:
+    global _EMPIRICAL_CATEGORY_PRIORS
+    if _EMPIRICAL_CATEGORY_PRIORS is not None:
+        return _EMPIRICAL_CATEGORY_PRIORS
+
+    priors: dict[tuple[str, str], list[int]] = {}
+    reports_dir = VALIDATION_PRIVATE / 'reports'
+    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
+    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
+        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
+        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
+        if not dataset_path.exists():
+            continue
+        try:
+            dataset_rows = {}
+            for line in dataset_path.read_text(encoding='utf-8').splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    dataset_rows[str(row.get('id') or '')] = row
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+
+        for result in report.get('results', []):
+            row = dataset_rows.get(str(result.get('session_id') or ''))
+            if not row:
+                continue
+            provider = str(result.get('provider_stratum') or '').upper()
+            category = str((row.get('origin') or {}).get('category') or '').strip()
+            if not provider or not category:
+                continue
+            bucket = priors.setdefault((provider, category), [0, 0])
+            if result.get('viability_pass'):
+                bucket[0] += 1
+            else:
+                bucket[1] += 1
+
+    _EMPIRICAL_CATEGORY_PRIORS = {
+        key: (counts[0], counts[1]) for key, counts in priors.items()
+    }
+    return _EMPIRICAL_CATEGORY_PRIORS
+
+
+def category_success_adjustment(provider: str, category: str) -> int:
+    provider_key = str(provider or '').upper().strip()
+    category_key = str(category or '').strip()
+    if not provider_key or not category_key:
+        return 0
+
+    priors = _load_empirical_category_priors()
+    passed, failed = priors.get((provider_key, category_key), (0, 0))
+    total = passed + failed
+    if total < 2:
+        return 0
+
+    rate = passed / total if total else 0.0
+    if rate == 0.0 and total >= 2:
+        return -7
+    if rate <= 0.15 and total >= 3:
+        return -5
+    if rate <= 0.25 and total >= 3:
+        return -3
+    if rate >= 0.5 and total >= 4:
+        return 2
+    return 0
 
 
 def provider_counts(db_path: Path = DEFAULT_DB) -> list[tuple[str, int]]:
@@ -330,6 +399,7 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
         flags=re.IGNORECASE,
     )
     score += min(3, len({token for token in informative_tokens(normalized_query)}))
+    score += category_success_adjustment(provider, str(origin.get('category') or record.get('category') or ''))
     if provider == 'IMF':
         if any(term in enriched for term in ['consumer prices', 'producer price', 'harmonized', 'expenditure of households', 'index']):
             score += 4
