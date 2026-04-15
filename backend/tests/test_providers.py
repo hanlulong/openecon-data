@@ -64,6 +64,28 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
         self.assertEqual(version, "1.0")
 
+    def test_oecd_resolve_indicator_expands_partial_dataflow_prefix(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        catalog = {
+            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE": {
+                "name": "Annual GDP and components - expenditure approach",
+                "description": "GDP expenditure table",
+                "structure": "DSD_NAMAIN10",
+            },
+            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE_CPC": {
+                "name": "National accounts price indicators",
+                "description": "GDP expenditure price variants",
+                "structure": "DSD_NAMAIN10",
+            },
+        }
+
+        with patch.object(OECDProvider, "_load_dataflows_catalog", return_value=catalog):
+            agency, dataflow, version = run(provider._resolve_indicator("OECD_DSD_NAMAIN10@DF_TABLE1"))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.SDD.NAD")
+        self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
+        self.assertEqual(version, "1.0")
+
     def test_fred_series_id_explicit_codes_passthrough(self) -> None:
         """Test that explicit FRED series codes pass through directly without resolver."""
         provider = FREDProvider(api_key="test-key")

@@ -32,6 +32,21 @@
         "null"
       ]
     },
+    "claim_grade_ready": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "claim_grade_blockers": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
     "run_id": {
       "type": [
         "string",
@@ -45,6 +60,18 @@
       ]
     },
     "dataset_tier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "floor_policy_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "floor_policy_sha256": {
       "type": [
         "string",
         "null"

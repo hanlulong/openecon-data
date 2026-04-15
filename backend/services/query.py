@@ -78,6 +78,13 @@ from ..services.query_parsing import (
 )
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
+
+
+_GENERIC_EXACT_TITLE_CONCEPTS = {
+    "employment",
+    "government debt",
+    "interest rate",
+}
 # detection.  See simplified_prompt.py.
 from ..utils.processing_steps import (
     ProcessingTracker,
@@ -113,6 +120,7 @@ from ..services.execution_planner import build_minimal_execution_plan as _ep_bui
 from ..services.indicator_resolution import (
     _effective_original_query as _ir_effective_original_query,
     code_semantic_hint as _ir_code_semantic_hint,
+    find_exact_provider_title_match as _ir_find_exact_provider_title_match,
     score_resolved_indicator_relevance as _ir_score_resolved_indicator_relevance,
     minimum_resolved_relevance_threshold as _ir_minimum_resolved_relevance_threshold,
     is_placeholder_indicator_code as _ir_is_placeholder_indicator_code,
@@ -377,6 +385,74 @@ class QueryService:
         """Delegates to :func:`query_helpers.extract_countries_from_query`."""
         from .query_helpers import extract_countries_from_query as _qh_extract
         return _qh_extract(query)
+
+    @staticmethod
+    def _broad_exact_title_catalog_concept(query: str) -> Optional[str]:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(query or "").lower()).strip()
+        if normalized in _GENERIC_EXACT_TITLE_CONCEPTS:
+            return normalized
+        return None
+
+    def _build_exact_indicator_title_intent(self, query: str) -> Optional[ParsedIntent]:
+        """Fast path for raw queries that already match a provider-native title."""
+        explicit_provider = self._detect_explicit_provider(query)
+        provider_candidates = [normalize_provider_name(explicit_provider)] if explicit_provider else list(ALL_PROVIDERS)
+        provider_candidates = [provider for provider in provider_candidates if provider]
+
+        matches: list[dict[str, Any]] = []
+        seen = set()
+        for provider in provider_candidates:
+            candidate = _ir_find_exact_provider_title_match(query, provider)
+            if not candidate:
+                continue
+            key = (normalize_provider_name(candidate.get("provider") or provider), str(candidate.get("code") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.append(candidate)
+
+        if len(matches) != 1:
+            return None
+
+        candidate = matches[0]
+        provider = normalize_provider_name(candidate.get("provider") or "")
+        code = str(candidate.get("code") or "").strip()
+        name = str(candidate.get("name") or query).strip()
+        if not provider or not code:
+            return None
+
+        params: dict[str, Any] = {
+            "indicator": code,
+            "__semantic_indicator_label": name,
+            "__semantic_provider_locked": True,
+            "__exact_indicator_title_match": True,
+        }
+        broad_concept = self._broad_exact_title_catalog_concept(query)
+        if broad_concept:
+            params["__catalog_concept"] = broad_concept
+        countries = self._extract_countries_from_query(query)
+        if len(countries) == 1:
+            params["country"] = countries[0]
+        elif len(countries) > 1:
+            params["countries"] = countries
+
+        return ParsedIntent(
+            apiProvider=provider,
+            indicators=[name],
+            parameters=params,
+            clarificationNeeded=False,
+            confidence=0.99,
+            recommendedChartType="line",
+            queryType="data_fetch",
+            originalQuery=query,
+            isFollowUp=False,
+            followUpType=None,
+            resolvedQuery=None,
+            needsDecomposition=False,
+            decompositionType=None,
+            decompositionEntities=None,
+            useProMode=False,
+        )
 
     def _add_provider_transparency(
         self,
@@ -3801,9 +3877,24 @@ class QueryService:
                     parse_result = copy.deepcopy(_cached)
                     logger.info("⚡ Intent cache HIT for: %s (skipped LLM call)", query[:60])
                 else:
-                    parse_result = await self.pipeline.parse_and_route(
-                        query, history, conversation_context=conversation_context,
-                    )
+                    exact_title_intent = self._build_exact_indicator_title_intent(query) if conversation_context is None else None
+                    if exact_title_intent is not None:
+                        parse_result = ParseRouteResult(
+                            intent=exact_title_intent,
+                            explicit_provider=exact_title_intent.apiProvider,
+                            routed_provider=exact_title_intent.apiProvider,
+                            validation_warning=None,
+                        )
+                        logger.info(
+                            "⚡ Exact-title parse shortcut: %s -> %s/%s",
+                            query[:80],
+                            exact_title_intent.apiProvider,
+                            (exact_title_intent.parameters or {}).get("indicator"),
+                        )
+                    else:
+                        parse_result = await self.pipeline.parse_and_route(
+                            query, history, conversation_context=conversation_context,
+                        )
                     # Cache the result for future identical queries (only without conversation context)
                     if _use_intent_cache and _query_hash and not parse_result.intent.clarificationNeeded:
                         _put_cached_parse_result(_query_hash, parse_result)
@@ -3834,6 +3925,7 @@ class QueryService:
                 _current_conv_state,
                 intent,
             )
+            provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
             if preserve_statscan_followup:
                 logger.info(
                     "Preserving StatsCan provider for dimension/decomposition follow-up (llm=%s)",
@@ -3847,6 +3939,11 @@ class QueryService:
                 if _current_conv_state and _current_conv_state.indicator and not preserved_params.get("__semantic_indicator_label"):
                     preserved_params["__semantic_indicator_label"] = _current_conv_state.indicator
                 intent.parameters = preserved_params
+            elif provider_locked:
+                logger.info(
+                    "🔒 Skipping UnifiedRouter override for provider-locked exact-title intent (%s)",
+                    intent.apiProvider,
+                )
             else:
                 # Framework: UnifiedRouter determines the provider (overrides LLM).
                 # The LLM may guess wrong (e.g., NOT_AVAILABLE for gold price,

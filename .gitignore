@@ -148,3 +148,10 @@ validation/reports/*
 
 # Generated test reports under docs/testing/reports
 docs/testing/reports/*.json
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**

@@ -49,6 +49,9 @@ def apply_country_overrides(
 
     extracted_countries = extract_countries_from_query(query)
     expanded_region_countries = CountryResolver.expand_regions_in_query(query)
+    explicit_provider_requested = normalize_provider_name(
+        svc._detect_explicit_provider(query) or ""
+    )
     if not extracted_countries and not expanded_region_countries:
         return
 
@@ -70,6 +73,18 @@ def apply_country_overrides(
     # Region-based multi-country override: when query mentions a known
     # country group (G7, G20, BRICS, EU, ASEAN, etc.), always expand to
     # the full member list regardless of comparative language.
+    if len(expanded_region_countries) > 1:
+        # Provider names like "from OECD" or "from Eurostat" can look like
+        # region/group cues, but they should not override an explicitly named
+        # concrete country in the same query.
+        if explicit_provider_requested and extracted_countries:
+            logger.info(
+                "🌍 Region Override skipped: explicit provider '%s' with concrete country %s",
+                explicit_provider_requested,
+                extracted_countries,
+            )
+            expanded_region_countries = []
+
     if len(expanded_region_countries) > 1:
         current_geo = current_countries[:] if current_countries else (
             [current_country] if current_country else []

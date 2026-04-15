@@ -1,0 +1,117 @@
+{
+  "$schema": "https://openecon.ai/schemas/validation/claim_gate_policy.schema.json",
+  "version": 1,
+  "policy_name": "claim_gate_policy_v1",
+  "snapshot_manifest_path": "validation/manifests/catalog_snapshot-2026-04-14.json",
+  "strata_manifest_path": "validation/manifests/strata_definition-v1.json",
+  "claim_thresholds": {
+    "weighted_session_success_min": 0.992,
+    "lower95_min": 0.99,
+    "wrong_confident_answer_rate_max": 0.005,
+    "unnecessary_clarification_rate_max": 0.05,
+    "ambiguity_resolution_success_min": 0.99
+  },
+  "direct_provider_floor_defaults": {
+    "critical": 0.97,
+    "high_traffic": 0.98
+  },
+  "high_traffic_direct_providers": [
+    "FRED",
+    "IMF",
+    "WorldBank"
+  ],
+  "required_direct_provider_floors": {
+    "FRED": {
+      "class": "high_traffic",
+      "floor": 0.98
+    },
+    "IMF": {
+      "class": "high_traffic",
+      "floor": 0.98
+    },
+    "WorldBank": {
+      "class": "high_traffic",
+      "floor": 0.98
+    },
+    "CoinGecko": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "Comtrade": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "Eurostat": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "StatsCan": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "OECD": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "BIS": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "ExchangeRate": {
+      "class": "critical",
+      "floor": 0.97
+    }
+  },
+  "required_multiround_family_floors": {
+    "provider_switch_chain": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "transform_switch_chain": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "comtrade_bilateral_chain": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "statscan_decomposition_chain": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "crypto_rotation_chain": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "fx_pair_chain": {
+      "class": "critical",
+      "floor": 0.97
+    }
+  },
+  "required_ambiguity_family_floors": {
+    "transform_ambiguity": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "provider_ambiguity": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "scope_ambiguity": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "decomposition_ambiguity": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "terminology_ambiguity": {
+      "class": "critical",
+      "floor": 0.97
+    },
+    "dominant_interpretation_cases": {
+      "class": "high_traffic",
+      "floor": 0.98
+    }
+  }
+}

@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.validation.common import DEFAULT_DB, sample_indicator_rows, write_jsonl  # noqa: E402
+from scripts.validation.common import audit_direct_query_shape  # noqa: E402
+from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
+from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
+    annotate as annotate_multiround,
+    mixed_provider_switch,
+    gdp_variant_cycle,
+    comtrade_bilateral,
+    statscan_decomposition,
+    crypto_rotation,
+    fx_rotation,
+)
+from scripts.validation.sample_ambiguity_cert_set import (  # noqa: E402
+    FAMILY_TEMPLATES,
+    make_record as make_ambiguity_record,
+)
+
+DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
+
+MULTI_BUILDERS = {
+    'provider_switch_chain': mixed_provider_switch,
+    'transform_switch_chain': gdp_variant_cycle,
+    'comtrade_bilateral_chain': comtrade_bilateral,
+    'statscan_decomposition_chain': statscan_decomposition,
+    'crypto_rotation_chain': crypto_rotation,
+    'fx_pair_chain': fx_rotation,
+}
+
+
+def load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def snapshot_id(snapshot: dict) -> str:
+    return f"{snapshot['snapshot_date']}:{str(snapshot['git_sha'])[:8]}:{snapshot['indicator_count']}"
+
+
+def normalize_provider_name(value: str) -> str:
+    return str(value or '').strip()
+
+
+def select_quality_screened_direct_records(records: list[dict], count: int) -> list[dict]:
+    def sort_key(record: dict) -> tuple[int, int, int, str]:
+        provenance = dict(record.get('provenance') or {})
+        risk_level = str(provenance.get('query_quality_risk') or 'low')
+        risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
+        reasons = list(provenance.get('query_quality_reasons') or [])
+        return (
+            risk_rank,
+            len(reasons),
+            len(str(record.get('query') or '')),
+            str(record.get('id') or ''),
+        )
+
+    ranked = sorted(records, key=sort_key)
+    return ranked[:count]
+
+
+def materialize_direct(
+    targets: list[dict],
+    *,
+    snapshot_meta: dict,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+    db_path: Path,
+) -> list[dict]:
+    rows = []
+    seq = 1
+    provider_counts = dict(snapshot_meta.get('provider_counts') or {})
+    for target in targets:
+        provider = normalize_provider_name(target['name'])
+        count = int(target.get('planned_batch_sessions') or 0)
+        if count <= 0:
+            continue
+        provider_population = int(provider_counts.get(provider, count))
+        oversample_count = min(provider_population, max(count * 50, count + 200))
+        samples = sample_indicator_rows(provider, oversample_count, db_path=db_path.resolve(), seed=seed)
+        candidate_records = []
+        for row in samples:
+            record = build_direct_record(
+                row,
+                seq,
+                provider_count=provider_population,
+                provider_sample_count=count,
+                snapshot_id=snapshot_id(snapshot_meta),
+                seed=seed,
+                holdout_split=holdout_split,
+                dataset_tier=dataset_tier,
+            )
+            record['id'] = f"batch-direct-{provider.lower()}-{seq:06d}"
+            quality = audit_direct_query_shape(record)
+            record['provenance']['batch_plan'] = 'next_review_batch'
+            record['provenance']['query_quality_risk'] = quality['risk_level']
+            record['provenance']['query_quality_reasons'] = quality['reasons']
+            candidate_records.append(record)
+            seq += 1
+        selected_records = select_quality_screened_direct_records(candidate_records, count)
+        rows.extend(selected_records)
+    return rows
+
+
+def materialize_multiround(
+    targets: list[dict],
+    *,
+    snapshot_meta: dict,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+) -> list[dict]:
+    rows = []
+    counters = {name: 0 for name in MULTI_BUILDERS}
+    for target in targets:
+        family = str(target['name'])
+        count = int(target.get('planned_batch_sessions') or 0)
+        builder = MULTI_BUILDERS[family]
+        for _ in range(count):
+            counters[family] += 1
+            session = builder(counters[family])
+            session['id'] = f"batch-{family}-{counters[family]:06d}"
+            rows.append(
+                annotate_multiround(
+                    session,
+                    snapshot_id=snapshot_id(snapshot_meta),
+                    seed=seed,
+                    holdout_split=holdout_split,
+                    dataset_tier=dataset_tier,
+                    family_total_count=max(int(target.get('target_n') or count), count),
+                    family_sample_count=count,
+                )
+            )
+    return rows
+
+
+def materialize_ambiguity(
+    targets: list[dict],
+    *,
+    snapshot_meta: dict,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+) -> list[dict]:
+    rows = []
+    counters = {name: 0 for name in FAMILY_TEMPLATES}
+    for target in targets:
+        family = str(target['name'])
+        count = int(target.get('planned_batch_sessions') or 0)
+        templates = FAMILY_TEMPLATES[family]
+        total_target = max(int(target.get('target_n') or count), count)
+        for idx in range(count):
+            counters[family] += 1
+            query, behavior, outcomes = templates[idx % len(templates)]
+            rows.append(
+                make_ambiguity_record(
+                    family,
+                    counters[family],
+                    query,
+                    behavior,
+                    outcomes,
+                    snapshot_id=snapshot_id(snapshot_meta),
+                    seed=seed,
+                    holdout_split=holdout_split,
+                    dataset_tier=dataset_tier,
+                    family_total_count=total_target,
+                    family_sample_count=count,
+                )
+            )
+    return rows
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description='Materialize dataset JSONLs for the next planned review batch.')
+    parser.add_argument('--batch-plan', type=Path, required=True)
+    parser.add_argument('--snapshot', type=Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument('--db-path', type=Path, default=DEFAULT_DB)
+    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--seed', type=int, default=20260415)
+    parser.add_argument('--dataset-tier', default='dev')
+    parser.add_argument('--holdout-split', default='batch_review')
+    args = parser.parse_args()
+
+    batch_plan = load_json(args.batch_plan.resolve())
+    snapshot_meta = load_json(args.snapshot.resolve())
+
+    allocation = dict(batch_plan.get('allocation') or {})
+    direct_targets = list((allocation.get('direct') or {}).get('targets') or [])
+    multiround_targets = list((allocation.get('multiround') or {}).get('targets') or [])
+    ambiguity_targets = list((allocation.get('ambiguity') or {}).get('targets') or [])
+
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    direct_rows = materialize_direct(
+        direct_targets,
+        snapshot_meta=snapshot_meta,
+        seed=args.seed,
+        holdout_split=args.holdout_split,
+        dataset_tier=args.dataset_tier,
+        db_path=args.db_path,
+    )
+    multiround_rows = materialize_multiround(
+        multiround_targets,
+        snapshot_meta=snapshot_meta,
+        seed=args.seed,
+        holdout_split=args.holdout_split,
+        dataset_tier=args.dataset_tier,
+    )
+    ambiguity_rows = materialize_ambiguity(
+        ambiguity_targets,
+        snapshot_meta=snapshot_meta,
+        seed=args.seed,
+        holdout_split=args.holdout_split,
+        dataset_tier=args.dataset_tier,
+    )
+
+    direct_path = output_dir / 'next_batch_direct.jsonl'
+    multiround_path = output_dir / 'next_batch_multiround.jsonl'
+    ambiguity_path = output_dir / 'next_batch_ambiguity.jsonl'
+    write_jsonl(direct_path, direct_rows)
+    write_jsonl(multiround_path, multiround_rows)
+    write_jsonl(ambiguity_path, ambiguity_rows)
+
+    print(
+        json.dumps(
+            {
+                'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+                'output_dir': str(output_dir),
+                'direct_records': len(direct_rows),
+                'multiround_records': len(multiround_rows),
+                'ambiguity_records': len(ambiguity_rows),
+                'batch_size': len(direct_rows) + len(multiround_rows) + len(ambiguity_rows),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

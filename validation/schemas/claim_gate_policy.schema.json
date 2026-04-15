@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/claim_gate_policy.schema.json",
+  "title": "Claim gate policy manifest",
+  "type": "object",
+  "required": [
+    "version",
+    "policy_name",
+    "claim_thresholds",
+    "required_direct_provider_floors",
+    "required_multiround_family_floors",
+    "required_ambiguity_family_floors"
+  ],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "policy_name": { "type": "string" },
+    "snapshot_manifest_path": { "type": ["string", "null"] },
+    "strata_manifest_path": { "type": ["string", "null"] },
+    "claim_thresholds": {
+      "type": "object",
+      "properties": {
+        "weighted_session_success_min": { "type": ["number", "null"] },
+        "lower95_min": { "type": ["number", "null"] },
+        "wrong_confident_answer_rate_max": { "type": ["number", "null"] },
+        "unnecessary_clarification_rate_max": { "type": ["number", "null"] },
+        "ambiguity_resolution_success_min": { "type": ["number", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "required_direct_provider_floors": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/floorRule"
+      }
+    },
+    "required_multiround_family_floors": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/floorRule"
+      }
+    },
+    "required_ambiguity_family_floors": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/floorRule"
+      }
+    }
+  },
+  "$defs": {
+    "floorRule": {
+      "type": "object",
+      "required": ["class", "floor"],
+      "properties": {
+        "class": { "type": "string" },
+        "floor": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

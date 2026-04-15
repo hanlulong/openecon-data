@@ -52,15 +52,30 @@ FAMILY_TEMPLATES = {
 }
 
 
-def make_record(family: str, idx: int, query: str, expected_behavior: str, outcomes: list[str], *, snapshot_id: str, seed: int, holdout_split: str, dataset_tier: str) -> dict:
+def make_record(
+    family: str,
+    idx: int,
+    query: str,
+    expected_behavior: str,
+    outcomes: list[str],
+    *,
+    snapshot_id: str,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+    family_total_count: int,
+    family_sample_count: int,
+) -> dict:
+    sampling_probability = (family_sample_count / family_total_count) if family_total_count else None
+    selection_weight = (1.0 / sampling_probability) if sampling_probability else None
     return {
         'id': f'amb-{family}-{idx:06d}',
         'dataset_tier': dataset_tier,
         'provenance': {
             'snapshot_id': snapshot_id,
             'sampler_version': SAMPLER_VERSION,
-            'sampling_probability': None,
-            'selection_weight': None,
+            'sampling_probability': sampling_probability,
+            'selection_weight': selection_weight,
             'holdout_split': holdout_split,
             'seed': seed,
             'generation_mode': 'ambiguity_template_bootstrap',
@@ -100,7 +115,21 @@ def main() -> int:
         for i in range(scaled_count):
             counters[family] += 1
             query, behavior, outcomes = templates[i % len(templates)]
-            records.append(make_record(family, counters[family], query, behavior, outcomes, snapshot_id=snapshot_id, seed=args.seed, holdout_split=args.holdout_split, dataset_tier=args.dataset_tier))
+            records.append(
+                make_record(
+                    family,
+                    counters[family],
+                    query,
+                    behavior,
+                    outcomes,
+                    snapshot_id=snapshot_id,
+                    seed=args.seed,
+                    holdout_split=args.holdout_split,
+                    dataset_tier=args.dataset_tier,
+                    family_total_count=count,
+                    family_sample_count=scaled_count,
+                )
+            )
 
     write_jsonl(args.output.resolve(), records)
     print(json.dumps({

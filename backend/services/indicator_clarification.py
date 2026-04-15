@@ -1921,6 +1921,40 @@ _AMBIGUOUS_CONCEPT_OPTIONS = {
             "code": "SL.EMP.TOTL.SP.ZS",
         },
     ],
+    "interest rate": [
+        {
+            "label": "policy rate",
+            "provider": "BIS",
+            "code": "WS_CBPOL",
+        },
+        {
+            "label": "long-term government bond yield",
+            "provider": "OECD",
+            "code": "IRLT",
+        },
+        {
+            "label": "real interest rate",
+            "provider": "FRED",
+            "code": "REAINTRATREARAT10Y",
+        },
+    ],
+    "government debt": [
+        {
+            "label": "government debt-to-GDP ratio",
+            "provider": "WORLDBANK",
+            "code": "GC.DOD.TOTL.GD.ZS",
+        },
+        {
+            "label": "nominal government debt",
+            "provider": "IMF",
+            "code": "GGXWDG_NGDP",
+        },
+        {
+            "label": "government debt service",
+            "provider": "WORLDBANK",
+            "code": "GC.XPN.TOTL.GD.ZS",
+        },
+    ],
 }
 
 
@@ -1988,12 +2022,10 @@ def _semantic_metric_option_value(original_query: str, label: str) -> str:
     if not query_text or not label_text:
         return label_text or query_text
 
-    replaced = re.sub(r"\bemployment\b", label_text, query_text, count=1, flags=re.IGNORECASE)
-    if replaced != query_text:
-        return replaced
-    replaced = re.sub(r"\btrade data\b", label_text, query_text, count=1, flags=re.IGNORECASE)
-    if replaced != query_text:
-        return replaced
+    for concept in ("employment", "trade data", "interest rate", "government debt"):
+        replaced = re.sub(rf"\b{re.escape(concept)}\b", label_text, query_text, count=1, flags=re.IGNORECASE)
+        if replaced != query_text:
+            return replaced
     return f"{label_text} {query_text}".strip()
 
 

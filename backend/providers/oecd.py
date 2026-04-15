@@ -397,6 +397,30 @@ class OECDProvider(BaseProvider):
             cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
             return result
 
+        explicit_prefix = explicit_dataflow
+        if explicit_prefix.startswith("OECD_"):
+            explicit_prefix = explicit_prefix[len("OECD_"):]
+        if explicit_prefix.startswith("DSD_") and "@DF_" in explicit_prefix:
+            catalog = self._load_dataflows_catalog()
+            prefix_matches = [
+                flow_id
+                for flow_id in catalog
+                if flow_id.upper().startswith(explicit_prefix)
+            ]
+            if prefix_matches:
+                # Prefer the shortest matching catalog key to avoid drifting to
+                # longer, more specialized derivatives when the fragment already
+                # identifies a common parent dataflow.
+                flow_id = min(prefix_matches, key=len)
+                logger.info(
+                    "🔒 Resolved OECD dataflow prefix '%s' -> %s via local catalog",
+                    explicit_dataflow,
+                    flow_id,
+                )
+                result = self._build_result_from_discovery(flow_id, {})
+                cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
+                return result
+
         normalized_indicator = re.sub(r"\s+", " ", str(indicator or "").replace("_", " ").strip().lower())
         canonical_dataflow = self.CANONICAL_DATAFLOW_ALIASES.get(normalized_indicator)
         if canonical_dataflow:

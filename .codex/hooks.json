@@ -32,8 +32,7 @@
             "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",
             "statusMessage": "Running OMX tool review"
           }
-        ],
-        "matcher": "Bash"
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -52,9 +51,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"/home/hanlulong/OpenEcon/scripts/execution_gate.py\" --check-stop",
+            "command": "python \"/home/hanlulong/OpenEcon/scripts/execution_gate.py\" --hook-stop-json",
             "timeout": 30
-          },
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
             "command": "node \"/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js\"",

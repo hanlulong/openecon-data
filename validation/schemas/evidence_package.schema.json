@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecon.ai/schemas/validation/evidence_package.schema.json",
+  "title": "Claim evidence package",
+  "type": "object",
+  "required": [
+    "generated_at_utc",
+    "package_version",
+    "claim_context",
+    "artifacts",
+    "summary"
+  ],
+  "properties": {
+    "generated_at_utc": {
+      "type": "string"
+    },
+    "package_version": {
+      "type": "integer"
+    },
+    "claim_context": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "git_sha"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "indicator_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "git_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "git_dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "deployment_base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployment_timestamp_utc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployment_health": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "object"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "claim_allowed",
+        "claim_blockers",
+        "package_blockers"
+      ],
+      "properties": {
+        "claim_allowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "claim_blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "package_blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

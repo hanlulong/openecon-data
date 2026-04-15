@@ -30,6 +30,7 @@ def main() -> int:
     total = len(rows)
     queue_reason_counts = Counter(str(row.get('queue_reason') or '<missing>') for row in rows)
     final_label_counts = Counter(str(row.get('final_label') or '<missing>') for row in rows)
+    failure_class_counts = Counter(str(row.get('failure_class') or '<missing>') for row in rows)
     completed = sum(1 for row in rows if row.get('final_label'))
     pending = total - completed
 
@@ -41,6 +42,7 @@ def main() -> int:
         'pending_records': pending,
         'completion_rate': (completed / total) if total else 0.0,
         'queue_reason_counts': dict(queue_reason_counts),
+        'failure_class_counts': dict(failure_class_counts),
         'final_label_counts': dict(final_label_counts),
         'adjudication_complete': pending == 0,
     }

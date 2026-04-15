@@ -376,12 +376,58 @@ class IndicatorResolver:
         # 3. If query maps to a known catalog concept, try provider's catalog codes first.
         # This guards against high-ranked but semantically wrong FTS candidates.
         if not result and provider and query_concept and preferred_catalog_codes:
-            result = self._resolve_via_catalog_codes(
-                query=query,
-                provider=provider,
-                concept_name=query_concept,
-                preferred_codes=preferred_catalog_codes,
+            # Exact/near-exact provider-local title matches should bypass the
+            # broad catalog shortcut. Otherwise a coarse concept inference like
+            # "inflation" can override a very specific indicator title match.
+            #
+            # Keep this gate strict: generic high-scoring search results for a
+            # known catalog concept must still defer to the catalog mapping.
+            # Only a normalized near-exact title match should outrank the
+            # catalog at this stage.
+            pre_catalog_results = self._search_candidates_for_provider_query(query, provider, limit=10)
+            pre_catalog_best, pre_catalog_confidence = self._pick_best_search_result(
+                query,
+                pre_catalog_results,
+                concept_name=None,
+                preferred_codes=None,
+                countries=context_countries,
             )
+            pre_catalog_exact_title = False
+            if pre_catalog_best:
+                normalized_query = re.sub(r"[^a-z0-9]+", " ", str(query or "").lower()).strip()
+                normalized_name = re.sub(
+                    r"[^a-z0-9]+",
+                    " ",
+                    str(pre_catalog_best.get("name") or "").lower(),
+                ).strip()
+                query_without_geo = " ".join(
+                    token for token in normalized_query.split() if token not in self._geo_terms
+                ).strip()
+                pre_catalog_exact_title = bool(
+                    normalized_name
+                    and len(normalized_name) >= 24
+                    and (
+                        normalized_query == normalized_name
+                        or query_without_geo == normalized_name
+                        or normalized_query.endswith(normalized_name)
+                    )
+                )
+            if pre_catalog_best and pre_catalog_exact_title and pre_catalog_confidence >= 0.95:
+                result = ResolvedIndicator(
+                    code=pre_catalog_best.get("code"),
+                    provider=pre_catalog_best.get("provider", provider),
+                    name=pre_catalog_best.get("name", query),
+                    confidence=pre_catalog_confidence,
+                    source="database",
+                    metadata=pre_catalog_best,
+                )
+            else:
+                result = self._resolve_via_catalog_codes(
+                    query=query,
+                    provider=provider,
+                    concept_name=query_concept,
+                    preferred_codes=preferred_catalog_codes,
+                )
 
         # 3a. Semantic verification — if catalog returned a code but query has
         # semantic discriminators that the resolved name doesn't match, try
@@ -457,7 +503,7 @@ class IndicatorResolver:
 
         # 4. Try FTS5 search in database (fallback for terms not in translator/catalog)
         if not result:
-            search_results = self.lookup.search(query, provider=provider, limit=20)
+            search_results = self._search_candidates_for_provider_query(query, provider, limit=20)
             search_results = self._fuse_semantic_candidates(
                 query=query,
                 provider=provider,
@@ -621,6 +667,39 @@ class IndicatorResolver:
             self._set_cached_result(cache_key, result)
 
         return result
+
+    def _search_candidates_for_provider_query(
+        self,
+        query: str,
+        provider: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Search provider-local indicator candidates with a few safe query variants.
+
+        Exact provider-native titles can fail raw FTS lookup when the user adds
+        a leading geography token (`US ...`) or a prefix before a colon. We
+        search a small set of normalized variants and deduplicate by code.
+        """
+        search_inputs = [str(query or "").strip()]
+        stripped = re.sub(r"^(?:us|united states)\s+", "", str(query or "").strip(), flags=re.IGNORECASE)
+        if stripped and stripped not in search_inputs:
+            search_inputs.append(stripped)
+        if ":" in stripped:
+            suffix = stripped.split(":", 1)[1].strip()
+            if suffix and suffix not in search_inputs:
+                search_inputs.append(suffix)
+
+        merged: List[Dict[str, Any]] = []
+        seen_codes: Set[str] = set()
+        for search_text in search_inputs:
+            results = self.lookup.search(search_text, provider=provider, limit=limit)
+            for candidate in results:
+                code = str(candidate.get("code") or "")
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                merged.append(candidate)
+        return merged
 
     def find_best_match(
         self,
@@ -1343,9 +1422,26 @@ class IndicatorResolver:
         name = str(candidate.get("name") or "")
         description = str(candidate.get("description") or "")
 
+        normalized_query = re.sub(r"[^a-z0-9]+", " ", query_text).strip()
+        normalized_name = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+        query_without_geo = " ".join(
+            token for token in normalized_query.split() if token not in self._geo_terms
+        ).strip()
+
         # Exact code queries should resolve with maximum confidence.
         if code and query_text == code.lower():
             return 1.0
+        # Strong exact-title matches should also resolve with near-maximum confidence.
+        # This is especially important for long provider-native indicator names where
+        # the user query is effectively the indicator title plus a geographic prefix
+        # such as "US".
+        if normalized_name and len(normalized_name) >= 24:
+            if (
+                normalized_query == normalized_name
+                or query_without_geo == normalized_name
+                or normalized_query.endswith(normalized_name)
+            ):
+                return 0.99
 
         query_terms = self._tokenize_terms(query_text)
         candidate_terms = self._tokenize_terms(f"{name} {code} {description}")

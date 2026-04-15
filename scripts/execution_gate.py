@@ -246,6 +246,23 @@ def write_gate_files(status: GateStatus) -> None:
     )
 
 
+def build_stop_hook_output(status: GateStatus) -> dict[str, Any]:
+    """Return a Codex Stop-hook-compatible JSON payload.
+
+    Stop hooks are special: exit code 0 must emit JSON on stdout, not plain text.
+    When the execution gate is green we simply allow the stop to proceed. When the
+    gate is red we ask Codex to continue with a concise blocker summary.
+    """
+    if status.can_stop:
+        return {"continue": True}
+
+    blocker_lines = "\n".join(f"- {blocker}" for blocker in status.blockers)
+    reason = "execution-gate: stop denied"
+    if blocker_lines:
+        reason = f"{reason}\n{blocker_lines}"
+    return {"decision": "block", "reason": reason}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="write gate artifacts and exit 0")
@@ -254,10 +271,19 @@ def main() -> int:
         action="store_true",
         help="write gate artifacts and exit non-zero if stop is not allowed",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--hook-stop-json",
+        action="store_true",
+        help="write gate artifacts and emit Stop-hook-compatible JSON on stdout",
+    )
+    args, _unknown_args = parser.parse_known_args()
 
     status = build_gate_status()
     write_gate_files(status)
+
+    if args.hook_stop_json:
+        print(json.dumps(build_stop_hook_output(status)))
+        return 0
 
     if args.check_stop:
         if status.can_stop:

@@ -33,13 +33,24 @@ CRYPTO_ASSETS = [('Bitcoin', 'Ethereum', 'Solana'), ('Bitcoin', 'Dogecoin', 'Car
 FX_PAIRS = [('USD to EUR', 'USD to GBP', 'USD to JPY'), ('EUR to GBP', 'USD to CAD', 'USD to CHF')]
 
 
-def annotate(session: dict, *, snapshot_id: str, seed: int, holdout_split: str, dataset_tier: str) -> dict:
+def annotate(
+    session: dict,
+    *,
+    snapshot_id: str,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+    family_total_count: int,
+    family_sample_count: int,
+) -> dict:
+    sampling_probability = (family_sample_count / family_total_count) if family_total_count else None
+    selection_weight = (1.0 / sampling_probability) if sampling_probability else None
     session['dataset_tier'] = dataset_tier
     session['provenance'] = {
         'snapshot_id': snapshot_id,
         'sampler_version': SAMPLER_VERSION,
-        'sampling_probability': None,
-        'selection_weight': None,
+        'sampling_probability': sampling_probability,
+        'selection_weight': selection_weight,
         'holdout_split': holdout_split,
         'seed': seed,
         'generation_mode': 'risk_weighted_template_bootstrap',
@@ -173,7 +184,17 @@ def main() -> int:
             counters[family] += 1
             session = builder(counters[family])
             session['id'] = f"{family}-{counters[family]:06d}"
-            records.append(annotate(session, snapshot_id=snapshot_id, seed=args.seed, holdout_split=args.holdout_split, dataset_tier=args.dataset_tier))
+            records.append(
+                annotate(
+                    session,
+                    snapshot_id=snapshot_id,
+                    seed=args.seed,
+                    holdout_split=args.holdout_split,
+                    dataset_tier=args.dataset_tier,
+                    family_total_count=count,
+                    family_sample_count=scaled_count,
+                )
+            )
 
     write_jsonl(args.output.resolve(), records)
     print(json.dumps({

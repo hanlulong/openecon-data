@@ -337,5 +337,137 @@
       ]
     },
     "cached_at": "2026-04-14T12:45:10.070962"
+  },
+  "OECD:OECD.CFE.EDS:DSD_REG_EDU:1.0": {
+    "dsd": {
+      "dsd_id": "DSD_REG_EDU",
+      "name": "Regional education",
+      "dimensions": [
+        {
+          "id": "FREQ",
+          "position": 0,
+          "name": "FREQ",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
+        },
+        {
+          "id": "TERRITORIAL_LEVEL",
+          "position": 1,
+          "name": "TERRITORIAL_LEVEL",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CFE.EDS:CL_TERRITORIAL_LEVEL(1.0)"
+        },
+        {
+          "id": "REF_AREA",
+          "position": 2,
+          "name": "REF_AREA",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_REGIONAL(1.3)"
+        },
+        {
+          "id": "TERRITORIAL_TYPE",
+          "position": 3,
+          "name": "TERRITORIAL_TYPE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CFE.EDS:CL_TERRITORIAL_TYPE(1.0)"
+        },
+        {
+          "id": "MEASURE",
+          "position": 4,
+          "name": "MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.CFE.EDS:CL_MEASURE(1.0)"
+        },
+        {
+          "id": "AGE",
+          "position": 5,
+          "name": "AGE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AGE(1.1)"
+        },
+        {
+          "id": "SEX",
+          "position": 6,
+          "name": "SEX",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_SEX(1.0)"
+        },
+        {
+          "id": "EDUCATION_LEV",
+          "position": 7,
+          "name": "EDUCATION_LEV",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_EDUCATION_LEV_ISCED11(1.0)"
+        },
+        {
+          "id": "STATISTICAL_OPERATION",
+          "position": 8,
+          "name": "STATISTICAL_OPERATION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_STATISTICAL_OPERATION(1.0)"
+        },
+        {
+          "id": "UNIT_MEASURE",
+          "position": 9,
+          "name": "UNIT_MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.7)"
+        }
+      ]
+    },
+    "cached_at": "2026-04-14T21:52:04.831492"
+  },
+  "OECD:OECD.SDD.TPS:DSD_PDB:1.0": {
+    "dsd": {
+      "dsd_id": "DSD_PDB",
+      "name": "Productivity Database",
+      "dimensions": [
+        {
+          "id": "REF_AREA",
+          "position": 0,
+          "name": "REF_AREA",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_AREA(1.1)"
+        },
+        {
+          "id": "FREQ",
+          "position": 1,
+          "name": "FREQ",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.1)"
+        },
+        {
+          "id": "MEASURE",
+          "position": 2,
+          "name": "MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD.SDD.TPS:CL_MEASURE_PROD(1.0)"
+        },
+        {
+          "id": "ACTIVITY",
+          "position": 3,
+          "name": "ACTIVITY",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ACTIVITY_ISIC4(1.0)"
+        },
+        {
+          "id": "UNIT_MEASURE",
+          "position": 4,
+          "name": "UNIT_MEASURE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_UNIT_MEASURE(1.11)"
+        },
+        {
+          "id": "PRICE_BASE",
+          "position": 5,
+          "name": "PRICE_BASE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_PRICES(1.0)"
+        },
+        {
+          "id": "TRANSFORMATION",
+          "position": 6,
+          "name": "TRANSFORMATION",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_TRANSFORMATION(1.0)"
+        },
+        {
+          "id": "ADJUSTMENT",
+          "position": 7,
+          "name": "ADJUSTMENT",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_ADJUSTMENT(1.0)"
+        },
+        {
+          "id": "CONVERSION_TYPE",
+          "position": 8,
+          "name": "CONVERSION_TYPE",
+          "codelist": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=OECD:CL_CONVERSION_TYPE(1.1)"
+        }
+      ]
+    },
+    "cached_at": "2026-04-14T21:55:42.070268"
   }
 }

@@ -333,6 +333,65 @@ class IndicatorResolverTests(unittest.TestCase):
         self.assertIn(result.code, ("HH_ALL", "HHDGDP"))
         self.assertGreaterEqual(result.confidence, 0.7)
 
+    def test_prefers_near_exact_long_title_match_for_fred_housing_series(self):
+        lookup = _FakeLookup(
+            search_results=[
+                {
+                    "code": "CPIAUCSL",
+                    "provider": "FRED",
+                    "name": "Consumer Price Index for All Urban Consumers: All Items in U.S. City Average",
+                    "description": "Inflation index",
+                },
+                {
+                    "code": "PRIINCCOUYY35300",
+                    "provider": "FRED",
+                    "name": "Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)",
+                    "description": "Housing inventory market hotness series",
+                },
+            ]
+        )
+        resolver = IndicatorResolver(lookup=lookup, translator=_FakeTranslator())
+
+        result = resolver.resolve(
+            "US Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)",
+            provider="FRED",
+            use_cache=False,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.code, "PRIINCCOUYY35300")
+        self.assertGreaterEqual(result.confidence, 0.95)
+
+    def test_provider_query_variant_search_handles_us_prefix_and_colon_titles(self):
+        class _VariantLookup(_FakeLookup):
+            def search(self, query: str, provider=None, limit: int = 5):
+                if query == "US Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)":
+                    return []
+                if query == "Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)":
+                    return []
+                if query == "Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)":
+                    return [
+                        {
+                            "code": "PRIINCCOUYY35300",
+                            "provider": "FRED",
+                            "name": "Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)",
+                            "description": "Housing inventory market hotness series",
+                        }
+                    ]
+                return []
+
+        resolver = IndicatorResolver(lookup=_VariantLookup(), translator=_FakeTranslator())
+
+        results = resolver._search_candidates_for_provider_query(  # pylint: disable=protected-access
+            "US Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)",
+            "FRED",
+            limit=10,
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["code"], "PRIINCCOUYY35300")
+
     def test_rejects_low_overlap_search_match(self):
         lookup = _FakeLookup(
             search_results=[

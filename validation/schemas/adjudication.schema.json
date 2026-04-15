@@ -6,13 +6,26 @@
   "required": ["session_id", "final_label"],
   "properties": {
     "session_id": { "type": "string" },
+    "dataset_type": { "type": ["string", "null"] },
+    "dataset_tier": { "type": ["string", "null"] },
+    "holdout_split": { "type": ["string", "null"] },
+    "provider_stratum": { "type": ["string", "null"] },
+    "family_stratum": { "type": ["string", "null"] },
     "round_index": { "type": ["integer", "null"], "minimum": 1 },
+    "queue_reason": { "type": ["string", "null"] },
     "automated_label": { "type": ["string", "null"] },
     "reviewer_1": { "type": ["object", "null"] },
     "reviewer_2": { "type": ["object", "null"] },
     "final_label": { "type": "string" },
     "notes": { "type": ["string", "null"] },
-    "failure_class": { "type": ["string", "null"] }
+    "failure_class": { "type": ["string", "null"] },
+    "review_focus_tags": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "clarification_detected": { "type": ["boolean", "null"] },
+    "expected_clarification": { "type": ["boolean", "null"] },
+    "answer_present_without_clarification": { "type": ["boolean", "null"] }
   },
   "additionalProperties": true
 }

@@ -13,10 +13,14 @@ DEFAULT_DATASET = ROOT / 'validation_private' / 'datasets' / 'prod_replay' / 'pr
 DEFAULT_RAW = ROOT / 'validation_private' / 'reports' / 'production_holdout_raw.jsonl'
 DEFAULT_SCORE = ROOT / 'validation_private' / 'reports' / 'production_holdout_score.json'
 DEFAULT_BASE_URL = 'https://data.openecon.ai'
+DEFAULT_FLOOR_POLICY = ROOT / 'validation' / 'manifests' / 'claim_gate_policy-v1.json'
 
 
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True)
+def run(cmd: list[str], *, capture_output: bool = False) -> str | None:
+    result = subprocess.run(cmd, check=True, capture_output=capture_output, text=True)
+    if capture_output:
+        return result.stdout
+    return None
 
 
 def main() -> int:
@@ -25,6 +29,8 @@ def main() -> int:
     parser.add_argument('--base-url', default=DEFAULT_BASE_URL)
     parser.add_argument('--raw-output', type=Path, default=DEFAULT_RAW)
     parser.add_argument('--score-output', type=Path, default=DEFAULT_SCORE)
+    parser.add_argument('--floor-policy', type=Path, default=DEFAULT_FLOOR_POLICY)
+    parser.add_argument('--adjudication-records', type=Path, default=None)
     parser.add_argument('--max-sessions', type=int, default=None)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
@@ -38,7 +44,10 @@ def main() -> int:
         run_cmd += ['--max-sessions', str(args.max_sessions)]
     if args.dry_run:
         run_cmd.append('--dry-run')
-    run(run_cmd)
+        run_preview = run(run_cmd, capture_output=True)
+    else:
+        run(run_cmd)
+        run_preview = None
 
     if args.dry_run:
         payload = {
@@ -48,6 +57,9 @@ def main() -> int:
             'base_url': args.base_url,
             'raw_output': str(args.raw_output.resolve()),
             'score_output': str(args.score_output.resolve()),
+            'floor_policy': str(args.floor_policy.resolve()),
+            'adjudication_records': str(args.adjudication_records.resolve()) if args.adjudication_records else None,
+            'run_certification_preview': json.loads(run_preview) if run_preview else None,
         }
         print(json.dumps(payload, indent=2))
         return 0
@@ -58,7 +70,12 @@ def main() -> int:
         '--dataset', str(dataset),
         '--raw-results', str(args.raw_output.resolve()),
         '--output', str(args.score_output.resolve()),
+        '--floor-policy', str(args.floor_policy.resolve()),
     ]
+    if args.adjudication_records is not None:
+        score_cmd += ['--adjudication-records', str(args.adjudication_records.resolve())]
+    if args.max_sessions is not None:
+        score_cmd += ['--max-sessions', str(args.max_sessions)]
     run(score_cmd)
 
     payload = {
@@ -68,6 +85,8 @@ def main() -> int:
         'base_url': args.base_url,
         'raw_output': str(args.raw_output.resolve()),
         'score_output': str(args.score_output.resolve()),
+        'floor_policy': str(args.floor_policy.resolve()),
+        'adjudication_records': str(args.adjudication_records.resolve()) if args.adjudication_records else None,
     }
     print(json.dumps(payload, indent=2))
     return 0

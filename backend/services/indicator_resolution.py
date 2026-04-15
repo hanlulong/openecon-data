@@ -86,6 +86,111 @@ def _effective_original_query(intent: ParsedIntent) -> str:
     return str(intent.originalQuery or "").strip()
 
 
+def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool:
+    """Return True when `text` closely matches a provider-native indicator title.
+
+    This is intentionally strict and only meant to catch cases where the user
+    has effectively pasted a concrete indicator name (sometimes with a geography
+    prefix such as "US"). In those cases we should not distill the query down
+    to a generic concept or let broad catalog shortcuts outrank the exact title.
+    """
+    try:
+        from .indicator_database import get_indicator_lookup
+
+        lookup = get_indicator_lookup()
+    except Exception:
+        return False
+
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    if not normalized_text:
+        return False
+
+    search_inputs = [str(text or "").strip()]
+    stripped = re.sub(r"^(?:us|united states)\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
+    if stripped and stripped not in search_inputs:
+        search_inputs.append(stripped)
+    if ":" in stripped:
+        suffix = stripped.split(":", 1)[1].strip()
+        if suffix and suffix not in search_inputs:
+            search_inputs.append(suffix)
+
+    candidates = []
+    seen_codes = set()
+    for search_text in search_inputs:
+        try:
+            for candidate in lookup.search(search_text, provider=provider_name, limit=5):
+                code = str(candidate.get("code") or "")
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                candidates.append(candidate)
+        except Exception:
+            continue
+
+    for candidate in candidates:
+        candidate_name = str(candidate.get("name") or "").strip().lower()
+        normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
+        if not normalized_name or len(normalized_name) < 24:
+            continue
+        if (
+            normalized_text == normalized_name
+            or normalized_text.endswith(normalized_name)
+                or normalized_name.endswith(normalized_text)
+            ):
+                return True
+    return False
+
+
+def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[Dict[str, Any]]:
+    """Return the best provider-local exact-title candidate for a raw query."""
+    try:
+        from .indicator_database import get_indicator_lookup
+
+        lookup = get_indicator_lookup()
+    except Exception:
+        return None
+
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    if not normalized_text:
+        return None
+
+    search_inputs = [str(text or "").strip()]
+    stripped = re.sub(r"^(?:us|united states)\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
+    if stripped and stripped not in search_inputs:
+        search_inputs.append(stripped)
+    if ":" in stripped:
+        suffix = stripped.split(":", 1)[1].strip()
+        if suffix and suffix not in search_inputs:
+            search_inputs.append(suffix)
+
+    best_candidate: Optional[Dict[str, Any]] = None
+    best_name_len = -1
+    seen_codes = set()
+    for search_text in search_inputs:
+        try:
+            results = lookup.search(search_text, provider=provider_name, limit=5)
+        except Exception:
+            continue
+        for candidate in results:
+            code = str(candidate.get("code") or "")
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            candidate_name = str(candidate.get("name") or "").strip().lower()
+            normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
+            if not normalized_name or len(normalized_name) < 24:
+                continue
+            if (
+                normalized_text == normalized_name
+                or normalized_text.endswith(normalized_name)
+                or normalized_name.endswith(normalized_text)
+            ):
+                if len(normalized_name) > best_name_len:
+                    best_candidate = candidate
+                    best_name_len = len(normalized_name)
+    return best_candidate
+
+
 # ---------------------------------------------------------------------------
 # Semantic code hints
 # ---------------------------------------------------------------------------
@@ -664,6 +769,14 @@ def apply_concept_provider_override(
     if not concept_candidates:
         return provider, params
 
+    if provider and looks_like_exact_provider_title_match(original_query, provider):
+        logger.info(
+            "📋 Skipping concept/provider override for exact %s title match: %s",
+            provider,
+            original_query,
+        )
+        return provider, params
+
     try:
         from .catalog_service import find_concept_by_term, get_best_provider, get_variant_for_query, is_provider_available, is_provider_explicitly_excluded
 
@@ -771,6 +884,28 @@ def apply_concept_provider_override(
                 and svc._looks_like_provider_indicator_code(provider, str(current_indicator))
             )
             canonical_code = preferred_code if provider_supported else best_code
+            # Some provider mnemonics (e.g. OECD "GDP", "IRLT") look code-like
+            # but are still coarse aliases. If the catalog has a more specific
+            # canonical code for the same provider, do not let the short alias
+            # block canonical code injection.
+            current_indicator_text = str(current_indicator or "")
+            if (
+                provider == "OECD"
+                and canonical_code
+                and current_indicator
+                and current_indicator_is_code
+                and canonical_code != current_indicator_text
+                and "@" not in current_indicator_text
+                and not current_indicator_text.startswith("DSD_")
+                and not any(separator in current_indicator_text for separator in ("_", ".", "-"))
+                and len(current_indicator_text) <= 8
+            ):
+                # Only bare mnemonic aliases like GDP/IRLT/CPI should be
+                # auto-upgraded to a canonical OECD dataflow here. Structured
+                # OECD codes with separators (for example LFS_UNEM_A) already
+                # encode meaningful scope and should survive as explicit
+                # provider-native inputs.
+                current_indicator_is_code = False
             if canonical_code and (not current_indicator or not current_indicator_is_code):
                 # Unified semantic verification -- single source of truth
                 from .indicator_resolver import get_indicator_resolver
@@ -1354,47 +1489,54 @@ async def resolve_indicator_for_fetch(
     # For follow-ups, use resolvedQuery (e.g. "GDP per capita India") rather
     # than the raw follow-up text (e.g. "show from IMF instead").
     selector_query = (_effective_original_query(intent) or indicator_query or "").strip()
-    try:
-        from .indicator_selector import IndicatorSelector
-        selector = IndicatorSelector()
-        selection = await selector.select(selector_query, provider)
-        if selection.code:
-            logger.info(
-                "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
-                indicator_query, selection.code, selection.source,
-            )
-            params = _apply_indicator_with_semantic_label(selection.code)
-            intent.parameters = params
-            return params
-        if selection.needs_user_choice:
-            logger.info(
-                "🔵 IndicatorSelector needs user choice: %d options",
-                len(selection.options),
-            )
-            params = {**params, "__indicator_options": selection.options}
-            intent.parameters = params
-            if _catalog_variant_fallback:
-                # Catalog already resolved a base code; IndicatorSelector offered
-                # options for the variant.  Return now instead of also running the
-                # expensive legacy resolver -- the options are already the best we
-                # can offer without a user decision.
+    if provider and looks_like_exact_provider_title_match(selector_query, provider):
+        logger.info(
+            "🎯 Skipping IndicatorSelector for exact %s title match: %s",
+            provider,
+            selector_query,
+        )
+    else:
+        try:
+            from .indicator_selector import IndicatorSelector
+            selector = IndicatorSelector()
+            selection = await selector.select(selector_query, provider)
+            if selection.code:
                 logger.info(
-                    "🔒 Catalog-variant path: returning user-choice options without legacy fallback",
+                    "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
+                    indicator_query, selection.code, selection.source,
                 )
+                params = _apply_indicator_with_semantic_label(selection.code)
+                intent.parameters = params
                 return params
-            # Don't return -- fall through to legacy resolver as backup
-    except Exception as e:
-        if _catalog_variant_fallback:
-            # IndicatorSelector failed but we have the catalog base code --
-            # use it directly instead of running the legacy resolver.
-            logger.info(
-                "🔒 IndicatorSelector unavailable; falling back to catalog-resolved code: %s (error: %s)",
-                _catalog_variant_fallback, e,
-            )
-            params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
-            intent.parameters = params
-            return params
-        logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
+            if selection.needs_user_choice:
+                logger.info(
+                    "🔵 IndicatorSelector needs user choice: %d options",
+                    len(selection.options),
+                )
+                params = {**params, "__indicator_options": selection.options}
+                intent.parameters = params
+                if _catalog_variant_fallback:
+                    # Catalog already resolved a base code; IndicatorSelector offered
+                    # options for the variant.  Return now instead of also running the
+                    # expensive legacy resolver -- the options are already the best we
+                    # can offer without a user decision.
+                    logger.info(
+                        "🔒 Catalog-variant path: returning user-choice options without legacy fallback",
+                    )
+                    return params
+                # Don't return -- fall through to legacy resolver as backup
+        except Exception as e:
+            if _catalog_variant_fallback:
+                # IndicatorSelector failed but we have the catalog base code --
+                # use it directly instead of running the legacy resolver.
+                logger.info(
+                    "🔒 IndicatorSelector unavailable; falling back to catalog-resolved code: %s (error: %s)",
+                    _catalog_variant_fallback, e,
+                )
+                params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
+                intent.parameters = params
+                return params
+            logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
 
     # When the catalog already resolved a code and IndicatorSelector ran but
     # found nothing (no code, no user-choice options), fall back to the
@@ -1557,6 +1699,13 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         )
         return _fallback_to_original_or_distilled()
 
+    if provider and looks_like_exact_provider_title_match(original_query, provider):
+        logger.info(
+            "🔎 Original query looks like an exact %s indicator title. Using original query for resolution.",
+            provider,
+        )
+        return original_query
+
     indicator_lower = indicator_query.lower()
     if any(term in indicator_lower for term in ("discontinued", "deprecated", "legacy")):
         logger.info("🔎 Parsed indicator appears deprecated/discontinued. Using original query.")
@@ -1618,7 +1767,11 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
     # If parser returned a long natural-language sentence as the indicator,
     # prefer a distilled metric phrase for stable cross-provider resolution.
-    if len(indicator_query.split()) >= 8 and distilled_original:
+    if (
+        len(indicator_query.split()) >= 8
+        and distilled_original
+        and not looks_like_exact_provider_title_match(original_query, provider)
+    ):
         return distilled_original
 
     return indicator_query
