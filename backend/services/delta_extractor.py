@@ -225,6 +225,24 @@ class DeltaExtractor:
 
         return delta
 
+    @staticmethod
+    def _fill_explicit_country_scope_for_switch_delta(
+        delta: FollowUpDelta,
+        query_text: str,
+    ) -> FollowUpDelta:
+        if delta.changed_country or delta.changed_countries or delta.added_countries or delta.removed_countries:
+            return delta
+        if delta.delta_type not in {"indicator_switch", "provider_change", "compound_change"}:
+            return delta
+        extracted_countries = CountryResolver.detect_all_countries_in_query(query_text)
+        if not extracted_countries:
+            return delta
+        if len(extracted_countries) == 1:
+            delta.changed_country = extracted_countries[0]
+        else:
+            delta.changed_countries = extracted_countries
+        return delta
+
     def extract(
         self,
         query: str,
@@ -742,6 +760,7 @@ Output the query_type and any changed fields as JSON."""
                 return None
 
             delta = self._promote_decomposition_semantics(delta, state)
+            delta = self._fill_explicit_country_scope_for_switch_delta(delta, query_text)
             delta.raw_query = query_text
             logger.info(
                 "LLM Delta: type=%s, changes=%s",

@@ -842,6 +842,36 @@ class TestDeltaExtractor:
         delta = extractor.extract("what about inflation", state)
         assert delta is None
 
+    def test_fill_explicit_country_scope_for_switch_delta_sets_changed_country(self, extractor):
+        delta = FollowUpDelta(
+            changed_indicator="US inflation",
+            changed_provider="FRED",
+            delta_type="indicator_switch",
+        )
+
+        updated = extractor._fill_explicit_country_scope_for_switch_delta(  # pylint: disable=protected-access
+            delta,
+            "Switch to US inflation from FRED",
+        )
+
+        assert updated.changed_country == "US"
+
+    def test_fill_explicit_country_scope_for_switch_delta_keeps_existing_geo_delta(self, extractor):
+        delta = FollowUpDelta(
+            changed_indicator="GDP",
+            changed_provider="WORLDBANK",
+            added_countries=["DE"],
+            delta_type="compound_change",
+        )
+
+        updated = extractor._fill_explicit_country_scope_for_switch_delta(  # pylint: disable=protected-access
+            delta,
+            "Add Germany GDP from World Bank",
+        )
+
+        assert updated.added_countries == ["DE"]
+        assert updated.changed_country is None
+
     def test_bare_indicator_without_switch_marker_stays_with_llm(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract("unemployment", state)
