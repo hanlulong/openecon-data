@@ -22,6 +22,7 @@ _EMPIRICAL_CATEGORY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_FAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_SUBFAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS: dict[tuple[str, str, str], tuple[int, int]] | None = None
+_EMPIRICAL_COUNTRY_CATEGORY_PRIORS: dict[tuple[str, str, str], tuple[int, int]] | None = None
 
 DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'FRED': ['US'],
@@ -456,6 +457,50 @@ def _load_empirical_country_subfamily_priors() -> dict[tuple[str, str, str], tup
     return _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS
 
 
+def _load_empirical_country_category_priors() -> dict[tuple[str, str, str], tuple[int, int]]:
+    global _EMPIRICAL_COUNTRY_CATEGORY_PRIORS
+    if _EMPIRICAL_COUNTRY_CATEGORY_PRIORS is not None:
+        return _EMPIRICAL_COUNTRY_CATEGORY_PRIORS
+
+    priors: dict[tuple[str, str, str], list[int]] = {}
+    reports_dir = VALIDATION_PRIVATE / 'reports'
+    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
+    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
+        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
+        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
+        if not dataset_path.exists():
+            continue
+        try:
+            dataset_rows = {}
+            for line in dataset_path.read_text(encoding='utf-8').splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    dataset_rows[str(row.get('id') or '')] = row
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+
+        for result in report.get('results', []):
+            row = dataset_rows.get(str(result.get('session_id') or ''))
+            if not row:
+                continue
+            provider = str(result.get('provider_stratum') or '').upper()
+            category = str((row.get('origin') or {}).get('category') or '').strip()
+            country = _leading_default_country(str(row.get('query') or ''), provider)
+            if not provider or not category or not country:
+                continue
+            bucket = priors.setdefault((provider, category, country), [0, 0])
+            if result.get('viability_pass'):
+                bucket[0] += 1
+            else:
+                bucket[1] += 1
+
+    _EMPIRICAL_COUNTRY_CATEGORY_PRIORS = {
+        key: (counts[0], counts[1]) for key, counts in priors.items()
+    }
+    return _EMPIRICAL_COUNTRY_CATEGORY_PRIORS
+
+
 def preferred_default_country(provider: str, name: str, choices: list[str], fallback_choice: str) -> str:
     provider_key = str(provider or '').upper().strip()
     if provider_key not in {'WORLDBANK', 'IMF'}:
@@ -465,7 +510,12 @@ def preferred_default_country(provider: str, name: str, choices: list[str], fall
         return fallback_choice
 
     priors = _load_empirical_country_subfamily_priors()
-    scored_choices: list[tuple[int, str]] = []
+    category_priors = _load_empirical_country_category_priors()
+    scored_choices: list[tuple[int, int, int, int, str]] = []
+    category = ""
+    # Best-effort category recovery from embedded provider metadata/row name path callers.
+    # Synthesizer calls this with only provider/name, so category-level priors are an additive
+    # fallback only when the caller doesn't provide a richer subfamily prior hit.
     for choice in choices:
         passed, failed = priors.get((provider_key, subfamily, str(choice)), (0, 0))
         total = passed + failed
@@ -476,15 +526,73 @@ def preferred_default_country(provider: str, name: str, choices: list[str], fall
                 score = 5
             elif rate >= 0.5:
                 score = 3
-            elif rate == 0.0:
+            elif rate == 0.0 and total >= 2:
                 score = -3
-        scored_choices.append((score, str(choice)))
+            elif rate == 0.0:
+                score = -1
+        evidence = passed - failed
+        scored_choices.append((score, evidence, passed, -failed, str(choice)))
 
-    best_score = max(score for score, _ in scored_choices) if scored_choices else 0
+    best_score = max(score for score, *_rest in scored_choices) if scored_choices else 0
     if best_score <= 0:
         return fallback_choice
 
-    best_choices = [choice for score, choice in scored_choices if score == best_score]
+    best_tuple = max(scored_choices)
+    best_choices = [choice for score, evidence, passed, neg_failed, choice in scored_choices if (score, evidence, passed, neg_failed) == best_tuple[:4]]
+    if fallback_choice in best_choices:
+        return fallback_choice
+    return sorted(best_choices)[0]
+
+
+def preferred_default_country_for_record(provider: str, category: str, name: str, choices: list[str], fallback_choice: str) -> str:
+    provider_key = str(provider or '').upper().strip()
+    if provider_key not in {'WORLDBANK', 'IMF'}:
+        return fallback_choice
+
+    subfamily = provider_subfamily_key(provider_key, name)
+    priors = _load_empirical_country_subfamily_priors()
+    category_priors = _load_empirical_country_category_priors()
+    category_key = str(category or '').strip()
+
+    scored_choices: list[tuple[int, int, int, int, str]] = []
+    for choice in choices:
+        passed, failed = priors.get((provider_key, subfamily, str(choice)), (0, 0))
+        total = passed + failed
+        score = 0
+        if total >= 1:
+            rate = passed / total if total else 0.0
+            if rate == 1.0:
+                score = 5
+            elif rate >= 0.5:
+                score = 3
+            elif rate == 0.0 and total >= 2:
+                score = -3
+            elif rate == 0.0:
+                score = -1
+        c_passed = c_failed = 0
+        if category_key:
+            c_passed, c_failed = category_priors.get((provider_key, category_key, str(choice)), (0, 0))
+            c_total = c_passed + c_failed
+            if c_total >= 2:
+                c_rate = c_passed / c_total if c_total else 0.0
+                if c_rate >= 0.75:
+                    score += 3
+                elif c_rate >= 0.6:
+                    score += 2
+                elif c_rate >= 0.5:
+                    score += 1
+                elif c_rate == 0.0:
+                    score -= 3
+        evidence = (passed - failed) + (c_passed - c_failed)
+        total_pass = passed + c_passed
+        total_fail = failed + c_failed
+        scored_choices.append((score, evidence, total_pass, -total_fail, str(choice)))
+
+    best_score = max(score for score, *_rest in scored_choices) if scored_choices else 0
+    if best_score <= 0:
+        return fallback_choice
+    best_tuple = max(scored_choices)
+    best_choices = [choice for score, evidence, passed, neg_failed, choice in scored_choices if (score, evidence, passed, neg_failed) == best_tuple[:4]]
     if fallback_choice in best_choices:
         return fallback_choice
     return sorted(best_choices)[0]
@@ -901,7 +1009,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     transform = infer_transform_family(name, description, str(row.get('unit') or ''), str(row.get('code') or ''))
     defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider, ['United States'])
     choice = defaults[stable_seed(provider, name) % len(defaults)]
-    choice = preferred_default_country(provider_upper, name, defaults, choice)
+    choice = preferred_default_country_for_record(provider_upper, str(row.get('category') or ''), name, defaults, choice)
     phrase = natural_phrase_from_name(name, description)
 
     if provider_upper == 'COINGECKO':

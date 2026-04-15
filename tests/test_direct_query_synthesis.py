@@ -6,6 +6,7 @@ from scripts.validation.common import (
     default_query_for_row,
     family_success_adjustment,
     heuristic_subfamily_adjustment,
+    preferred_default_country_for_record,
     preferred_default_country,
     provider_family_key,
     provider_subfamily_key,
@@ -443,6 +444,17 @@ def test_preferred_default_country_uses_probe_history_for_worldbank_subfamilies(
     assert preferred_default_country(
         "WORLDBANK",
         "Completion rate, lower secondary education, fourth quintile, male, adjusted location parity index (LPIA)",
+        defaults,
+        "United States",
+    ) == "India"
+
+
+def test_preferred_default_country_for_record_uses_category_country_priors():
+    defaults = ["United States", "China", "India", "Brazil", "Japan", "Germany"]
+    assert preferred_default_country_for_record(
+        "WORLDBANK",
+        "Education Statistics",
+        "Percentage of qualified teachers in primary education, both sexes (%)",
         defaults,
         "United States",
     ) == "India"
