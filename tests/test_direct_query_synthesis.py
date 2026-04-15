@@ -326,6 +326,21 @@ def test_audit_direct_query_shape_flags_worldbank_macro_exposure_queries():
     assert "worldbank_macro_exposure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_specialized_source_category():
+    audit = audit_direct_query_shape(
+        {
+            "query": "China All instruments USD Ext. Debt Service Pmt DI: Intercom Lending More than 18 to 24 Prin. and Int. from World Bank",
+            "origin": {
+                "name": "All instruments, USD, Ext. Debt Service Pmt, DI: Intercom Lending, More than 18 to 24, Prin. and Int.",
+                "category": "Quarterly External Debt Statistics SDDS",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {

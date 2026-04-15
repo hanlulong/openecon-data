@@ -88,6 +88,8 @@ def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):
     assert len(ambiguity_rows) == 3
     assert direct_rows[0]["provenance"]["holdout_split"] == "batch_review"
     assert direct_rows[0]["provenance"]["batch_plan"] == "next_review_batch"
+    assert "description" in direct_rows[0]["origin"]
+    assert "raw_metadata" in direct_rows[0]["origin"]
     assert multiround_rows[0]["family"] == "transform_switch_chain"
     assert ambiguity_rows[0]["provenance"]["family"] == "dominant_interpretation_cases"
 
@@ -402,6 +404,39 @@ def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_
     selected = select_quality_screened_direct_records(records, 1)
 
     assert [row["id"] for row in selected] == ["worldbank-literacy-2"]
+
+
+def test_select_quality_screened_direct_records_prefers_completion_over_specialized_worldbank_source():
+    records = [
+        {
+            "id": "worldbank-qeds",
+            "query": "China All instruments USD Ext. Debt Service Pmt DI: Intercom Lending More than 18 to 24 Prin. and Int. from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "All instruments, USD, Ext. Debt Service Pmt, DI: Intercom Lending, More than 18 to 24, Prin. and Int.",
+                "description": "",
+                "category": "Quarterly External Debt Statistics SDDS",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["worldbank_specialized_source_family"]},
+        },
+        {
+            "id": "worldbank-completion-2",
+            "query": "India male Completion rate lower secondary education adjusted location parity index (LPIA) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Completion rate, lower secondary education, adjusted location parity index (LPIA), male",
+                "description": "",
+                "category": "Education Statistics",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-completion-2"]
 
 
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
