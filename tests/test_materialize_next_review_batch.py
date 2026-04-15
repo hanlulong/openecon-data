@@ -175,3 +175,292 @@ def test_select_quality_screened_direct_records_avoids_high_risk_oecd_methodolog
     selected = select_quality_screened_direct_records(records, 1)
 
     assert [row["id"] for row in selected] == ["oecd-clear"]
+
+
+def test_select_quality_screened_direct_records_can_prefer_medium_risk_when_specificity_is_much_stronger():
+    records = [
+        {
+            "id": "oecd-generic-low",
+            "query": "Germany Water use from OECD",
+            "origin": {"name": "Water use", "description": ""},
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+        {
+            "id": "oecd-specific-medium",
+            "query": "Canada All countries National CPI Growth rate over one year All items less food and energy from OECD",
+            "origin": {
+                "name": "National CPI, Growth rate over one year, All items less food and energy",
+                "description": "",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["acronym_dense"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["oecd-specific-medium"]
+
+
+def test_select_quality_screened_direct_records_prefers_simple_coingecko_assets_over_complex_slugs():
+    records = [
+        {
+            "id": "coingecko-complex",
+            "query": "treasury-bond-eth-tokenized-stock-defichain cryptocurrency price from CoinGecko",
+            "provider_stratum": "CoinGecko",
+            "origin": {
+                "name": "iShares 20+ Year Treasury Bond ETF Defichain",
+                "description": "",
+                "source_provider": "CoinGecko",
+                "source_indicator_code": "treasury-bond-eth-tokenized-stock-defichain",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+        {
+            "id": "coingecko-simple",
+            "query": "Sushi cryptocurrency price from CoinGecko",
+            "provider_stratum": "CoinGecko",
+            "origin": {
+                "name": "Sushi",
+                "description": "",
+                "source_provider": "CoinGecko",
+                "source_indicator_code": "sushi",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["coingecko-simple"]
+
+
+def test_select_quality_screened_direct_records_avoids_fred_regional_price_slices_when_generic_series_exists():
+    records = [
+        {
+            "id": "fred-regional-price",
+            "query": "US Average Price: Pork Sirloin Roast Bone-In (Cost per Pound/453.6 Grams) in the South Census Region - Urban from FRED",
+            "provider_stratum": "FRED",
+            "origin": {"name": "Average Price: Pork Sirloin Roast Bone-In", "description": ""},
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["multi_modifier_title"]},
+        },
+        {
+            "id": "fred-generic",
+            "query": "US Consumer Price Indices (CPIs HICPs) from FRED",
+            "provider_stratum": "FRED",
+            "origin": {"name": "Consumer Price Indices (CPIs HICPs)", "description": ""},
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["fred-generic"]
+
+
+def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_binary_policy_query():
+    records = [
+        {
+            "id": "worldbank-binary-policy",
+            "query": "Brazil Sons and daughters have equal rights to inherit assets from their parents (1=yes; 0=no) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {"name": "Sons and daughters have equal rights to inherit assets from their parents (1=yes; 0=no)", "description": ""},
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["worldbank_binary_policy_query"]},
+        },
+        {
+            "id": "worldbank-functional-difficulty",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {"name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)", "description": ""},
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-functional-difficulty"]
+
+
+def test_select_quality_screened_direct_records_prefers_oecd_share_of_students_over_cpi_energy_bundle():
+    records = [
+        {
+            "id": "oecd-cpi-bundle",
+            "query": "Canada All countries National CPI Growth rate over one year All items less food and energy from OECD",
+            "provider_stratum": "OECD",
+            "origin": {
+                "name": "National CPI, Growth rate over one year, All items less food and energy",
+                "description": "",
+                "source_provider": "OECD",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query", "acronym_dense", "multi_modifier_title"]},
+        },
+        {
+            "id": "oecd-student-share",
+            "query": "Japan Share of students enrolled in school and work-based programmes from OECD",
+            "provider_stratum": "OECD",
+            "origin": {
+                "name": "Share of students enrolled in school and work-based programmes",
+                "description": "",
+                "source_provider": "OECD",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["oecd-student-share"]
+
+
+def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_attendance_variant():
+    records = [
+        {
+            "id": "worldbank-attendance",
+            "query": "Japan rural Adjusted net attendance rate one year before the official primary entry age male (%) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Adjusted net attendance rate one year before the official primary entry age, male",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query", "multi_modifier_title"]},
+        },
+        {
+            "id": "worldbank-literacy",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-literacy"]
+
+
+def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
+    records = [
+        {
+            "id": "oecd-afdd",
+            "query": "Japan Africa's Development Dynamics (AfDD) Table 36 - Employment by business activity and skill level from OECD",
+            "provider_stratum": "OECD",
+            "origin": {
+                "name": "Africa's Development Dynamics (AfDD) Table 36 - Employment by business activity and skill level",
+                "description": "",
+                "source_provider": "OECD",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["oecd_low_viability_family"]},
+        },
+        {
+            "id": "oecd-student-share-2",
+            "query": "Japan Share of students enrolled in school and work-based programmes from OECD",
+            "provider_stratum": "OECD",
+            "origin": {
+                "name": "Share of students enrolled in school and work-based programmes",
+                "description": "",
+                "source_provider": "OECD",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["oecd-student-share-2"]
+
+
+def test_select_quality_screened_direct_records_prefers_eurostat_household_composition_over_vine_breakdown():
+    records = [
+        {
+            "id": "eurostat-vines",
+            "query": "Area under wine-grape vine varieties broken down by vine variety and by age of the vines - Germany from Eurostat",
+            "provider_stratum": "Eurostat",
+            "origin": {
+                "name": "Area under wine-grape vine varieties broken down by vine variety and by age of the vines - Germany",
+                "description": "",
+                "source_provider": "Eurostat",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["eurostat_agri_breakdown_query"]},
+        },
+        {
+            "id": "eurostat-household",
+            "query": "Germany household composition degree of urbanisation and frequency from Eurostat",
+            "provider_stratum": "Eurostat",
+            "origin": {
+                "name": "Persons communicating via social media by income quintile, household composition, degree of urbanisation and frequency",
+                "description": "",
+                "source_provider": "Eurostat",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["eurostat-household"]
+
+
+def test_select_quality_screened_direct_records_prefers_imf_consumer_prices_over_debt_schedule():
+    records = [
+        {
+            "id": "imf-debt-schedule",
+            "query": "Japan Other Sectors Principal External Debt Debt-service Payment schedule More than 9 and up to 12 months from IMF",
+            "provider_stratum": "IMF",
+            "origin": {
+                "name": "External Debt, Other Sectors, Debt-service Payment schedule, More than 9 and up to 12 months, Principal",
+                "description": "",
+                "source_provider": "IMF",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["imf_low_viability_family"]},
+        },
+        {
+            "id": "imf-cpi",
+            "query": "United States Consumer Price Index Food and non-alcoholic beverages Base Year = 2005 from IMF",
+            "provider_stratum": "IMF",
+            "origin": {
+                "name": "Prices, Consumer Price Index, Food and non-alcoholic beverages, COICOP, Base Year = 2005, Index",
+                "description": "",
+                "source_provider": "IMF",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query", "multi_modifier_title"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["imf-cpi"]
+
+
+def test_select_quality_screened_direct_records_prefers_fred_cpi_over_naics_revenue():
+    records = [
+        {
+            "id": "fred-revenue",
+            "query": "US Total Revenue for 6211: Offices of Physicians - Taxable Establishments Subject to Federal Income Tax from FRED",
+            "provider_stratum": "FRED",
+            "origin": {
+                "name": "Total Revenue for 6211: Offices of Physicians - Taxable, Establishments Subject to Federal Income Tax",
+                "description": "",
+                "source_provider": "FRED",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["fred_low_viability_family"]},
+        },
+        {
+            "id": "fred-cpi",
+            "query": "US Consumer Price Indices (CPIs HICPs) from FRED",
+            "provider_stratum": "FRED",
+            "origin": {
+                "name": "Consumer Price Indices (CPIs HICPs)",
+                "description": "",
+                "source_provider": "FRED",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["fred-cpi"]

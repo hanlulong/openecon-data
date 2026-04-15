@@ -59,10 +59,12 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
         specificity = direct_query_specificity_score(record)
+        risk_group = 1 if risk_rank >= 2 else 0
         return (
+            risk_group,
+            -specificity,
             risk_rank,
             len(reasons),
-            -specificity,
             len(str(record.get('query') or '')),
             str(record.get('id') or ''),
         )

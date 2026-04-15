@@ -263,6 +263,9 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     query = str(record.get('query') or '')
     name = str(origin.get('name') or record.get('name') or '').strip()
     description = str(origin.get('description') or record.get('description') or '').strip()
+    provider = str(record.get('provider_stratum') or record.get('provider') or origin.get('source_provider') or '').upper()
+    lowered = f"{query} {name} {description}".lower()
+    category = str(origin.get('category') or '').lower()
 
     score = 0
     score += len({token for token in informative_tokens(name)})
@@ -278,6 +281,82 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
         flags=re.IGNORECASE,
     )
     score += min(3, len({token for token in informative_tokens(normalized_query)}))
+    if provider == 'IMF':
+        if any(term in lowered for term in ['consumer prices', 'producer price', 'harmonized', 'expenditure of households', 'index']):
+            score += 4
+        if any(term in lowered for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'dataset:', 'claims', 'liabilities']):
+            score -= 4
+        if any(term in lowered for term in ['debt-service payment schedule', 'more than 9 and up to 12 months', 'more than 18 and less than 24 months', 'by cofog', 'wages and salaries in kind']):
+            score -= 5
+        if 'industrial production' in lowered and 'manufacture of' in lowered:
+            score -= 4
+        if any(term in lowered for term in ['other postal services', 'equities domestic company', 'financial market prices end of period']):
+            score -= 4
+    if provider == 'WORLDBANK':
+        if any(term in category for term in ['global jobs indicators', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'identification for development (id4d) data', 'g20 financial inclusion indicators']):
+            score -= 4
+        if any(term in lowered for term in ['q1', 'q2', 'q3', 'q4', 'q5', 'de facto', '1st graders', 'moving average', 'mobile phone', 'mobile money account', 'wage gap', 'grace period', 'held by nonresidents']):
+            score -= 3
+        if len(re.findall(r'\b[a-z]{2,6}\.', lowered)) >= 2:
+            score -= 6
+        if any(term in lowered for term in ['learning deprivation', 'timss', 'pirls', 'mpl low']):
+            score -= 4
+        if any(term in lowered for term in ['net attendance rate', 'out-of-school rate', 'gender parity index', 'gpia', 'attendance ratio', 'youth idle rate', 'household survey data']):
+            score -= 4
+        if any(term in lowered for term in ['contract teachers', 'off-budget', 'salary expenditures per teacher', 'share of tertiary expenditures', '(1=yes; 0=no)', 'rights to inherit assets', 'are other banks permitted', 'pasec', 'no functional difficulty']):
+            score -= 5
+        if any(term in lowered for term in ['youth literacy rate', 'population 25-64 years', 'both sexes']) and any(term in lowered for term in ['rural', 'male', 'female', 'literacy rate']):
+            score -= 4
+        if any(term in lowered for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
+            score -= 5
+        if any(term in lowered for term in ['literacy rate', 'per student expenditure', 'completion rate', 'adjusted location parity index', 'any degree of functional difficulty']):
+            score += 3
+    if provider == 'COINGECKO':
+        code = str(origin.get('source_indicator_code') or record.get('code') or '').lower()
+        code_parts = [part for part in code.split('-') if part]
+        if code.count('-') >= 3:
+            score -= min(6, code.count('-'))
+        if any(term in code for term in ['tokenized-stock', 'fan-token', 'memecoin', 'veda-vault', 'wrapped-', 'wrapped', 'defichain', 'seized-by', 'bridged-', '-lp']):
+            score -= 4
+        if len(code_parts) <= 1 and 3 <= len(code) <= 12:
+            score += 3
+        if len(str(name).split()) <= 2 and 3 <= len(name) <= 20:
+            score += 2
+    if provider == 'FRED':
+        if any(term in lowered for term in ['average price:', 'cost per pound', 'census region', 'market hotness', 'page view count per property', 'median listing price per square feet', '(cbsa)']):
+            score -= 5
+        if any(term in lowered for term in ['level rest of the world', 'revaluation state and local governments']):
+            score -= 4
+        if re.search(r'total revenue for\s+\d{4}', lowered):
+            score -= 5
+        if any(term in lowered for term in ['net equity in life insurance and pension funds', 'asset (ima)']):
+            score -= 5
+        if any(term in lowered for term in ['employer firms total revenue', 'total expense for', 'establishments subject to federal income tax', 'defined benefit retirement funds', 'commercial paper; asset']):
+            score -= 4
+        if any(term in category for term in ['search: inflation', 'search: cpi', 'search: gas price', 'tax data']):
+            score += 3
+    if provider == 'OECD':
+        if any(term in lowered for term in ['all countries', 'growth rate over one year', 'less food and energy', 'coicop', 'sut ', 'taxes less subsidies', 'share of final consumption expenditure', 'public services and governance of the policy cycle', 'classroom teachers and academic staffs']):
+            score -= 4
+        if 'new entrants to and first-time graduates' in lowered:
+            score -= 4
+        if 'educational attainment level age group and gender' in lowered:
+            score -= 3
+        if any(term in lowered for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition']):
+            score -= 5
+        if any(term in lowered for term in ['analysis by armed group', 'west africa', 'real labour productivity', 'regions']):
+            score -= 4
+        if 'share of students enrolled in school and work-based programmes' in lowered:
+            score += 4
+        if any(term in lowered for term in ['social security contributions and payroll taxes', 'household income and saving in the national accounts']):
+            score += 3
+    if provider == 'EUROSTAT':
+        if any(term in lowered for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
+            score -= 5
+        if any(term in lowered for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in lowered for term in ['age', 'sex', 'most frequent activity']):
+            score -= 4
+        if any(term in lowered for term in ['household composition', 'degree of urbanisation', 'fixed moment in time']):
+            score += 3
     return score
 
 
@@ -380,7 +459,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     if provider_upper == 'COINGECKO':
         return f"{derive_coin_query_name(row)} cryptocurrency price from CoinGecko"
     if provider_upper == 'EXCHANGERATE':
-        return choice
+        return f"{choice} exchange rate from ExchangeRate"
     if provider_upper == 'COMTRADE':
         commodity = re.sub(r'^\d+\s*-\s*', '', name).strip() or name
         return f"{choice} exports of {commodity} from Comtrade"
@@ -493,24 +572,78 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     ):
         reasons.append('micro_demographic_slice')
     if (
-        (re.search(r'\bage\s+\d{1,2}(?:-\d{1,2})?\b', query_lower) and any(term in query_lower for term in ['school', 'schooling', 'education', 'barro-lee']))
+        (re.search(r'\baged?\s+\d{1,2}(?:-\d{1,2})?\b', query_lower) and any(term in query_lower for term in ['school', 'schooling', 'education', 'barro-lee', 'primary education', 'secondary education', 'tertiary education']))
         or ('schools with access to internet' in query_lower and any(term in query_lower for term in ['rural', 'urban', 'male', 'female']))
     ):
         reasons.append('education_subgroup_slice')
     if any(term in query_lower for term in ['poorest', 'richest', 'quintile', 'decile', 'percentile']):
         reasons.append('socioeconomic_slice')
+    if (
+        ('% age' in query_lower or 'ages ' in query_lower or 'age ' in query_lower)
+        and any(term in query_lower for term in [
+            'borrowed',
+            'received',
+            'can send',
+            'can apply',
+            'first sexual intercourse',
+            'older',
+            'laborforce',
+            'mobile phone',
+            'personal safety',
+            'safety concerns',
+            'small firms',
+        ])
+    ):
+        reasons.append('survey_micro_slice')
+    if any(term in query_lower for term in ['wage gap', 'public to private']) and re.search(r'\baged?\s+\d{1,2}', query_lower):
+        reasons.append('gap_subgroup_query')
+    if any(term in query_lower for term in ['official flows', 'un agencies', 'unpbf']):
+        reasons.append('official_flow_subseries')
+    if any(term in query_lower for term in ['bank loan', 'line of credit', 'mobile money account']) and any(term in query_lower for term in ['small firms', 'out of labor force', '% age', 'older']):
+        reasons.append('financial_inclusion_slice')
+    if any(term in query_lower for term in ['debt securities held by nonresidents', 'held by nonresidents']) and any(term in query_lower for term in ['short term', 'long term', 'total']):
+        reasons.append('holder_term_breakdown_query')
+    if 'ownership' in query_lower and any(term in query_lower for term in ['private', 'public', 'state']):
+        reasons.append('ownership_breakdown_query')
     if 'definition' in query_lower and 'survey' in query_lower:
         reasons.append('definition_survey_query')
+    if 'definition' in query_lower and any(term in query_lower for term in ['debt', 'deposits', 'assets', 'liabilities', 'gross value added', 'claims']):
+        reasons.append('definition_financial_query')
     if 'labor markets' in query_lower and 'number of persons' in query_lower:
         reasons.append('classification_labor_query')
     if 'gross value added' in query_lower and any(term in query_lower for term in ['electricity', 'gas', 'water supply']):
         reasons.append('classification_gva_query')
+    if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities']):
+        reasons.append('imf_complex_finance_family')
+    if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower):
+        reasons.append('imf_low_viability_family')
+    if any(term in origin_name_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
+        reasons.append('worldbank_niche_catalog_family')
+    category_lower = str(origin.get('category') or '').lower()
+    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub']):
+        reasons.append('worldbank_niche_catalog_family')
+    if any(term in query_lower for term in ['(1=yes; 0=no)', 'rights to inherit assets', 'are other banks permitted']):
+        reasons.append('worldbank_binary_policy_query')
+    if any(term in query_lower for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
+        reasons.append('worldbank_education_finance_query')
+    if any(term in query_lower for term in ['no functional difficulty', 'youth literacy rate', 'population 25-64 years']) and any(term in query_lower for term in ['rural', 'male', 'female', 'both sexes', 'literacy rate']):
+        reasons.append('worldbank_demographic_literacy_slice')
+    if any(term in query_lower for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner']):
+        reasons.append('worldbank_id_financial_inclusion_query')
+    if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity']):
+        reasons.append('oecd_low_viability_family')
+    if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
+        reasons.append('eurostat_agri_breakdown_query')
+    if any(term in query_lower for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in query_lower for term in ['sex', 'age', 'most frequent activity']):
+        reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
         reasons.append('accounting_artifact_query')
     if re.search(r'\b(scenario|scenarios|projection|projections|forecast|forecasts|fua|fuas)\b', query_lower):
         reasons.append('scenario_projection_query')
+    if re.search(r'total revenue for\s+\d{4}', query_lower) or any(term in query_lower for term in ['net equity in life insurance and pension funds', 'asset (ima)', 'employer firms total revenue', 'total expense for', 'establishments subject to federal income tax', 'defined benefit retirement funds', 'commercial paper; asset']):
+        reasons.append('fred_low_viability_family')
     methodology_markers = [
         'ppp',
         'ppps',
@@ -545,12 +678,30 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'micro_demographic_slice',
         'education_subgroup_slice',
         'socioeconomic_slice',
+        'survey_micro_slice',
+        'gap_subgroup_query',
+        'official_flow_subseries',
+        'financial_inclusion_slice',
+        'holder_term_breakdown_query',
+        'ownership_breakdown_query',
         'definition_survey_query',
+        'definition_financial_query',
         'classification_labor_query',
         'classification_gva_query',
+        'imf_complex_finance_family',
+        'imf_low_viability_family',
+        'worldbank_niche_catalog_family',
+        'worldbank_binary_policy_query',
+        'worldbank_education_finance_query',
+        'worldbank_demographic_literacy_slice',
+        'worldbank_id_financial_inclusion_query',
+        'oecd_low_viability_family',
+        'eurostat_agri_breakdown_query',
+        'eurostat_cross_tab_query',
         'subnational_abbrev_ambiguous',
         'accounting_artifact_query',
         'scenario_projection_query',
+        'fred_low_viability_family',
         'methodology_dense',
     ]):
         risk_level = 'high'

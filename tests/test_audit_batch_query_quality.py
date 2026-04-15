@@ -274,6 +274,180 @@ def test_audit_batch_query_quality_flags_socioeconomic_slice_queries(tmp_path: P
     assert "socioeconomic_slice" in flagged["reasons"]
 
 
+def test_audit_batch_query_quality_flags_survey_micro_slice_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Japan Borrowed to start or operate a business poorest 40% (% age 15+) from World Bank",
+                "origin": {
+                    "name": "Borrowed to start or operate a business, poorest 40% (% age 15+)"
+                },
+            },
+            {
+                "id": "direct-2",
+                "query": "Germany Palm Oil Land Area by type of ownership: Private (in Hectares) from World Bank",
+                "origin": {
+                    "name": "Palm Oil Land Area by type of ownership: Private (in Hectares)"
+                },
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 2
+    reasons = {row["id"]: set(row["reasons"]) for row in report["flagged_rows"]}
+    assert "survey_micro_slice" in reasons["direct-1"]
+    assert "ownership_breakdown_query" in reasons["direct-2"]
+
+
+def test_audit_batch_query_quality_flags_mobile_phone_age_slice_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany No mobile phone due to personal safety concerns (% age 15+) from World Bank",
+                "origin": {
+                    "name": "No mobile phone due to personal safety concerns (% age 15+)"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "survey_micro_slice" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_worldbank_niche_breakdown_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany aged 15-64 total Public to private wage gap from World Bank",
+                "origin": {"name": "Public to private wage gap, aged 15-64, total"},
+            },
+            {
+                "id": "direct-2",
+                "query": "Net official flows from UN agencies UNPBF (current US$) from World Bank",
+                "origin": {"name": "Net official flows from UN agencies, UNPBF (current US$)"},
+            },
+            {
+                "id": "direct-3",
+                "query": "Japan Small firms with a bank loan or line of credit (%) from World Bank",
+                "origin": {"name": "Small firms with a bank loan or line of credit (%)"},
+            },
+            {
+                "id": "direct-4",
+                "query": "China total short term 15_Debt securities held by nonresidents from World Bank",
+                "origin": {"name": "15_Debt securities held by nonresidents, total, short term"},
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 4
+    reasons = {row["id"]: set(row["reasons"]) for row in report["flagged_rows"]}
+    assert "gap_subgroup_query" in reasons["direct-1"]
+    assert "official_flow_subseries" in reasons["direct-2"]
+    assert "financial_inclusion_slice" in reasons["direct-3"]
+    assert "holder_term_breakdown_query" in reasons["direct-4"]
+
+
+def test_audit_batch_query_quality_flags_worldbank_niche_catalog_families(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany No mobile phone due to personal safety concerns (% age 15+) from World Bank",
+                "origin": {
+                    "name": "No mobile phone due to personal safety concerns (% age 15+)",
+                    "category": "Global Findex database",
+                },
+            },
+            {
+                "id": "direct-2",
+                "query": "India GOAL 11 Sustainable Cities and Communities (5 year moving average) from World Bank",
+                "origin": {
+                    "name": "GOAL 11: Sustainable Cities and Communities (5 year moving average)",
+                    "category": "Statistical Performance Indicators (SPI)",
+                },
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 2
+    reasons = {row["id"]: set(row["reasons"]) for row in report["flagged_rows"]}
+    assert "worldbank_niche_catalog_family" in reasons["direct-1"]
+    assert "worldbank_niche_catalog_family" in reasons["direct-2"]
+
+
 def test_audit_batch_query_quality_flags_classification_labor_queries(tmp_path: Path):
     dataset = tmp_path / "dataset.jsonl"
     output = tmp_path / "audit.json"
@@ -307,3 +481,73 @@ def test_audit_batch_query_quality_flags_classification_labor_queries(tmp_path: 
     assert report["summary"]["high_risk_rows"] == 1
     flagged = report["flagged_rows"][0]
     assert "classification_labor_query" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_definition_financial_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany Bhutan definition Non-Hydro Power Debt from IMF",
+                "origin": {
+                    "name": "Bhutan definition, non-hydro power debt"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "definition_financial_query" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_imf_complex_finance_family_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "China Inward Debt Positions (Net): Resident Financial Intermediaries from IMF",
+                "origin": {
+                    "name": "Inward Debt Positions (Net): Resident Financial Intermediaries, Euros"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "imf_complex_finance_family" in flagged["reasons"]

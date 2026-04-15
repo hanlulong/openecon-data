@@ -46,6 +46,20 @@ def test_default_query_for_row_prefers_slug_for_complex_coingecko_assets():
     assert query.lower().endswith("from coingecko")
 
 
+def test_default_query_for_row_makes_exchange_rate_provider_explicit():
+    row = {
+        "provider": "ExchangeRate",
+        "code": "USDGBP",
+        "name": "USD to GBP",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query.lower().endswith("exchange rate from exchangerate")
+    assert " to " in query
+
+
 def test_default_query_for_row_naturalizes_comtrade_codes_into_exports_query():
     row = {
         "provider": "Comtrade",
@@ -202,3 +216,87 @@ def test_audit_direct_query_shape_flags_definition_survey_queries():
 
     assert audit["risk_level"] == "high"
     assert "definition_survey_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_binary_policy_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Brazil Sons and daughters have equal rights to inherit assets from their parents (1=yes; 0=no) from World Bank",
+            "origin": {"name": "Sons and daughters have equal rights to inherit assets from their parents (1=yes; 0=no)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_binary_policy_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_publication_table_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Japan Africa's Development Dynamics (AfDD) Table 36 - Employment by business activity and skill level from OECD",
+            "origin": {"name": "Africa's Development Dynamics (AfDD) Table 36 - Employment by business activity and skill level"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_vine_breakdown_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Area under wine-grape vine varieties broken down by vine variety and by age of the vines - Cyprus from Eurostat",
+            "origin": {"name": "Area under wine-grape vine varieties broken down by vine variety and by age of the vines - Cyprus"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_agri_breakdown_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_debt_schedule_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Japan Other Sectors Principal External Debt Debt-service Payment schedule More than 9 and up to 12 months from IMF",
+            "origin": {"name": "External Debt, Other Sectors, Debt-service Payment schedule, More than 9 and up to 12 months, Principal"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_fred_naics_revenue_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "US Total Revenue for 6211: Offices of Physicians - Taxable Establishments Subject to Federal Income Tax from FRED",
+            "origin": {"name": "Total Revenue for 6211: Offices of Physicians - Taxable, Establishments Subject to Federal Income Tax"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "fred_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_id_challenge_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Japan Challenge: Applying for a job total (% of population ages 15+ without an ID) from World Bank",
+            "origin": {"name": "Challenge: Applying for a job, total (% of population ages 15+ without an ID)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_id_financial_inclusion_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Canada Trends of political violence in West Africa: Analysis by armed group from OECD",
+            "origin": {"name": "Trends of political violence in West Africa: Analysis by armed group"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
