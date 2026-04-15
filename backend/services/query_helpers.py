@@ -28,7 +28,33 @@ def extract_countries_from_query(query: str) -> List[str]:
     Returns:
         List of ISO Alpha-2 country codes.
     """
-    countries = CountryResolver.detect_all_countries_in_query(query)
+    sanitized_query = query
+    try:
+        from ..routing.unified_router import detect_explicit_provider_match
+
+        explicit_match = detect_explicit_provider_match(query)
+        if explicit_match:
+            provider, matched_keyword = explicit_match
+            query_lower = query.lower()
+            if matched_keyword.endswith("(at start)"):
+                provider_lower = provider.lower()
+                sanitized_query = re.sub(
+                    rf"^\s*{re.escape(provider_lower)}\b",
+                    " ",
+                    query_lower,
+                    flags=re.IGNORECASE,
+                )
+            else:
+                sanitized_query = re.sub(
+                    re.escape(matched_keyword),
+                    " ",
+                    query,
+                    flags=re.IGNORECASE,
+                )
+    except Exception:
+        sanitized_query = query
+
+    countries = CountryResolver.detect_all_countries_in_query(sanitized_query)
     if countries:
         logger.info("🌍 Fallback country extraction found countries: %s", countries)
     return countries

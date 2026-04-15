@@ -46,8 +46,10 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     # LLM_PROVIDER options: openrouter, vllm, ollama, lm-studio
-    llm_provider: str = Field(default="vllm", alias="LLM_PROVIDER")
-    llm_model: str | None = Field(default="gpt-oss-120b", alias="LLM_MODEL")
+    # Match .env.example defaults so a stock local setup uses OpenRouter unless
+    # the operator explicitly opts into a local model server.
+    llm_provider: str = Field(default="openrouter", alias="LLM_PROVIDER")
+    llm_model: str | None = Field(default="openai/gpt-4o-mini", alias="LLM_MODEL")
     llm_base_url: str | None = Field(default="http://localhost:8000", alias="LLM_BASE_URL")
     llm_timeout: int = Field(default=120, alias="LLM_TIMEOUT")  # Higher default for local models
     # vLLM-specific settings (for SSH-tunneled or local vLLM servers)
