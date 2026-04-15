@@ -21,6 +21,7 @@ VALIDATION_PRIVATE = ROOT / 'validation_private'
 _EMPIRICAL_CATEGORY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_FAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_SUBFAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
+_EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS: dict[tuple[str, str, str], tuple[int, int]] | None = None
 
 DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'FRED': ['US'],
@@ -392,6 +393,101 @@ def subfamily_success_adjustment(provider: str, name: str) -> int:
     if rate >= 0.75 and total >= 2:
         return 3
     return 0
+
+
+def _leading_default_country(query: str, provider: str) -> str | None:
+    text = str(query or '').strip().lower()
+    provider_value = str(provider or '').strip().lower()
+    choices_source = []
+    for key, values in DEFAULT_COUNTRIES_BY_PROVIDER.items():
+        if str(key).strip().lower() == provider_value:
+            choices_source = values
+            break
+    choices = [str(choice) for choice in choices_source if isinstance(choice, str)]
+    for choice in sorted(choices, key=len, reverse=True):
+        choice_lower = choice.lower()
+        if text == choice_lower or text.startswith(choice_lower + ' '):
+            return choice
+    return None
+
+
+def _load_empirical_country_subfamily_priors() -> dict[tuple[str, str, str], tuple[int, int]]:
+    global _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS
+    if _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS is not None:
+        return _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS
+
+    priors: dict[tuple[str, str, str], list[int]] = {}
+    reports_dir = VALIDATION_PRIVATE / 'reports'
+    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
+    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
+        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
+        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
+        if not dataset_path.exists():
+            continue
+        try:
+            dataset_rows = {}
+            for line in dataset_path.read_text(encoding='utf-8').splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    dataset_rows[str(row.get('id') or '')] = row
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+
+        for result in report.get('results', []):
+            row = dataset_rows.get(str(result.get('session_id') or ''))
+            if not row:
+                continue
+            provider = str(result.get('provider_stratum') or '').upper()
+            name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
+            subfamily = provider_subfamily_key(provider, name)
+            country = _leading_default_country(str(row.get('query') or ''), provider)
+            if not provider or not subfamily or not country:
+                continue
+            bucket = priors.setdefault((provider, subfamily, country), [0, 0])
+            if result.get('viability_pass'):
+                bucket[0] += 1
+            else:
+                bucket[1] += 1
+
+    _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS = {
+        key: (counts[0], counts[1]) for key, counts in priors.items()
+    }
+    return _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS
+
+
+def preferred_default_country(provider: str, name: str, choices: list[str], fallback_choice: str) -> str:
+    provider_key = str(provider or '').upper().strip()
+    if provider_key not in {'WORLDBANK', 'IMF'}:
+        return fallback_choice
+    subfamily = provider_subfamily_key(provider_key, name)
+    if not subfamily:
+        return fallback_choice
+
+    priors = _load_empirical_country_subfamily_priors()
+    scored_choices: list[tuple[int, str]] = []
+    for choice in choices:
+        passed, failed = priors.get((provider_key, subfamily, str(choice)), (0, 0))
+        total = passed + failed
+        score = 0
+        if total >= 1:
+            rate = passed / total if total else 0.0
+            if rate == 1.0:
+                score = 5
+            elif rate >= 0.5:
+                score = 3
+            elif rate == 0.0:
+                score = -3
+        scored_choices.append((score, str(choice)))
+
+    best_score = max(score for score, _ in scored_choices) if scored_choices else 0
+    if best_score <= 0:
+        return fallback_choice
+
+    best_choices = [choice for score, choice in scored_choices if score == best_score]
+    if fallback_choice in best_choices:
+        return fallback_choice
+    return sorted(best_choices)[0]
 
 
 def heuristic_subfamily_adjustment(provider: str, category: str, name: str) -> int:
@@ -805,6 +901,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     transform = infer_transform_family(name, description, str(row.get('unit') or ''), str(row.get('code') or ''))
     defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider, ['United States'])
     choice = defaults[stable_seed(provider, name) % len(defaults)]
+    choice = preferred_default_country(provider_upper, name, defaults, choice)
     phrase = natural_phrase_from_name(name, description)
 
     if provider_upper == 'COINGECKO':

@@ -6,6 +6,7 @@ from scripts.validation.common import (
     default_query_for_row,
     family_success_adjustment,
     heuristic_subfamily_adjustment,
+    preferred_default_country,
     provider_family_key,
     provider_subfamily_key,
     subfamily_success_adjustment,
@@ -380,7 +381,7 @@ def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
 
 
 def test_category_success_adjustment_uses_probe_history():
-    assert category_success_adjustment("WorldBank", "Education Statistics") < 0
+    assert category_success_adjustment("WorldBank", "Quarterly Public Sector Debt") < 0
     assert category_success_adjustment("WorldBank", "Disability Data Hub (DDH)") >= 0
 
 
@@ -429,6 +430,22 @@ def test_heuristic_subfamily_adjustment_prefers_and_demotes_expected_families():
         "INDICATOR",
         "Balance of Payments, Current Account, Secondary Income, General government, Current taxes on income, wealth, et(credit) [BPM6], National Currency",
     ) > 0
+
+
+def test_preferred_default_country_uses_probe_history_for_worldbank_subfamilies():
+    defaults = ["United States", "China", "India", "Brazil", "Japan", "Germany"]
+    assert preferred_default_country(
+        "WORLDBANK",
+        "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+        defaults,
+        "United States",
+    ) == "Brazil"
+    assert preferred_default_country(
+        "WORLDBANK",
+        "Completion rate, lower secondary education, fourth quintile, male, adjusted location parity index (LPIA)",
+        defaults,
+        "United States",
+    ) == "India"
 
 
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
