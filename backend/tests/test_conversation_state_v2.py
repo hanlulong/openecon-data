@@ -914,6 +914,15 @@ class TestDeltaExtractor:
         assert delta.delta_type == "time_change"
         assert delta.changed_start_date is not None
 
+    def test_time_change_guard_rejects_contentful_queries(self, extractor):
+        assert extractor._looks_like_pure_time_change_query("last 20 years") is True
+        assert (
+            extractor._looks_like_pure_time_change_query(
+                "unemployment in Canada by sex in last 20 years"
+            )
+            is False
+        )
+
     def test_exchange_rate_pair_change_detected_structurally(self, extractor):
         state = ConversationState(indicator="exchange rate", provider="EXCHANGERATE")
         delta = extractor.extract("Switch to USD to JPY", state)

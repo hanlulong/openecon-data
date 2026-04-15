@@ -168,6 +168,24 @@ class DeltaExtractor:
         self._qs = query_service
 
     @staticmethod
+    def _looks_like_pure_time_change_query(query: str) -> bool:
+        query_lower = str(query or "").lower().strip()
+        if not query_lower:
+            return False
+
+        tokens = re.findall(r"[a-zA-Z]+", query_lower)
+        non_filler = [
+            t for t in tokens
+            if t not in _FILLER_WORDS and t not in {
+                "years", "year", "months", "month", "quarters", "quarter",
+                "decades", "decade", "since", "last", "from", "to", "between",
+                "past", "recent", "latest", "change", "switch", "update", "set",
+                "period", "range", "time", "dates", "date", "timeframe",
+            }
+        ]
+        return len(non_filler) <= 1
+
+    @staticmethod
     def _promote_decomposition_semantics(
         delta: FollowUpDelta,
         state: ConversationState,
@@ -716,6 +734,13 @@ Output the query_type and any changed fields as JSON."""
                 logger.info("LLM delta: no changes detected, returning None")
                 return None
 
+            if delta.delta_type == "time_change" and not self._looks_like_pure_time_change_query(query_text):
+                logger.info(
+                    "LLM delta guard: ignoring time_change for contentful query: %s",
+                    query_text[:80],
+                )
+                return None
+
             delta = self._promote_decomposition_semantics(delta, state)
             delta.raw_query = query_text
             logger.info(
@@ -1171,17 +1196,8 @@ Output the query_type and any changed fields as JSON."""
         if not query_lower:
             return None
 
-        # Only match if query is very short and mostly about time
-        tokens = re.findall(r"[a-zA-Z]+", query_lower)
-        non_filler = [t for t in tokens if t not in _FILLER_WORDS and t not in {
-            "years", "year", "months", "month", "quarters", "quarter",
-            "decades", "decade", "since", "last", "from", "to", "between",
-            "past", "recent", "latest", "change", "switch", "update", "set",
-            "period", "range", "time", "dates", "date", "timeframe",
-        }]
-
-        # If there are non-filler, non-time tokens, this is not a pure time change
-        if len(non_filler) > 1:
+        # Only match if query is very short and mostly about time.
+        if not self._looks_like_pure_time_change_query(query):
             return None
 
         # Try "from YYYY to YYYY"

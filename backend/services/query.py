@@ -2826,6 +2826,61 @@ class QueryService:
 
         return True
 
+    def _maybe_promote_statscan_axis_decomposition_from_query(
+        self,
+        query: str,
+        intent: Optional[ParsedIntent],
+    ) -> None:
+        if intent is None:
+            return
+        if normalize_provider_name(intent.apiProvider or "") != "STATSCAN":
+            return
+
+        params = dict(intent.parameters or {})
+        if params.get("__dimensions"):
+            return
+
+        query_lower = query.lower()
+        axis = None
+        current_decomp_type = str(intent.decompositionType or "").strip().lower()
+        if re.search(r"\bby\s+(sex|gender)\b", query_lower) or current_decomp_type in {"sex", "gender"}:
+            axis = "Sex"
+        elif re.search(r"\bby\s+(age|age group|age groups|ages)\b", query_lower) or current_decomp_type in {"age", "age group", "age groups", "ages"}:
+            axis = "Age group"
+
+        if not axis:
+            return
+
+        intent.needsDecomposition = True
+        intent.decompositionType = "dimension"
+        params["__statscan_decomposition_axis"] = axis
+        params["__semantic_provider_locked"] = True
+        if axis == "Sex" and intent.indicators:
+            cleaned_indicators = []
+            for indicator in intent.indicators:
+                cleaned = re.sub(
+                    r"\b(male|female|males|females|sex|gender)\b",
+                    " ",
+                    str(indicator or ""),
+                    flags=re.IGNORECASE,
+                )
+                cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;-")
+                if cleaned:
+                    cleaned_indicators.append(cleaned)
+            unique_cleaned = list(dict.fromkeys(cleaned_indicators))
+            if len(unique_cleaned) == 1:
+                params["__semantic_indicator_label"] = unique_cleaned[0]
+                intent.indicators = [unique_cleaned[0]]
+        intent.parameters = params
+        if intent.clarificationNeeded:
+            intent.clarificationNeeded = False
+            intent.clarificationQuestions = None
+        logger.info(
+            "Promoted StatsCan axis decomposition from query: axis=%s query=%s",
+            axis,
+            query[:80],
+        )
+
     async def _maybe_expand_statscan_dimension_decomposition_entities(
         self,
         conversation_id: Optional[str],
@@ -4037,6 +4092,7 @@ class QueryService:
             self._maybe_resolve_region_clarification(query, intent)
             self._maybe_resolve_temporal_comparison_clarification(query, intent)
             self._maybe_expand_multi_concept_intent(query, intent)
+            self._maybe_promote_statscan_axis_decomposition_from_query(query, intent)
 
             # Route informational queries — the LLM classified queryType as
             # part of intent extraction (same API call, zero cost).
@@ -4119,6 +4175,22 @@ class QueryService:
                     fill_missing_territories=True
                 )
             await self._maybe_expand_statscan_dimension_decomposition_entities(conv_id, intent)
+            if (
+                intent.needsDecomposition
+                or (intent.parameters or {}).get("__dimensions")
+                or (intent.parameters or {}).get("__statscan_decomposition_axis")
+            ):
+                try:
+                    _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
+                    _new_conv_state = merge_new_state_with_previous(_new_conv_state, _prev_good_state)
+                    _pending_conv_state = _new_conv_state
+                    if not self._use_staged_state_commit():
+                        conversation_manager.set_conversation_state(conv_id, _new_conv_state)
+                except Exception as _statscan_state_err:
+                    logger.warning(
+                        "Failed to refresh conversation state after StatsCan dimension enrichment: %s",
+                        _statscan_state_err,
+                    )
 
             # Note: Query decomposition now uses batch methods when available (see _decompose_and_aggregate)
             # This avoids timeouts by making single API calls instead of 10-13 parallel requests
@@ -6465,6 +6537,7 @@ class QueryService:
                 product_id = self._infer_statscan_product_id_for_followup(conversation_id, original_intent)
                 if product_id:
                     sub_params["indicator"] = product_id
+                    sub_params["__statscan_product_id"] = product_id
                 semantic_label = str(sub_params.get("__semantic_indicator_label") or "").strip()
                 if semantic_label:
                     sub_indicators = [semantic_label]

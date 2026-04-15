@@ -16,6 +16,7 @@ This module provides:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import logging
 import re
 import time
@@ -122,6 +123,13 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
             and not str(key).startswith("__")
         }
 
+    if provider_norm == "STATSCAN":
+        contract["indicator"] = str(code or "").strip()
+        contract["country"] = contract["country_scope"][0] if contract["country_scope"] else None
+        contract["dimensions"] = dict(params.get("__dimensions") or params.get("dimensions") or {})
+        contract["decomposition_axis"] = str(params.get("__statscan_decomposition_axis") or "").strip() or None
+        contract["product_id"] = str(params.get("__statscan_product_id") or "").strip() or None
+
     return contract
 
 
@@ -164,6 +172,29 @@ def materialize_execution_plan(
         "__execution_plan_identity": cache_identity,
     }
     return plan
+
+
+def _statscan_periods_from_date_range(params: dict[str, Any], default: int) -> int:
+    explicit_periods = params.get("periods")
+    if explicit_periods is not None:
+        try:
+            return int(explicit_periods)
+        except (TypeError, ValueError):
+            pass
+
+    start_date = str(params.get("startDate") or "").strip()
+    if not start_date:
+        return default
+
+    end_date = str(params.get("endDate") or "").strip() or datetime.utcnow().date().isoformat()
+    try:
+        start_dt = datetime.fromisoformat(start_date[:10])
+        end_dt = datetime.fromisoformat(end_date[:10])
+    except ValueError:
+        return default
+
+    months = max(1, ((end_dt.year - start_dt.year) * 12) + (end_dt.month - start_dt.month) + 1)
+    return max(default, months)
 
 
 # ---------------------------------------------------------------------------
@@ -947,12 +978,13 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                         pass
 
                 if _product_id_dim:
+                    dimension_periods = _statscan_periods_from_date_range(params, 60)
                     decomposition_params = {
                         "productId": _product_id_dim,
                         "indicator": _base,
                         "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                         "axis": dimension_decomposition_axis,
-                        "periods": params.get("periods", 60),
+                        "periods": dimension_periods,
                         "dimensions": dimensions,
                         "startDate": params.get("startDate"),
                         "endDate": params.get("endDate"),
@@ -998,12 +1030,13 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 if _product_id:
                     # Remove the breakdown dimension from the modifiers (it's not a real filter)
                     _non_breakdown_dims = {k: v for k, v in dimensions.items() if k != _breakdown_dim}
+                    province_periods = _statscan_periods_from_date_range(params, 60)
                     province_params = {
                         "productId": _product_id,
                         "indicator": _base,
                         "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                         "provinces": "all",
-                        "periods": params.get("periods", 60),
+                        "periods": province_periods,
                         "dimensions": _non_breakdown_dims,
                         "startDate": params.get("startDate"),
                         "endDate": params.get("endDate"),
@@ -1126,6 +1159,11 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             _indicator_key in svc.statscan_provider.VECTOR_MAPPINGS
             or _indicator_key in svc.statscan_provider.COORDINATE_PRODUCT_MAPPINGS
         )
+        if not _is_known:
+            _resolved_key = _resolve_numeric_to_vector_key(_indicator_key)
+            if _resolved_key:
+                _indicator_key = _resolved_key
+                _is_known = True
         if _is_known:
             query_text = intent.originalQuery or ""
             try:
@@ -1150,6 +1188,10 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                             f"StatsCan dimension modifiers detected: {_modifiers} "
                             f"for indicator={_indicator_key}"
                         )
+                        params["__dimensions"] = _modifiers
+                        params["__base_indicator"] = _indicator_key
+                        params["__statscan_product_id"] = _product_id
+                        intent.parameters = params
                         start_year = int(params["startDate"][:4]) if params.get("startDate") else None
                         end_year = int(params["endDate"][:4]) if params.get("endDate") else None
                         series = await svc.statscan_provider.fetch_with_dimensions(

@@ -2231,6 +2231,84 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNone(response.error)
         self.assertEqual(len(response.data or []), 2)
 
+    def test_maybe_promote_statscan_axis_decomposition_from_query_sets_dimension_axis(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "CA"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Are you looking for unemployment rates for both males and females separately?"],
+            originalQuery="unemployment in Canada by sex",
+            needsDecomposition=True,
+            decompositionType="sex",
+        )
+
+        self.service._maybe_promote_statscan_axis_decomposition_from_query(  # pylint: disable=protected-access
+            "unemployment in Canada by sex",
+            intent,
+        )
+
+        self.assertTrue(intent.needsDecomposition)
+        self.assertEqual(intent.decompositionType, "dimension")
+        self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+        self.assertFalse(intent.clarificationNeeded)
+        self.assertIsNone(intent.clarificationQuestions)
+
+    def test_process_query_promotes_statscan_by_sex_query_to_dimension_decomposition(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-statscan-by-sex-dimension")
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "CA"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Are you looking for unemployment rates for both males and females separately?"],
+            originalQuery="unemployment in Canada by sex",
+            needsDecomposition=True,
+            decompositionType="sex",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="STATSCAN",
+            validation_warning=None,
+        )
+
+        async def _expand_axis(_conversation_id: str, current_intent: ParsedIntent) -> None:
+            current_intent.decompositionEntities = ["Males", "Females"]
+
+        data = [
+            sample_series_with(source="Statistics Canada", indicator="unemployment rate", country="Males", series_id="14100287:2"),
+            sample_series_with(source="Statistics Canada", indicator="unemployment rate", country="Females", series_id="14100287:3"),
+        ]
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_expand_statscan_dimension_decomposition_entities", new_callable=AsyncMock, side_effect=_expand_axis), \
+             patch.object(self.service, "_decompose_and_aggregate", new_callable=AsyncMock, return_value=data), \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None):
+            response = run(
+                self.service.process_query(
+                    "unemployment in Canada by sex",
+                    conversation_id=conv_id,
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=False,
+                )
+            )
+
+        self.assertFalse(response.error)
+        self.assertEqual(len(response.data or []), 2)
+        self.assertTrue(intent.needsDecomposition)
+        self.assertEqual(intent.decompositionType, "dimension")
+        self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+
+        persisted = conversation_manager.get_conversation_state(conv_id)
+        assert persisted is not None
+        self.assertEqual(
+            persisted.decomposition,
+            {"type": "dimension", "entities": ["Males", "Females"], "axis": "Sex"},
+        )
+
     def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
         intent = ParsedIntent(

@@ -1019,7 +1019,11 @@ def apply_concept_provider_override(
                                 "📋 Catalog variant resolved: %s → %s for %s (concept=%s)",
                                 canonical_code, variant_code, provider, concept_name,
                             )
-                            params = {**params, "indicator": variant_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
+                            params = _apply_indicator_with_semantic_label(
+                                variant_code,
+                                __catalog_resolved=True,
+                                __catalog_concept=concept_name,
+                            )
                             intent.parameters = params
                             if not intent.indicators or len(intent.indicators) <= 1:
                                 intent.indicators = [variant_code]
@@ -1059,7 +1063,11 @@ def apply_concept_provider_override(
                                 return alt_normalized, params
                     return provider, params
 
-                params = {**params, "indicator": canonical_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
+                params = _apply_indicator_with_semantic_label(
+                    canonical_code,
+                    __catalog_resolved=True,
+                    __catalog_concept=concept_name,
+                )
                 intent.parameters = params
                 distinct_indicators = {str(value) for value in (intent.indicators or []) if value}
                 if not distinct_indicators or len(distinct_indicators) == 1:
@@ -1128,7 +1136,11 @@ def apply_concept_provider_override(
         intent.apiProvider = alt_provider or provider
 
         if alt_code:
-            params = {**params, "indicator": alt_code, "__catalog_resolved": True, "__catalog_concept": concept_name}
+            params = _apply_indicator_with_semantic_label(
+                alt_code,
+                __catalog_resolved=True,
+                __catalog_concept=concept_name,
+            )
             intent.parameters = params
             if not intent.indicators or len(intent.indicators) <= 1:
                 intent.indicators = [alt_code]
