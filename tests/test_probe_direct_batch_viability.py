@@ -13,6 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "validation" / "probe_direct_batch_viability.py"
 
 
+class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
@@ -102,7 +107,7 @@ def test_probe_direct_batch_viability_filters_by_structural_success_and_provider
         def log_message(self, format, *args):  # noqa: A003
             return
 
-    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+    with ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -164,7 +169,7 @@ def test_probe_direct_batch_viability_respects_max_sessions(tmp_path: Path):
         def log_message(self, format, *args):  # noqa: A003
             return
 
-    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+    with ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -221,7 +226,7 @@ def test_probe_direct_batch_viability_retries_transient_timeout(tmp_path: Path):
         def log_message(self, format, *args):  # noqa: A003
             return
 
-    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+    with ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -271,7 +276,7 @@ def test_probe_direct_batch_viability_records_timeout_failures_without_crashing(
         def log_message(self, format, *args):  # noqa: A003
             return
 
-    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+    with ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"

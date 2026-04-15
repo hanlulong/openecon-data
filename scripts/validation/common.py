@@ -394,6 +394,50 @@ def subfamily_success_adjustment(provider: str, name: str) -> int:
     return 0
 
 
+def heuristic_subfamily_adjustment(provider: str, category: str, name: str) -> int:
+    provider_key = str(provider or '').upper().strip()
+    category_key = str(category or '').strip().lower()
+    subfamily_key = provider_subfamily_key(provider_key, name)
+    if provider_key == 'WORLDBANK':
+        if any(token in subfamily_key for token in [
+            'learning deprivation gap',
+            'learning deprivation severity',
+            'financial management country systems',
+            'tracking climate related expenditure',
+            'regulatory capital to risk',
+            'maternal mortality ratio',
+            'prevalence of anemia among',
+        ]):
+            return -5
+        if category_key == 'education statistics' and any(token in subfamily_key for token in [
+            'timss',
+            'pirls',
+            'llece',
+            'piaac',
+            'saber',
+            'qualified teachers',
+            'pupil trained teacher ratio',
+            'repeaters in grade',
+            'out of school rate',
+            'government expenditure on education',
+            'ratio of expenditures per',
+        ]):
+            return -4
+    if provider_key == 'IMF':
+        if any(token in subfamily_key for token in [
+            'current account goods',
+            'current account secondary',
+            'social security revenue other',
+        ]):
+            return 2
+        if any(token in subfamily_key for token in [
+            'royalties and license fees',
+            'taxes income profits government',
+        ]):
+            return -2
+    return 0
+
+
 def provider_counts(db_path: Path = DEFAULT_DB) -> list[tuple[str, int]]:
     con = sqlite3.connect(str(db_path))
     cur = con.cursor()
@@ -575,6 +619,7 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     score += category_success_adjustment(provider, str(origin.get('category') or record.get('category') or ''))
     score += family_success_adjustment(provider, name)
     score += subfamily_success_adjustment(provider, name)
+    score += heuristic_subfamily_adjustment(provider, str(origin.get('category') or record.get('category') or ''), name)
     if provider == 'IMF':
         if any(term in enriched for term in ['consumer prices', 'producer price', 'harmonized', 'expenditure of households', 'index']):
             score += 4

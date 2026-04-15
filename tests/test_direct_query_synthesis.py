@@ -5,6 +5,7 @@ from scripts.validation.common import (
     category_success_adjustment,
     default_query_for_row,
     family_success_adjustment,
+    heuristic_subfamily_adjustment,
     provider_family_key,
     provider_subfamily_key,
     subfamily_success_adjustment,
@@ -415,6 +416,19 @@ def test_subfamily_success_adjustment_uses_probe_history():
         "WorldBank",
         "Completion rate, lower secondary education, female, adjusted location parity index (LPIA)",
     ) < 0
+
+
+def test_heuristic_subfamily_adjustment_prefers_and_demotes_expected_families():
+    assert heuristic_subfamily_adjustment(
+        "WorldBank",
+        "Education Statistics",
+        "Learning Deprivation Gap;TIMSS 2015 for grade 4 using MPL Low (400 points) for math, Fifth Quintile",
+    ) < 0
+    assert heuristic_subfamily_adjustment(
+        "IMF",
+        "INDICATOR",
+        "Balance of Payments, Current Account, Secondary Income, General government, Current taxes on income, wealth, et(credit) [BPM6], National Currency",
+    ) > 0
 
 
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
