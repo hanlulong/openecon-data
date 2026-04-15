@@ -85,6 +85,8 @@ _GENERIC_EXACT_TITLE_CONCEPTS = {
     "government debt",
     "interest rate",
 }
+
+_RAW_QUERY_CACHE_HASH_PROVIDERS = {"STATSCAN", "STATISTICS CANADA"}
 # detection.  See simplified_prompt.py.
 from ..utils.processing_steps import (
     ProcessingTracker,
@@ -2628,12 +2630,14 @@ class QueryService:
             return cache_params
 
         cache_params["_provider"] = normalize_provider_name(provider)
-        # Include original query hash for dimension-aware caching.
-        # "CPI shelter Canada" and "CPI energy Canada" both resolve to
-        # indicator=CPI but need different cache entries because the
-        # dimension modifiers are extracted from the query text at fetch time.
+        # Include original query hash only for providers that still depend on
+        # raw query semantics at fetch time (notably StatsCan dimension
+        # extraction). For ordinary follow-up refinements like chart/format
+        # changes, hashing the raw follow-up text causes unnecessary cache
+        # misses and re-fetches in multi-round sessions.
+        normalized_provider = cache_params["_provider"]
         oq = params.get("__original_query") or params.get("originalQuery")
-        if oq:
+        if oq and normalized_provider in _RAW_QUERY_CACHE_HASH_PROVIDERS:
             cache_params["_query_hash"] = hashlib.sha256(
                 oq.strip().lower().encode("utf-8")
             ).hexdigest()[:16]
@@ -3674,6 +3678,26 @@ class QueryService:
                         or _delta.added_countries is not None
                         or _delta.removed_countries is not None
                     )
+                    _target_countries = _delta_intent.parameters.get("countries")
+                    if not _target_countries:
+                        _country_value = _delta_intent.parameters.get("country")
+                        _target_countries = [_country_value] if _country_value else []
+                    if (
+                        _delta_scope_changed
+                        and _preserve_current_provider
+                        and _merged_state.provider
+                        and _target_countries
+                        and not self._provider_covers_country_list(_merged_state.provider, _target_countries)
+                    ):
+                        logger.info(
+                            "Delta path: releasing preserved provider %s because expanded scope is unsupported for countries=%s",
+                            _merged_state.provider,
+                            _target_countries,
+                        )
+                        _provider_locked = False
+                        if _delta_intent.parameters is None:
+                            _delta_intent.parameters = {}
+                        _delta_intent.parameters.pop("__semantic_provider_locked", None)
                     _delta_changes_routing_params = (
                         _delta.changed_indicator is not None
                         or _delta.added_indicators is not None
@@ -3707,10 +3731,6 @@ class QueryService:
                             and not _provider_locked
                             and _merged_state.provider
                         ):
-                            _target_countries = _delta_intent.parameters.get("countries")
-                            if not _target_countries:
-                                _country_value = _delta_intent.parameters.get("country")
-                                _target_countries = [_country_value] if _country_value else []
                             if (
                                 _target_countries
                                 and not self._provider_covers_country_list(_merged_state.provider, _target_countries)

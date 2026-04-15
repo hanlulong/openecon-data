@@ -117,6 +117,28 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(cache_params["_provider"], "WORLDBANK")
         self.assertEqual(cache_params["indicator"], "NE.IMP.GNFS.ZS")
 
+    def test_build_cache_params_ignores_original_query_for_non_dimension_provider(self) -> None:
+        raw_params = {
+            "indicator": "NGDP_RPCH",
+            "__original_query": "Switch to bar chart",
+        }
+
+        cache_params = self.service._build_cache_params("IMF", raw_params)  # pylint: disable=protected-access
+
+        self.assertEqual(cache_params["_provider"], "IMF")
+        self.assertNotIn("_query_hash", cache_params)
+
+    def test_build_cache_params_keeps_original_query_hash_for_statscan(self) -> None:
+        raw_params = {
+            "indicator": "14100287",
+            "__original_query": "show male unemployment in canada",
+        }
+
+        cache_params = self.service._build_cache_params("StatsCan", raw_params)  # pylint: disable=protected-access
+
+        self.assertEqual(cache_params["_provider"], "STATSCAN")
+        self.assertIn("_query_hash", cache_params)
+
     def test_coerce_parsed_intent_sets_original_query_when_missing(self) -> None:
         raw_intent = {
             "apiProvider": "WORLDBANK",
@@ -2736,6 +2758,38 @@ class QueryServiceTests(unittest.TestCase):
             self.assertIn("DE", [c.upper() for c in target_countries])
             self.assertEqual(refined_intent.apiProvider, "WORLDBANK")
             self.assertNotIn("indicator", params)
+
+    def test_process_query_releases_preserved_provider_when_added_country_is_uncovered(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState
+
+        conv_id = conversation_manager.get_or_create("conv-add-country-uncovered-provider-release")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="GDP",
+                country="US",
+                provider="FRED",
+                routed_provider="FRED",
+                original_query="US GDP",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        with patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("Add China GDP", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        execute_intent.assert_awaited_once()
+        refined_intent = execute_intent.call_args.kwargs.get("intent") or execute_intent.call_args.args[2]
+        params = refined_intent.parameters or {}
+        target_countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
+        self.assertIn("CN", [str(c).upper() for c in target_countries])
+        self.assertEqual(refined_intent.apiProvider, "WORLDBANK")
+        self.assertNotIn("__semantic_provider_locked", params)
 
     def test_delta_path_preserves_locked_provider_on_scope_follow_up(self) -> None:
         from backend.services.conversation_state_v2 import ConversationState
