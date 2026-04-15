@@ -333,6 +333,8 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     if provider == 'IMF':
         if any(term in enriched for term in ['consumer prices', 'producer price', 'harmonized', 'expenditure of households', 'index']):
             score += 4
+        if any(term in enriched for term in ['current account', 'balance of payments', 'revenue', 'taxes', 'income, profits, and capital gains']):
+            score += 3
         if any(term in enriched for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'dataset:', 'claims', 'liabilities']):
             score -= 4
         if any(term in enriched for term in ['debt-service payment schedule', 'more than 9 and up to 12 months', 'more than 18 and less than 24 months', 'by cofog', 'wages and salaries in kind']):
@@ -341,11 +343,15 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
             score -= 4
         if any(term in enriched for term in ['other postal services', 'equities domestic company', 'financial market prices end of period']):
             score -= 4
+        if any(term in enriched for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in enriched for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash, national currency']):
+            score -= 4
     if provider == 'WORLDBANK':
         if any(term in category for term in ['global jobs indicators', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'identification for development (id4d) data', 'g20 financial inclusion indicators']):
             score -= 4
         if any(term in category for term in ['quarterly external debt statistics', 'global public procurement']):
             score -= 7
+        if any(term in category for term in ['quarterly public sector debt', 'exporter dynamics database', 'gender statistics']):
+            score -= 6
         if any(term in enriched for term in ['q1', 'q2', 'q3', 'q4', 'q5', 'de facto', '1st graders', 'moving average', 'mobile phone', 'mobile money account', 'wage gap', 'grace period', 'held by nonresidents']):
             score -= 3
         if len(re.findall(r'\b[a-z]{2,6}\.', enriched)) >= 2:
@@ -361,6 +367,8 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
         if any(term in enriched for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
             score -= 5
         if any(term in enriched for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures', 'national assessment for learning outcomes', 'optimal competency', 'public sector wage premium', 'price level ratio of ppp conversion factor', 'sea-plm', 'elevation is below 5 meters']):
+            score -= 5
+        if any(term in enriched for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
             score -= 5
         if any(term in enriched for term in ['literacy rate', 'per student expenditure', 'completion rate', 'adjusted location parity index', 'any degree of functional difficulty']):
             score += 3
@@ -679,6 +687,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_niche_catalog_family')
     if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement']):
         reasons.append('worldbank_specialized_source_family')
+    if any(term in category_lower for term in ['quarterly public sector debt', 'exporter dynamics database', 'gender statistics']):
+        reasons.append('worldbank_specialized_source_family')
     if any(term in worldbank_text for term in ['rights to inherit assets', 'are other banks permitted']):
         reasons.append('worldbank_binary_policy_query')
     if any(term in worldbank_text for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
@@ -693,8 +703,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_assessment_family')
     if any(term in worldbank_text for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
         reasons.append('worldbank_macro_exposure_family')
+    if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
+        reasons.append('worldbank_ddh_prevalence_family')
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity']):
         reasons.append('oecd_low_viability_family')
+    if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency']):
+        reasons.append('imf_price_or_memorandum_family')
     if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
         reasons.append('eurostat_agri_breakdown_query')
     if any(term in query_lower for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in query_lower for term in ['sex', 'age', 'most frequent activity']):
@@ -762,7 +776,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_education_expenditure_family',
         'worldbank_assessment_family',
         'worldbank_macro_exposure_family',
+        'worldbank_ddh_prevalence_family',
         'oecd_low_viability_family',
+        'imf_price_or_memorandum_family',
         'eurostat_agri_breakdown_query',
         'eurostat_cross_tab_query',
         'subnational_abbrev_ambiguous',

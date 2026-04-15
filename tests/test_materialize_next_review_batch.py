@@ -439,6 +439,39 @@ def test_select_quality_screened_direct_records_prefers_completion_over_speciali
     assert [row["id"] for row in selected] == ["worldbank-completion-2"]
 
 
+def test_select_quality_screened_direct_records_prefers_literacy_over_ddh_prevalence_family():
+    records = [
+        {
+            "id": "worldbank-ddh-prevalence",
+            "query": "India Adjusted prevalence of male persons with some degree of mobility difficulty (% of male persons) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Adjusted prevalence of male persons with some degree of mobility difficulty (% of male persons)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["worldbank_ddh_prevalence_family"]},
+        },
+        {
+            "id": "worldbank-literacy-3",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-literacy-3"]
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
     records = [
         {

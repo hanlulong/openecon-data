@@ -341,6 +341,35 @@ def test_audit_direct_query_shape_flags_worldbank_specialized_source_category():
     assert "worldbank_specialized_source_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_ddh_prevalence_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "India Adjusted prevalence of male persons with some degree of mobility difficulty (% of male persons) from World Bank",
+            "origin": {
+                "name": "Adjusted prevalence of male persons with some degree of mobility difficulty (% of male persons)",
+                "category": "Disability Data Hub (DDH)",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_ddh_prevalence_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Germany Expenditure General Government Memorandum items Cash Government and Public Sector Finance from IMF",
+            "origin": {
+                "name": "Government and Public Sector Finance, Expenditure, General Government, Memorandum items, Current Expenditures [2001 Manual], Cash, National Currency",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {
