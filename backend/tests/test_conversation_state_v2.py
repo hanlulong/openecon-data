@@ -210,6 +210,36 @@ class TestMergeState:
             "axis": "Age group",
         }
 
+    def test_age_group_singular_decomposition_payload_is_canonicalized(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "age group", "entities": None, "axis": "Geography"},
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
+
+    def test_frequency_change_is_merged_into_state(self):
+        state = ConversationState(
+            indicator="inflation rate",
+            country="US",
+            frequency="annual",
+        )
+        delta = FollowUpDelta(
+            changed_frequency="monthly",
+            delta_type="parameter_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.frequency == "monthly"
+
     def test_additive_country(self):
         state = ConversationState(
             indicator="GDP", countries=["US", "DE"]
@@ -495,6 +525,7 @@ class TestMaterializeIntent:
             country="US",
             start_date="2020-01-01",
             end_date="2024-12-31",
+            frequency="quarterly",
             provider="FRED",
             original_query="GDP in US 2020-2024",
         )
@@ -504,6 +535,7 @@ class TestMaterializeIntent:
         assert intent.parameters["country"] == "US"
         assert intent.parameters["startDate"] == "2020-01-01"
         assert intent.parameters["endDate"] == "2024-12-31"
+        assert intent.parameters["frequency"] == "quarterly"
         assert intent.originalQuery == "GDP in US 2020-2024"
         assert intent.clarificationNeeded is False
 
@@ -622,7 +654,7 @@ class TestExtractStateFromIntent:
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["GDP"],
-            parameters={"country": "US", "startDate": "2020-01-01"},
+            parameters={"country": "US", "startDate": "2020-01-01", "frequency": "quarterly"},
             clarificationNeeded=False,
             originalQuery="GDP in US",
         )
@@ -630,6 +662,7 @@ class TestExtractStateFromIntent:
         assert state.indicator == "GDP"
         assert state.country == "US"
         assert state.start_date == "2020-01-01"
+        assert state.frequency == "quarterly"
         assert state.provider == "FRED"
         assert state.routed_provider == "FRED"
         assert state.original_query == "GDP in US"
@@ -830,6 +863,14 @@ class TestDeltaExtractor:
         assert delta.delta_type == "additive_country"
         assert delta.added_countries == ["GB"]
 
+    def test_country_and_provider_follow_up_with_indicator_reaffirmation(self, extractor):
+        state = ConversationState(indicator="GDP", country="US", provider="FRED")
+        delta = extractor.extract("Japan GDP from World Bank", state)
+        assert delta is not None
+        assert delta.delta_type == "compound_change"
+        assert delta.changed_country == "JP"
+        assert delta.changed_provider == "WORLDBANK"
+
     def test_multi_country_replacement(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
         delta = extractor.extract("show US and Germany", state)
@@ -871,6 +912,32 @@ class TestDeltaExtractor:
 
         assert updated.added_countries == ["DE"]
         assert updated.changed_country is None
+
+    def test_fill_explicit_country_scope_for_provider_change_recovers_country_when_llm_misses_it(self, extractor):
+        delta = FollowUpDelta(
+            changed_provider="WORLDBANK",
+            delta_type="country_change",
+        )
+
+        updated = extractor._fill_explicit_country_scope_for_switch_delta(  # pylint: disable=protected-access
+            delta,
+            "Japan GDP from World Bank",
+        )
+
+        assert updated.changed_country == "JP"
+
+    def test_fill_explicit_provider_for_switch_delta_recovers_provider_when_llm_misses_it(self, extractor):
+        delta = FollowUpDelta(
+            changed_indicator="GDP growth rate",
+            delta_type="indicator_switch",
+        )
+
+        updated = extractor._fill_explicit_provider_for_switch_delta(  # pylint: disable=protected-access
+            delta,
+            "Switch to IMF GDP growth rate",
+        )
+
+        assert updated.changed_provider == "IMF"
 
     def test_bare_indicator_without_switch_marker_stays_with_llm(self, extractor):
         state = ConversationState(indicator="GDP", country="US")
@@ -915,10 +982,52 @@ class TestDeltaExtractor:
         assert delta.delta_type == "provider_change"
         assert delta.changed_provider == "FRED"
 
-    def test_provider_change_with_country_and_metric_defers_to_llm(self, extractor):
+    def test_provider_reaffirmation_returns_parameter_delta(self, extractor):
+        state = ConversationState(indicator="inflation", countries=["US", "GB"], provider="WORLDBANK")
+        delta = extractor.extract("Switch to World Bank data", state)
+        assert delta is not None
+        assert delta.delta_type == "provider_change"
+        assert delta.changed_provider == "WORLDBANK"
+
+    def test_frequency_change_detected_structurally(self, extractor):
+        state = ConversationState(indicator="inflation rate", country="US", frequency="annual")
+        delta = extractor.extract("Change to monthly frequency", state)
+        assert delta is not None
+        assert delta.changed_frequency == "monthly"
+
+    def test_breakdown_follow_up_detected_structurally(self, extractor):
+        state = ConversationState(
+            indicator="employment rate",
+            provider="STATSCAN",
+            country="CA",
+            dimensions={"Geography": "Ontario"},
+        )
+        delta = extractor.extract("Show by age group", state)
+        assert delta is not None
+        assert delta.changed_decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
+
+    def test_provider_change_geo_artifacts_are_sanitized(self, extractor):
+        delta = FollowUpDelta(
+            changed_provider="WORLDBANK",
+            changed_country="1W",
+            delta_type="provider_change",
+        )
+        updated = extractor._sanitize_provider_change_geography_artifacts(  # pylint: disable=protected-access
+            delta,
+            "Switch to World Bank data",
+        )
+        assert updated.changed_country is None
+
+    def test_provider_change_with_country_and_metric_is_handled_structurally_when_indicator_is_reaffirmed(self, extractor):
         state = ConversationState(indicator="GDP", country="US", provider="FRED")
         delta = extractor.extract("Japan GDP from World Bank", state)
-        assert delta is None
+        assert delta is not None
+        assert delta.changed_country == "JP"
+        assert delta.changed_provider == "WORLDBANK"
 
     def test_time_change_from_to(self, extractor):
         state = ConversationState(

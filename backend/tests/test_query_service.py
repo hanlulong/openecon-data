@@ -1001,6 +1001,38 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(provider, "BIS")
         self.assertEqual(params.get("indicator"), "WS_EER")
 
+    def test_apply_concept_provider_override_replaces_mismatched_explicit_code_with_canonical_code(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["credit to GDP ratio"],
+            parameters={
+                "country": "US",
+                "indicator": "WS_CREDIT_GAP",
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="BIS credit to GDP ratio",
+        )
+
+        with patch.object(self.service, "_build_distilled_indicator_query", return_value="credit to GDP ratio"), \
+             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="credit to GDP ratio"), \
+             patch("backend.services.catalog_service.find_concept_by_term", return_value="credit"), \
+             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
+             patch("backend.services.catalog_service.is_indicator_code_for_concept", return_value=False), \
+             patch("backend.services.indicator_resolution.is_resolved_indicator_plausible", return_value=False), \
+             patch("backend.services.catalog_service.get_best_provider", side_effect=[
+                 ("BIS", "WS_TC", 0.95),
+                 ("BIS", "WS_TC", 0.95),
+             ]):
+            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+                "BIS",
+                intent,
+                dict(intent.parameters),
+            )
+
+        self.assertEqual(provider, "BIS")
+        self.assertEqual(params.get("indicator"), "WS_TC")
+
     def test_apply_concept_provider_override_skips_exact_fred_title_match(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -3722,6 +3754,70 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(providers_by_country.get("Canada"), "IMF")
         self.assertEqual(providers_by_country.get("United States"), "IMF")
         self.assertEqual(providers_by_country.get("Japan"), "IMF")
+
+    def test_collective_answer_member_delta_promotes_unmatched_growth_members_to_imf_template(self) -> None:
+        state = ConversationState(
+            indicator="GDP",
+            turn_number=5,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="FRED",
+                    indicator_label="GDP",
+                    provider_code="GDP",
+                    series_id="GDP",
+                    country="US",
+                    countries=["US"],
+                    source_turn=5,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP",
+                    provider_code="NY.GDP.MKTP.CD",
+                    series_id="NY.GDP.MKTP.CD",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=5,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP",
+                    provider_code="NGDPD",
+                    series_id="NGDPD",
+                    country="China",
+                    countries=["China"],
+                    source_turn=5,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="GDP growth rate",
+                    provider_code="NGDP_RPCH",
+                    series_id="NGDP_RPCH",
+                    country="Japan",
+                    countries=["Japan"],
+                    source_turn=5,
+                ),
+            ],
+        )
+
+        members = self.service._select_collective_answer_members(  # pylint: disable=protected-access
+            state,
+            FollowUpDelta(
+                changed_indicator="GDP growth rate",
+                delta_type="indicator_switch",
+                raw_query="Switch all to GDP growth rate",
+            ),
+            "GDP growth rate",
+        )
+
+        providers_by_country = {
+            (member.country or (member.countries or [None])[0]): member.provider
+            for member in members
+        }
+        self.assertEqual(providers_by_country.get("US"), "IMF")
+        self.assertEqual(providers_by_country.get("Canada"), "IMF")
+        self.assertEqual(providers_by_country.get("China"), "IMF")
 
     def test_collective_path_skips_provider_locked_additive_country_followup(self) -> None:
         state = ConversationState(

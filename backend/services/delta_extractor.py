@@ -77,6 +77,13 @@ _TIME_RANGE_RE = re.compile(
     r"\b(19\d{2}|20\d{2})\s*[-–—]\s*(19\d{2}|20\d{2})\b",
 )
 
+_FREQUENCY_CHANGE_RE = re.compile(
+    r"\b(?:change|switch|set|show|use)?\s*(?:to\s+)?"
+    r"(monthly|quarterly|annual|annually|yearly|daily|weekly)"
+    r"(?:\s+frequency|\s+data)?\b",
+    re.IGNORECASE,
+)
+
 _CURRENCY_PAIR_RE = re.compile(
     r"\b([A-Za-z]{3})\s*(?:to|/|vs)\s*([A-Za-z]{3})\b",
     re.IGNORECASE,
@@ -186,6 +193,14 @@ class DeltaExtractor:
         return len(non_filler) <= 1
 
     @staticmethod
+    def _normalize_frequency(value: str) -> str:
+        freq = str(value or "").strip().lower()
+        return {
+            "annually": "annual",
+            "yearly": "annual",
+        }.get(freq, freq)
+
+    @staticmethod
     def _promote_decomposition_semantics(
         delta: FollowUpDelta,
         state: ConversationState,
@@ -232,15 +247,65 @@ class DeltaExtractor:
     ) -> FollowUpDelta:
         if delta.changed_country or delta.changed_countries or delta.added_countries or delta.removed_countries:
             return delta
-        if delta.delta_type not in {"indicator_switch", "provider_change", "compound_change"}:
+        if delta.delta_type not in {"indicator_switch", "provider_change", "compound_change", "country_change"} and not (
+            delta.changed_provider or delta.changed_indicator
+        ):
             return delta
-        extracted_countries = CountryResolver.detect_all_countries_in_query(query_text)
+        stripped_query = _PROVIDER_SWITCH_RE.sub(" ", query_text)
+        extracted_countries = CountryResolver.detect_all_countries_in_query(stripped_query)
+        if not extracted_countries:
+            extracted_countries = CountryResolver.detect_all_countries_in_query(query_text)
         if not extracted_countries:
             return delta
         if len(extracted_countries) == 1:
             delta.changed_country = extracted_countries[0]
         else:
             delta.changed_countries = extracted_countries
+        return delta
+
+    @staticmethod
+    def _sanitize_provider_change_geography_artifacts(
+        delta: FollowUpDelta,
+        query_text: str,
+    ) -> FollowUpDelta:
+        if delta.changed_provider is None:
+            return delta
+
+        stripped_query = _PROVIDER_SWITCH_RE.sub(" ", str(query_text or ""))
+        retained_countries = {
+            str(country).upper()
+            for country in CountryResolver.detect_all_countries_in_query(stripped_query)
+        }
+
+        if delta.changed_country and str(delta.changed_country).upper() not in retained_countries:
+            delta.changed_country = None
+        if delta.changed_countries:
+            kept = [
+                country
+                for country in delta.changed_countries
+                if str(country).upper() in retained_countries
+            ]
+            delta.changed_countries = kept or None
+
+        return delta
+
+    @staticmethod
+    def _fill_explicit_provider_for_switch_delta(
+        delta: FollowUpDelta,
+        query_text: str,
+    ) -> FollowUpDelta:
+        if delta.changed_provider:
+            return delta
+        if delta.delta_type not in {"indicator_switch", "provider_change", "compound_change", "country_change"} and not delta.changed_indicator:
+            return delta
+
+        match = _PROVIDER_SWITCH_RE.search(str(query_text or ""))
+        if not match:
+            return delta
+
+        from ..utils.providers import normalize_provider_name
+
+        delta.changed_provider = normalize_provider_name(match.group(1).strip())
         return delta
 
     def extract(
@@ -288,6 +353,10 @@ class DeltaExtractor:
         if delta:
             return delta
 
+        delta = self._try_country_provider_follow_up_with_indicator_reaffirmation(query_text, state)
+        if delta:
+            return delta
+
         delta = self._try_country_follow_up_with_indicator_reaffirmation(query_text, state)
         if delta:
             return delta
@@ -302,6 +371,14 @@ class DeltaExtractor:
             return delta
 
         delta = self._try_time_change(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_frequency_change(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_breakdown_follow_up(query_text, state)
         if delta:
             return delta
 
@@ -582,6 +659,8 @@ class DeltaExtractor:
             state_lines.append(f"  Start date: {state.start_date}")
         if state.end_date:
             state_lines.append(f"  End date: {state.end_date}")
+        if state.frequency:
+            state_lines.append(f"  Frequency: {state.frequency}")
         if state.dimensions:
             state_lines.append(f"  Dimensions: {state.dimensions}")
         if state.chart_type:
@@ -663,23 +742,28 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
    - When available dimension members are listed below, use the EXACT member name.
    - is_dimension_modifier_change: true when changing dimensions.
 4. If the query is completely unrelated to prior context, set is_new_query=true, query_type="new_query".
-5. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
-6. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
-7. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
-8. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
-9. "break it down by X" / "filter by X" / "by sex" / "by age" / "show by province":
+5. For frequency changes:
+   - changed_frequency: use this for "monthly frequency", "quarterly data", "annual data", "daily data", "weekly data"
+   - valid values: monthly, quarterly, annual, daily, weekly
+   - DO NOT put frequency in changed_chart_type
+6. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
+7. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
+8. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
+9. "What about X" / "show X instead" where X is a different economic concept → changed_indicator (replaces).
+10. "break it down by X" / "filter by X" / "by sex" / "by age" / "show by province":
    - use changed_decomposition for full breakdowns like "by province"
    - use added_dimensions for specific member filters like "Ontario only"
    - CRITICAL: "show by province" / "by province" / "break down by province" (no specific province named)
      → changed_decomposition = {{"type": "provinces", "entities": null, "axis": "Geography"}}
    - "show for Ontario" / "Ontario only" → added_dimensions = {{"Geography": "Ontario"}}
-10. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
+11. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
 
 IMPORTANT DISTINCTIONS:
 - "Show unemployment instead" → changed_indicator (replaces current)
 - "Also show unemployment" → added_indicators (adds alongside current)
 - "Correlate unemployment with GDP" → pro_mode (needs computation)
 - "Show as bar chart" → parameter_delta (chart type)
+- "Change to monthly frequency" → parameter_delta with changed_frequency="monthly"
 - "Show me a scatter plot" → pro_mode (needs code)
 - "Show by province" → changed_decomposition with type="provinces" (ALL provinces, not one specific)
 - "Show for Ontario" → dimension_change with Geography="Ontario" (specific province filter)
@@ -741,6 +825,7 @@ Output the query_type and any changed fields as JSON."""
                     "changed_country", "changed_countries",
                     "added_countries", "removed_countries", "changed_provider",
                     "changed_start_date", "changed_end_date",
+                    "changed_frequency",
                     "added_dimensions", "removed_dimensions", "changed_decomposition",
                     "changed_chart_type", "changed_trade_flow",
                     "changed_trade_reporter", "changed_trade_partner",
@@ -760,7 +845,9 @@ Output the query_type and any changed fields as JSON."""
                 return None
 
             delta = self._promote_decomposition_semantics(delta, state)
+            delta = self._fill_explicit_provider_for_switch_delta(delta, query_text)
             delta = self._fill_explicit_country_scope_for_switch_delta(delta, query_text)
+            delta = self._sanitize_provider_change_geography_artifacts(delta, query_text)
             delta.raw_query = query_text
             logger.info(
                 "LLM Delta: type=%s, changes=%s",
@@ -877,6 +964,87 @@ Output the query_type and any changed fields as JSON."""
             if token not in _FILLER_WORDS and token not in _INDICATOR_NOISE_WORDS and len(token) > 1
         }
         return tokens
+
+    def _try_country_provider_follow_up_with_indicator_reaffirmation(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Detect follow-ups like 'Japan GDP from World Bank' structurally.
+
+        This preserves the current semantic indicator while allowing explicit
+        provider + geography rewrites to avoid a slower, error-prone LLM delta.
+        """
+        provider_match = _PROVIDER_SWITCH_RE.search(query)
+        if not provider_match:
+            return None
+
+        stripped_query = _PROVIDER_SWITCH_RE.sub(" ", query)
+        target_countries = CountryResolver.detect_all_countries_in_query(stripped_query)
+        if not target_countries:
+            return None
+
+        query_lower = stripped_query.lower()
+        tokens = re.findall(r"[a-zA-Z]+", query_lower)
+        if not tokens:
+            return None
+
+        geography_tokens: set[str] = set()
+        for country in target_countries:
+            geography_tokens.add(country.lower())
+            if country.upper() == "US":
+                geography_tokens.update({"united", "states", "usa", "us", "america"})
+            iso3 = CountryResolver.to_iso3(country)
+            if iso3:
+                geography_tokens.add(iso3.lower())
+            for alias, code in CountryResolver.COUNTRY_ALIASES.items():
+                if code == country.upper():
+                    for token in alias.split():
+                        geography_tokens.add(token.lower())
+
+        content_tokens = [
+            token for token in tokens
+            if token not in _FILLER_WORDS and token not in geography_tokens
+        ]
+        if not content_tokens:
+            return None
+
+        current_indicator_tokens = self._indicator_token_set(state.indicator)
+        for member in (state.active_answer_members or []):
+            current_indicator_tokens.update(self._indicator_token_set(getattr(member, "indicator_label", None)))
+        if not current_indicator_tokens:
+            return None
+
+        content_token_set = {
+            token for token in content_tokens
+            if token not in _INDICATOR_NOISE_WORDS and len(token) > 1
+        }
+        if not content_token_set or not content_token_set.issubset(current_indicator_tokens):
+            return None
+
+        from ..utils.providers import normalize_provider_name
+
+        provider = normalize_provider_name(provider_match.group(1).strip())
+        logger.info(
+            "Delta: country+provider follow-up with indicator reaffirmation → provider=%s countries=%s",
+            provider,
+            target_countries,
+        )
+        if len(target_countries) == 1:
+            return FollowUpDelta(
+                changed_country=target_countries[0],
+                changed_provider=provider,
+                raw_query=query,
+                delta_type="compound_change",
+                query_type="parameter_delta",
+            )
+        return FollowUpDelta(
+            changed_countries=target_countries,
+            changed_provider=provider,
+            raw_query=query,
+            delta_type="compound_change",
+            query_type="parameter_delta",
+        )
 
     def _try_country_follow_up_with_indicator_reaffirmation(
         self,
@@ -1075,14 +1243,16 @@ Output the query_type and any changed fields as JSON."""
         from ..utils.providers import normalize_provider_name
         provider = normalize_provider_name(provider_raw)
 
-        if provider == (state.provider or state.routed_provider or "").upper():
-            return None  # Same provider, no change
-
-        logger.info("Delta: provider change → %s", provider)
+        current_provider = (state.provider or state.routed_provider or "").upper()
+        if provider == current_provider:
+            logger.info("Delta: provider reaffirmation → %s", provider)
+        else:
+            logger.info("Delta: provider change → %s", provider)
         return FollowUpDelta(
             changed_provider=provider,
             raw_query=query,
             delta_type="provider_change",
+            query_type="parameter_delta",
         )
 
     # ------------------------------------------------------------------
@@ -1271,6 +1441,69 @@ Output the query_type and any changed fields as JSON."""
                     changed_end_date=f"{now.year}-12-31",
                     raw_query=query,
                     delta_type="time_change",
+                )
+
+        return None
+
+    def _try_frequency_change(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Detect pure frequency follow-ups like 'change to monthly frequency'."""
+        match = _FREQUENCY_CHANGE_RE.search(query)
+        if not match:
+            return None
+
+        query_lower = str(query or "").lower()
+        stripped = _FREQUENCY_CHANGE_RE.sub(" ", query_lower)
+        residual_tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", stripped)
+            if token not in _FILLER_WORDS and token not in {"frequency", "data", "change", "switch", "set"}
+        ]
+        if residual_tokens:
+            return None
+
+        frequency = self._normalize_frequency(match.group(1))
+        if frequency == str(state.frequency or "").strip().lower():
+            return None
+
+        logger.info("Delta: frequency change → %s", frequency)
+        return FollowUpDelta(
+            changed_frequency=frequency,
+            raw_query=query,
+            delta_type="parameter_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_breakdown_follow_up(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Detect simple breakdown follow-ups without sending them to the LLM."""
+        query_lower = str(query or "").strip().lower()
+        if not query_lower:
+            return None
+
+        breakdown_map = [
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+province(?:s)?\b"), {"type": "provinces", "entities": None, "axis": "Geography"}),
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+state(?:s)?\b"), {"type": "states", "entities": None, "axis": "Geography"}),
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+region(?:s)?\b"), {"type": "regions", "entities": None, "axis": "Geography"}),
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+country\b"), {"type": "countries", "entities": None, "axis": "Geography"}),
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+(?:age|age group|age groups)\b"), {"type": "dimension", "entities": None, "axis": "Age group"}),
+            (re.compile(r"\b(?:show|break\s+down|group)\s+(?:it\s+)?by\s+(?:sex|gender)\b"), {"type": "dimension", "entities": None, "axis": "Gender"}),
+        ]
+        for pattern, payload in breakdown_map:
+            if pattern.search(query_lower):
+                logger.info("Delta: decomposition breakdown → %s", payload)
+                return FollowUpDelta(
+                    changed_decomposition=dict(payload),
+                    is_dimension_modifier_change=True,
+                    raw_query=query,
+                    delta_type="dimension_change",
+                    query_type="parameter_delta",
                 )
 
         return None

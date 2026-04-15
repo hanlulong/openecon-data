@@ -49,6 +49,7 @@ _GEOGRAPHY_DIMENSION_KEYS = {
 _DIMENSION_DECOMPOSITION_AXIS_ALIASES = {
     "age": "Age group",
     "age group": "Age group",
+    "age-group": "Age group",
     "ages": "Age group",
     "gender": "Gender",
     "sex": "Gender",
@@ -286,10 +287,10 @@ def _canonicalize_decomposition_payload(
     axis = str(payload.get("axis") or "").strip()
     axis_lower = axis.lower()
 
-    if decomp_type in {"age groups", "age_group", "age_groups", "ages"}:
+    if decomp_type in {"age", "age group", "age groups", "age_group", "age_groups", "ages"}:
         payload["type"] = "dimension"
         payload["axis"] = "Age group"
-    elif decomp_type in {"sex", "gender"}:
+    elif decomp_type in {"sex", "gender", "genders"}:
         payload["type"] = "dimension"
         payload["axis"] = "Gender"
     elif decomp_type == "dimension" and axis:
@@ -426,6 +427,7 @@ class ConversationState(BaseModel):
     provider_locked: bool = False
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    frequency: Optional[str] = None
 
     # --- Dimension modifiers (StatsCan, Eurostat sub-categories) ---
     dimensions: Optional[Dict[str, str]] = None
@@ -494,6 +496,7 @@ class FollowUpDelta(BaseModel):
     changed_provider: Optional[str] = None
     changed_start_date: Optional[str] = None
     changed_end_date: Optional[str] = None
+    changed_frequency: Optional[str] = None
     added_dimensions: Optional[Dict[str, str]] = None
     removed_dimensions: Optional[List[str]] = None
     changed_chart_type: Optional[str] = None
@@ -545,6 +548,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             provider_locked=bool(delta.changed_provider),
             start_date=delta.changed_start_date,
             end_date=delta.changed_end_date,
+            frequency=delta.changed_frequency,
             chart_type=delta.changed_chart_type,
             decomposition=delta.changed_decomposition or decomposition_from_dimensions,
             trade_flow=delta.changed_trade_flow,
@@ -671,6 +675,8 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.start_date = delta.changed_start_date
     if delta.changed_end_date:
         merged.end_date = delta.changed_end_date
+    if delta.changed_frequency:
+        merged.frequency = delta.changed_frequency
 
     # --- Dimensions ---
     if delta.added_dimensions:
@@ -741,6 +747,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["startDate"] = state.start_date
     if state.end_date:
         parameters["endDate"] = state.end_date
+    if state.frequency:
+        parameters["frequency"] = state.frequency
 
     # Trade
     provider_name = (state.provider or state.routed_provider or "").upper()
@@ -884,6 +892,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # Time
     start_date = params.get("startDate")
     end_date = params.get("endDate")
+    frequency = params.get("frequency")
 
     original_query = str(intent.originalQuery or "").strip()
 
@@ -1097,6 +1106,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         routed_provider=provider_name,
         start_date=start_date,
         end_date=end_date,
+        frequency=frequency,
         original_query=intent.originalQuery,
         last_indicators_resolved=list(intent.indicators) if intent.indicators else None,
         trade_flow=trade_flow,
@@ -1164,6 +1174,8 @@ def merge_new_state_with_previous(
         new_state.start_date = previous.start_date
     if not new_state.end_date and previous.end_date:
         new_state.end_date = previous.end_date
+    if not new_state.frequency and previous.frequency:
+        new_state.frequency = previous.frequency
 
     # --- Indicator resolution ---
     if (

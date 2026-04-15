@@ -2033,6 +2033,10 @@ class QueryService:
                 by_country[key] = member
 
         rewritten: List[Any] = []
+        template_member = max(
+            imf_members,
+            key=lambda member: int(getattr(member, "source_turn", 0) or 0),
+        )
         for member in members:
             keys = self._member_country_keys(member)
             replacement = None
@@ -2040,7 +2044,14 @@ class QueryService:
                 if key in by_country:
                     replacement = by_country[key].model_copy(deep=True)
                     break
-            rewritten.append(replacement or member)
+            if replacement is None:
+                replacement = template_member.model_copy(deep=True)
+                replacement.country = getattr(member, "country", None)
+                replacement.countries = list(getattr(member, "countries", None) or ([replacement.country] if replacement.country else [])) or None
+                replacement.indicator_label = collective_indicator_label
+                replacement.provider_code = None
+                replacement.series_id = None
+            rewritten.append(replacement)
         return rewritten
 
     def _collective_member_query(

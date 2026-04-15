@@ -585,6 +585,10 @@ def is_resolved_indicator_plausible(
             return False
 
     if provider_upper == "BIS":
+        if "gap" not in query_lower and "GAP" in code_upper:
+            return False
+        if "gap" in query_lower and code_upper == "WS_TC":
+            return False
         if "debt_gdp_ratio" in query_cues:
             if code_upper in {"WS_DSR", "WS_DEBT_SEC2_PUB"}:
                 return False
@@ -777,8 +781,29 @@ def apply_concept_provider_override(
         )
         return provider, params
 
+    def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
+        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        if not semantic_label:
+            semantic_label = (
+                select_indicator_query_for_resolution(svc, intent)
+                or _effective_original_query(intent)
+                or str(intent.indicators[0] if intent.indicators else "")
+            ).strip()
+
+        merged = {**params, "indicator": indicator_value, **extra}
+        if semantic_label and not svc._looks_like_provider_indicator_code(provider, semantic_label):
+            merged["__semantic_indicator_label"] = semantic_label
+        return merged
+
     try:
-        from .catalog_service import find_concept_by_term, get_best_provider, get_variant_for_query, is_provider_available, is_provider_explicitly_excluded
+        from .catalog_service import (
+            find_concept_by_term,
+            get_best_provider,
+            get_variant_for_query,
+            is_indicator_code_for_concept,
+            is_provider_available,
+            is_provider_explicitly_excluded,
+        )
 
         concept_name = None
         matched_query = ""
@@ -906,7 +931,44 @@ def apply_concept_provider_override(
                 # encode meaningful scope and should survive as explicit
                 # provider-native inputs.
                 current_indicator_is_code = False
-            if canonical_code and (not current_indicator or not current_indicator_is_code):
+            current_indicator_matches_concept = False
+            current_indicator_plausible = True
+            current_indicator_text_upper = current_indicator_text.upper()
+            if current_indicator and current_indicator_is_code:
+                try:
+                    current_indicator_matches_concept = is_indicator_code_for_concept(
+                        concept_name,
+                        provider,
+                        current_indicator_text,
+                    )
+                except Exception:
+                    current_indicator_matches_concept = False
+
+                try:
+                    from .indicator_resolver import get_indicator_resolver
+
+                    _resolver = get_indicator_resolver()
+                    current_meta = _resolver.lookup.get(provider, current_indicator_text) if provider else None
+                    current_name = (current_meta.get("name", "") if current_meta else "")
+                    current_indicator_plausible = is_resolved_indicator_plausible(
+                        svc=svc,
+                        provider=provider,
+                        indicator_query=original_query or matched_query or current_indicator_text,
+                        resolved_code=current_indicator_text,
+                        resolved_name=current_name,
+                    )
+                except Exception:
+                    current_indicator_plausible = True
+
+            should_replace_existing_code = bool(
+                canonical_code
+                and current_indicator
+                and current_indicator_is_code
+                and current_indicator_text_upper != str(canonical_code).upper()
+                and (not current_indicator_matches_concept and not current_indicator_plausible)
+            )
+
+            if canonical_code and (not current_indicator or not current_indicator_is_code or should_replace_existing_code):
                 # Unified semantic verification -- single source of truth
                 from .indicator_resolver import get_indicator_resolver
                 _resolver = get_indicator_resolver()
