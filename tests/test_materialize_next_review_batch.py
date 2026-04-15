@@ -342,6 +342,68 @@ def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_
     assert [row["id"] for row in selected] == ["worldbank-literacy"]
 
 
+def test_select_quality_screened_direct_records_prefers_worldbank_completion_over_education_expenditure_family():
+    records = [
+        {
+            "id": "worldbank-education-exp",
+            "query": "Germany World Bank: Share of household consumption for private expenditures on primary education (%) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "World Bank: Share of household consumption for private expenditures on primary education (%)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["worldbank_education_expenditure_family"]},
+        },
+        {
+            "id": "worldbank-completion",
+            "query": "India male Completion rate lower secondary education adjusted location parity index (LPIA) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Completion rate, lower secondary education, adjusted location parity index (LPIA), male",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-completion"]
+
+
+def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_assessment_family():
+    records = [
+        {
+            "id": "worldbank-assessment",
+            "query": "China Rural Above Proficiency;SEA-PLM 2019 for grade 5 using MPL Level 6 for reading from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Rural Above Proficiency;SEA-PLM 2019 for grade 5 using MPL Level 6 for reading",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["worldbank_assessment_family"]},
+        },
+        {
+            "id": "worldbank-literacy-2",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-literacy-2"]
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
     records = [
         {

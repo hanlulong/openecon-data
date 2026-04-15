@@ -290,6 +290,42 @@ def test_audit_direct_query_shape_flags_worldbank_id_challenge_queries():
     assert "worldbank_id_financial_inclusion_query" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_education_expenditure_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Germany World Bank: Share of household consumption for private expenditures on primary education (%) from World Bank",
+            "origin": {"name": "World Bank: Share of household consumption for private expenditures on primary education (%)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_assessment_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "China Rural Above Proficiency;SEA-PLM 2019 for grade 5 using MPL Level 6 for reading from World Bank",
+            "origin": {"name": "Rural Above Proficiency;SEA-PLM 2019 for grade 5 using MPL Level 6 for reading"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_assessment_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_macro_exposure_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Germany Price level ratio of PPP conversion factor (GDP) to market exchange rate from World Bank",
+            "origin": {"name": "Price level ratio of PPP conversion factor (GDP) to market exchange rate"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_macro_exposure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {

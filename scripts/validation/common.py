@@ -309,6 +309,8 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
             score -= 4
         if any(term in lowered for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
             score -= 5
+        if any(term in lowered for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures', 'national assessment for learning outcomes', 'optimal competency', 'public sector wage premium', 'price level ratio of ppp conversion factor', 'sea-plm', 'elevation is below 5 meters']):
+            score -= 5
         if any(term in lowered for term in ['literacy rate', 'per student expenditure', 'completion rate', 'adjusted location parity index', 'any degree of functional difficulty']):
             score += 3
     if provider == 'COINGECKO':
@@ -630,6 +632,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_demographic_literacy_slice')
     if any(term in query_lower for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner']):
         reasons.append('worldbank_id_financial_inclusion_query')
+    if any(term in query_lower for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures']):
+        reasons.append('worldbank_education_expenditure_family')
+    if any(term in query_lower for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
+        reasons.append('worldbank_assessment_family')
+    if any(term in query_lower for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
+        reasons.append('worldbank_macro_exposure_family')
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity']):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
@@ -695,6 +703,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_education_finance_query',
         'worldbank_demographic_literacy_slice',
         'worldbank_id_financial_inclusion_query',
+        'worldbank_education_expenditure_family',
+        'worldbank_assessment_family',
+        'worldbank_macro_exposure_family',
         'oecd_low_viability_family',
         'eurostat_agri_breakdown_query',
         'eurostat_cross_tab_query',
