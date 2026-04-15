@@ -75,7 +75,11 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         "WORLDBANK": 1,
         "IMF": 2,
     }
+    provider_category_caps = {
+        ("WORLDBANK", "Education Statistics"): 6,
+    }
     family_counts: dict[tuple[str, str], int] = {}
+    category_counts: dict[tuple[str, str], int] = {}
     selected: list[dict] = []
     deferred: list[dict] = []
 
@@ -83,6 +87,7 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         provider = str(record.get("provider_stratum") or record.get("provider") or "").upper()
         origin = dict(record.get("origin") or {})
         family = provider_family_key(provider, str(origin.get("name") or record.get("name") or record.get("query") or ""))
+        category = str(origin.get("category") or record.get("category") or "").strip()
         cap = provider_family_caps.get(provider)
         if cap and family:
             key = (provider, family)
@@ -90,6 +95,13 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
                 deferred.append(record)
                 continue
             family_counts[key] = family_counts.get(key, 0) + 1
+        category_cap = provider_category_caps.get((provider, category))
+        if category_cap:
+            category_key = (provider, category)
+            if category_counts.get(category_key, 0) >= category_cap:
+                deferred.append(record)
+                continue
+            category_counts[category_key] = category_counts.get(category_key, 0) + 1
         selected.append(record)
         if len(selected) >= count:
             return selected

@@ -516,6 +516,43 @@ def test_select_quality_screened_direct_records_caps_worldbank_family_duplicates
     assert len([row_id for row_id in ids if row_id.startswith("worldbank-completion-")]) == 1
 
 
+def test_select_quality_screened_direct_records_caps_worldbank_education_category():
+    records = [
+        {
+            "id": f"edu-{idx}",
+            "query": f"Education row {idx} from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": f"Education row {idx}",
+                "description": "",
+                "category": "Education Statistics",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        }
+        for idx in range(7)
+    ] + [
+        {
+            "id": "ddh-1",
+            "query": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 7)
+
+    categories = [row["origin"]["category"] for row in selected]
+    assert categories.count("Education Statistics") == 6
+    assert "Disability Data Hub (DDH)" in categories
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
     records = [
         {
