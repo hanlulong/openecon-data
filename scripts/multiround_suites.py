@@ -448,6 +448,18 @@ def _regression_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]
                 latest_year_at_least=latest_year_for_recent_data,
                 note="This regression must prove that the follow-up actually expands the time horizon, not just preserves the sex split.",
             ),
+            _case(
+                "show only females",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("females",),
+                forbidden_cues=("male",),
+                frequencies=("monthly",),
+                exact_series_count=1,
+                min_points_per_series=200,
+                earliest_year_at_most=earliest_year_for_last_20,
+                latest_year_at_least=latest_year_for_recent_data,
+            ),
         ],
         "Reg 2: StatsCan Sex Single-turn Horizon": [
             _case(
@@ -461,6 +473,18 @@ def _regression_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]
                 earliest_year_at_most=earliest_year_for_last_20,
                 latest_year_at_least=latest_year_for_recent_data,
                 note="The fused single-turn variant should be equivalent to the multiround follow-up chain.",
+            ),
+            _case(
+                "show only males",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("males",),
+                forbidden_cues=("female",),
+                frequencies=("monthly",),
+                exact_series_count=1,
+                min_points_per_series=200,
+                earliest_year_at_most=earliest_year_for_last_20,
+                latest_year_at_least=latest_year_for_recent_data,
             ),
         ],
     }

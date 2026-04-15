@@ -156,6 +156,22 @@ class TestMergeState:
             "Age group": "25 to 54 years",
         }
 
+    def test_specific_sex_filter_clears_dimension_decomposition_even_when_axis_is_sex(self):
+        state = ConversationState(
+            indicator="unemployment rate",
+            country="CA",
+            provider="STATSCAN",
+            decomposition={"type": "dimension", "entities": None, "axis": "Sex"},
+        )
+        delta = FollowUpDelta(
+            added_dimensions={"sex": "female"},
+            is_dimension_modifier_change=True,
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition is None
+        assert merged.dimensions == {"sex": "female"}
+
     def test_specific_age_filter_clears_generic_demographic_decomposition(self):
         state = ConversationState(
             indicator="employment rate",
@@ -703,6 +719,26 @@ class TestExtractStateFromIntent:
         assert state.indicator == "GDP growth rate"
         assert state.resolved_indicator_code == "NGDP_RPCH"
 
+    def test_extract_state_canonicalizes_statscan_dimension_axis_from_intent(self):
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "CA", "__statscan_decomposition_axis": "Sex"},
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["Males", "Females"],
+            originalQuery="unemployment in Canada by sex",
+        )
+
+        state = extract_state_from_intent(intent)
+
+        assert state.decomposition == {
+            "type": "dimension",
+            "entities": ["Males", "Females"],
+            "axis": "Gender",
+        }
+
     def test_multi_country_extraction(self):
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -1220,7 +1256,7 @@ class TestDeltaExtractorDimensionModifier:
         return _make
 
     def test_female_after_unemployment_is_dimension(self, _build_extractor):
-        """'show female' after unemployment rate stays on the LLM path for now."""
+        """'show female' after unemployment rate resolves as a dimension modifier."""
         _cube = {"dimension": [{"dimensionNameEn": "Sex", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -1237,10 +1273,11 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show female", state)
-        assert delta is None
+        assert delta is not None
+        assert delta.added_dimensions == {"sex": "female"}
 
-    def test_shelter_after_cpi_deferred_to_llm(self, _build_extractor):
-        """Dimension modifiers stay on the LLM path until typed dimension actions land."""
+    def test_shelter_after_cpi_is_dimension_modifier(self, _build_extractor):
+        """StatsCan product/category filters resolve as dimension modifiers."""
         _cube = {"dimension": [{"dimensionNameEn": "Products and product groups", "member": []}]}
         extractor = _build_extractor(
             vector_mappings={"CPI": 41690973},
@@ -1257,7 +1294,8 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show shelter", state)
-        assert delta is None
+        assert delta is not None
+        assert delta.added_dimensions == {"products": "Shelter"}
 
     def test_inflation_after_unemployment_deferred_to_llm(self, _build_extractor):
         """Generic non-crypto indicator switches remain on the LLM path."""
@@ -1290,8 +1328,8 @@ class TestDeltaExtractorDimensionModifier:
         delta = extractor.extract("female", state)
         assert delta is None  # Deferred to LLM
 
-    def test_dimension_modifier_deferred_to_llm(self, _build_extractor):
-        """Dimension modifiers remain on the LLM path until the dimension-action contract exists."""
+    def test_dimension_modifier_youth_is_structural(self, _build_extractor):
+        """Age-style StatsCan follow-ups resolve structurally."""
         _cube = {"dimension": []}
         extractor = _build_extractor(
             vector_mappings={"UNEMPLOYMENT_RATE": 2062815},
@@ -1308,10 +1346,11 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show youth", state)
-        assert delta is None
+        assert delta is not None
+        assert delta.added_dimensions == {"age": "youth"}
 
-    def test_coordinate_mapping_deferred_to_llm(self, _build_extractor):
-        """Province-based follow-ups remain on the LLM path for now."""
+    def test_coordinate_mapping_geography_filter_is_structural(self, _build_extractor):
+        """Province-based StatsCan filters resolve structurally as dimensions."""
         _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
         extractor = _build_extractor(
             coord_mappings={"HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "desc")},
@@ -1327,7 +1366,8 @@ class TestDeltaExtractorDimensionModifier:
             statscan_cube_metadata=_cube,
         )
         delta = extractor.extract("show Ontario", state)
-        assert delta is None
+        assert delta is not None
+        assert delta.added_dimensions == {"geography": "Ontario"}
 
 
 # ─── materialize_intent with dimensions ─────────────────────────────

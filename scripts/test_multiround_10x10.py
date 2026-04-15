@@ -154,6 +154,15 @@ def semantic_tags_from_observed(
 
     if "gdp" in text or "gross domestic product" in text or any("GDP" in series_id for series_id in series_ids):
         tags.add("gdp")
+    if "hicp" in text or any("HICP" in series_id for series_id in series_ids):
+        tags.add("hicp")
+    if (
+        "cpi" in text
+        or "consumer price index" in text
+        or "consumer prices" in text
+        or any("CPI" in series_id for series_id in series_ids)
+    ):
+        tags.add("cpi")
     if "inflation" in text or "consumer price" in text or "hicp" in text or "cpi" in text or any("CPI" in series_id or "HICP" in series_id for series_id in series_ids):
         tags.add("inflation")
     if "trade balance" in text or "external balance" in text or any("RSB" in series_id for series_id in series_ids):
@@ -254,6 +263,16 @@ def _extract_year(value: Any) -> int | None:
         return int(match.group(1))
     except ValueError:
         return None
+
+
+def _cue_present(cue: str, observed: dict[str, Any]) -> bool:
+    cue_norm = normalize_cue_text(cue)
+    if not cue_norm:
+        return False
+    if cue_norm in {str(tag).lower() for tag in observed.get("semantic_tags", [])}:
+        return True
+    cue_text = str(observed.get("cue_text") or "")
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(cue_norm)}(?![a-z0-9])", cue_text))
 
 
 def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
@@ -406,12 +425,11 @@ def evaluate_round(case: RoundCase, resp_json: dict[str, Any]) -> tuple[str, str
             reasons.append(f"series_id_mismatch expected~={oracle.accepted_series_ids} actual={observed['series_ids']}")
 
     for cue in oracle.required_indicator_cues:
-        cue_lower = cue.lower()
-        if cue_lower not in observed["cue_text"] and cue_lower not in observed["semantic_tags"]:
+        if not _cue_present(cue, observed):
             reasons.append(f"missing_indicator_cue={cue}")
 
     for cue in oracle.forbidden_indicator_cues:
-        if cue.lower() in observed["cue_text"]:
+        if _cue_present(cue, observed):
             reasons.append(f"forbidden_indicator_cue_present={cue}")
 
     if (

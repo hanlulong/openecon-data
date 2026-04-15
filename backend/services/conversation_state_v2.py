@@ -250,7 +250,8 @@ def _dimensions_target_decomposition_axis(
         return False
 
     decomp_type = str(decomposition.get("type") or "").strip().lower()
-    decomp_axis = str(decomposition.get("axis") or "").strip().lower()
+    decomp_axis_raw = str(decomposition.get("axis") or "").strip().lower()
+    decomp_axis = str(_DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(decomp_axis_raw, decomp_axis_raw)).strip().lower()
     for raw_key, raw_value in dimensions.items():
         key_lower = str(raw_key or "").strip().lower()
         value_lower = str(raw_value or "").strip().lower()
@@ -986,13 +987,16 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # Decomposition
     decomposition: Optional[Dict[str, Any]] = None
     if intent.needsDecomposition and intent.decompositionType:
-        decomposition = {
+        decomposition = _canonicalize_decomposition_payload({
             "type": intent.decompositionType,
             "entities": intent.decompositionEntities,
-        }
+        })
         decomposition_axis = str(params.get("__statscan_decomposition_axis") or "").strip()
+        if decomposition is None:
+            decomposition = {}
         if decomposition_axis:
             decomposition["axis"] = decomposition_axis
+            decomposition = _canonicalize_decomposition_payload(decomposition)
     elif decomposition_from_dimensions:
         decomposition = decomposition_from_dimensions
 

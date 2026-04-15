@@ -85,6 +85,7 @@ def test_regression_suite_covers_reported_statscan_sex_timeframe_bug() -> None:
     assert [case.query for case in suite["Reg 1: StatsCan Sex Follow-up Horizon"]] == [
         "unemployment in Canada by sex",
         "last 20 years",
+        "show only females",
     ]
     last_20_years_case = suite["Reg 1: StatsCan Sex Follow-up Horizon"][1]
     assert last_20_years_case.oracle.accepted_providers == ("STATSCAN",)
@@ -92,6 +93,8 @@ def test_regression_suite_covers_reported_statscan_sex_timeframe_bug() -> None:
     assert last_20_years_case.oracle.min_points_per_series >= 200
     assert last_20_years_case.oracle.earliest_year_at_most == 2007
     assert last_20_years_case.oracle.latest_year_at_least == 2025
+    females_case = suite["Reg 1: StatsCan Sex Follow-up Horizon"][2]
+    assert females_case.oracle.forbidden_indicator_cues == ("male",)
 
 
 @pytest.mark.unit
@@ -180,6 +183,7 @@ def test_observed_semantic_tags_detect_inflation_and_growth_variants() -> None:
     growth_observed = extract_observed(growth_response)
 
     assert "inflation" in inflation_observed["semantic_tags"]
+    assert "hicp" in inflation_observed["semantic_tags"]
     assert "growth" in growth_observed["semantic_tags"]
     assert "gdp" in growth_observed["semantic_tags"]
 

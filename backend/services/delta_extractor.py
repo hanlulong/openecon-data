@@ -361,6 +361,10 @@ class DeltaExtractor:
         if delta:
             return delta
 
+        delta = self._try_dimension_modifier(query_text, state)
+        if delta:
+            return delta
+
         # Fast structural handlers — only for unambiguous patterns.
         # Dimension and indicator changes are handled by the LLM (Tier 2)
         # because regex can't distinguish "seniors" (age dimension) from
