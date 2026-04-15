@@ -553,6 +553,51 @@ def test_select_quality_screened_direct_records_caps_worldbank_education_categor
     assert "Disability Data Hub (DDH)" in categories
 
 
+def test_select_quality_screened_direct_records_expands_cap_for_proven_worldbank_family():
+    records = [
+        {
+            "id": "worldbank-literacy-a",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+        {
+            "id": "worldbank-literacy-b",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+        {
+            "id": "worldbank-literacy-c",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "category": "Disability Data Hub (DDH)",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 3)
+
+    assert len(selected) == 3
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
     records = [
         {

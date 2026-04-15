@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import DEFAULT_DB, provider_family_key, sample_indicator_rows, write_jsonl  # noqa: E402
-from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score  # noqa: E402
+from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score, family_success_adjustment  # noqa: E402
 from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
 from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
     annotate as annotate_multiround,
@@ -71,7 +71,7 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
 
     ranked = sorted(records, key=sort_key)
 
-    provider_family_caps = {
+    base_provider_family_caps = {
         "WORLDBANK": 1,
         "IMF": 2,
     }
@@ -86,9 +86,15 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
     for record in ranked:
         provider = str(record.get("provider_stratum") or record.get("provider") or "").upper()
         origin = dict(record.get("origin") or {})
-        family = provider_family_key(provider, str(origin.get("name") or record.get("name") or record.get("query") or ""))
+        family_name = str(origin.get("name") or record.get("name") or record.get("query") or "")
+        family = provider_family_key(provider, family_name)
         category = str(origin.get("category") or record.get("category") or "").strip()
-        cap = provider_family_caps.get(provider)
+        cap = base_provider_family_caps.get(provider)
+        family_signal = family_success_adjustment(provider, family_name)
+        if cap is not None and family_signal >= 4:
+            cap += 2
+        elif cap is not None and family_signal >= 2:
+            cap += 1
         if cap and family:
             key = (provider, family)
             if family_counts.get(key, 0) >= cap:
