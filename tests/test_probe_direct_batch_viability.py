@@ -190,3 +190,115 @@ def test_probe_direct_batch_viability_respects_max_sessions(tmp_path: Path):
 
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["summary"]["session_count"] == 1
+
+
+def test_probe_direct_batch_viability_retries_transient_timeout(tmp_path: Path):
+    dataset = tmp_path / "direct.jsonl"
+    output = tmp_path / "viability.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {"id": "direct-1", "query": "retry-me", "provider_stratum": "FRED", "gold": {"accepted_providers": ["FRED"]}},
+        ],
+    )
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_POST(self):  # noqa: N802
+            type(self).attempts += 1
+            if type(self).attempts == 1:
+                import time as _time
+                _time.sleep(0.2)
+            body = json.dumps({"data": [{"metadata": {"source": "FRED"}, "data": [{"date": "2024", "value": 1}]}]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--dataset",
+                    str(dataset),
+                    "--base-url",
+                    base_url,
+                    "--timeout-seconds",
+                    "0.05",
+                    "--max-attempts",
+                    "2",
+                    "--output",
+                    str(output),
+                ],
+                check=True,
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["viability_pass_count"] == 1
+    assert report["results"][0]["attempt_count"] == 2
+
+
+def test_probe_direct_batch_viability_records_timeout_failures_without_crashing(tmp_path: Path):
+    dataset = tmp_path / "direct.jsonl"
+    output = tmp_path / "viability.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {"id": "direct-1", "query": "always-timeout", "provider_stratum": "FRED", "gold": {"accepted_providers": ["FRED"]}},
+        ],
+    )
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            import time as _time
+            _time.sleep(0.2)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--dataset",
+                    str(dataset),
+                    "--base-url",
+                    base_url,
+                    "--timeout-seconds",
+                    "0.05",
+                    "--max-attempts",
+                    "2",
+                    "--output",
+                    str(output),
+                ],
+                check=True,
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["viability_pass_count"] == 0
+    assert report["summary"]["viability_fail_count"] == 1
+    assert report["summary"]["reason_counts"]["exception:ReadTimeout"] == 1
+    assert report["results"][0]["attempt_count"] == 2

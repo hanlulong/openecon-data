@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 import sys
 from typing import Any
 
@@ -27,6 +28,30 @@ def accepted_provider_set(row: dict[str, Any]) -> set[str]:
     return {normalize_provider_name(str(item)) for item in accepted if str(item).strip()}
 
 
+def probe_query(
+    *,
+    base: str,
+    query: str,
+    timeout_seconds: float,
+    max_attempts: int,
+) -> tuple[requests.Response | None, dict[str, Any] | None, str | None, int]:
+    last_error: str | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(base, json={'query': query}, timeout=timeout_seconds)
+            data = resp.json()
+            return resp, data, None, attempt
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt >= max_attempts:
+                return None, None, last_error, attempt
+            time.sleep(min(1.0, 0.1 * attempt))
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = f"{type(exc).__name__}: {exc}"
+            return None, None, last_error, attempt
+    return None, None, last_error or "unknown", max_attempts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Probe direct-batch viability against a live backend before full execution.')
     parser.add_argument('--dataset', type=Path, required=True)
@@ -35,6 +60,8 @@ def main() -> int:
     parser.add_argument('--kept-output', type=Path, default=None)
     parser.add_argument('--rejected-output', type=Path, default=None)
     parser.add_argument('--max-sessions', type=int, default=None)
+    parser.add_argument('--timeout-seconds', type=float, default=20.0)
+    parser.add_argument('--max-attempts', type=int, default=2)
     args = parser.parse_args()
 
     rows = list(iter_jsonl(args.dataset.resolve()))
@@ -48,48 +75,71 @@ def main() -> int:
     base = args.base_url.rstrip('/') + '/api/query'
 
     for row in rows:
-        payload = {'query': row['query']}
-        resp = requests.post(base, json=payload, timeout=120)
-        data = resp.json()
-        signals = extract_response_signals(data)
         accepted = accepted_provider_set(row)
-        observed_providers = {normalize_provider_name(provider) for provider in signals['providers']}
-        structural_pass = int(resp.status_code or 0) == 200 and not data.get('error') and int(signals['series_count'] or 0) > 0 and not signals['clarification_detected']
-        provider_match = True if not accepted else bool(accepted & observed_providers)
+        resp, data, request_error, attempt_count = probe_query(
+            base=base,
+            query=str(row.get('query') or ''),
+            timeout_seconds=float(args.timeout_seconds),
+            max_attempts=max(1, int(args.max_attempts)),
+        )
 
-        reasons = []
-        if not structural_pass:
-            if data.get('error'):
-                reasons.append(f"error:{data.get('error')}")
-            if signals['clarification_detected']:
-                reasons.append('clarification_detected')
-            if int(signals['series_count'] or 0) <= 0:
-                reasons.append('no_series')
-        if structural_pass and not provider_match:
-            reasons.append('provider_mismatch')
+        if resp is None or data is None:
+            result = {
+                'session_id': row.get('id'),
+                'query': row.get('query'),
+                'provider_stratum': row.get('provider_stratum'),
+                'status_code': None,
+                'viability_pass': False,
+                'structural_pass': False,
+                'provider_match': False,
+                'accepted_providers': sorted(accepted),
+                'observed_providers': [],
+                'series_count': 0,
+                'clarification_detected': False,
+                'error': request_error,
+                'reasons': [f"exception:{request_error.split(':', 1)[0]}" if request_error else 'exception:unknown', 'no_series'],
+                'attempt_count': attempt_count,
+            }
+        else:
+            signals = extract_response_signals(data)
+            observed_providers = {normalize_provider_name(provider) for provider in signals['providers']}
+            structural_pass = int(resp.status_code or 0) == 200 and not data.get('error') and int(signals['series_count'] or 0) > 0 and not signals['clarification_detected']
+            provider_match = True if not accepted else bool(accepted & observed_providers)
 
-        viability_pass = structural_pass and provider_match
-        result = {
-            'session_id': row.get('id'),
-            'query': row.get('query'),
-            'provider_stratum': row.get('provider_stratum'),
-            'status_code': resp.status_code,
-            'viability_pass': viability_pass,
-            'structural_pass': structural_pass,
-            'provider_match': provider_match,
-            'accepted_providers': sorted(accepted),
-            'observed_providers': sorted(observed_providers),
-            'series_count': signals['series_count'],
-            'clarification_detected': signals['clarification_detected'],
-            'error': data.get('error'),
-            'reasons': reasons,
-        }
+            reasons = []
+            if not structural_pass:
+                if data.get('error'):
+                    reasons.append(f"error:{data.get('error')}")
+                if signals['clarification_detected']:
+                    reasons.append('clarification_detected')
+                if int(signals['series_count'] or 0) <= 0:
+                    reasons.append('no_series')
+            if structural_pass and not provider_match:
+                reasons.append('provider_mismatch')
+
+            viability_pass = structural_pass and provider_match
+            result = {
+                'session_id': row.get('id'),
+                'query': row.get('query'),
+                'provider_stratum': row.get('provider_stratum'),
+                'status_code': resp.status_code,
+                'viability_pass': viability_pass,
+                'structural_pass': structural_pass,
+                'provider_match': provider_match,
+                'accepted_providers': sorted(accepted),
+                'observed_providers': sorted(observed_providers),
+                'series_count': signals['series_count'],
+                'clarification_detected': signals['clarification_detected'],
+                'error': data.get('error'),
+                'reasons': reasons,
+                'attempt_count': attempt_count,
+            }
         results.append(result)
-        if viability_pass:
+        if result['viability_pass']:
             kept_rows.append(row)
         else:
             rejected_rows.append(row)
-            for reason in reasons or ['unknown']:
+            for reason in result['reasons'] or ['unknown']:
                 reason_counts[reason] += 1
 
     payload = {

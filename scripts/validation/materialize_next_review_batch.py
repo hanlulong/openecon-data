@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validation.common import DEFAULT_DB, sample_indicator_rows, write_jsonl  # noqa: E402
+from scripts.validation.common import DEFAULT_DB, provider_family_key, sample_indicator_rows, write_jsonl  # noqa: E402
 from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score  # noqa: E402
 from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
 from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
@@ -70,7 +70,37 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         )
 
     ranked = sorted(records, key=sort_key)
-    return ranked[:count]
+
+    provider_family_caps = {
+        "WORLDBANK": 1,
+        "IMF": 2,
+    }
+    family_counts: dict[tuple[str, str], int] = {}
+    selected: list[dict] = []
+    deferred: list[dict] = []
+
+    for record in ranked:
+        provider = str(record.get("provider_stratum") or record.get("provider") or "").upper()
+        origin = dict(record.get("origin") or {})
+        family = provider_family_key(provider, str(origin.get("name") or record.get("name") or record.get("query") or ""))
+        cap = provider_family_caps.get(provider)
+        if cap and family:
+            key = (provider, family)
+            if family_counts.get(key, 0) >= cap:
+                deferred.append(record)
+                continue
+            family_counts[key] = family_counts.get(key, 0) + 1
+        selected.append(record)
+        if len(selected) >= count:
+            return selected
+
+    if len(selected) < count:
+        for record in deferred:
+            selected.append(record)
+            if len(selected) >= count:
+                break
+
+    return selected[:count]
 
 
 def materialize_direct(

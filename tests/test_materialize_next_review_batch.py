@@ -472,6 +472,50 @@ def test_select_quality_screened_direct_records_prefers_literacy_over_ddh_preval
     assert [row["id"] for row in selected] == ["worldbank-literacy-3"]
 
 
+def test_select_quality_screened_direct_records_caps_worldbank_family_duplicates():
+    records = [
+        {
+            "id": "worldbank-completion-a",
+            "query": "India male Completion rate lower secondary education adjusted location parity index (LPIA) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Completion rate, lower secondary education, adjusted location parity index (LPIA), male",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+        {
+            "id": "worldbank-completion-b",
+            "query": "China female Completion rate lower secondary education adjusted location parity index (LPIA) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Completion rate, lower secondary education, female, adjusted location parity index (LPIA)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+        {
+            "id": "worldbank-literacy-a",
+            "query": "Brazil Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Literacy rate (% of persons aged 15 to 29 years with any degree of functional difficulty)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 2)
+
+    ids = [row["id"] for row in selected]
+    assert "worldbank-literacy-a" in ids
+    assert len([row_id for row_id in ids if row_id.startswith("worldbank-completion-")]) == 1
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_student_share_over_publication_table_query():
     records = [
         {
