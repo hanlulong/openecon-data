@@ -91,3 +91,219 @@ def test_audit_batch_query_quality_handles_multiple_datasets(tmp_path: Path):
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["by_type"]["direct"] == 2
     assert report["summary"]["high_risk_rows"] == 1
+
+
+def test_audit_batch_query_quality_flags_scenario_and_methodology_dense_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Canada Climate projections by scenario 2030–2060 – Cities and FUAs from OECD",
+                "origin": {
+                    "name": "Climate projections by scenario, 2030–2060 – Cities and FUAs"
+                },
+            },
+            {
+                "id": "direct-2",
+                "query": "US $ current prices current PPPs Annual net national income per capita from OECD",
+                "origin": {
+                    "name": "Annual net national income per capita, US $, current prices, current PPPs"
+                },
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 2
+    reasons = {row["id"]: set(row["reasons"]) for row in report["flagged_rows"]}
+    assert "scenario_projection_query" in reasons["direct-1"]
+    assert "methodology_dense" in reasons["direct-2"]
+
+
+def test_audit_batch_query_quality_flags_accounting_subtotal_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany Exchange Difference Sub Total Federation Income and Distribution from IMF",
+                "origin": {
+                    "name": "Federation Income and Distribution, Exchange Difference, Sub Total"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "accounting_artifact_query" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_ambiguous_subnational_abbreviations(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "US AL Market Hotness: Page View Count per Property in Jefferson County from FRED",
+                "origin": {
+                    "name": "AL Market Hotness: Page View Count per Property in Jefferson County"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "subnational_abbrev_ambiguous" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_avoids_false_country_conflicts_on_common_words(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "A woman can apply for a passport in the same way as a man from World Bank",
+                "origin": {
+                    "name": "A woman can apply for a passport in the same way as a man (1=yes; 0=no)"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 0
+
+
+def test_audit_batch_query_quality_flags_socioeconomic_slice_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Japan Borrowed to start or operate a business poorest 40% (% age 15+) from World Bank",
+                "origin": {
+                    "name": "Borrowed to start or operate a business, poorest 40% (% age 15+)"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "socioeconomic_slice" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_classification_labor_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "China Employment Manufacturing Labor Markets Number of persons from IMF",
+                "origin": {
+                    "name": "Labor Markets, Employment, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 3.1, Manufacturing, Number of persons"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "classification_labor_query" in flagged["reasons"]

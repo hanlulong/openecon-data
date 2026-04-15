@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import DEFAULT_DB, sample_indicator_rows, write_jsonl  # noqa: E402
-from scripts.validation.common import audit_direct_query_shape  # noqa: E402
+from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score  # noqa: E402
 from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
 from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
     annotate as annotate_multiround,
@@ -58,9 +58,11 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         risk_level = str(provenance.get('query_quality_risk') or 'low')
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
+        specificity = direct_query_specificity_score(record)
         return (
             risk_rank,
             len(reasons),
+            -specificity,
             len(str(record.get('query') or '')),
             str(record.get('id') or ''),
         )

@@ -1043,6 +1043,33 @@ class IMFProvider(BaseProvider):
         if mapped:
             return mapped, self._friendly_indicator_label(indicator, mapped)
 
+        # Step 1.5: If the caller already supplied an exact IMF code that exists
+        # in the local indicator catalog, trust it directly. This preserves
+        # explicit provider-code queries without re-running metadata discovery,
+        # while still failing closed for fake codes because they will miss the
+        # local exact lookup and continue down the normal validation path.
+        exact_code_candidate = str(indicator or "").upper().strip()
+        structured_exact_code = (
+            "_" in exact_code_candidate
+            or "." in exact_code_candidate
+            or any(char.isdigit() for char in exact_code_candidate)
+            or len(exact_code_candidate) >= 8
+        )
+        if structured_exact_code and re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{2,}", exact_code_candidate):
+            try:
+                from ..services.indicator_database import get_indicator_lookup
+
+                lookup = get_indicator_lookup()
+                exact_meta = lookup.get("IMF", exact_code_candidate)
+            except Exception as exc:
+                logger.debug("IMF exact-code lookup skipped for '%s': %s", indicator, exc)
+                exact_meta = None
+
+            if exact_meta:
+                label_hint = str(exact_meta.get("name") or indicator)
+                logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
+                return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
+
         # Step 2: Try cross-provider indicator translator (handles indicator names from other systems)
         translator = get_indicator_translator()
         translated_code, concept_name = translator.translate_indicator(indicator, "IMF")

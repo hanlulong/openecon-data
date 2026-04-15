@@ -10,6 +10,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from backend.routing.country_resolver import CountryResolver
+except Exception:  # pragma: no cover - fallback for lightweight script usage
+    CountryResolver = None
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
 
@@ -59,21 +64,34 @@ _SAFE_DIRECT_ACRONYMS = {
     'CHF',
 }
 
-_KNOWN_COUNTRY_NAMES = {
-    'united states',
-    'us',
-    'usa',
-    'china',
-    'japan',
-    'germany',
-    'france',
-    'italy',
-    'brazil',
-    'canada',
-    'india',
-    'united kingdom',
-    'uk',
+if CountryResolver is not None:
+    _COUNTRY_QUERY_TERMS = {
+        alias.lower()
+        for alias in CountryResolver.COUNTRY_ALIASES
+        if len(alias) >= 4 or alias.lower() in {'us', 'usa', 'uk', 'uae', 'eu'}
+    }
+else:
+    _COUNTRY_QUERY_TERMS = {
+        'united states',
+        'us',
+        'usa',
+        'china',
+        'japan',
+        'germany',
+        'france',
+        'italy',
+        'brazil',
+        'canada',
+        'india',
+        'united kingdom',
+        'uk',
+        'nigeria',
+    }
+_AMBIGUOUS_COUNTRY_TERMS = {
+    'can',
+    'world',
 }
+_COUNTRY_QUERY_TERMS -= _AMBIGUOUS_COUNTRY_TERMS
 _GENERIC_CONTEXT_STOPWORDS = {
     'this',
     'dataset',
@@ -240,6 +258,29 @@ def description_context_phrase(description: str) -> str:
     return ' '.join(cleaned.split()[:8]).strip(' ,;')
 
 
+def direct_query_specificity_score(record: dict[str, Any]) -> int:
+    origin = dict(record.get('origin') or {})
+    query = str(record.get('query') or '')
+    name = str(origin.get('name') or record.get('name') or '').strip()
+    description = str(origin.get('description') or record.get('description') or '').strip()
+
+    score = 0
+    score += len({token for token in informative_tokens(name)})
+
+    contextual = description_context_phrase(description)
+    if contextual and contextual.lower() != name.lower():
+        score += min(3, len({token for token in informative_tokens(contextual)}))
+
+    normalized_query = re.sub(
+        r'\b(from|world bank|eurostat|oecd|fred|imf|statistics canada|statscan|bis|coingecko|comtrade)\b',
+        ' ',
+        query,
+        flags=re.IGNORECASE,
+    )
+    score += min(3, len({token for token in informative_tokens(normalized_query)}))
+    return score
+
+
 def natural_phrase_from_name(name: str, description: str = '') -> str:
     raw = str(name or '').strip()
     if not raw:
@@ -292,6 +333,9 @@ def natural_phrase_from_name(name: str, description: str = '') -> str:
 def derive_coin_query_name(row: dict[str, Any]) -> str:
     name = str(row.get('name') or '').strip()
     code = str(row.get('code') or '').strip()
+    if code and '-' in code:
+        if len(name.split()) >= 4 or len(name) >= 24 or any(symbol in name for symbol in {'€', '$', '£'}):
+            return code
     if len(name) > 4 and not re.fullmatch(r'[A-Z0-9]{1,5}', name):
         return name
     slug = re.sub(r'-\d+$', '', code)
@@ -303,14 +347,14 @@ def derive_coin_query_name(row: dict[str, Any]) -> str:
 
 def query_mentions_country(text: str) -> bool:
     lowered = str(text or '').lower()
-    return any(re.search(rf'\b{re.escape(country)}\b', lowered) for country in _KNOWN_COUNTRY_NAMES)
+    return any(re.search(rf'\b{re.escape(country)}\b', lowered) for country in _COUNTRY_QUERY_TERMS)
 
 
 def count_distinct_country_mentions(text: str) -> int:
     lowered = str(text or '').lower()
     matches = {
         country
-        for country in _KNOWN_COUNTRY_NAMES
+        for country in _COUNTRY_QUERY_TERMS
         if re.search(rf'\b{re.escape(country)}\b', lowered)
     }
     if {'us', 'usa', 'united states'} & matches:
@@ -324,6 +368,8 @@ def count_distinct_country_mentions(text: str) -> int:
 
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     provider = str(row.get('provider') or '')
+    provider_upper = provider.upper()
+    code = str(row.get('code') or '').strip()
     name = str(row.get('name') or '').strip()
     description = str(row.get('description') or '').strip()
     transform = infer_transform_family(name, description, str(row.get('unit') or ''), str(row.get('code') or ''))
@@ -331,34 +377,37 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     choice = defaults[stable_seed(provider, name) % len(defaults)]
     phrase = natural_phrase_from_name(name, description)
 
-    if provider == 'CoinGecko':
+    if provider_upper == 'COINGECKO':
         return f"{derive_coin_query_name(row)} cryptocurrency price from CoinGecko"
-    if provider == 'ExchangeRate':
+    if provider_upper == 'EXCHANGERATE':
         return choice
-    if provider == 'Comtrade':
+    if provider_upper == 'COMTRADE':
         commodity = re.sub(r'^\d+\s*-\s*', '', name).strip() or name
         return f"{choice} exports of {commodity} from Comtrade"
-    if provider == 'StatsCan':
+    if provider_upper == 'STATSCAN':
         return f"Canada {phrase} from Statistics Canada"
-    if provider == 'IMF':
+    if provider_upper == 'IMF':
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from IMF".strip()
-    if provider == 'WorldBank':
+    if provider_upper == 'WORLDBANK':
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from World Bank".strip()
-    if provider == 'OECD':
+    if provider_upper == 'OECD':
         if re.fullmatch(r'[A-Z0-9]{1,6}', phrase):
             phrase = f"{provider} indicator {phrase}"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from OECD".strip()
-    if provider == 'BIS':
+    if provider_upper == 'EUROSTAT':
+        prefix = '' if query_mentions_country(phrase) else f"{choice} "
+        return f"{prefix}{phrase} from Eurostat".strip()
+    if provider_upper == 'BIS':
         if re.fullmatch(r'[A-Z0-9]{1,8}', phrase):
             phrase = f"{provider} indicator {phrase}"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from BIS".strip()
-    if provider == 'FRED':
+    if provider_upper == 'FRED':
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
-        return f"{prefix}{phrase}".strip()
+        return f"{prefix}{phrase} from FRED".strip()
     if transform in {'imports', 'exports', 'trade_balance', 'current_account'}:
         return f'{choice} {name}'
     prefix = '' if query_mentions_country(phrase) else f"{choice} "
@@ -416,6 +465,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     query = str(row.get('query') or default_query_for_row(row) or '')
     origin = dict(row.get('origin') or {})
     origin_name = str(origin.get('name') or row.get('name') or '').strip()
+    origin_name_lower = origin_name.lower()
     reasons: list[str] = []
     query_lower = query.lower()
 
@@ -438,13 +488,71 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if count_distinct_country_mentions(query) > 1:
         reasons.append('country_scope_conflict')
     if (
-        ('average age' in query_lower and any(term in query_lower for term in ['urban', 'rural', 'female', 'male']))
-        or (re.search(r'\bage\s+\d{1,2}\b', query_lower) and any(term in query_lower for term in ['female', 'male', 'urban', 'rural']))
+        ('average age' in query_lower and any(term in query_lower for term in ['urban', 'rural', 'female', 'male', 'men', 'women']))
+        or (re.search(r'\bage\s+\d{1,2}', query_lower) and any(term in query_lower for term in ['female', 'male', 'men', 'women', 'urban', 'rural']))
     ):
         reasons.append('micro_demographic_slice')
+    if (
+        (re.search(r'\bage\s+\d{1,2}(?:-\d{1,2})?\b', query_lower) and any(term in query_lower for term in ['school', 'schooling', 'education', 'barro-lee']))
+        or ('schools with access to internet' in query_lower and any(term in query_lower for term in ['rural', 'urban', 'male', 'female']))
+    ):
+        reasons.append('education_subgroup_slice')
+    if any(term in query_lower for term in ['poorest', 'richest', 'quintile', 'decile', 'percentile']):
+        reasons.append('socioeconomic_slice')
+    if 'definition' in query_lower and 'survey' in query_lower:
+        reasons.append('definition_survey_query')
+    if 'labor markets' in query_lower and 'number of persons' in query_lower:
+        reasons.append('classification_labor_query')
+    if 'gross value added' in query_lower and any(term in query_lower for term in ['electricity', 'gas', 'water supply']):
+        reasons.append('classification_gva_query')
+    if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
+        reasons.append('subnational_abbrev_ambiguous')
+    if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
+        reasons.append('accounting_artifact_query')
+    if re.search(r'\b(scenario|scenarios|projection|projections|forecast|forecasts|fua|fuas)\b', query_lower):
+        reasons.append('scenario_projection_query')
+    methodology_markers = [
+        'ppp',
+        'ppps',
+        'current prices',
+        'constant prices',
+        'seasonally adjusted',
+        'annual',
+        'quarterly',
+        'per capita',
+        'definition',
+        'survey',
+        'national currency',
+        'de facto',
+        'sub total',
+        'exchange difference',
+    ]
+    methodology_hits = sum(
+        1 for marker in methodology_markers if marker in query_lower or marker in origin_name_lower
+    )
+    if methodology_hits >= 3:
+        reasons.append('methodology_dense')
+    if origin_name.count(',') >= 3:
+        reasons.append('multi_modifier_title')
 
     risk_level = 'low'
-    if any(reason in reasons for reason in ['very_long_query', 'catalog_jargon', 'provider_title_like', 'opaque_acronym_query', 'country_scope_conflict', 'micro_demographic_slice']):
+    if any(reason in reasons for reason in [
+        'very_long_query',
+        'catalog_jargon',
+        'provider_title_like',
+        'opaque_acronym_query',
+        'country_scope_conflict',
+        'micro_demographic_slice',
+        'education_subgroup_slice',
+        'socioeconomic_slice',
+        'definition_survey_query',
+        'classification_labor_query',
+        'classification_gva_query',
+        'subnational_abbrev_ambiguous',
+        'accounting_artifact_query',
+        'scenario_projection_query',
+        'methodology_dense',
+    ]):
         risk_level = 'high'
     elif reasons:
         risk_level = 'medium'

@@ -477,6 +477,26 @@ class ProviderTests(unittest.TestCase):
         assert label is not None
         self.assertIn("debt", label.lower())
 
+    def test_imf_exact_local_code_bypasses_metadata_discovery(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _Lookup:
+            def get(self, provider_name: str, code: str):
+                if provider_name == "IMF" and code == "RACFACBFIRM_XDC":
+                    return {
+                        "code": "RACFACBFIRM_XDC",
+                        "name": "Reserve assets, claims on banks, firms, national currency",
+                    }
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            code, label = run(provider._resolve_indicator_code("RACFACBFIRM_XDC"))
+
+        self.assertEqual(code, "RACFACBFIRM_XDC")
+        self.assertIsNotNone(label)
+        assert label is not None
+        self.assertIn("reserve", label.lower())
+
     def test_imf_gdp_resolves_to_level_code_not_growth(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 

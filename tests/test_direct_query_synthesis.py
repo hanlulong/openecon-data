@@ -32,6 +32,20 @@ def test_default_query_for_row_uses_slug_for_short_coingecko_symbols():
     assert "apollox" in query.lower()
 
 
+def test_default_query_for_row_prefers_slug_for_complex_coingecko_assets():
+    row = {
+        "provider": "CoinGecko",
+        "code": "matic-aave-usdc",
+        "name": "Matic Aave Interest Bearing USDC",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert "matic-aave-usdc" in query
+    assert query.lower().endswith("from coingecko")
+
+
 def test_default_query_for_row_naturalizes_comtrade_codes_into_exports_query():
     row = {
         "provider": "Comtrade",
@@ -68,7 +82,7 @@ def test_default_query_for_row_avoids_prefixing_country_when_title_already_has_s
 
     query = default_query_for_row(row)
 
-    assert query == "Bank Deposits to GDP for Japan"
+    assert query == "Bank Deposits to GDP for Japan from FRED"
 
 
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
@@ -87,6 +101,47 @@ def test_default_query_for_row_enriches_generic_oecd_title_from_description():
 
     assert "physicians by status" in query.lower()
     assert query.lower().endswith("from oecd")
+
+
+def test_default_query_for_row_does_not_prepend_country_when_imf_title_already_names_one():
+    row = {
+        "provider": "IMF",
+        "code": "NER_CBS_PSD_XDC",
+        "name": "Nigeria Definition, Central Bank Survey: Private Sector Deposits, National Currency",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query.lower().startswith("nigeria definition")
+    assert "germany " not in query.lower()
+
+
+def test_default_query_for_row_uses_imf_code_for_high_modifier_titles():
+    row = {
+        "provider": "IMF",
+        "code": "NER_CBS_PSD_XDC",
+        "name": "Nigeria Definition, Central Bank Survey: Private Sector Deposits, National Currency",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert "nigeria definition" in query.lower()
+    assert query.lower().endswith("from imf")
+
+
+def test_default_query_for_row_adds_explicit_provider_for_eurostat_queries():
+    row = {
+        "provider": "Eurostat",
+        "code": "migr_immi1ctz",
+        "name": "Immigration",
+        "description": "Long-term immigration flows",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query.lower().endswith("from eurostat")
 
 
 def test_audit_direct_query_shape_flags_country_scope_conflict():
@@ -111,3 +166,39 @@ def test_audit_direct_query_shape_flags_micro_demographic_slices():
 
     assert audit["risk_level"] == "high"
     assert "micro_demographic_slice" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_men_age_micro_demographic_slices():
+    audit = audit_direct_query_shape(
+        {
+            "query": "China Received private sector wages: in cash only men (% age 15+) from World Bank",
+            "origin": {"name": "Received private sector wages: in cash only, men (% age 15+)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "micro_demographic_slice" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_education_subgroup_slices():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Germany age 30-34 total Barro-Lee: Average years of secondary schooling from World Bank",
+            "origin": {"name": "Barro-Lee: Average years of secondary schooling, age 30-34, total"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "education_subgroup_slice" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_definition_survey_queries():
+    audit = audit_direct_query_shape(
+        {
+            "query": "Nigeria Definition Central Bank Survey Private Sector Deposits from IMF",
+            "origin": {"name": "Nigeria Definition, Central Bank Survey: Private Sector Deposits, National Currency"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "definition_survey_query" in audit["reasons"]

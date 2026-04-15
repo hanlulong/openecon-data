@@ -130,3 +130,48 @@ def test_select_quality_screened_direct_records_prefers_low_risk():
     selected = select_quality_screened_direct_records(records, 2)
 
     assert [row["id"] for row in selected] == ["low-1", "low-2"]
+
+
+def test_select_quality_screened_direct_records_prefers_more_specific_low_risk_rows():
+    records = [
+        {
+            "id": "generic-1",
+            "query": "France Immigration from Eurostat",
+            "origin": {"name": "Immigration", "description": ""},
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+        {
+            "id": "specific-1",
+            "query": "Italy Practising dentists from Eurostat",
+            "origin": {"name": "Practising dentists", "description": ""},
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["specific-1"]
+
+
+def test_select_quality_screened_direct_records_avoids_high_risk_oecd_methodology_titles():
+    records = [
+        {
+            "id": "oecd-dense",
+            "query": "US $ current prices current PPPs Annual net national income per capita from OECD",
+            "origin": {
+                "name": "Annual net national income per capita, US $, current prices, current PPPs",
+                "description": "",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["methodology_dense"]},
+        },
+        {
+            "id": "oecd-clear",
+            "query": "Germany Water use from OECD",
+            "origin": {"name": "Water use", "description": ""},
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["oecd-clear"]

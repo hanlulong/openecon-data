@@ -393,6 +393,59 @@ class QueryService:
             return normalized
         return None
 
+    def _build_explicit_provider_code_intent(self, query: str) -> Optional[ParsedIntent]:
+        """Fast path for raw queries that are just a provider code plus provider mention."""
+        explicit_provider = normalize_provider_name(self._detect_explicit_provider(query) or "")
+        if not explicit_provider:
+            return None
+
+        lowered = str(query or "").strip().lower()
+        stripped = re.sub(
+            rf"\bfrom\s+{re.escape(explicit_provider.lower())}\b",
+            " ",
+            lowered,
+            flags=re.IGNORECASE,
+        )
+        stripped = re.sub(
+            rf"\buse\s+{re.escape(explicit_provider.lower())}\b",
+            " ",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        stripped = re.sub(r"\s+", " ", stripped).strip(" ,;:")
+        if not stripped:
+            return None
+
+        candidate = str(stripped).upper()
+        if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
+            return None
+
+        if not re.fullmatch(r"[A-Z0-9_@.\-]{3,}", candidate):
+            return None
+
+        return ParsedIntent(
+            apiProvider=explicit_provider,
+            indicators=[candidate],
+            parameters={
+                "indicator": candidate,
+                "__semantic_indicator_label": candidate,
+                "__semantic_provider_locked": True,
+                "__exact_provider_code_match": True,
+            },
+            clarificationNeeded=False,
+            confidence=0.99,
+            recommendedChartType="line",
+            queryType="data_fetch",
+            originalQuery=query,
+            isFollowUp=False,
+            followUpType=None,
+            resolvedQuery=None,
+            needsDecomposition=False,
+            decompositionType=None,
+            decompositionEntities=None,
+            useProMode=False,
+        )
+
     def _build_exact_indicator_title_intent(self, query: str) -> Optional[ParsedIntent]:
         """Fast path for raw queries that already match a provider-native title."""
         explicit_provider = self._detect_explicit_provider(query)
@@ -3877,19 +3930,25 @@ class QueryService:
                     parse_result = copy.deepcopy(_cached)
                     logger.info("⚡ Intent cache HIT for: %s (skipped LLM call)", query[:60])
                 else:
-                    exact_title_intent = self._build_exact_indicator_title_intent(query) if conversation_context is None else None
-                    if exact_title_intent is not None:
+                    exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
+                    exact_title_intent = (
+                        self._build_exact_indicator_title_intent(query)
+                        if conversation_context is None and exact_code_intent is None
+                        else None
+                    )
+                    shortcut_intent = exact_code_intent or exact_title_intent
+                    if shortcut_intent is not None:
                         parse_result = ParseRouteResult(
-                            intent=exact_title_intent,
-                            explicit_provider=exact_title_intent.apiProvider,
-                            routed_provider=exact_title_intent.apiProvider,
+                            intent=shortcut_intent,
+                            explicit_provider=shortcut_intent.apiProvider,
+                            routed_provider=shortcut_intent.apiProvider,
                             validation_warning=None,
                         )
                         logger.info(
-                            "⚡ Exact-title parse shortcut: %s -> %s/%s",
+                            "⚡ Parse shortcut: %s -> %s/%s",
                             query[:80],
-                            exact_title_intent.apiProvider,
-                            (exact_title_intent.parameters or {}).get("indicator"),
+                            shortcut_intent.apiProvider,
+                            (shortcut_intent.parameters or {}).get("indicator"),
                         )
                     else:
                         parse_result = await self.pipeline.parse_and_route(

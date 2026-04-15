@@ -328,6 +328,17 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.clarificationNeeded)
         self.assertEqual(len(response.data or []), 1)
 
+    def test_build_explicit_provider_code_intent_returns_provider_locked_code(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "NER_CBS_PSD_XDC from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "NER_CBS_PSD_XDC")
+        self.assertTrue(intent.parameters.get("__semantic_provider_locked"))
+
     def test_fetch_data_replaces_explicit_fred_code_when_query_conflicts(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
