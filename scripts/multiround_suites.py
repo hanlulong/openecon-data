@@ -7,7 +7,7 @@ from datetime import datetime
 
 
 DEFAULT_SUITE_NAME = "baseline"
-SUITES_VERSION = 2
+SUITES_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -25,8 +25,12 @@ class RoundOracle:
     accepted_series_ids: tuple[str, ...] = ()
     required_indicator_cues: tuple[str, ...] = ()
     forbidden_indicator_cues: tuple[str, ...] = ()
+    accepted_frequencies: tuple[str, ...] = ()
     min_series_count: int = 1
     exact_series_count: int | None = None
+    min_points_per_series: int = 0
+    earliest_year_at_most: int | None = None
+    latest_year_at_least: int | None = None
     expect_clarification: bool = False
     required_option_cues: tuple[str, ...] = ()
     note: str = ""
@@ -77,8 +81,12 @@ def _case(
     series_ids: tuple[str, ...] = (),
     cues: tuple[str, ...] = (),
     forbidden_cues: tuple[str, ...] = (),
+    frequencies: tuple[str, ...] = (),
     min_series_count: int = 1,
     exact_series_count: int | None = None,
+    min_points_per_series: int = 0,
+    earliest_year_at_most: int | None = None,
+    latest_year_at_least: int | None = None,
     expect_clarification: bool = False,
     option_cues: tuple[str, ...] = (),
     note: str = "",
@@ -92,8 +100,12 @@ def _case(
             accepted_series_ids=series_ids,
             required_indicator_cues=cues,
             forbidden_indicator_cues=forbidden_cues,
+            accepted_frequencies=frequencies,
             min_series_count=min_series_count,
             exact_series_count=exact_series_count,
+            min_points_per_series=min_points_per_series,
+            earliest_year_at_most=earliest_year_at_most,
+            latest_year_at_least=latest_year_at_least,
             expect_clarification=expect_clarification,
             required_option_cues=option_cues,
             note=note,
@@ -408,6 +420,52 @@ def _alternative_suite(_: datetime | None = None) -> dict[str, list[RoundCase]]:
     }
 
 
+def _regression_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]:
+    timestamp = now or datetime.now()
+    earliest_year_for_last_20 = timestamp.year - 19
+    latest_year_for_recent_data = timestamp.year - 1
+
+    return {
+        "Reg 1: StatsCan Sex Follow-up Horizon": [
+            _case(
+                "unemployment in Canada by sex",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("unemployment", "male", "female"),
+                frequencies=("monthly",),
+                exact_series_count=2,
+                min_points_per_series=24,
+            ),
+            _case(
+                "last 20 years",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("male", "female"),
+                frequencies=("monthly",),
+                exact_series_count=2,
+                min_points_per_series=200,
+                earliest_year_at_most=earliest_year_for_last_20,
+                latest_year_at_least=latest_year_for_recent_data,
+                note="This regression must prove that the follow-up actually expands the time horizon, not just preserves the sex split.",
+            ),
+        ],
+        "Reg 2: StatsCan Sex Single-turn Horizon": [
+            _case(
+                "unemployment in Canada by sex in last 20 years",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("unemployment", "male", "female"),
+                frequencies=("monthly",),
+                exact_series_count=2,
+                min_points_per_series=200,
+                earliest_year_at_most=earliest_year_for_last_20,
+                latest_year_at_least=latest_year_for_recent_data,
+                note="The fused single-turn variant should be equivalent to the multiround follow-up chain.",
+            ),
+        ],
+    }
+
+
 _SUITES: dict[str, dict[str, object]] = {
     "baseline": {
         "description": "Canonical Phase 6 multiround benchmark with round-level semantic oracles.",
@@ -419,6 +477,13 @@ _SUITES: dict[str, dict[str, object]] = {
             "trade direction changes, decomposition carryover, and broader context rewrites."
         ),
         "builder": _alternative_suite,
+    },
+    "regression": {
+        "description": (
+            "Targeted multiround regressions for previously broken follow-up behaviors, "
+            "including StatsCan decomposition + timeframe retention."
+        ),
+        "builder": _regression_suite,
     },
 }
 

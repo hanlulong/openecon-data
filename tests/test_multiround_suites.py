@@ -19,9 +19,10 @@ from scripts.test_multiround_10x10 import evaluate_round, extract_observed
 @pytest.mark.unit
 def test_multiround_suite_catalog_exposes_baseline_and_alternative() -> None:
     assert DEFAULT_SUITE_NAME == "baseline"
-    assert SUITES_VERSION >= 2
-    assert list_suite_names() == ["baseline", "alternative"]
+    assert SUITES_VERSION >= 3
+    assert list_suite_names() == ["baseline", "alternative", "regression"]
     assert "Alternative 10x10 benchmark" in get_suite_description("alternative")
+    assert "StatsCan decomposition + timeframe retention" in get_suite_description("regression")
 
 
 @pytest.mark.unit
@@ -75,6 +76,22 @@ def test_alternative_suite_targets_different_conversation_stress_patterns() -> N
         "Switch to imports",
         "Show total trade Germany and United States",
     ]
+
+
+@pytest.mark.unit
+def test_regression_suite_covers_reported_statscan_sex_timeframe_bug() -> None:
+    suite = load_suite("regression", now=datetime(2026, 4, 15, 12, 0, 0))
+
+    assert [case.query for case in suite["Reg 1: StatsCan Sex Follow-up Horizon"]] == [
+        "unemployment in Canada by sex",
+        "last 20 years",
+    ]
+    last_20_years_case = suite["Reg 1: StatsCan Sex Follow-up Horizon"][1]
+    assert last_20_years_case.oracle.accepted_providers == ("STATSCAN",)
+    assert last_20_years_case.oracle.accepted_frequencies == ("monthly",)
+    assert last_20_years_case.oracle.min_points_per_series >= 200
+    assert last_20_years_case.oracle.earliest_year_at_most == 2007
+    assert last_20_years_case.oracle.latest_year_at_least == 2025
 
 
 @pytest.mark.unit
@@ -204,3 +221,50 @@ def test_country_normalization_handles_world_bank_country_labels() -> None:
     assert status == "PASS"
     assert reasons == []
     assert observed["countries"] == ["JP", "KR"]
+
+
+@pytest.mark.unit
+def test_oracle_evaluator_checks_frequency_point_count_and_year_span() -> None:
+    case = RoundCase(
+        query="last 20 years",
+        oracle=RoundOracle(
+            accepted_providers=("STATSCAN",),
+            required_countries=("CA",),
+            required_indicator_cues=("unemployment", "male", "female"),
+            accepted_frequencies=("monthly",),
+            exact_series_count=2,
+            min_points_per_series=200,
+            earliest_year_at_most=2007,
+            latest_year_at_least=2025,
+        ),
+    )
+    resp_json = {
+        "data": [
+            {
+                "metadata": {
+                    "source": "Statistics Canada",
+                    "country": "Canada",
+                    "indicator": "male unemployment rate",
+                    "frequency": "monthly",
+                    "seriesId": "14100287:male",
+                },
+                "data": [{"date": f"{year}-01-01", "value": 1.0} for year in range(2015, 2025)],
+            },
+            {
+                "metadata": {
+                    "source": "Statistics Canada",
+                    "country": "Canada",
+                    "indicator": "female unemployment rate",
+                    "frequency": "monthly",
+                    "seriesId": "14100287:female",
+                },
+                "data": [{"date": f"{year}-01-01", "value": 1.0} for year in range(2015, 2025)],
+            },
+        ]
+    }
+
+    status, _, _, reasons, observed = evaluate_round(case, resp_json)
+    assert status == "FAIL"
+    assert "points_per_series<200" in reasons
+    assert "earliest_year>2007" in reasons
+    assert observed["frequencies"] == ["monthly"]

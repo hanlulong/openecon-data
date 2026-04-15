@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Oracle-bearing multi-round conversation test: 10 tests x 10 rounds = 100 turns.
+Oracle-bearing multi-round conversation test harness.
 
 Unlike the older harness, PASS now means the response matched a round-level
 semantic oracle rather than merely returning some data.
@@ -235,6 +235,27 @@ def collect_datasets(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _dataset_points(dataset: dict[str, Any]) -> list[Any]:
+    for key in ["data", "values", "observations", "time_series", "timeSeries", "chart_data", "chartData"]:
+        value = dataset.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return list(value.values())
+    return []
+
+
+def _extract_year(value: Any) -> int | None:
+    text = str(value or "").strip()
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
     datasets = collect_datasets(resp_json)
     metadata = [(dataset.get("metadata") or {}) for dataset in datasets]
@@ -242,7 +263,10 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
     providers = set()
     countries = set()
     series_ids = set()
+    frequencies = set()
     text_parts: list[str] = []
+    point_counts: list[int] = []
+    years_seen: list[int] = []
 
     top_level_provider = normalize_provider_name(resp_json.get("source") or resp_json.get("provider") or intent.get("apiProvider"))
     if top_level_provider:
@@ -257,6 +281,9 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
         series_id = str(meta.get("seriesId") or meta.get("series_id") or "").strip().upper()
         if series_id:
             series_ids.add(series_id)
+        frequency = str(meta.get("frequency") or "").strip().lower()
+        if frequency:
+            frequencies.add(frequency)
         text_parts.extend(
             [
                 str(meta.get("indicator") or ""),
@@ -264,6 +291,18 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
                 str(meta.get("seriesId") or ""),
             ]
         )
+
+    for dataset in datasets:
+        points = _dataset_points(dataset)
+        if points:
+            point_counts.append(len(points))
+        for point in points:
+            if isinstance(point, dict):
+                year = _extract_year(point.get("date") or point.get("refPer") or point.get("period"))
+            else:
+                year = _extract_year(point)
+            if year is not None:
+                years_seen.append(year)
 
     response_text = str(resp_json.get("response") or "")
     text_parts.append(response_text)
@@ -295,8 +334,13 @@ def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:
         "providers": sorted(providers),
         "countries": sorted(countries),
         "series_ids": sorted(series_ids),
+        "frequencies": sorted(frequencies),
         "series_count": populated_series_count,
         "scope_cardinality": scope_cardinality,
+        "min_points_per_series": min(point_counts) if point_counts else 0,
+        "max_points_per_series": max(point_counts) if point_counts else 0,
+        "earliest_year": min(years_seen) if years_seen else None,
+        "latest_year": max(years_seen) if years_seen else None,
         "clarification_detected": detect_clarification(resp_json),
         "cue_text": normalize_cue_text(" ".join(part for part in text_parts if part)),
         "semantic_tags": sorted(semantic_tags),
@@ -327,11 +371,19 @@ def evaluate_round(case: RoundCase, resp_json: dict[str, Any]) -> tuple[str, str
             reasons.append(f"series_count<{oracle.min_series_count}")
         if oracle.exact_series_count is not None and observed_cardinality != oracle.exact_series_count:
             reasons.append(f"series_count!={oracle.exact_series_count}")
+        if oracle.min_points_per_series and observed["min_points_per_series"] < oracle.min_points_per_series:
+            reasons.append(f"points_per_series<{oracle.min_points_per_series}")
 
     if oracle.accepted_providers:
         provider_overlap = set(observed["providers"]) & set(oracle.accepted_providers)
         if not provider_overlap:
             reasons.append(f"provider_mismatch expected~={oracle.accepted_providers} actual={observed['providers']}")
+
+    if oracle.accepted_frequencies:
+        observed_freqs = {str(freq).lower() for freq in observed["frequencies"]}
+        expected_freqs = {str(freq).lower() for freq in oracle.accepted_frequencies}
+        if not (observed_freqs & expected_freqs):
+            reasons.append(f"frequency_mismatch expected~={oracle.accepted_frequencies} actual={observed['frequencies']}")
 
     if oracle.required_countries:
         missing = sorted(set(oracle.required_countries) - set(observed["countries"]))
@@ -361,6 +413,24 @@ def evaluate_round(case: RoundCase, resp_json: dict[str, Any]) -> tuple[str, str
     for cue in oracle.forbidden_indicator_cues:
         if cue.lower() in observed["cue_text"]:
             reasons.append(f"forbidden_indicator_cue_present={cue}")
+
+    if (
+        oracle.earliest_year_at_most is not None
+        and (
+            observed["earliest_year"] is None
+            or observed["earliest_year"] > oracle.earliest_year_at_most
+        )
+    ):
+        reasons.append(f"earliest_year>{oracle.earliest_year_at_most}")
+
+    if (
+        oracle.latest_year_at_least is not None
+        and (
+            observed["latest_year"] is None
+            or observed["latest_year"] < oracle.latest_year_at_least
+        )
+    ):
+        reasons.append(f"latest_year<{oracle.latest_year_at_least}")
 
     status = "PASS" if not reasons else "FAIL"
     source_summary = ",".join(observed["providers"][:3])
@@ -550,7 +620,7 @@ def main() -> None:
     print(f"Target: {base_url}")
     print(f"Suite: {args.suite} — {suite_description}")
     print(f"Suite version: {SUITES_VERSION}")
-    print(f"Tests: {len(tests)} x 10 rounds = {sum(len(v) for v in tests.values())} total rounds")
+    print(f"Tests: {len(tests)} named tests = {sum(len(v) for v in tests.values())} total rounds")
 
     try:
         health = requests.get(f"{base_url}/api/health", timeout=30)
