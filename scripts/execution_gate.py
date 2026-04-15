@@ -70,12 +70,32 @@ def _find_active_ralph_state() -> dict[str, Any] | None:
             payload = json.loads(state_file.read_text())
         except Exception:
             continue
-        if not payload.get("active"):
+        if not _is_live_ralph_state(payload):
             continue
         mtime = state_file.stat().st_mtime
         if latest is None or mtime > latest[0]:
             latest = (mtime, payload)
     return latest[1] if latest else None
+
+
+def _is_live_ralph_state(payload: dict[str, Any]) -> bool:
+    """Return True when a Ralph state should still block stop.
+
+    Old sessions can occasionally be left with ``active=true`` even after a
+    completion/cancel handoff.  Treat those as inactive when they already have
+    a terminal phase or a ``completed_at`` timestamp.
+    """
+    if not payload.get("active"):
+        return False
+
+    if payload.get("completed_at"):
+        return False
+
+    phase = str(payload.get("current_phase") or "").strip().lower()
+    if phase in {"complete", "completed", "cancelled", "failed"}:
+        return False
+
+    return True
 
 
 def _tracked_worktree_dirty() -> bool:
@@ -92,6 +112,9 @@ def _tracked_worktree_dirty() -> bool:
 
     for line in result.stdout.splitlines():
         if not line.strip():
+            continue
+        status = line[:2]
+        if status in {"??", "!!"}:
             continue
         path = line[3:]
         if path.startswith(".codex/") or path.startswith("docs/testing/reports/"):

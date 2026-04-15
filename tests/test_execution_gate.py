@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "execution_gate.py"
@@ -109,3 +110,85 @@ def test_hook_stop_json_mode_ignores_unknown_args(monkeypatch, capsys):
         "decision": "block",
         "reason": "execution-gate: stop denied\n- tracked worktree still contains uncommitted changes",
     }
+
+
+def test_tracked_worktree_dirty_ignores_untracked_files(monkeypatch):
+    module = load_execution_gate_module()
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="?? .codex/agents/\n?? docs/design/SESSION_RESTART_2026-04-15_REBOOT.md\n",
+        ),
+    )
+
+    assert module._tracked_worktree_dirty() is False  # pylint: disable=protected-access
+
+
+def test_tracked_worktree_dirty_detects_real_tracked_modification(monkeypatch):
+    module = load_execution_gate_module()
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=" M backend/services/query.py\n?? .codex/agents/\n",
+        ),
+    )
+
+    assert module._tracked_worktree_dirty() is True  # pylint: disable=protected-access
+
+
+def test_find_active_ralph_state_ignores_stale_terminal_active_files(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    sessions_dir = tmp_path / "sessions"
+    stale_dir = sessions_dir / "old"
+    stale_dir.mkdir(parents=True)
+    fresh_dir = sessions_dir / "fresh"
+    fresh_dir.mkdir(parents=True)
+
+    (stale_dir / "ralph-state.json").write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "executing",
+                "completed_at": "2026-04-15T20:49:30Z",
+            }
+        )
+    )
+    (fresh_dir / "ralph-state.json").write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "executing",
+            }
+        )
+    )
+
+    monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
+
+    payload = module._find_active_ralph_state()  # pylint: disable=protected-access
+
+    assert payload is not None
+    assert payload.get("completed_at") is None
+
+
+def test_find_active_ralph_state_returns_none_when_only_terminal_active_files_exist(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    sessions_dir = tmp_path / "sessions"
+    stale_dir = sessions_dir / "stale"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "ralph-state.json").write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "complete",
+                "completed_at": "2026-04-15T20:49:30Z",
+            }
+        )
+    )
+
+    monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
+
+    assert module._find_active_ralph_state() is None  # pylint: disable=protected-access
