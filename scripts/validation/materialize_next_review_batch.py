@@ -181,6 +181,7 @@ def materialize_multiround(
         family = str(target['name'])
         count = int(target.get('planned_batch_sessions') or 0)
         builder = MULTI_BUILDERS[family]
+        counters[family] = max(counters.get(family, 0), int(target.get('current_n') or 0))
         for _ in range(count):
             counters[family] += 1
             session = builder(counters[family])
@@ -214,9 +215,10 @@ def materialize_ambiguity(
         count = int(target.get('planned_batch_sessions') or 0)
         templates = FAMILY_TEMPLATES[family]
         total_target = max(int(target.get('target_n') or count), count)
+        counters[family] = max(counters.get(family, 0), int(target.get('current_n') or 0))
         for idx in range(count):
+            query, behavior, outcomes = templates[counters[family] % len(templates)]
             counters[family] += 1
-            query, behavior, outcomes = templates[idx % len(templates)]
             rows.append(
                 make_ambiguity_record(
                     family,

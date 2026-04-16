@@ -5,7 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.validation.materialize_next_review_batch import select_quality_screened_direct_records
+from scripts.validation.materialize_next_review_batch import (
+    materialize_ambiguity,
+    materialize_multiround,
+    select_quality_screened_direct_records,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +123,58 @@ def test_materialize_next_review_batch_handles_empty_targets(tmp_path: Path):
     assert read_jsonl(output_dir / "next_batch_direct.jsonl") == []
     assert read_jsonl(output_dir / "next_batch_multiround.jsonl") == []
     assert read_jsonl(output_dir / "next_batch_ambiguity.jsonl") == []
+
+
+def test_materialize_multiround_starts_after_current_n():
+    rows = materialize_multiround(
+        [
+            {
+                "name": "provider_switch_chain",
+                "planned_batch_sessions": 2,
+                "target_n": 19,
+                "current_n": 2,
+            }
+        ],
+        snapshot_meta={"snapshot_date": "2026-04-14", "git_sha": "abc12345", "indicator_count": 330050},
+        seed=20260415,
+        holdout_split="batch_review",
+        dataset_tier="dev",
+    )
+
+    assert [row["id"] for row in rows] == [
+        "batch-provider_switch_chain-000003",
+        "batch-provider_switch_chain-000004",
+    ]
+    assert rows[0]["rounds"][0]["query"] == "United States GDP from FRED"
+    assert rows[0]["rounds"][1]["query"] == "India GDP from World Bank"
+    assert rows[0]["rounds"][2]["query"] == "Brazil GDP from IMF"
+    assert rows[1]["rounds"][1]["query"] == "China GDP from World Bank"
+
+
+def test_materialize_ambiguity_starts_after_current_n():
+    rows = materialize_ambiguity(
+        [
+            {
+                "name": "dominant_interpretation_cases",
+                "planned_batch_sessions": 2,
+                "target_n": 30,
+                "current_n": 2,
+            }
+        ],
+        snapshot_meta={"snapshot_date": "2026-04-14", "git_sha": "abc12345", "indicator_count": 330050},
+        seed=20260415,
+        holdout_split="batch_review",
+        dataset_tier="dev",
+    )
+
+    assert [row["id"] for row in rows] == [
+        "amb-dominant_interpretation_cases-000003",
+        "amb-dominant_interpretation_cases-000004",
+    ]
+    assert [row["query"] for row in rows] == [
+        "US unemployment rate",
+        "Bitcoin price",
+    ]
 
 
 def test_select_quality_screened_direct_records_prefers_low_risk():
