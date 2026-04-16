@@ -274,6 +274,17 @@ class TestExtractDimensionModifiers:
         age_keys = [k for k in modifiers if k in ("age",)]
         assert len(age_keys) > 0, f"Expected age modifier, got: {modifiers}"
 
+    def test_extract_age_numeric_range_alias(self, statscan_provider):
+        """Hyphenated age ranges should match StatsCan age-group members generically."""
+        metadata = _get_labour_metadata(statscan_provider)
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="show only 25-54",
+            base_indicator="EMPLOYMENT",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        assert modifiers.get("age") == "25 to 54 years"
+
     def test_extract_combined_modifiers(self, statscan_provider):
         """Multiple modifiers should be extracted simultaneously."""
         metadata = _get_labour_metadata(statscan_provider)

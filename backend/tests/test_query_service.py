@@ -2363,6 +2363,45 @@ class QueryServiceTests(unittest.TestCase):
             {"type": "dimension", "entities": ["Males", "Females"], "axis": "Gender"},
         )
 
+    def test_maybe_expand_statscan_dimension_entities_can_fallback_to_semantic_product_for_axis(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["20100056"],
+            parameters={
+                "country": "CA",
+                "__statscan_product_id": "20100056",
+                "__semantic_indicator_label": "employment rate",
+                "__statscan_decomposition_axis": "Age group",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            originalQuery="Show by age group",
+        )
+
+        async def _fake_get_members(product_id, axis_keyword):
+            if str(product_id) == "20100056":
+                return []
+            if str(product_id) == "14100287":
+                return [(6, "25 to 54 years"), (7, "55 years and over")]
+            return []
+
+        metadata_service = Mock()
+        metadata_service.discover_product_for_indicator = AsyncMock(return_value="14100287")
+        self.service.statscan_provider._statscan_metadata_service = metadata_service  # pylint: disable=protected-access
+
+        with patch.object(self.service, "_infer_statscan_product_id_for_followup", return_value="20100056"), \
+             patch.object(self.service.statscan_provider, "get_dimension_members", new_callable=AsyncMock, side_effect=_fake_get_members):
+            run(
+                self.service._maybe_expand_statscan_dimension_decomposition_entities(  # pylint: disable=protected-access
+                    "conv-statscan-semantic-axis-fallback",
+                    intent,
+                )
+            )
+
+        self.assertEqual(intent.decompositionEntities, ["25 to 54 years", "55 years and over"])
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+
     def test_decompose_and_aggregate_statscan_provinces_preserves_followup_product_id_when_resolver_drifts(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",

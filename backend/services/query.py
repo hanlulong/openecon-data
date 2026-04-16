@@ -2920,18 +2920,48 @@ class QueryService:
         if not axis:
             return
 
-        product_id = self._infer_statscan_product_id_for_followup(conversation_id, intent)
-        if not product_id:
-            return
-
         axis_keyword = "age" if "age" in axis.lower() else "sex" if any(token in axis.lower() for token in ("sex", "gender")) else None
         if axis_keyword is None:
             return
 
-        try:
-            members = await self.statscan_provider.get_dimension_members(product_id, axis_keyword)
-        except Exception as exc:
-            logger.warning("Failed to expand StatsCan decomposition axis %s for product %s: %s", axis, product_id, exc)
+        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        candidate_product_ids: list[str] = []
+        for candidate in [
+            self._infer_statscan_product_id_for_followup(conversation_id, intent),
+            params.get("__statscan_product_id"),
+        ]:
+            normalized = self._extract_statscan_product_id(candidate)
+            if normalized and normalized not in candidate_product_ids:
+                candidate_product_ids.append(normalized)
+
+        if semantic_label and hasattr(self.statscan_provider, "_statscan_metadata_service") and self.statscan_provider._statscan_metadata_service:
+            try:
+                discovered_product = await self.statscan_provider._statscan_metadata_service.discover_product_for_indicator(semantic_label.lower())
+                normalized_discovered = self._extract_statscan_product_id(discovered_product)
+                if normalized_discovered and normalized_discovered not in candidate_product_ids:
+                    candidate_product_ids.append(normalized_discovered)
+            except Exception as exc:
+                logger.debug("StatsCan semantic product discovery failed for '%s': %s", semantic_label, exc)
+
+        members = []
+        product_id = None
+        for candidate_product_id in candidate_product_ids:
+            try:
+                candidate_members = await self.statscan_provider.get_dimension_members(candidate_product_id, axis_keyword)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to expand StatsCan decomposition axis %s for product %s: %s",
+                    axis,
+                    candidate_product_id,
+                    exc,
+                )
+                continue
+            if candidate_members:
+                members = candidate_members
+                product_id = candidate_product_id
+                break
+
+        if not product_id:
             return
 
         entities = []

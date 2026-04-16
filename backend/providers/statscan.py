@@ -2803,6 +2803,7 @@ class StatsCanProvider(BaseProvider):
             return {}
 
         query_lower = query_text.lower()
+        query_lower = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", query_lower)
         # Remove the base indicator words from the query to avoid false positives
         indicator_words = set(base_indicator.lower().replace("_", " ").split())
 
@@ -2906,24 +2907,36 @@ class StatsCanProvider(BaseProvider):
                 # Strategy 1: exact member name match (word-boundary aware)
                 # Use regex word boundaries to avoid substring false positives
                 # e.g., "employment rate" must not match inside "unemployment rate"
-                if member_name_lower in query_lower:
-                    # Verify it's at a word boundary
-                    pattern = r'(?<![a-z])' + re.escape(member_name_lower) + r'(?![a-z])'
-                    if re.search(pattern, query_lower):
-                        # Guard: if the matched phrase is mostly noise/indicator words,
-                        # this is not a real modifier (e.g., "consumer price index" is
-                        # just the CPI indicator name, not a CPI sub-category).
-                        match_words = set(member_name_lower.replace(",", "").split())
-                        non_noise_match_words = match_words - noise_words - {"and", "or", "the", "of", "to"}
-                        if not non_noise_match_words:
-                            continue  # match is entirely noise/indicator words
-
-                        score = 100 + len(member_name_lower)
-                        if score > best_match_score:
-                            best_match_score = score
-                            best_match_term = member_name
-                            best_dim_hint = dim_name_lower.split()[0]  # e.g., "geography" from "Geography"
+                member_variants = {
+                    member_name_lower,
+                    member_name_lower.replace(" years", ""),
+                    member_name_lower.replace(" year", ""),
+                    re.sub(r"(\d+)\s+to\s+(\d+)", r"\1-\2", member_name_lower),
+                }
+                member_variants = {variant.strip() for variant in member_variants if variant and variant.strip()}
+                matched_variant = None
+                for variant in sorted(member_variants, key=len, reverse=True):
+                    if variant not in query_lower:
                         continue
+                    pattern = r'(?<![a-z0-9])' + re.escape(variant) + r'(?![a-z0-9])'
+                    if re.search(pattern, query_lower):
+                        matched_variant = variant
+                        break
+                if matched_variant:
+                    # Guard: if the matched phrase is mostly noise/indicator words,
+                    # this is not a real modifier (e.g., "consumer price index" is
+                    # just the CPI indicator name, not a CPI sub-category).
+                    match_words = set(member_name_lower.replace(",", "").split())
+                    non_noise_match_words = match_words - noise_words - {"and", "or", "the", "of", "to"}
+                    if not non_noise_match_words:
+                        continue  # match is entirely noise/indicator words
+
+                    score = 100 + len(matched_variant)
+                    if score > best_match_score:
+                        best_match_score = score
+                        best_match_term = member_name
+                        best_dim_hint = dim_name_lower.split()[0]  # e.g., "geography" from "Geography"
+                    continue
 
                 # Strategy 2: check if individual significant words from member name
                 # appear as query words (not just substrings)
