@@ -105,7 +105,7 @@ def test_run_claim_bundle_uses_existing_adjudication_for_summary(tmp_path: Path)
     assert payload["existing_adjudication_records"] == str(adjudication_path.resolve())
     assert str(adjudication_path.resolve()) in summary_cmd
     assert str(adjudication_path.resolve()) not in queue_cmd
-    assert triage_cmd is None
+    assert triage_cmd is not None
 
 
 def test_run_claim_bundle_propagates_max_sessions_to_score_step(tmp_path: Path):
@@ -250,6 +250,60 @@ def test_run_claim_bundle_reuses_existing_adjudication_for_production_replay(tmp
     payload = json.loads(proc.stdout)
     replay_cmd = payload["commands"]["replay_production_holdout"]
     evidence_cmd = payload["commands"]["build_evidence_package"]
+    triage_cmd = payload["commands"]["build_adjudication_triage_report"]
     assert payload["production_adjudication_records"] == str(adjudication_path.resolve())
     assert str(adjudication_path.resolve()) in replay_cmd
     assert evidence_cmd is not None
+    assert triage_cmd is not None
+
+
+def test_run_claim_bundle_forwards_existing_parity_report_when_production_score_is_supplied(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    production_score_path = tmp_path / "production-score.json"
+    parity_path = tmp_path / "parity.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "id": "direct-fred-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    production_score_path.write_text(json.dumps({"snapshot_id": "snap-1"}) + "\n", encoding="utf-8")
+    parity_path.write_text(json.dumps({"summary": {"severity_counts": {"material": 0}}}) + "\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BUNDLE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--production-score-report",
+            str(production_score_path),
+            "--production-parity-report",
+            str(parity_path),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    claim_cmd = payload["commands"]["certify_claim"]
+    evidence_cmd = payload["commands"]["build_evidence_package"]
+    assert payload["run_production_replay"] is False
+    assert "--production-score-report" in claim_cmd
+    assert "--parity-report" in claim_cmd
+    assert str(parity_path.resolve()) in claim_cmd
+    assert evidence_cmd is not None
+    assert str(parity_path.resolve()) in evidence_cmd

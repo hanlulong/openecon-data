@@ -55,6 +55,7 @@ def main() -> int:
     parser.add_argument("--production-raw-output", type=Path, default=DEFAULT_PRODUCTION_RAW_OUTPUT)
     parser.add_argument("--production-score-output", type=Path, default=DEFAULT_PRODUCTION_SCORE_OUTPUT)
     parser.add_argument("--production-adjudication-records", type=Path, default=None)
+    parser.add_argument("--production-parity-report", type=Path, default=None)
     parser.add_argument("--production-max-sessions", type=int, default=None)
     parser.add_argument("--parity-output", type=Path, default=DEFAULT_PARITY_OUTPUT)
     parser.add_argument("--evidence-package-output", type=Path, default=DEFAULT_EVIDENCE_PACKAGE_OUTPUT)
@@ -80,6 +81,7 @@ def main() -> int:
     production_dataset = args.production_dataset.resolve()
     production_raw_output = args.production_raw_output.resolve()
     production_score_output = args.production_score_output.resolve()
+    production_parity_report = args.production_parity_report.resolve() if args.production_parity_report is not None else None
     parity_output = args.parity_output.resolve()
     evidence_package_output = args.evidence_package_output.resolve()
     catalog_snapshot = args.catalog_snapshot.resolve()
@@ -203,10 +205,11 @@ def main() -> int:
         str(claim_output),
     ]
     effective_production_score_report = production_score_output if args.run_production_replay else production_score_report
+    effective_parity_report = parity_output if args.run_production_replay else production_parity_report
     if effective_production_score_report is not None:
         claim_cmd += ["--production-score-report", str(effective_production_score_report)]
-    if args.run_production_replay:
-        claim_cmd += ["--parity-report", str(parity_output)]
+    if effective_parity_report is not None:
+        claim_cmd += ["--parity-report", str(effective_parity_report)]
 
     evidence_cmd = None
     if effective_production_score_report is not None:
@@ -236,6 +239,8 @@ def main() -> int:
         ]
         if args.run_production_replay:
             evidence_cmd += ["--parity-report", str(parity_output)]
+        elif effective_parity_report is not None:
+            evidence_cmd += ["--parity-report", str(effective_parity_report)]
 
     plan = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -256,6 +261,7 @@ def main() -> int:
         "production_raw_output": str(production_raw_output),
         "production_score_output": str(production_score_output),
         "production_adjudication_records": str(production_adjudication_records) if production_adjudication_records is not None else None,
+        "production_parity_report": str(production_parity_report) if production_parity_report is not None else None,
         "parity_output": str(parity_output),
         "evidence_package_output": str(evidence_package_output),
         "commands": {
@@ -263,7 +269,7 @@ def main() -> int:
             "score_certification": score_cmd,
             "build_adjudication_queue": queue_cmd,
             "adjudication_summary": adjud_summary_cmd,
-            "build_adjudication_triage_report": triage_cmd if existing_adjudication is None else None,
+            "build_adjudication_triage_report": triage_cmd,
             "replay_production_holdout": replay_cmd if args.run_production_replay else None,
             "compare_replay_reports": compare_cmd if args.run_production_replay else None,
             "certify_claim": claim_cmd,
@@ -277,9 +283,8 @@ def main() -> int:
 
     run(run_cert_cmd, dry_run=False)
     run(score_cmd, dry_run=False)
-    if existing_adjudication is None:
-        run(queue_cmd, dry_run=False)
-        run(triage_cmd, dry_run=False)
+    run(queue_cmd, dry_run=False)
+    run(triage_cmd, dry_run=False)
     run(adjud_summary_cmd, dry_run=False)
     if args.run_production_replay:
         run(replay_cmd, dry_run=False)
@@ -289,7 +294,7 @@ def main() -> int:
         print(claim_proc.stdout.strip())
     if claim_proc.stderr.strip():
         print(claim_proc.stderr.strip(), file=sys.stderr)
-    if evidence_cmd is not None and claim_output.exists():
+    if evidence_cmd is not None and claim_proc.returncode == 0 and claim_output.exists():
         run(evidence_cmd, dry_run=False)
     return claim_proc.returncode
 
