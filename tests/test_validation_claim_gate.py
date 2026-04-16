@@ -231,10 +231,127 @@ def test_certify_claim_blocks_missing_required_strata(tmp_path: Path):
     assert "required strata missing: WorldBank (high_traffic)" in decision["blockers"]
 
 
+def test_certify_claim_blocks_unresolved_framework_clusters_and_material_parity(tmp_path: Path):
+    score_path = tmp_path / "score.json"
+    adjudication_path = tmp_path / "adjudication.json"
+    triage_path = tmp_path / "triage.json"
+    production_path = tmp_path / "production.json"
+    parity_path = tmp_path / "parity.json"
+    output_path = tmp_path / "claim.json"
+
+    score_path.write_text(
+        json.dumps(
+            {
+                "scoring_mode": "claim_grade",
+                "claim_grade_ready": True,
+                "snapshot_id": "snap-1",
+                "floor_policy_path": str((ROOT / "validation" / "manifests" / "claim_gate_policy-v1.json").resolve()),
+                "floor_policy_sha256": "abc123",
+                "metrics": {
+                    "claim_observed_success": 0.995,
+                    "claim_lower95": 0.991,
+                    "wrong_confident_answer_rate": 0.0,
+                    "unnecessary_clarification_rate": 0.0,
+                    "ambiguity_resolution_success": 1.0,
+                },
+                "strata": {
+                    "failing_strata": [],
+                    "missing_required_strata": [],
+                },
+                "session_results": [],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adjudication_path.write_text(json.dumps({"adjudication_complete": True}) + "\n", encoding="utf-8")
+    triage_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "framework_bug_cluster_counts": {
+                        "unexpected_clarification_on_direct_query": 2
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    production_path.write_text(
+        json.dumps(
+            {
+                "scoring_mode": "claim_grade",
+                "claim_grade_ready": True,
+                "snapshot_id": "snap-1",
+                "floor_policy_sha256": "abc123",
+                "metrics": {
+                    "claim_observed_success": 0.995,
+                    "claim_lower95": 0.991,
+                    "wrong_confident_answer_rate": 0.0,
+                    "unnecessary_clarification_rate": 0.0,
+                    "ambiguity_resolution_success": 1.0,
+                },
+                "strata": {
+                    "failing_strata": [],
+                    "missing_required_strata": [],
+                },
+                "session_results": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parity_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "severity_counts": {
+                        "material": 1,
+                        "match": 9,
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(CLAIM_SCRIPT),
+            "--score-report",
+            str(score_path),
+            "--adjudication-summary",
+            str(adjudication_path),
+            "--triage-report",
+            str(triage_path),
+            "--production-score-report",
+            str(production_path),
+            "--parity-report",
+            str(parity_path),
+            "--output",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 1
+    decision = json.loads(output_path.read_text(encoding="utf-8"))
+    assert decision["framework_bug_cluster_counts"] == {"unexpected_clarification_on_direct_query": 2}
+    assert "unresolved framework failure clusters present: unexpected_clarification_on_direct_query=2" in decision["blockers"]
+    assert "production parity has 1 material drift session(s)" in decision["blockers"]
+
+
 def test_certify_claim_prefers_overall_weighted_fallback_metrics(tmp_path: Path):
     score_path = tmp_path / "score.json"
     adjudication_path = tmp_path / "adjudication.json"
+    triage_path = tmp_path / "triage.json"
     production_path = tmp_path / "production.json"
+    parity_path = tmp_path / "parity.json"
     output_path = tmp_path / "claim.json"
 
     score_path.write_text(
@@ -261,6 +378,10 @@ def test_certify_claim_prefers_overall_weighted_fallback_metrics(tmp_path: Path)
         encoding="utf-8",
     )
     adjudication_path.write_text(json.dumps({"adjudication_complete": True}) + "\n", encoding="utf-8")
+    triage_path.write_text(
+        json.dumps({"summary": {"framework_bug_cluster_counts": {}}}) + "\n",
+        encoding="utf-8",
+    )
     production_path.write_text(
         json.dumps(
             {
@@ -282,6 +403,10 @@ def test_certify_claim_prefers_overall_weighted_fallback_metrics(tmp_path: Path)
         + "\n",
         encoding="utf-8",
     )
+    parity_path.write_text(
+        json.dumps({"summary": {"severity_counts": {"match": 10, "material": 0}}}) + "\n",
+        encoding="utf-8",
+    )
 
     proc = subprocess.run(
         [
@@ -291,8 +416,12 @@ def test_certify_claim_prefers_overall_weighted_fallback_metrics(tmp_path: Path)
             str(score_path),
             "--adjudication-summary",
             str(adjudication_path),
+            "--triage-report",
+            str(triage_path),
             "--production-score-report",
             str(production_path),
+            "--parity-report",
+            str(parity_path),
             "--output",
             str(output_path),
         ],

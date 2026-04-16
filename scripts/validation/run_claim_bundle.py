@@ -14,12 +14,18 @@ DEFAULT_RAW_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_raw
 DEFAULT_SCORE_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_score.json"
 DEFAULT_QUEUE_OUTPUT = ROOT / "validation_private" / "adjudication" / "claim_bundle_review_queue.jsonl"
 DEFAULT_ADJUDICATION_SUMMARY = ROOT / "validation_private" / "adjudication" / "claim_bundle_adjudication_summary.json"
+DEFAULT_TRIAGE_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_triage.json"
 DEFAULT_CLAIM_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_decision.json"
 DEFAULT_BASE_URL = "http://localhost:3001"
 DEFAULT_PRODUCTION_BASE_URL = "https://data.openecon.ai"
 DEFAULT_PRODUCTION_DATASET = ROOT / "validation_private" / "datasets" / "prod_replay" / "prod_replay-sessions.jsonl"
 DEFAULT_PRODUCTION_RAW_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_production_raw.jsonl"
 DEFAULT_PRODUCTION_SCORE_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_production_score.json"
+DEFAULT_PARITY_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_parity.json"
+DEFAULT_EVIDENCE_PACKAGE_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_evidence_package.json"
+DEFAULT_CATALOG_SNAPSHOT = ROOT / "validation" / "manifests" / "catalog_snapshot-2026-04-14.json"
+DEFAULT_PROVIDER_DISTRIBUTION = ROOT / "validation" / "manifests" / "provider_distribution-latest.json"
+DEFAULT_STRATA_DEFINITION = ROOT / "validation" / "manifests" / "strata_definition-v1.json"
 
 
 def run(cmd: list[str], *, dry_run: bool) -> None:
@@ -38,6 +44,7 @@ def main() -> int:
     parser.add_argument("--score-output", type=Path, default=DEFAULT_SCORE_OUTPUT)
     parser.add_argument("--queue-output", type=Path, default=DEFAULT_QUEUE_OUTPUT)
     parser.add_argument("--adjudication-summary-output", type=Path, default=DEFAULT_ADJUDICATION_SUMMARY)
+    parser.add_argument("--triage-output", type=Path, default=DEFAULT_TRIAGE_OUTPUT)
     parser.add_argument("--claim-output", type=Path, default=DEFAULT_CLAIM_OUTPUT)
     parser.add_argument("--floor-policy", type=Path, default=ROOT / "validation" / "manifests" / "claim_gate_policy-v1.json")
     parser.add_argument("--existing-adjudication-records", type=Path, default=None)
@@ -49,6 +56,11 @@ def main() -> int:
     parser.add_argument("--production-score-output", type=Path, default=DEFAULT_PRODUCTION_SCORE_OUTPUT)
     parser.add_argument("--production-adjudication-records", type=Path, default=None)
     parser.add_argument("--production-max-sessions", type=int, default=None)
+    parser.add_argument("--parity-output", type=Path, default=DEFAULT_PARITY_OUTPUT)
+    parser.add_argument("--evidence-package-output", type=Path, default=DEFAULT_EVIDENCE_PACKAGE_OUTPUT)
+    parser.add_argument("--catalog-snapshot", type=Path, default=DEFAULT_CATALOG_SNAPSHOT)
+    parser.add_argument("--provider-distribution", type=Path, default=DEFAULT_PROVIDER_DISTRIBUTION)
+    parser.add_argument("--strata-definition", type=Path, default=DEFAULT_STRATA_DEFINITION)
     parser.add_argument("--pass-sample-rate", type=float, default=0.10)
     parser.add_argument("--seed", type=int, default=20260414)
     parser.add_argument("--max-sessions", type=int, default=None)
@@ -60,6 +72,7 @@ def main() -> int:
     score_output = args.score_output.resolve()
     queue_output = args.queue_output.resolve()
     adjudication_summary_output = args.adjudication_summary_output.resolve()
+    triage_output = args.triage_output.resolve()
     claim_output = args.claim_output.resolve()
     floor_policy = args.floor_policy.resolve()
     existing_adjudication = args.existing_adjudication_records.resolve() if args.existing_adjudication_records else None
@@ -67,6 +80,11 @@ def main() -> int:
     production_dataset = args.production_dataset.resolve()
     production_raw_output = args.production_raw_output.resolve()
     production_score_output = args.production_score_output.resolve()
+    parity_output = args.parity_output.resolve()
+    evidence_package_output = args.evidence_package_output.resolve()
+    catalog_snapshot = args.catalog_snapshot.resolve()
+    provider_distribution = args.provider_distribution.resolve()
+    strata_definition = args.strata_definition.resolve()
     production_adjudication_records = (
         args.production_adjudication_records.resolve()
         if args.production_adjudication_records is not None
@@ -125,6 +143,19 @@ def main() -> int:
         str(adjudication_summary_output),
     ]
 
+    triage_cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "validation" / "build_adjudication_triage_report.py"),
+        "--queue",
+        str(queue_output),
+        "--raw-results",
+        str(raw_output),
+        "--output",
+        str(triage_output),
+    ]
+    for dataset in datasets:
+        triage_cmd += ["--dataset", str(dataset)]
+
     replay_cmd = [
         sys.executable,
         str(ROOT / "scripts" / "validation" / "replay_production_holdout.py"),
@@ -144,6 +175,21 @@ def main() -> int:
     if args.production_max_sessions is not None:
         replay_cmd += ["--max-sessions", str(args.production_max_sessions)]
 
+    compare_cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "validation" / "compare_replay_reports.py"),
+        "--local-raw",
+        str(raw_output),
+        "--production-raw",
+        str(production_raw_output),
+        "--local-score",
+        str(score_output),
+        "--production-score",
+        str(production_score_output),
+        "--output",
+        str(parity_output),
+    ]
+
     claim_cmd = [
         sys.executable,
         str(ROOT / "scripts" / "validation" / "certify_claim.py"),
@@ -151,12 +197,45 @@ def main() -> int:
         str(score_output),
         "--adjudication-summary",
         str(adjudication_summary_output),
+        "--triage-report",
+        str(triage_output),
         "--output",
         str(claim_output),
     ]
     effective_production_score_report = production_score_output if args.run_production_replay else production_score_report
     if effective_production_score_report is not None:
         claim_cmd += ["--production-score-report", str(effective_production_score_report)]
+    if args.run_production_replay:
+        claim_cmd += ["--parity-report", str(parity_output)]
+
+    evidence_cmd = None
+    if effective_production_score_report is not None:
+        evidence_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "validation" / "build_evidence_package.py"),
+            "--catalog-snapshot",
+            str(catalog_snapshot),
+            "--provider-distribution",
+            str(provider_distribution),
+            "--strata-definition",
+            str(strata_definition),
+            "--local-score-report",
+            str(score_output),
+            "--adjudication-summary",
+            str(adjudication_summary_output),
+            "--triage-report",
+            str(triage_output),
+            "--production-score-report",
+            str(effective_production_score_report),
+            "--claim-decision",
+            str(claim_output),
+            "--deployment-base-url",
+            args.production_base_url,
+            "--output",
+            str(evidence_package_output),
+        ]
+        if args.run_production_replay:
+            evidence_cmd += ["--parity-report", str(parity_output)]
 
     plan = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -166,6 +245,7 @@ def main() -> int:
         "score_output": str(score_output),
         "queue_output": str(queue_output),
         "adjudication_summary_output": str(adjudication_summary_output),
+        "triage_output": str(triage_output),
         "claim_output": str(claim_output),
         "floor_policy": str(floor_policy),
         "existing_adjudication_records": str(existing_adjudication) if existing_adjudication is not None else None,
@@ -176,13 +256,18 @@ def main() -> int:
         "production_raw_output": str(production_raw_output),
         "production_score_output": str(production_score_output),
         "production_adjudication_records": str(production_adjudication_records) if production_adjudication_records is not None else None,
+        "parity_output": str(parity_output),
+        "evidence_package_output": str(evidence_package_output),
         "commands": {
             "run_certification": run_cert_cmd,
             "score_certification": score_cmd,
             "build_adjudication_queue": queue_cmd,
             "adjudication_summary": adjud_summary_cmd,
+            "build_adjudication_triage_report": triage_cmd if existing_adjudication is None else None,
             "replay_production_holdout": replay_cmd if args.run_production_replay else None,
+            "compare_replay_reports": compare_cmd if args.run_production_replay else None,
             "certify_claim": claim_cmd,
+            "build_evidence_package": evidence_cmd,
         },
     }
 
@@ -194,14 +279,18 @@ def main() -> int:
     run(score_cmd, dry_run=False)
     if existing_adjudication is None:
         run(queue_cmd, dry_run=False)
+        run(triage_cmd, dry_run=False)
     run(adjud_summary_cmd, dry_run=False)
     if args.run_production_replay:
         run(replay_cmd, dry_run=False)
+        run(compare_cmd, dry_run=False)
     claim_proc = subprocess.run(claim_cmd, check=False, capture_output=True, text=True)
     if claim_proc.stdout.strip():
         print(claim_proc.stdout.strip())
     if claim_proc.stderr.strip():
         print(claim_proc.stderr.strip(), file=sys.stderr)
+    if evidence_cmd is not None and claim_output.exists():
+        run(evidence_cmd, dry_run=False)
     return claim_proc.returncode
 
 

@@ -1789,6 +1789,48 @@ class QueryServiceTests(unittest.TestCase):
         joined = "\n".join(clarification.clarificationQuestions or [])
         self.assertIn("multiple plausible indicator matches", joined.lower())
 
+    def test_build_prefetch_indicator_choice_clarification_outcome_stage_keeps_strong_cross_provider_primary(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "CA", "indicator": "14100287", "__semantic_indicator_label": "unemployment rate"},
+            clarificationNeeded=False,
+            originalQuery="Canada unemployment rate",
+        )
+        options = [
+            "[OECD] Monthly unemployment rates (DSD_LFS@DF_IALFS_UNE_M)",
+            "[WorldBank] Unemployment, total (% of total labor force) (modeled ILO estimate) (SL.UEM.TOTL.ZS)",
+        ]
+
+        class _Resolved:
+            provider = "STATSCAN"
+            code = "14100287"
+            name = "Labour force characteristics, monthly, seasonally adjusted and trend-cycle"
+            confidence = 0.90
+            source = "database"
+            metadata = {}
+
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
+             patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=True)), \
+             patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
+             patch.object(self.service, "_indicator_resolution_threshold", return_value=0.5), \
+             patch.object(self.service, "_score_resolved_indicator_relevance", return_value=0.9), \
+             patch.object(self.service, "_minimum_resolved_relevance_threshold", return_value=0.1), \
+             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-cross-provider-primary",
+                    query="Canada unemployment rate",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
+
     def test_build_prefetch_indicator_choice_clarification_outcome_stage_allows_up_to_ten_options(self) -> None:
         self.service.settings.use_outcome_decision_stage = True
         conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage-width")

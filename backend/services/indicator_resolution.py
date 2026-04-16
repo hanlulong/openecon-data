@@ -476,8 +476,15 @@ def is_resolved_indicator_plausible(
         ]
         if part
     ).lower()
+    statscan_labour_force_surface = (
+        provider_upper in {"STATSCAN", "STATISTICS CANADA"}
+        and "labour force characteristics" in candidate_text
+    )
 
     if not query_cues:
+        return True
+
+    if statscan_labour_force_surface and query_cues & {"unemployment", "employment_rate", "employment_population"}:
         return True
 
     if specialization_mismatch_penalty(query_lower, candidate_text) >= 1.8:

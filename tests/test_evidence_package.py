@@ -23,6 +23,7 @@ def test_build_evidence_package_hashes_artifacts_and_surfaces_blockers(tmp_path:
     strata = tmp_path / "strata.json"
     local_score = tmp_path / "local-score.json"
     adjudication = tmp_path / "adjudication.json"
+    triage = tmp_path / "triage.json"
     production_score = tmp_path / "production-score.json"
     claim_decision = tmp_path / "claim.json"
     parity_report = tmp_path / "parity.json"
@@ -33,6 +34,7 @@ def test_build_evidence_package_hashes_artifacts_and_surfaces_blockers(tmp_path:
     write_json(strata, {"snapshot_id": "snap-1", "version": 1})
     write_json(local_score, {"snapshot_id": "snap-1", "claim_grade_ready": True, "scoring_mode": "claim_grade", "metrics": {"claim_observed_success": 1.0, "claim_lower95": 0.85}, "snapshot": {"session_count": 22}})
     write_json(adjudication, {"adjudication_complete": True, "completed_records": 22, "total_records": 22})
+    write_json(triage, {"summary": {"bucket_counts": {"likely_framework_bug": 1}, "framework_bug_cluster_counts": {"unexpected_clarification_on_direct_query": 1}}})
     write_json(production_score, {"snapshot_id": "snap-1", "claim_grade_ready": False, "scoring_mode": "adjudicated_structural", "claim_grade_blockers": ["prod drift"]})
     write_json(claim_decision, {"claim_allowed": False, "blockers": ["lower95 below threshold"]})
     write_json(parity_report, {"summary": {"sessions_with_differences": 1, "severity_counts": {"material": 1, "match": 21}}})
@@ -51,6 +53,8 @@ def test_build_evidence_package_hashes_artifacts_and_surfaces_blockers(tmp_path:
             str(local_score),
             "--adjudication-summary",
             str(adjudication),
+            "--triage-report",
+            str(triage),
             "--production-score-report",
             str(production_score),
             "--claim-decision",
@@ -76,6 +80,7 @@ def test_build_evidence_package_hashes_artifacts_and_surfaces_blockers(tmp_path:
     assert report["summary"]["package_blockers"] == ["lower95 below threshold"]
     assert report["artifacts"]["claim_decision"]["exists"] is True
     assert len(report["artifacts"]["claim_decision"]["sha256"]) == 64
+    assert report["artifacts"]["triage_report"]["summary"]["framework_bug_cluster_counts"] == {"unexpected_clarification_on_direct_query": 1}
     assert report["artifacts"]["parity_report"]["summary"]["sessions_with_differences"] == 1
 
 
@@ -93,6 +98,7 @@ def test_build_evidence_package_uses_health_timestamp_when_deployment_timestamp_
     strata = tmp_path / "strata.json"
     local_score = tmp_path / "local-score.json"
     adjudication = tmp_path / "adjudication.json"
+    triage = tmp_path / "triage.json"
     production_score = tmp_path / "production-score.json"
     claim_decision = tmp_path / "claim.json"
     output = tmp_path / "package.json"
@@ -102,6 +108,7 @@ def test_build_evidence_package_uses_health_timestamp_when_deployment_timestamp_
     write_json(strata, {"snapshot_id": "snap-1", "version": 1})
     write_json(local_score, {"snapshot_id": "snap-1", "claim_grade_ready": True, "scoring_mode": "claim_grade", "metrics": {"claim_observed_success": 1.0, "claim_lower95": 0.85}, "snapshot": {"session_count": 22}})
     write_json(adjudication, {"adjudication_complete": True, "completed_records": 22, "total_records": 22})
+    write_json(triage, {"summary": {"bucket_counts": {"likely_framework_bug": 0}, "framework_bug_cluster_counts": {}}})
     write_json(production_score, {"snapshot_id": "snap-1", "claim_grade_ready": True, "scoring_mode": "claim_grade"})
     write_json(claim_decision, {"claim_allowed": False, "blockers": ["lower95 below threshold"]})
 
@@ -145,6 +152,8 @@ def test_build_evidence_package_uses_health_timestamp_when_deployment_timestamp_
                     str(local_score),
                     "--adjudication-summary",
                     str(adjudication),
+                    "--triage-report",
+                    str(triage),
                     "--production-score-report",
                     str(production_score),
                     "--claim-decision",

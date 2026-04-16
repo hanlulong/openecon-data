@@ -49,8 +49,13 @@ def test_run_claim_bundle_dry_run_wires_expected_steps(tmp_path: Path):
     assert "score_certification" in payload["commands"]
     assert "build_adjudication_queue" in payload["commands"]
     assert "adjudication_summary" in payload["commands"]
+    assert "build_adjudication_triage_report" in payload["commands"]
     assert "certify_claim" in payload["commands"]
+    assert "build_evidence_package" in payload["commands"]
     assert payload["existing_adjudication_records"] is None
+    assert payload["commands"]["build_adjudication_triage_report"] is not None
+    assert payload["commands"]["build_evidence_package"] is None
+    assert "--triage-report" in payload["commands"]["certify_claim"]
 
 
 def test_run_claim_bundle_uses_existing_adjudication_for_summary(tmp_path: Path):
@@ -96,9 +101,11 @@ def test_run_claim_bundle_uses_existing_adjudication_for_summary(tmp_path: Path)
     payload = json.loads(proc.stdout)
     summary_cmd = payload["commands"]["adjudication_summary"]
     queue_cmd = payload["commands"]["build_adjudication_queue"]
+    triage_cmd = payload["commands"]["build_adjudication_triage_report"]
     assert payload["existing_adjudication_records"] == str(adjudication_path.resolve())
     assert str(adjudication_path.resolve()) in summary_cmd
     assert str(adjudication_path.resolve()) not in queue_cmd
+    assert triage_cmd is None
 
 
 def test_run_claim_bundle_propagates_max_sessions_to_score_step(tmp_path: Path):
@@ -183,11 +190,20 @@ def test_run_claim_bundle_can_plan_production_replay(tmp_path: Path):
 
     payload = json.loads(proc.stdout)
     replay_cmd = payload["commands"]["replay_production_holdout"]
+    compare_cmd = payload["commands"]["compare_replay_reports"]
+    evidence_cmd = payload["commands"]["build_evidence_package"]
     claim_cmd = payload["commands"]["certify_claim"]
     assert payload["run_production_replay"] is True
     assert replay_cmd is not None
+    assert compare_cmd is not None
+    assert evidence_cmd is not None
     assert "--production-score-report" in claim_cmd
+    assert "--triage-report" in claim_cmd
+    assert "--parity-report" in claim_cmd
     assert "--max-sessions" in replay_cmd
+    assert "--parity-report" in evidence_cmd
+    assert "--triage-report" in evidence_cmd
+    assert str(Path(payload["parity_output"]).resolve()) in compare_cmd
 
 
 def test_run_claim_bundle_reuses_existing_adjudication_for_production_replay(tmp_path: Path):
@@ -233,5 +249,7 @@ def test_run_claim_bundle_reuses_existing_adjudication_for_production_replay(tmp
 
     payload = json.loads(proc.stdout)
     replay_cmd = payload["commands"]["replay_production_holdout"]
+    evidence_cmd = payload["commands"]["build_evidence_package"]
     assert payload["production_adjudication_records"] == str(adjudication_path.resolve())
     assert str(adjudication_path.resolve()) in replay_cmd
+    assert evidence_cmd is not None

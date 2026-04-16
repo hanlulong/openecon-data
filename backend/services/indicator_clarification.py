@@ -2435,6 +2435,16 @@ async def build_prefetch_indicator_choice_clarification(
         and top_option[0] == normalize_provider_name(getattr(resolved, "provider", provider))
         and str(top_option[1]).upper() == str(getattr(resolved, "code", "") or "").upper()
     )
+    option_provider_names = {
+        normalize_provider_name(parsed[0])
+        for option in options
+        for parsed in [parse_indicator_option(option)]
+        if parsed
+    }
+    intent_indicator = str((intent.indicators or [None])[0] or "")
+    has_provider_native_intent_indicator = bool(
+        intent_indicator and looks_like_provider_indicator_code(provider, intent_indicator)
+    )
 
     if len(options) == 1:
         if top_option and (not primary_accepted or not top_matches_primary):
@@ -2473,6 +2483,21 @@ async def build_prefetch_indicator_choice_clarification(
         and primary_accepted
         and not top_matches_primary
         and primary_relevance >= 0.65
+    ):
+        return None
+
+    if (
+        primary_accepted
+        and primary_relevance >= 0.65
+        and option_provider_names
+        and normalize_provider_name(provider) not in option_provider_names
+    ):
+        return None
+
+    if (
+        has_provider_native_intent_indicator
+        and option_provider_names
+        and normalize_provider_name(provider) not in option_provider_names
     ):
         return None
 

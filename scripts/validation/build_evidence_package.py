@@ -133,6 +133,8 @@ def claim_decision_summary(decision: dict[str, Any] | None) -> dict[str, Any] | 
         'observed_success': decision.get('observed_success'),
         'lower95': decision.get('lower95'),
         'blockers': list(decision.get('blockers') or []),
+        'framework_bug_cluster_counts': dict(decision.get('framework_bug_cluster_counts') or {}),
+        'parity_material_drift_sessions': decision.get('parity_material_drift_sessions'),
     }
 
 
@@ -143,6 +145,7 @@ def main() -> int:
     parser.add_argument('--strata-definition', type=Path, default=DEFAULT_STRATA)
     parser.add_argument('--local-score-report', type=Path, required=True)
     parser.add_argument('--adjudication-summary', type=Path, required=True)
+    parser.add_argument('--triage-report', type=Path, default=None)
     parser.add_argument('--production-score-report', type=Path, required=True)
     parser.add_argument('--claim-decision', type=Path, required=True)
     parser.add_argument('--parity-report', type=Path, default=None)
@@ -157,6 +160,7 @@ def main() -> int:
     strata_definition = load_json(args.strata_definition.resolve())
     local_score = load_json(args.local_score_report.resolve())
     adjudication_summary = load_json(args.adjudication_summary.resolve())
+    triage_report = load_json(args.triage_report.resolve()) if args.triage_report is not None else None
     production_score = load_json(args.production_score_report.resolve())
     claim_decision = load_json(args.claim_decision.resolve())
     parity_report = load_json(args.parity_report.resolve()) if args.parity_report is not None else None
@@ -204,6 +208,10 @@ def main() -> int:
                 'completed_records': (adjudication_summary or {}).get('completed_records'),
                 'total_records': (adjudication_summary or {}).get('total_records'),
             }),
+            'triage_report': artifact_entry(args.triage_report, summary={
+                'bucket_counts': ((triage_report or {}).get('summary') or {}).get('bucket_counts'),
+                'framework_bug_cluster_counts': ((triage_report or {}).get('summary') or {}).get('framework_bug_cluster_counts'),
+            }) if args.triage_report is not None else None,
             'production_score_report': artifact_entry(args.production_score_report, summary=score_summary(production_score)),
             'parity_report': artifact_entry(args.parity_report, summary={
                 'sessions_with_differences': ((parity_report or {}).get('summary') or {}).get('sessions_with_differences'),

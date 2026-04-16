@@ -135,6 +135,12 @@ Fresh artifacts:
   - `validation_private/reports/curated_broader_review_v2_batch1_score.json`
 - first-batch conservative decision:
   - `validation_private/reports/curated_broader_review_v2_batch1_decision.json`
+- first-batch adjudication queue:
+  - `validation_private/adjudication/curated_broader_review_v2_batch1_queue.jsonl`
+- first-batch adjudication summary:
+  - `validation_private/adjudication/curated_broader_review_v2_batch1_summary.json`
+- first-batch generalized triage:
+  - `validation_private/reports/curated_broader_review_v2_batch1_triage_regenerated.json`
 
 Current gap estimate:
 
@@ -160,8 +166,82 @@ Current first-batch provisional score summary:
 Interpretation:
 
 - the next blocker is no longer \"find the multiround bug\" — that lane is already green.
-- the next blocker is now **evidence volume + reviewed/adjudicated coverage**.
+- the next blocker is now **evidence volume + reviewed/adjudicated coverage**, but not by blind batch growth alone.
 - the first newly materialized batch is useful because it gives Ralph a concrete next execution surface, but it is still only the first step in a much larger reviewed-evidence expansion.
+
+### Fresh batch1 triage truth
+
+The first reviewed batch now has a generalized triage layer, not just raw queue counts.
+
+Fresh regenerated triage summary:
+
+- likely dataset/query-surface: `4`
+- likely framework bug: `4`
+- human adjudication required: `9`
+
+Named clusters from `validation_private/reports/curated_broader_review_v2_batch1_triage_regenerated.json`:
+
+- `provider_data_availability_surface`: `3`
+- `unexpected_clarification_on_direct_query`: `2`
+- `provider_surface_query_shape`: `1`
+- `multiround_state_carryover`: `2`
+- `ambiguity_semantic_review`: `6`
+- `pass_audit_review`: `3`
+
+Interpretation:
+
+- WorldBank/OECD long-tail no-data cases still look more like dataset/query-surface coverage noise than a generalized framework regression.
+- Two direct unexpected-clarification rows (FRED + StatsCan) look like plausible framework defects worth separate reproduction before wider reviewed expansion.
+- The StatsCan decomposition chain rows look like a multiround/state-carryover family and should be treated as a possible framework lane even though the broad multiround suites are green.
+- Most ambiguity rows still require real human adjudication; structural signals alone are not enough.
+
+### Claim-bundle orchestration is now more complete
+
+`scripts/validation/run_claim_bundle.py --dry-run` now wires the full local bundle through:
+
+- certification replay
+- structural score
+- adjudication queue
+- adjudication summary
+- generalized triage report
+- production replay (when requested)
+- local-vs-production parity comparison (when requested)
+- final evidence-package assembly (when production score is available)
+- claim decision
+
+This means the claim bundle can now plan not just queue generation, but also the triage/parity/evidence artifacts needed for a defensible claim-grade package.
+
+### Fresh framework-fix slice after triage
+
+One of the newly triaged framework clusters was not just a paper classification issue; it reproduced live.
+
+Reproduced before fix:
+
+- `Canada unemployment rate` could route to StatsCan and still ask a cross-provider clarification between OECD and World Bank instead of answering directly.
+- That same clarification on round 1 polluted the `statscan_decomposition_chain` batch family because follow-up turns (`Show by province` → `Show only Ontario` → `Show by age group`) then succeeded after the initial unnecessary clarification.
+
+Framework fix landed:
+
+- `backend/services/indicator_clarification.py`
+- `backend/services/indicator_resolution.py`
+- `backend/tests/test_query_service.py`
+
+What changed:
+
+- if a provider-native indicator code is already present in the routed intent, prefetch clarification no longer overrides it with cross-provider alternatives when there are no same-provider competing options;
+- StatsCan’s generic **Labour force characteristics** surface is now treated as a plausible resolved match for labour-market rate queries such as unemployment/employment-population style prompts, instead of being rejected as implausible.
+
+Fresh verification:
+
+- `backend/.venv/bin/pytest -q backend/tests/test_query_service.py -k "prefetch_indicator_choice_clarification_outcome_stage_keeps_strong_cross_provider_primary or build_prefetch_indicator_choice_clarification_outcome_stage_clarifies_when_primary_and_alternative_are_both_executable or process_query_returns_prefetch_indicator_clarification_before_fetch"` → `3 passed`
+- live local replay on restarted backend:
+  - `Canada unemployment rate` → direct StatsCan answer, no clarification, series `2062815`
+  - multiround chain `Canada unemployment rate` → `Show by province` → `Show only Ontario` → `Show by age group` now runs through without the initial clarification
+
+Interpretation:
+
+- the `multiround_state_carryover` cluster for this family was partly real framework behavior, not just adjudication noise;
+- batch1’s triage output should now be treated as stale for the Canada-unemployment/StatsCan first-turn clarification family and regenerated after the next certification replay.
 
 ## Why this matters
 
@@ -179,13 +259,24 @@ The next continuous Ralph loop should focus on the **claim-grade certification p
 
 Priority order:
 
-1. continue the reviewed/adjudicated coverage expansion using:
+1. use `validation_private/reports/curated_broader_review_v2_batch1_triage_regenerated.json` to separate:
+   - likely framework-bug rows to reproduce/fix
+   - likely dataset/query-surface rows to keep out of framework-bug accounting
+   - human-adjudication rows that need manual semantic labeling
+2. resolve or explicitly bucket the likely framework-bug cluster rows before blind expansion:
+   - direct unexpected-clarification rows (FRED / StatsCan)
+   - `statscan_decomposition_chain` carryover rows
+3. regenerate the affected certification artifacts after the latest framework fix:
+   - fresh raw replay / score for the impacted reviewed batch
+   - fresh adjudication queue + summary
+   - fresh triage report
+4. continue the reviewed/adjudicated coverage expansion using:
    - `validation_private/reports/curated_broader_review_v2_next_batch_plan.json`
    - `validation_private/datasets/batch_review/curated_broader_review_v2_batch1/`
-2. collect raw results and reviewed labels for the new batch
-3. rescore and re-estimate the lower95 gap
-4. only if the effective-n estimate still appears methodologically suspect, inspect weighting / design-effect assumptions before generating more batches
-5. keep Ralph active until the decision artifacts materially move toward the 99% claim gate
+5. collect raw results and reviewed labels for the new batch
+6. rescore and re-estimate the lower95 gap
+7. only if the effective-n estimate still appears methodologically suspect, inspect weighting / design-effect assumptions before generating more batches
+8. keep Ralph active until the decision artifacts materially move toward the 99% claim gate
 
 ## Suggested resume commands
 
@@ -208,6 +299,8 @@ validation_private/reports/curated_broader_review_v2_progress_report.json
 validation_private/reports/curated_broader_review_v2_next_batch_plan.json
 validation_private/reports/curated_broader_review_v2_batch1_audit.json
 validation_private/reports/curated_broader_review_v2_batch1_score.json
+validation_private/adjudication/curated_broader_review_v2_batch1_summary.json
+validation_private/reports/curated_broader_review_v2_batch1_triage_regenerated.json
 ```
 
 ## Bottom line
@@ -218,6 +311,6 @@ As of this handoff:
 - Original Canada-by-sex bug family: **green**
 - Baseline multiround: **green**
 - Alternative multiround: **green**
-- Broader claim-grade 99% certification path: **still blocked by effective-n / reviewed-evidence gap**
+- Broader claim-grade 99% certification path: **still blocked by effective-n / reviewed-evidence gap plus unresolved triaged framework/adjudication lanes**
 
 Ralph should continue from here on the certification/evidence lane, not by reopening already-green multiround work unless new regressions appear.

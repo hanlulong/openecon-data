@@ -46,6 +46,30 @@ def metric_with_proxy(report: dict[str, Any], exact_key: str, proxy_key: str) ->
     return value
 
 
+def triage_framework_clusters(triage_report: dict[str, Any] | None) -> dict[str, int]:
+    if triage_report is None:
+        return {}
+    summary_clusters = dict((triage_report.get('summary') or {}).get('framework_bug_cluster_counts') or {})
+    if summary_clusters:
+        return {str(key): int(value) for key, value in summary_clusters.items()}
+    counts: dict[str, int] = {}
+    for item in list(triage_report.get('items') or []):
+        if item.get('bucket') != 'likely_framework_bug':
+            continue
+        cluster = str(item.get('cluster') or '').strip()
+        if not cluster:
+            continue
+        counts[cluster] = counts.get(cluster, 0) + 1
+    return counts
+
+
+def parity_material_drift_count(parity_report: dict[str, Any] | None) -> int:
+    if parity_report is None:
+        return 0
+    severity_counts = dict((parity_report.get('summary') or {}).get('severity_counts') or {})
+    return int(severity_counts.get('material') or 0)
+
+
 def claim_observed_success(report: dict[str, Any]) -> float:
     session_results = list(report.get('session_results') or [])
     successes = sum(1 for row in session_results if row.get('provisional_structural_pass'))
@@ -131,6 +155,8 @@ def main() -> int:
     parser.add_argument('--score-report', type=Path, required=True)
     parser.add_argument('--adjudication-summary', type=Path, default=None)
     parser.add_argument('--production-score-report', type=Path, default=None)
+    parser.add_argument('--triage-report', type=Path, default=None)
+    parser.add_argument('--parity-report', type=Path, default=None)
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--required-observed', type=float, default=None)
     parser.add_argument('--required-lower95', type=float, default=None)
@@ -143,6 +169,12 @@ def main() -> int:
     production_score_report = None
     if args.production_score_report is not None and args.production_score_report.exists():
         production_score_report = json.loads(args.production_score_report.resolve().read_text(encoding='utf-8'))
+    triage_report = None
+    if args.triage_report is not None and args.triage_report.exists():
+        triage_report = json.loads(args.triage_report.resolve().read_text(encoding='utf-8'))
+    parity_report = None
+    if args.parity_report is not None and args.parity_report.exists():
+        parity_report = json.loads(args.parity_report.resolve().read_text(encoding='utf-8'))
     floor_policy_path = Path(str(report.get('floor_policy_path'))).resolve() if report.get('floor_policy_path') else None
     floor_policy = load_json(floor_policy_path)
     observed = claim_observed_success(report)
@@ -186,6 +218,14 @@ def main() -> int:
         blockers.append('adjudication summary missing')
     elif not adjudication_summary.get('adjudication_complete', False):
         blockers.append('adjudication is not complete')
+    framework_clusters = triage_framework_clusters(triage_report)
+    if triage_report is None:
+        blockers.append('triage report missing')
+    elif framework_clusters:
+        blockers.append(
+            'unresolved framework failure clusters present: '
+            + ', '.join(f'{cluster}={count}' for cluster, count in sorted(framework_clusters.items()))
+        )
     if production_score_report is None:
         blockers.append('production score report missing')
     else:
@@ -204,12 +244,20 @@ def main() -> int:
             blockers.append('production score report is not marked claim_grade_ready')
             production_blockers = list(production_score_report.get('claim_grade_blockers') or [])
             blockers.extend(f'production score blocker: {item}' for item in production_blockers)
+        if parity_report is None:
+            blockers.append('parity report missing')
+        else:
+            material_drift = parity_material_drift_count(parity_report)
+            if material_drift > 0:
+                blockers.append(f'production parity has {material_drift} material drift session(s)')
 
     decision = {
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
         'score_report': str(args.score_report.resolve()),
         'adjudication_summary': str(args.adjudication_summary.resolve()) if args.adjudication_summary else None,
         'production_score_report': str(args.production_score_report.resolve()) if args.production_score_report else None,
+        'triage_report': str(args.triage_report.resolve()) if args.triage_report else None,
+        'parity_report': str(args.parity_report.resolve()) if args.parity_report else None,
         'floor_policy_path': str(floor_policy_path) if floor_policy_path is not None else None,
         'observed_success': observed,
         'lower95': lower95,
@@ -222,6 +270,8 @@ def main() -> int:
         'blockers': blockers,
         'failing_strata': failing_strata,
         'missing_required_strata': missing_required_strata,
+        'framework_bug_cluster_counts': framework_clusters,
+        'parity_material_drift_sessions': parity_material_drift_count(parity_report) if parity_report is not None else None,
         'note': 'This gate is intentionally conservative and will refuse a catalog-wide claim until claim-grade scoring and adjudication are in place.',
     }
 
