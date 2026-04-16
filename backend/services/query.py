@@ -483,6 +483,8 @@ class QueryService:
             "__semantic_provider_locked": True,
             "__exact_indicator_title_match": True,
         }
+        if provider == "COINGECKO":
+            params["coinIds"] = [code]
         broad_concept = self._broad_exact_title_catalog_concept(query)
         if broad_concept:
             params["__catalog_concept"] = broad_concept

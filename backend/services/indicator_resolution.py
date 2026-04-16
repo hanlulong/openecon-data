@@ -108,6 +108,7 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         return False
 
     search_inputs = exact_title_search_inputs(text, provider_name)
+    min_name_len = 4 if _normalize_provider_name(provider_name) == "COINGECKO" else 24
 
     candidates = []
     seen_codes = set()
@@ -125,7 +126,7 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
     for candidate in candidates:
         candidate_name = str(candidate.get("name") or "").strip().lower()
         normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
-        if not normalized_name or len(normalized_name) < 24:
+        if not normalized_name or len(normalized_name) < min_name_len:
             continue
         if any(
             normalized_query == normalized_name
@@ -156,6 +157,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         return None
 
     search_inputs = exact_title_search_inputs(text, provider_name)
+    min_name_len = 4 if _normalize_provider_name(provider_name) == "COINGECKO" else 24
 
     best_candidate: Optional[Dict[str, Any]] = None
     best_name_len = -1
@@ -172,7 +174,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             seen_codes.add(code)
             candidate_name = str(candidate.get("name") or "").strip().lower()
             normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
-            if not normalized_name or len(normalized_name) < 24:
+            if not normalized_name or len(normalized_name) < min_name_len:
                 continue
             if any(
                 normalized_query == normalized_name
@@ -251,6 +253,24 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             ).strip()
             if stripped_prefix and stripped_prefix not in seen:
                 queue.append(stripped_prefix)
+
+        if provider_key == "COINGECKO":
+            stripped_crypto_suffix = re.sub(
+                r"\b(?:cryptocurrency|crypto|token|coin)\s+price\b",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip(" ,;:")
+            if stripped_crypto_suffix and stripped_crypto_suffix not in seen:
+                queue.append(stripped_crypto_suffix)
+            stripped_price_suffix = re.sub(
+                r"\bprice\b$",
+                "",
+                stripped_crypto_suffix or candidate,
+                flags=re.IGNORECASE,
+            ).strip(" ,;:")
+            if stripped_price_suffix and stripped_price_suffix not in seen:
+                queue.append(stripped_price_suffix)
 
         if ":" in candidate:
             suffix = candidate.split(":", 1)[1].strip()

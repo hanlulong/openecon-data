@@ -599,6 +599,30 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET")
         self.assertEqual(intent.indicators, ["Share of students enrolled in school and work-based programmes"])
 
+    def test_build_exact_indicator_title_intent_handles_coingecko_asset_name_with_suffix(self) -> None:
+        lookup_results = [
+            {
+                "code": "libfi",
+                "provider": "CoinGecko",
+                "name": "Liberty Finance",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Liberty Finance cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "libfi")
+        self.assertEqual(intent.parameters.get("coinIds"), ["libfi"])
+        self.assertEqual(intent.indicators, ["Liberty Finance"])
+
     def test_build_exact_indicator_title_intent_tags_generic_interest_rate_as_broad_concept(self) -> None:
         lookup_results = [
             {
@@ -6766,6 +6790,26 @@ class QueryServiceTests(unittest.TestCase):
             self.assertTrue(range_mock.called)
             called_coin_ids = [call.kwargs.get("coin_id") for call in range_mock.call_args_list]
             self.assertEqual(called_coin_ids, ["bitcoin", "ethereum"])
+
+    def test_fetch_data_coingecko_respects_exact_title_coin_ids(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="CoinGecko",
+            indicators=["Liberty Finance"],
+            parameters={"coinIds": ["libfi"], "indicator": "libfi"},
+            clarificationNeeded=False,
+            originalQuery="Liberty Finance cryptocurrency price from CoinGecko",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.coingecko_provider, "get_simple_price", return_value=[sample_series_with(series_id="libfi", indicator="Liberty Finance", source="CoinGecko")]) as simple_mock, \
+             patch.object(self.service.coingecko_provider, "get_historical_data_range", return_value=[sample_series_with(series_id="libfi", indicator="Liberty Finance", source="CoinGecko")]) as range_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        if simple_mock.called:
+            self.assertEqual(simple_mock.call_args.kwargs.get("coin_ids"), ["libfi"])
+        else:
+            self.assertTrue(range_mock.called)
+            self.assertEqual(range_mock.call_args.kwargs.get("coin_id"), "libfi")
 
     def test_fetch_data_comtrade_trade_balance_uses_balance_fetch_despite_stale_flow(self) -> None:
         intent = ParsedIntent(
