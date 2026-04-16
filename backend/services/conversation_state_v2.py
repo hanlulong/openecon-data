@@ -302,6 +302,43 @@ def _canonicalize_decomposition_payload(
     return payload
 
 
+def _strip_dimensions_for_decomposition(
+    dimensions: Optional[Dict[str, str]],
+    decomposition: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, str]]:
+    """Remove stale member filters that conflict with a new breakdown request."""
+    if not dimensions or not decomposition:
+        return dimensions
+
+    decomp_type = str(decomposition.get("type") or "").strip().lower()
+    decomp_axis_raw = str(decomposition.get("axis") or "").strip().lower()
+    decomp_axis = str(_DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(decomp_axis_raw, decomp_axis_raw)).strip().lower()
+
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_value in dimensions.items():
+        key = str(raw_key or "").strip()
+        key_lower = key.lower()
+        value_lower = str(raw_value or "").strip().lower()
+
+        if decomp_type in {"provinces", "states", "regions", "countries"}:
+            if key_lower in _GEOGRAPHY_DIMENSION_KEYS:
+                continue
+            cleaned[key] = str(raw_value)
+            continue
+
+        if decomp_type == "dimension":
+            canonical_axis = _canonical_dimension_decomposition_axis(key_lower, value_lower)
+            if canonical_axis and canonical_axis.lower() == decomp_axis:
+                continue
+            candidate_axis = _DIMENSION_DECOMPOSITION_AXIS_ALIASES.get(key_lower, key_lower)
+            if str(candidate_axis).strip().lower() == decomp_axis:
+                continue
+
+        cleaned[key] = str(raw_value)
+
+    return cleaned or None
+
+
 def update_answer_members_from_data(
     state: ConversationState,
     data: Optional[List[NormalizedData]],
@@ -333,11 +370,14 @@ def update_answer_members_from_data(
         ordered_keys = ordered_keys[-recent_limit:]
     state.recent_answer_members = [recent_by_key[key] for key in ordered_keys]
 
-    latest_statscan_product = None
-    for member in current_members:
-        latest_statscan_product = _extract_statscan_product_id_from_member(member)
-        if latest_statscan_product:
-            break
+    params = (intent.parameters or {}) if intent is not None else {}
+    explicit_statscan_product = "".join(ch for ch in str(params.get("__statscan_product_id") or "") if ch.isdigit())[:8] or None
+    latest_statscan_product = explicit_statscan_product
+    if not latest_statscan_product:
+        for member in current_members:
+            latest_statscan_product = _extract_statscan_product_id_from_member(member)
+            if latest_statscan_product:
+                break
     if latest_statscan_product:
         if state.statscan_product_id != latest_statscan_product:
             state.statscan_cube_metadata = None
@@ -707,6 +747,10 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     # --- Decomposition ---
     if delta.changed_decomposition is not None:
         merged.decomposition = _canonicalize_decomposition_payload(delta.changed_decomposition)
+        merged.dimensions = _strip_dimensions_for_decomposition(
+            merged.dimensions,
+            merged.decomposition,
+        )
 
     # --- Trade fields ---
     if delta.changed_trade_flow:
@@ -954,6 +998,19 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     trade_commodity = params.get("commodity")
     provider_name = normalize_provider_name(intent.apiProvider or "")
 
+    explicit_statscan_product = str(params.get("__statscan_product_id") or "").strip()
+    explicit_statscan_product_digits = (
+        "".join(ch for ch in explicit_statscan_product if ch.isdigit())[:8] or None
+    )
+    if (
+        provider_name == "STATSCAN"
+        and explicit_statscan_product_digits
+        and resolved_indicator_code
+    ):
+        resolved_digits = "".join(ch for ch in str(resolved_indicator_code) if ch.isdigit())[:8]
+        if resolved_digits and resolved_digits != explicit_statscan_product_digits:
+            resolved_indicator_code = explicit_statscan_product_digits
+
     if provider_name == "COMTRADE":
         raw_reporters = params.get("reporters")
         reporter_list: List[str] = []
@@ -1045,9 +1102,8 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # during R1's data fetch). This avoids async API calls in the delta extractor.
     statscan_product_id: Optional[str] = None
     statscan_cube_metadata_val: Optional[Dict[str, Any]] = None
-    explicit_statscan_product = str(params.get("__statscan_product_id") or "").strip()
     if explicit_statscan_product:
-        statscan_product_id = "".join(ch for ch in explicit_statscan_product if ch.isdigit())[:8] or None
+        statscan_product_id = explicit_statscan_product_digits
     if base_indicator:
         try:
             from ..providers.statscan import StatsCanProvider

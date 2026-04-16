@@ -2854,6 +2854,29 @@ class StatsCanProvider(BaseProvider):
             best_match_term: Optional[str] = None
             best_dim_hint: Optional[str] = None
 
+            if any(kw in dim_name_lower for kw in ["geogr", "province", "territor", "region"]):
+                geography_candidates: list[str] = []
+                for name in self.GEOGRAPHY_MEMBER_IDS:
+                    if name == "CANADA":
+                        continue
+                    geography_candidates.append(name)
+                geography_candidates.extend(
+                    alias
+                    for alias, canonical in self.GEOGRAPHY_ALIASES.items()
+                    if canonical != "CANADA"
+                )
+                geography_candidates = sorted(set(geography_candidates), key=len, reverse=True)
+                for candidate in geography_candidates:
+                    candidate_lower = candidate.lower()
+                    pattern = r'(?<![a-z])' + re.escape(candidate_lower) + r'(?![a-z])'
+                    if not re.search(pattern, query_lower):
+                        continue
+                    canonical = self.GEOGRAPHY_ALIASES.get(candidate.upper(), candidate)
+                    best_match_score = 1000 + len(canonical)
+                    best_match_term = canonical.title() if canonical.isupper() else canonical
+                    best_dim_hint = "geography"
+                    break
+
             for member in members:
                 member_name = self._extract_member_name(member)
                 if not member_name:

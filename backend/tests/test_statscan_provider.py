@@ -216,6 +216,27 @@ class TestExtractDimensionModifiers:
         assert "geography" in modifiers
         assert "alberta" in modifiers["geography"].lower()
 
+    def test_extract_geography_prefers_exact_province_over_longer_subregional_member(self, statscan_provider):
+        metadata = {
+            "dimension": [
+                {
+                    "dimensionNameEn": "Geography",
+                    "member": [
+                        {"memberId": 1, "memberNameEn": "Canada"},
+                        {"memberId": 7, "memberNameEn": "Ontario"},
+                        {"memberId": 701, "memberNameEn": "Ontario by Local Health Integration Network"},
+                    ],
+                }
+            ]
+        }
+        modifiers = statscan_provider.extract_dimension_modifiers(
+            query_text="show only Ontario",
+            base_indicator="EMPLOYMENT",
+            product_id="14100287",
+            cube_metadata=metadata,
+        )
+        assert modifiers.get("geography") == "ONTARIO" or modifiers.get("geography") == "Ontario"
+
     def test_extract_gender_male(self, statscan_provider):
         """'male' in query should match the Gender/Sex dimension via alias expansion."""
         metadata = _get_labour_metadata(statscan_provider)

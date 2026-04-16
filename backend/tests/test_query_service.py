@@ -2360,8 +2360,129 @@ class QueryServiceTests(unittest.TestCase):
         assert persisted is not None
         self.assertEqual(
             persisted.decomposition,
-            {"type": "dimension", "entities": ["Males", "Females"], "axis": "Sex"},
+            {"type": "dimension", "entities": ["Males", "Females"], "axis": "Gender"},
         )
+
+    def test_decompose_and_aggregate_statscan_provinces_preserves_followup_product_id_when_resolver_drifts(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={
+                "country": "CA",
+                "indicator": "17100024",
+                "__statscan_product_id": "14100287",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="provinces",
+            decompositionEntities=["Ontario", "Alberta"],
+            originalQuery="Show all provinces",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Ontario employment rate",
+                country="Canada",
+                series_id="14100287:7.9.1.1.1.1.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Alberta employment rate",
+                country="Canada",
+                series_id="14100287:10.9.1.1.1.1.0.0.0.0",
+            ),
+        ]
+
+        async def _fake_resolve(provider, current_intent, params):
+            # Simulate a drifted resolved indicator code from an upstream resolver.
+            merged = dict(params)
+            merged["indicator"] = "17100024"
+            return merged
+
+        async def _fake_cube_metadata(product_id: str):
+            if str(product_id) == "14100287":
+                return {"dimension": [{}, {}, {}, {}, {}, {}]}
+            if str(product_id) == "17100024":
+                return {"dimension": [{}]}
+            return {"dimension": []}
+
+        with patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_fake_resolve), \
+             patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, side_effect=_fake_cube_metadata), \
+             patch.object(self.service.statscan_provider, "fetch_multi_province_data", new_callable=AsyncMock, return_value=returned) as batch_fetch:
+            data = run(
+                self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                    "Show all provinces",
+                    intent,
+                    "conv-statscan-province-preserve-product",
+                )
+            )
+
+        self.assertEqual(len(data), 2)
+        params = batch_fetch.await_args.args[0]
+        self.assertEqual(params["productId"], "14100287")
+        self.assertEqual(intent.parameters.get("indicator"), "14100287")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+
+    def test_decompose_and_aggregate_statscan_provinces_prefers_richer_semantic_product_candidate(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100330"],
+            parameters={
+                "country": "CA",
+                "indicator": "14100330",
+                "__statscan_product_id": "14100330",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="provinces",
+            decompositionEntities=["Ontario", "Alberta"],
+            originalQuery="Show by province",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Ontario employment rate",
+                country="Canada",
+                series_id="14100287:7.9.1.1.1.1.0.0.0.0",
+            ),
+        ]
+
+        async def _fake_resolve(provider, current_intent, params):
+            merged = dict(params)
+            merged["indicator"] = "14100330"
+            merged["__statscan_product_id"] = "14100330"
+            return merged
+
+        async def _fake_cube_metadata(product_id: str):
+            if str(product_id) == "14100287":
+                return {"dimension": [{}, {}, {}, {}, {}, {}]}
+            if str(product_id) == "14100330":
+                return {"dimension": [{}, {}]}
+            return {"dimension": []}
+
+        with patch.object(self.service, "_get_direct_provider_indicator_translation", return_value="14100287"), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_fake_resolve), \
+             patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, side_effect=_fake_cube_metadata), \
+             patch.object(self.service.statscan_provider, "fetch_multi_province_data", new_callable=AsyncMock, return_value=returned) as batch_fetch:
+            data = run(
+                self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                    "Show by province",
+                    intent,
+                    "conv-statscan-province-rich-product",
+                )
+            )
+
+        self.assertEqual(len(data), 1)
+        params = batch_fetch.await_args.args[0]
+        self.assertEqual(params["productId"], "14100287")
+        self.assertEqual(intent.parameters.get("indicator"), "14100287")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 
     def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
@@ -3468,6 +3589,42 @@ class QueryServiceTests(unittest.TestCase):
             {"GDP growth rate"},
         )
 
+    def test_build_collective_member_intent_preserves_provider_code_in_params_for_stable_members(self) -> None:
+        state = ConversationState(
+            indicator="GDP growth rate",
+            provider="IMF",
+            start_date="2020-01-01",
+            end_date="2025-12-31",
+        )
+        member = AnswerSetMember(
+            provider="IMF",
+            indicator_label="GDP growth rate",
+            provider_code="NGDP_RPCH",
+            series_id="NGDP_RPCH",
+            country="United States",
+            countries=["United States"],
+            source_turn=4,
+        )
+        delta = FollowUpDelta(
+            changed_start_date="2020-01-01",
+            changed_end_date="2025-12-31",
+            delta_type="time_change",
+            raw_query="Change to 2020-2025",
+        )
+
+        intent = self.service._build_collective_member_intent(  # pylint: disable=protected-access
+            query="Change to 2020-2025",
+            member_query="US GDP growth rate",
+            state=state,
+            member=member,
+            delta=delta,
+            collective_indicator_label="GDP growth rate",
+        )
+
+        self.assertEqual(intent.parameters.get("indicator"), "NGDP_RPCH")
+        self.assertEqual(intent.parameters.get("country"), "US")
+        self.assertEqual(intent.parameters.get("__semantic_provider_locked"), True)
+
     def test_collective_answer_member_delta_rehydrates_recent_country_with_current_indicator(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-collective-answer-members-add-back")
         state = ConversationState(
@@ -3818,6 +3975,66 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(providers_by_country.get("US"), "IMF")
         self.assertEqual(providers_by_country.get("Canada"), "IMF")
         self.assertEqual(providers_by_country.get("China"), "IMF")
+
+    def test_collective_answer_member_delta_skips_lightweight_clarification_when_semantic_verifier_passes(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-semantic-verifier-wins")
+        state = ConversationState(
+            indicator="current account balance",
+            turn_number=6,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="current account balance",
+                    provider_code="BCA_NGDPD",
+                    series_id="BCA_NGDPD",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=6,
+                ),
+                AnswerSetMember(
+                    provider="IMF",
+                    indicator_label="current account balance",
+                    provider_code="BCA_NGDPD",
+                    series_id="BCA_NGDPD",
+                    country="Germany",
+                    countries=["Germany"],
+                    source_turn=6,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="government debt to GDP",
+            delta_type="indicator_switch",
+            raw_query="Switch to government debt to GDP",
+        )
+
+        async def _fake_fetch(intent: ParsedIntent):
+            country = (intent.parameters or {}).get("country")
+            return [
+                sample_series_with(
+                    source="IMF",
+                    indicator="General government gross debt",
+                    country=country,
+                    series_id="GGXWDG_NGDP",
+                )
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=True):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Switch to government debt to GDP",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.error)
+        self.assertEqual(len(response.data or []), 2)
 
     def test_collective_path_skips_provider_locked_additive_country_followup(self) -> None:
         state = ConversationState(
@@ -5499,6 +5716,58 @@ class QueryServiceTests(unittest.TestCase):
         params = fetch_multi_dim.await_args.args[0]
         self.assertEqual(params["axis"], "Age group")
         self.assertEqual(params["dimensions"], {"Geography": "Ontario"})
+
+    def test_fetch_data_statscan_dimension_decomposition_falls_back_to_semantic_product_with_richer_axis(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["14100330"],
+            parameters={
+                "country": "CA",
+                "indicator": "14100330",
+                "__statscan_product_id": "14100330",
+                "__statscan_decomposition_axis": "Age group",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            originalQuery="Show by age group",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment rate - 25 to 54 years",
+                country="Canada",
+                series_id="14100287:1.9.1.7.1.1.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment rate - 55 to 64 years",
+                country="Canada",
+                series_id="14100287:1.9.1.8.1.1.0.0.0.0",
+            ),
+        ]
+
+        async def _fake_fetch_multi_dimension(params):
+            if params["productId"] == "14100330":
+                raise ValueError("Product 14100330 has no dimension matching axis 'Age group'")
+            return returned
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service, "_get_direct_provider_indicator_translation", return_value="14100287"), \
+             patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, side_effect=_fake_fetch_multi_dimension) as fetch_multi_dim, \
+             patch.object(self.service.statscan_provider, "fetch_with_dimensions", new_callable=AsyncMock, side_effect=AssertionError("should not use scalar dimension fetch")):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 2)
+        self.assertEqual(fetch_multi_dim.await_count, 2)
+        first_params = fetch_multi_dim.await_args_list[0].args[0]
+        second_params = fetch_multi_dim.await_args_list[1].args[0]
+        self.assertEqual(first_params["productId"], "14100330")
+        self.assertEqual(second_params["productId"], "14100287")
+        self.assertEqual(intent.parameters.get("indicator"), "14100287")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 
     def test_fetch_data_preserves_statscan_product_for_dimension_filter_follow_up(self) -> None:
         intent = ParsedIntent(

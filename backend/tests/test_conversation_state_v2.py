@@ -100,6 +100,25 @@ class TestMergeState:
         }
         assert merged.dimensions is None
 
+    def test_changed_geography_decomposition_clears_stale_geography_dimension_filters(self):
+        state = ConversationState(
+            indicator="employment rate",
+            country="CA",
+            provider="STATSCAN",
+            dimensions={"Geography": "Ontario"},
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            delta_type="dimension_change",
+        )
+        merged = merge_state(state, delta)
+        assert merged.decomposition == {
+            "type": "provinces",
+            "entities": None,
+            "axis": "Geography",
+        }
+        assert merged.dimensions is None
+
     def test_specific_geography_filter_clears_first_class_decomposition(self):
         state = ConversationState(
             indicator="unemployment rate",
@@ -739,6 +758,25 @@ class TestExtractStateFromIntent:
             "axis": "Gender",
         }
 
+    def test_extract_state_prefers_explicit_statscan_product_id_over_drifted_indicator_code(self):
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={
+                "country": "CA",
+                "indicator": "17100024",
+                "__statscan_product_id": "14100287",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            originalQuery="Show all provinces",
+        )
+
+        state = extract_state_from_intent(intent)
+
+        assert state.resolved_indicator_code == "14100287"
+        assert state.statscan_product_id == "14100287"
+
     def test_multi_country_extraction(self):
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
@@ -1368,6 +1406,44 @@ class TestDeltaExtractorDimensionModifier:
         delta = extractor.extract("show Ontario", state)
         assert delta is not None
         assert delta.added_dimensions == {"geography": "Ontario"}
+
+    def test_dimension_modifier_uses_statscan_product_id_even_without_known_base_indicator(self, _build_extractor):
+        _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
+        extractor = _build_extractor(
+            cube_metadata=_cube,
+            extracted_modifiers={"geography": "Alberta"},
+        )
+        state = ConversationState(
+            indicator="employment rate",
+            provider="StatsCan",
+            country="CA",
+            statscan_product_id="14100287",
+            statscan_cube_metadata=_cube,
+        )
+        delta = extractor.extract("Switch to Alberta", state)
+        assert delta is not None
+        assert delta.added_dimensions == {"geography": "Alberta"}
+
+    def test_breakdown_phrase_wins_over_misleading_dimension_member_match(self, _build_extractor):
+        _cube = {"dimension": [{"dimensionNameEn": "Geography", "member": []}]}
+        extractor = _build_extractor(
+            cube_metadata=_cube,
+            extracted_modifiers={"geography": "Peer group A"},
+        )
+        state = ConversationState(
+            indicator="employment rate",
+            provider="StatsCan",
+            country="CA",
+            statscan_product_id="14100330",
+            statscan_cube_metadata=_cube,
+        )
+        delta = extractor.extract("Show by age group", state)
+        assert delta is not None
+        assert delta.changed_decomposition == {
+            "type": "dimension",
+            "entities": None,
+            "axis": "Age group",
+        }
 
 
 # ─── materialize_intent with dimensions ─────────────────────────────
@@ -2112,6 +2188,44 @@ class TestResolvedIndicatorCodePreservation:
 
         assert state.statscan_product_id == "14100287"
         assert state.statscan_cube_metadata is None
+
+    def test_update_answer_members_from_data_prefers_explicit_statscan_product_over_filtered_series_product(self):
+        state = ConversationState(
+            indicator="employment rate",
+            provider="STATSCAN",
+            country="Canada",
+            statscan_product_id="14100330",
+            turn_number=4,
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100330"],
+            parameters={
+                "country": "Canada",
+                "indicator": "14100330",
+                "__statscan_product_id": "14100287",
+                "__semantic_indicator_label": "employment rate",
+            },
+            clarificationNeeded=False,
+            originalQuery="Show all provinces",
+        )
+        data = [
+            NormalizedData(
+                metadata=Metadata(
+                    source="Statistics Canada",
+                    indicator="Ontario employment rate",
+                    country="Canada",
+                    frequency="monthly",
+                    unit="%",
+                    seriesId="20100056:10.1.1.2.0.0.0.0.0.0",
+                ),
+                data=[],
+            )
+        ]
+
+        update_answer_members_from_data(state, data, intent=intent)
+
+        assert state.statscan_product_id == "14100287"
 
     def test_update_answer_members_from_data_refreshes_coingecko_coin_ids_from_series(self):
         state = ConversationState(

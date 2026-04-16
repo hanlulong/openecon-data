@@ -999,6 +999,47 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     return results if isinstance(results, list) else [results]
             except Exception as e:
                 logger.warning(f"StatsCan dimension decomposition dispatch failed: {e}. Falling through.")
+                semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+                if semantic_label:
+                    alt_code = svc._get_direct_provider_indicator_translation("STATSCAN", semantic_label)
+                    if alt_code:
+                        alt_product_id = svc.statscan_provider._normalize_metadata_product_id(str(alt_code))
+                        if alt_product_id != _product_id_dim:
+                            alt_base = str(alt_code).upper().replace(" ", "_").replace("-", "_")
+                            if alt_base.isdigit():
+                                resolved_alt_base = _resolve_numeric_to_vector_key(alt_base)
+                                if resolved_alt_base:
+                                    alt_base = resolved_alt_base
+                            try:
+                                dimension_periods = _statscan_periods_from_date_range(params, 60)
+                                alt_decomposition_params = {
+                                    "productId": alt_product_id,
+                                    "indicator": alt_base,
+                                    "indicatorLabel": semantic_label,
+                                    "axis": dimension_decomposition_axis,
+                                    "periods": dimension_periods,
+                                    "dimensions": dimensions,
+                                    "startDate": params.get("startDate"),
+                                    "endDate": params.get("endDate"),
+                                }
+                                logger.info(
+                                    "StatsCan dimension decomposition fallback: semantic=%s product=%s axis=%s",
+                                    semantic_label,
+                                    alt_product_id,
+                                    dimension_decomposition_axis,
+                                )
+                                results = await svc.statscan_provider.fetch_multi_dimension_data(alt_decomposition_params)
+                                params["indicator"] = alt_product_id
+                                params["__statscan_product_id"] = alt_product_id
+                                intent.parameters = params
+                                return results if isinstance(results, list) else [results]
+                            except Exception as alt_exc:
+                                logger.warning(
+                                    "StatsCan dimension decomposition fallback failed for semantic=%s product=%s: %s",
+                                    semantic_label,
+                                    alt_product_id,
+                                    alt_exc,
+                                )
 
         # Check if this is a dimension BREAKDOWN (e.g., Geography="Province")
         # vs a dimension FILTER (e.g., Geography="Ontario")

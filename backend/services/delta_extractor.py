@@ -361,6 +361,10 @@ class DeltaExtractor:
         if delta:
             return delta
 
+        delta = self._try_breakdown_follow_up(query_text, state)
+        if delta:
+            return delta
+
         delta = self._try_dimension_modifier(query_text, state)
         if delta:
             return delta
@@ -379,10 +383,6 @@ class DeltaExtractor:
             return delta
 
         delta = self._try_frequency_change(query_text, state)
-        if delta:
-            return delta
-
-        delta = self._try_breakdown_follow_up(query_text, state)
         if delta:
             return delta
 
@@ -1305,20 +1305,20 @@ Output the query_type and any changed fields as JSON."""
             or state.indicator.upper().replace(" ", "_").replace("-", "_")
         )
 
-        # Check if this indicator is known (has a vector or coordinate mapping)
-        _vec = statscan.VECTOR_MAPPINGS.get(indicator_key)
-        _coord = statscan.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
-        if _vec is None and _coord is None:
-            return None
-
         # Resolve product ID
-        product_id: Optional[str] = None
-        if _coord:
-            product_id = statscan._normalize_metadata_product_id(_coord[0])
-        elif _vec is not None:
-            _cached = statscan.PRODUCT_ID_CACHE.get(_vec)
-            if _cached:
-                product_id = statscan._normalize_metadata_product_id(_cached)
+        product_id: Optional[str] = str(getattr(state, "statscan_product_id", "") or "").strip() or None
+        if product_id:
+            product_id = statscan._normalize_metadata_product_id(product_id)
+        else:
+            # Check if this indicator is known (has a vector or coordinate mapping)
+            _vec = statscan.VECTOR_MAPPINGS.get(indicator_key)
+            _coord = statscan.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
+            if _coord:
+                product_id = statscan._normalize_metadata_product_id(_coord[0])
+            elif _vec is not None:
+                _cached = statscan.PRODUCT_ID_CACHE.get(_vec)
+                if _cached:
+                    product_id = statscan._normalize_metadata_product_id(_cached)
 
         if not product_id:
             return None

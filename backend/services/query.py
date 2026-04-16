@@ -304,7 +304,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-04-14.1"
+    CACHE_KEY_VERSION = "2026-04-15.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -2247,6 +2247,8 @@ class QueryService:
             if indicator_changed
             else str(getattr(member, "provider_code", None) or getattr(member, "series_id", None) or collective_indicator_label or "unknown")
         )
+        if not indicator_changed and indicator_token:
+            params["indicator"] = indicator_token
 
         return ParsedIntent(
             apiProvider=str(getattr(member, "provider", "") or getattr(state, "provider", "") or "WorldBank"),
@@ -2332,12 +2334,12 @@ class QueryService:
                     self._build_minimal_execution_plan(member_query, member_intent),
                     member_data,
                 )
-                if verification_error or self._needs_indicator_clarification(member_query, member_data, member_intent):
+                if verification_error:
                     logger.warning(
                         "Collective delta verification failed for %s via %s: %s",
                         member_scope,
                         member_intent.apiProvider,
-                        verification_error or "uncertain match",
+                        verification_error,
                     )
                     failed_members.append(member_scope)
                     continue
@@ -2790,6 +2792,7 @@ class QueryService:
         params = (intent.parameters or {}) if intent is not None else {}
         candidates = [
             params.get("productId"),
+            params.get("__statscan_product_id"),
             params.get("indicator"),
         ]
         for indicator in (intent.indicators or []) if intent is not None else []:
@@ -6421,9 +6424,53 @@ class QueryService:
                                 product_id = str(_vec_id)
                                 logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
 
+                    candidate_product_ids: list[str] = []
+                    semantic_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
+                    semantic_candidate = (
+                        self._get_direct_provider_indicator_translation("STATSCAN", semantic_label)
+                        if semantic_label else None
+                    )
+                    for candidate in [
+                        product_id,
+                        (intent.parameters or {}).get("__statscan_product_id"),
+                        (intent.parameters or {}).get("indicator"),
+                        semantic_candidate,
+                        *(intent.indicators or []),
+                    ]:
+                        extracted = self._extract_statscan_product_id(candidate)
+                        if extracted and extracted not in candidate_product_ids:
+                            candidate_product_ids.append(extracted)
+
+                    if len(candidate_product_ids) > 1:
+                        scored_candidates: list[tuple[int, str]] = []
+                        for candidate_product_id in candidate_product_ids:
+                            try:
+                                cube_meta = await self.statscan_provider._get_cube_metadata(candidate_product_id)
+                                dimension_count = len(cube_meta.get("dimension", []) or [])
+                            except Exception:
+                                dimension_count = -1
+                            scored_candidates.append((dimension_count, candidate_product_id))
+                        scored_candidates.sort(key=lambda item: (item[0], -candidate_product_ids.index(item[1])), reverse=True)
+                        best_product_id = scored_candidates[0][1]
+                        if best_product_id != product_id:
+                            logger.info(
+                                "Decomposition: preferring richer StatsCan product %s over %s among candidates=%s",
+                                best_product_id,
+                                product_id,
+                                candidate_product_ids,
+                            )
+                        product_id = best_product_id
+
+                    if product_id:
+                        normalized_product_id = self.statscan_provider._normalize_metadata_product_id(product_id)
+                        if intent.parameters is None:
+                            intent.parameters = {}
+                        intent.parameters["indicator"] = normalized_product_id
+                        intent.parameters["__statscan_product_id"] = normalized_product_id
+
                     # Build parameters for batch method
                     params = {
-                        "productId": product_id,
+                        "productId": intent.parameters.get("__statscan_product_id") or product_id,
                         "indicator": indicator_name,
                         "indicatorLabel": str((intent.parameters or {}).get("__semantic_indicator_label") or indicator_name),
                         "provinces": intent.decompositionEntities,
