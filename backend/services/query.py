@@ -173,6 +173,7 @@ from ..services.indicator_clarification import (
     has_explicit_group_scope as _ic_has_explicit_group_scope,
     rewrite_group_scope_query as _ic_rewrite_group_scope_query,
     build_group_scope_clarification as _ic_build_group_scope_clarification,
+    build_unspecified_geography_breakdown_clarification as _ic_build_unspecified_geography_breakdown_clarification,
     build_structured_semantic_clarification as _ic_build_structured_semantic_clarification,
     filter_viable_indicator_choice_options as _ic_filter_viable_indicator_choice_options,
     build_failed_indicator_choice_response as _ic_build_failed_indicator_choice_response,
@@ -1130,6 +1131,21 @@ class QueryService:
     ) -> Optional[QueryResponse]:
         """Delegates to :func:`indicator_clarification.build_group_scope_clarification`."""
         return _ic_build_group_scope_clarification(self, conversation_id, query, intent, is_multi_indicator, processing_steps)
+
+    def _build_unspecified_geography_breakdown_clarification(
+        self,
+        conversation_id: str,
+        query: str,
+        intent: Optional[ParsedIntent] = None,
+        processing_steps: Optional[List[Any]] = None,
+    ) -> Optional[QueryResponse]:
+        """Delegates to :func:`indicator_clarification.build_unspecified_geography_breakdown_clarification`."""
+        return _ic_build_unspecified_geography_breakdown_clarification(
+            conversation_id,
+            query,
+            intent,
+            processing_steps,
+        )
 
     async def _filter_viable_indicator_choice_options(
         self,
@@ -3931,6 +3947,14 @@ class QueryService:
 
             # Pro Mode: check complexity for first-turn queries or when
             # classifier explicitly says pro_mode (already handled above for follow-ups)
+            generic_scope_clarification = self._build_unspecified_geography_breakdown_clarification(
+                conversation_id=conv_id,
+                query=query,
+                processing_steps=tracker.to_list() if tracker else None,
+            )
+            if generic_scope_clarification is not None:
+                return generic_scope_clarification
+
             if auto_pro_mode and _query_type in (None, "new_query"):
                 early_complexity = QueryComplexityAnalyzer.detect_complexity(query, intent=None)
                 if early_complexity['pro_mode_required']:

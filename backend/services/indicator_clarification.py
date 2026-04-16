@@ -1903,6 +1903,41 @@ def build_group_scope_clarification(
     )
 
 
+def build_unspecified_geography_breakdown_clarification(
+    conversation_id: str,
+    query: str,
+    intent: Optional[ParsedIntent] = None,
+    processing_steps: Optional[List[Any]] = None,
+) -> Optional[QueryResponse]:
+    """Ask for explicit geography when a regional breakdown is requested without one."""
+    query_text = str(query or "").strip()
+    if not query_text:
+        return None
+
+    query_lower = query_text.lower()
+    if not re.search(r"\bby\s+(?:province|state|region|city|county)\b", query_lower):
+        return None
+    if CountryResolver.detect_all_countries_in_query(query_text):
+        return None
+    if CountryResolver.detect_regions_in_query(query_text):
+        return None
+
+    clarification_questions = [
+        "Your query asks for a geographic breakdown, but it does not name the geography to break down.",
+        "If you want a subnational breakdown, name the country first (for example: 'Canada employment by province').",
+        "If you want a multi-country group, name the region explicitly (for example: 'employment in South Asia').",
+    ]
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        intent=intent,
+        clarificationNeeded=True,
+        clarificationQuestions=clarification_questions,
+        clarificationOptions=None,
+        processingSteps=processing_steps,
+    )
+
+
 _AMBIGUOUS_CONCEPT_OPTIONS = {
     "employment": [
         {

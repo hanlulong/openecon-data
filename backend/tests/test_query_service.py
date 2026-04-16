@@ -5942,6 +5942,16 @@ class QueryServiceTests(unittest.TestCase):
         assert response.intent is not None
         self.assertEqual(response.intent.apiProvider, "WORLDBANK")
 
+    def test_process_query_clarifies_unspecified_geography_breakdown_before_auto_promode(self) -> None:
+        with patch.object(self.service, "_execute_pro_mode", new_callable=AsyncMock) as pro_mode_mock:
+            response = run(self.service.process_query("employment by region", auto_pro_mode=True))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNone(response.codeExecution)
+        joined = "\n".join(response.clarificationQuestions or [])
+        self.assertIn("does not name the geography", joined)
+        pro_mode_mock.assert_not_awaited()
+
     def test_detect_explicit_provider_does_not_treat_oecd_region_phrase_as_provider_request(self) -> None:
         provider = self.service._detect_explicit_provider(  # pylint: disable=protected-access
             "Long-term interest rate comparison for OECD economies"
