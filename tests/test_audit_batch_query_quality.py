@@ -553,6 +553,41 @@ def test_audit_batch_query_quality_flags_definition_financial_queries(tmp_path: 
     assert "definition_financial_query" in flagged["reasons"]
 
 
+def test_audit_batch_query_quality_flags_government_finance_definition_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Revenue Taxes Dominican Republic Definition Government and Public Sector Finance Budgetary Central Government from IMF",
+                "origin": {
+                    "name": "Dominican Republic Definition, Government and Public Sector Finance, Revenue, Budgetary Central Government, Taxes"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "definition_financial_query" in flagged["reasons"]
+
+
 def test_audit_batch_query_quality_flags_imf_complex_finance_family_queries(tmp_path: Path):
     dataset = tmp_path / "dataset.jsonl"
     output = tmp_path / "audit.json"
@@ -586,3 +621,108 @@ def test_audit_batch_query_quality_flags_imf_complex_finance_family_queries(tmp_
     assert report["summary"]["high_risk_rows"] == 1
     flagged = report["flagged_rows"][0]
     assert "imf_complex_finance_family" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_imf_external_debt_position_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany Gross External Debt Position Private Sector Debt Not Publicly Guranteed from IMF",
+                "origin": {
+                    "name": "Gross External Debt Position, Private Sector Debt Not Publicly Guranteed"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "imf_complex_finance_family" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_imf_producer_price_weight_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Germany Weight Producer Price Index Manufacture of furniture from IMF",
+                "origin": {
+                    "name": "Prices, Producer Price Index, Manufacture of furniture, Weight"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "imf_low_viability_family" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_oecd_unemployment_benefits_tax_row(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Canada Effective tax rate on taking up work when claiming unemployment benefits from OECD",
+                "origin": {
+                    "name": "Effective tax rate on taking up work when claiming unemployment benefits"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "oecd_low_viability_family" in flagged["reasons"]

@@ -1170,15 +1170,15 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('ownership_breakdown_query')
     if 'definition' in query_lower and 'survey' in query_lower:
         reasons.append('definition_survey_query')
-    if 'definition' in query_lower and any(term in query_lower for term in ['debt', 'deposits', 'assets', 'liabilities', 'gross value added', 'claims']):
+    if 'definition' in query_lower and any(term in query_lower for term in ['debt', 'deposits', 'assets', 'liabilities', 'gross value added', 'claims', 'revenue', 'taxes', 'government and public sector finance', 'budgetary central government']):
         reasons.append('definition_financial_query')
     if 'labor markets' in query_lower and 'number of persons' in query_lower:
         reasons.append('classification_labor_query')
     if 'gross value added' in query_lower and any(term in query_lower for term in ['electricity', 'gas', 'water supply']):
         reasons.append('classification_gva_query')
-    if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities']):
+    if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
-    if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower):
+    if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
         reasons.append('imf_low_viability_family')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
@@ -1205,7 +1205,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_macro_exposure_family')
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
         reasons.append('worldbank_ddh_prevalence_family')
-    if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity']):
+    if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits']):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency']):
         reasons.append('imf_price_or_memorandum_family')
