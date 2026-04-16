@@ -576,6 +576,29 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "MELIPRVSUSCOUNTY24005")
         self.assertEqual(intent.indicators, ["Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD"])
 
+    def test_build_exact_indicator_title_intent_handles_country_prefix_and_provider_suffix(self) -> None:
+        lookup_results = [
+            {
+                "code": "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET",
+                "provider": "OECD",
+                "name": "Share of students enrolled in school and work-based programmes",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Japan Share of students enrolled in school and work-based programmes from OECD"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "OECD")
+        self.assertEqual(intent.parameters.get("indicator"), "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET")
+        self.assertEqual(intent.indicators, ["Share of students enrolled in school and work-based programmes"])
+
     def test_build_exact_indicator_title_intent_tags_generic_interest_rate_as_broad_concept(self) -> None:
         lookup_results = [
             {

@@ -21,6 +21,7 @@ import re
 from typing import Any, List, Optional
 
 from ..models import NormalizedData, ParsedIntent
+from ..routing.country_resolver import CountryResolver
 from ..services.relevance_scorer import (
     extract_indicator_cues,
     score_series_relevance,
@@ -101,18 +102,12 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
     except Exception:
         return False
 
-    normalized_text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    query_text = str(text or "").strip()
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", query_text.lower()).strip()
     if not normalized_text:
         return False
 
-    search_inputs = [str(text or "").strip()]
-    stripped = re.sub(r"^(?:us|united states)\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
-    if stripped and stripped not in search_inputs:
-        search_inputs.append(stripped)
-    if ":" in stripped:
-        suffix = stripped.split(":", 1)[1].strip()
-        if suffix and suffix not in search_inputs:
-            search_inputs.append(suffix)
+    search_inputs = exact_title_search_inputs(text, provider_name)
 
     candidates = []
     seen_codes = set()
@@ -132,11 +127,16 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
         if not normalized_name or len(normalized_name) < 24:
             continue
-        if (
-            normalized_text == normalized_name
-            or normalized_text.endswith(normalized_name)
-                or normalized_name.endswith(normalized_text)
-            ):
+        if any(
+            normalized_query == normalized_name
+            or normalized_query.endswith(normalized_name)
+            or normalized_name.endswith(normalized_query)
+            for normalized_query in (
+                re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
+                for candidate_query in search_inputs
+            )
+            if normalized_query
+        ):
                 return True
     return False
 
@@ -150,18 +150,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
     except Exception:
         return None
 
-    normalized_text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    query_text = str(text or "").strip()
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", query_text.lower()).strip()
     if not normalized_text:
         return None
 
-    search_inputs = [str(text or "").strip()]
-    stripped = re.sub(r"^(?:us|united states)\s+", "", str(text or "").strip(), flags=re.IGNORECASE)
-    if stripped and stripped not in search_inputs:
-        search_inputs.append(stripped)
-    if ":" in stripped:
-        suffix = stripped.split(":", 1)[1].strip()
-        if suffix and suffix not in search_inputs:
-            search_inputs.append(suffix)
+    search_inputs = exact_title_search_inputs(text, provider_name)
 
     best_candidate: Optional[Dict[str, Any]] = None
     best_name_len = -1
@@ -180,15 +174,90 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
             if not normalized_name or len(normalized_name) < 24:
                 continue
-            if (
-                normalized_text == normalized_name
-                or normalized_text.endswith(normalized_name)
-                or normalized_name.endswith(normalized_text)
+            if any(
+                normalized_query == normalized_name
+                or normalized_query.endswith(normalized_name)
+                or normalized_name.endswith(normalized_query)
+                for normalized_query in (
+                    re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
+                    for candidate_query in search_inputs
+                )
+                if normalized_query
             ):
                 if len(normalized_name) > best_name_len:
                     best_candidate = candidate
                     best_name_len = len(normalized_name)
     return best_candidate
+
+
+def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
+    """Generate strict exact-title search variants for provider-local title matches."""
+    query_text = str(text or "").strip()
+    if not query_text:
+        return []
+
+    provider_key = _normalize_provider_name(provider_name)
+    provider_aliases = {
+        "WORLDBANK": ["world bank", "worldbank"],
+        "STATSCAN": ["statistics canada", "statscan"],
+        "COINGECKO": ["coin gecko", "coingecko"],
+        "EXCHANGERATE": ["exchange rate", "exchange rate-api", "exchangerate", "exchangerate-api"],
+        "COMTRADE": ["comtrade", "un comtrade"],
+        "OECD": ["oecd"],
+        "EUROSTAT": ["eurostat"],
+        "IMF": ["imf"],
+        "FRED": ["fred"],
+        "BIS": ["bis"],
+    }.get(provider_key, [str(provider_name or "").strip().lower()])
+
+    search_inputs: list[str] = []
+    queue = [query_text]
+    seen: set[str] = set()
+
+    while queue:
+        candidate = queue.pop(0).strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        search_inputs.append(candidate)
+
+        # Strip a leading country alias only when it appears as a plain prefix.
+        for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+            stripped_country = re.sub(
+                rf"^(?:{re.escape(str(alias).strip())})\s+",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip()
+            if stripped_country != candidate and stripped_country not in seen:
+                queue.append(stripped_country)
+
+        # Strip common provider suffixes/prefixes around pasted titles.
+        for alias in provider_aliases:
+            stripped_suffix = re.sub(
+                rf"\b(?:from|via|use)\s+{re.escape(alias)}\b$",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip(" ,;:")
+            if stripped_suffix and stripped_suffix not in seen:
+                queue.append(stripped_suffix)
+
+            stripped_prefix = re.sub(
+                rf"^\[?{re.escape(alias)}\]?\s*",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip()
+            if stripped_prefix and stripped_prefix not in seen:
+                queue.append(stripped_prefix)
+
+        if ":" in candidate:
+            suffix = candidate.split(":", 1)[1].strip()
+            if suffix and suffix not in seen:
+                queue.append(suffix)
+
+    return search_inputs
 
 
 # ---------------------------------------------------------------------------
