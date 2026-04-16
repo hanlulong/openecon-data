@@ -111,6 +111,58 @@ Key values:
 - `lower95 = 0.8513404742740388`
 - blocked because lower95 and claim-grade readiness are still not sufficient
 
+### Fresh post-multiround gap analysis
+
+After the multiround framework turned green, the next Ralph slice recomputed the current effective-n gap and materialized the next reviewed batch.
+
+Fresh artifacts:
+
+- gap report:
+  - `validation_private/reports/curated_broader_review_v2_gap_report.json`
+- expansion plan:
+  - `validation_private/reports/curated_broader_review_v2_expansion_plan.json`
+- progress report:
+  - `validation_private/reports/curated_broader_review_v2_progress_report.json`
+- next batch plan:
+  - `validation_private/reports/curated_broader_review_v2_next_batch_plan.json`
+- materialized batch:
+  - `validation_private/datasets/batch_review/curated_broader_review_v2_batch1/`
+- batch audit:
+  - `validation_private/reports/curated_broader_review_v2_batch1_audit.json`
+- first-batch raw replay:
+  - `validation_private/reports/curated_broader_review_v2_batch1_raw.jsonl`
+- first-batch provisional score:
+  - `validation_private/reports/curated_broader_review_v2_batch1_score.json`
+- first-batch conservative decision:
+  - `validation_private/reports/curated_broader_review_v2_batch1_decision.json`
+
+Current gap estimate:
+
+- current effective n: `22`
+- required effective n at perfect success: `381`
+- additional effective n needed: `359`
+
+Current v2 batch materialization summary:
+
+- direct: `23`
+- multiround: `14`
+- ambiguity: `13`
+- total batch size: `50`
+- query-quality audit high-risk rows: `0`
+
+Current first-batch provisional score summary:
+
+- scoring mode: `provisional_structural`
+- overall weighted provisional success: `0.7797005169695611`
+- overall weighted lower95 approximation: `0.39677321997956516`
+- claim-grade ready: `false`
+
+Interpretation:
+
+- the next blocker is no longer \"find the multiround bug\" — that lane is already green.
+- the next blocker is now **evidence volume + reviewed/adjudicated coverage**.
+- the first newly materialized batch is useful because it gives Ralph a concrete next execution surface, but it is still only the first step in a much larger reviewed-evidence expansion.
+
 ## Why this matters
 
 The user’s contract is:
@@ -127,15 +179,13 @@ The next continuous Ralph loop should focus on the **claim-grade certification p
 
 Priority order:
 
-1. identify the narrowest real blocker in the claim-grade path:
-   - lower95 modeling / effective-n path
-   - claim-grade readiness flagging
-   - semantic metrics still proxy-backed
-   - adjudication completeness
-   - production replay integration
-2. choose one blocker and make a framework/evidence fix
-3. rerun the certification scoring / decision path
-4. keep Ralph active until the decision artifacts meaningfully improve
+1. continue the reviewed/adjudicated coverage expansion using:
+   - `validation_private/reports/curated_broader_review_v2_next_batch_plan.json`
+   - `validation_private/datasets/batch_review/curated_broader_review_v2_batch1/`
+2. collect raw results and reviewed labels for the new batch
+3. rescore and re-estimate the lower95 gap
+4. only if the effective-n estimate still appears methodologically suspect, inspect weighting / design-effect assumptions before generating more batches
+5. keep Ralph active until the decision artifacts materially move toward the 99% claim gate
 
 ## Suggested resume commands
 
@@ -152,6 +202,12 @@ Useful evidence files:
 .omx/reports/phase1-multiround-oracle-regression-v1.json
 .omx/reports/phase1-multiround-oracle-alternative-v8.json
 validation_private/reports/curated_broader_review_v1_with_production_decision.json
+validation_private/reports/curated_broader_review_v2_gap_report.json
+validation_private/reports/curated_broader_review_v2_expansion_plan.json
+validation_private/reports/curated_broader_review_v2_progress_report.json
+validation_private/reports/curated_broader_review_v2_next_batch_plan.json
+validation_private/reports/curated_broader_review_v2_batch1_audit.json
+validation_private/reports/curated_broader_review_v2_batch1_score.json
 ```
 
 ## Bottom line
@@ -162,6 +218,6 @@ As of this handoff:
 - Original Canada-by-sex bug family: **green**
 - Baseline multiround: **green**
 - Alternative multiround: **green**
-- Broader claim-grade 99% certification path: **still blocked**
+- Broader claim-grade 99% certification path: **still blocked by effective-n / reviewed-evidence gap**
 
 Ralph should continue from here on the certification/evidence lane, not by reopening already-green multiround work unless new regressions appear.
