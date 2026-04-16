@@ -171,6 +171,41 @@ def test_audit_batch_query_quality_flags_accounting_subtotal_queries(tmp_path: P
     assert "accounting_artifact_query" in flagged["reasons"]
 
 
+def test_audit_batch_query_quality_flags_indicator_code_prefixed_queries(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Brazil 1101130:Fish and seafood from World Bank",
+                "origin": {
+                    "name": "1101130:Fish and seafood"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "indicator_code_prefix" in flagged["reasons"]
+
+
 def test_audit_batch_query_quality_flags_ambiguous_subnational_abbreviations(tmp_path: Path):
     dataset = tmp_path / "dataset.jsonl"
     output = tmp_path / "audit.json"

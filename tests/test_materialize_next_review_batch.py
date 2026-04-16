@@ -313,6 +313,37 @@ def test_select_quality_screened_direct_records_prefers_low_risk_statscan_over_m
     assert [row["id"] for row in selected] == ["statscan-low-import-industry"]
 
 
+def test_select_quality_screened_direct_records_rejects_code_prefixed_worldbank_row_when_clean_alternative_exists():
+    records = [
+        {
+            "id": "worldbank-code-prefix",
+            "query": "Brazil 1101130:Fish and seafood from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "1101130:Fish and seafood",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["indicator_code_prefix"]},
+        },
+        {
+            "id": "worldbank-clean",
+            "query": "China Lower secondary completion rate total (% of relevant age group) from World Bank",
+            "provider_stratum": "WorldBank",
+            "origin": {
+                "name": "Lower secondary completion rate, total (% of relevant age group)",
+                "description": "",
+                "source_provider": "WorldBank",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["worldbank-clean"]
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_share_of_students_over_cpi_energy_bundle():
     records = [
         {

@@ -1122,6 +1122,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     query_tail = re.sub(r'^(United States|US|Japan|Germany|France|Italy|China|Brazil|Canada)\s+', '', query, flags=re.IGNORECASE).strip()
     if query_tail and re.fullmatch(r'[A-Z0-9]{1,6}', query_tail) and query_tail.upper() not in _SAFE_DIRECT_ACRONYMS:
         reasons.append('opaque_acronym_query')
+    if (
+        re.search(r'^\d{4,}[A-Z0-9._-]*\s*:', query_tail)
+        or re.search(r'^\d{4,}[A-Z0-9._-]*\s*:', origin_name)
+    ):
+        reasons.append('indicator_code_prefix')
     if count_distinct_country_mentions(query) > 1:
         reasons.append('country_scope_conflict')
     if (
@@ -1245,6 +1250,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'very_long_query',
         'catalog_jargon',
         'provider_title_like',
+        'indicator_code_prefix',
         'opaque_acronym_query',
         'country_scope_conflict',
         'micro_demographic_slice',
