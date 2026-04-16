@@ -243,6 +243,65 @@ Interpretation:
 - the `multiround_state_carryover` cluster for this family was partly real framework behavior, not just adjudication noise;
 - batch1’s triage output should now be treated as stale for the Canada-unemployment/StatsCan first-turn clarification family and regenerated after the next certification replay.
 
+### Fresh post-fix reviewed-batch replay
+
+The first reviewed batch has now been replayed locally again after the framework fix.
+
+Fresh artifacts:
+
+- raw replay:
+  - `validation_private/reports/curated_broader_review_v2_batch1_postfix1_raw.jsonl`
+- structural score:
+  - `validation_private/reports/curated_broader_review_v2_batch1_postfix1_score.json`
+- adjudication queue:
+  - `validation_private/adjudication/curated_broader_review_v2_batch1_postfix1_queue.jsonl`
+- adjudication summary:
+  - `validation_private/adjudication/curated_broader_review_v2_batch1_postfix1_summary.json`
+- triage:
+  - `validation_private/reports/curated_broader_review_v2_batch1_postfix1_triage.json`
+- gap report:
+  - `validation_private/reports/curated_broader_review_v2_batch1_postfix1_gap_report.json`
+- expansion plan:
+  - `validation_private/reports/curated_broader_review_v2_batch1_postfix1_expansion_plan.json`
+
+Fresh postfix1 summary:
+
+- batch1 overall unweighted structural success: `0.80` (was `0.72`)
+- batch1 direct weighted provisional success: `0.9320961470484269` (was `0.7797343836792404`)
+- adjudication queue records: `13` (was `17`)
+- likely framework bug bucket count: `0` (was `4`)
+
+Resolved rows in the fresh postfix1 replay:
+
+- `batch-direct-fred-000590`
+- `batch-direct-statscan-000614`
+- `batch-statscan_decomposition_chain-000002`
+- `batch-statscan_decomposition_chain-000003`
+
+Their earlier failure mode was the same shape:
+
+- structural fail
+- unnecessary first-turn clarification
+
+Their fresh postfix1 replay now shows:
+
+- structural pass
+- no clarification
+
+Fresh postfix1 triage summary:
+
+- likely dataset/query-surface: `4`
+- likely framework bug: `0`
+- human adjudication: `9`
+
+Interpretation:
+
+- the immediate batch1 framework-bug lane is now cleared locally;
+- the remaining reviewed-batch blockers are now mostly:
+  - long-tail provider/data-surface cases (`provider_data_availability_surface`, `provider_surface_query_shape`)
+  - ambiguity rows that still require manual semantic adjudication
+- this does **not** mean the catalog-wide claim is ready; it means the reviewed-batch framework defects surfaced by this slice were genuinely fixed, and the blocker has shifted back toward adjudication + evidence volume.
+
 ## Why this matters
 
 The user’s contract is:
@@ -270,13 +329,14 @@ Priority order:
    - fresh raw replay / score for the impacted reviewed batch
    - fresh adjudication queue + summary
    - fresh triage report
-4. continue the reviewed/adjudicated coverage expansion using:
+4. use the fresh postfix1 batch artifacts as the new local source of truth for this slice rather than the stale pre-fix batch1 queue/triage
+5. continue the reviewed/adjudicated coverage expansion using:
    - `validation_private/reports/curated_broader_review_v2_next_batch_plan.json`
    - `validation_private/datasets/batch_review/curated_broader_review_v2_batch1/`
-5. collect raw results and reviewed labels for the new batch
-6. rescore and re-estimate the lower95 gap
-7. only if the effective-n estimate still appears methodologically suspect, inspect weighting / design-effect assumptions before generating more batches
-8. keep Ralph active until the decision artifacts materially move toward the 99% claim gate
+6. collect raw results and reviewed labels for the new batch
+7. rescore and re-estimate the lower95 gap
+8. only if the effective-n estimate still appears methodologically suspect, inspect weighting / design-effect assumptions before generating more batches
+9. keep Ralph active until the decision artifacts materially move toward the 99% claim gate
 
 ## Suggested resume commands
 
