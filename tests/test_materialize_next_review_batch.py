@@ -282,6 +282,37 @@ def test_select_quality_screened_direct_records_prefers_worldbank_literacy_over_
     assert [row["id"] for row in selected] == ["worldbank-functional-difficulty"]
 
 
+def test_select_quality_screened_direct_records_prefers_low_risk_statscan_over_modestly_more_specific_medium_slice():
+    records = [
+        {
+            "id": "statscan-medium-health-slice",
+            "query": "Canada youth reported Health indicator statistics for youth aged 12 to 17 years from Statistics Canada",
+            "provider_stratum": "StatsCan",
+            "origin": {
+                "name": "Youth-reported Health indicator statistics for youth aged 12 to 17 years",
+                "description": "",
+                "source_provider": "StatsCan",
+            },
+            "provenance": {"query_quality_risk": "medium", "query_quality_reasons": ["long_query"]},
+        },
+        {
+            "id": "statscan-low-import-industry",
+            "query": "Canada Import of goods or services by industry and enterprise size from Statistics Canada",
+            "provider_stratum": "StatsCan",
+            "origin": {
+                "name": "Import of goods or services by industry and enterprise size",
+                "description": "",
+                "source_provider": "StatsCan",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["statscan-low-import-industry"]
+
+
 def test_select_quality_screened_direct_records_prefers_oecd_share_of_students_over_cpi_energy_bundle():
     records = [
         {
