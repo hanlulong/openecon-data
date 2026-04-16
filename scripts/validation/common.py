@@ -1205,9 +1205,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_macro_exposure_family')
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
         reasons.append('worldbank_ddh_prevalence_family')
-    if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits']):
+    if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits', 'temporary employment by permanency of the job']):
         reasons.append('oecd_low_viability_family')
-    if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency']):
+    if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
         reasons.append('imf_price_or_memorandum_family')
     if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
         reasons.append('eurostat_agri_breakdown_query')

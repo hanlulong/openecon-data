@@ -726,3 +726,73 @@ def test_audit_batch_query_quality_flags_oecd_unemployment_benefits_tax_row(tmp_
     assert report["summary"]["high_risk_rows"] == 1
     flagged = report["flagged_rows"][0]
     assert "oecd_low_viability_family" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_imf_memorandum_gva_query(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "Brazil Memorandum Items Real Activity Gross Value Added Information and communication Previous Year Prices from IMF",
+                "origin": {
+                    "name": "Memorandum Items, Real Activity, Gross Value Added, Information and communication, Previous Year Prices"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "imf_price_or_memorandum_family" in flagged["reasons"]
+
+
+def test_audit_batch_query_quality_flags_oecd_temporary_employment_permanency_row(tmp_path: Path):
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "audit.json"
+
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "direct-1",
+                "query": "United States Share of women in temporary employment by permanency of the job from OECD",
+                "origin": {
+                    "name": "Share of women in temporary employment by permanency of the job"
+                },
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["high_risk_rows"] == 1
+    flagged = report["flagged_rows"][0]
+    assert "oecd_low_viability_family" in flagged["reasons"]
