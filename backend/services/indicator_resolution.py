@@ -61,6 +61,53 @@ _STRICT_PRECISION_CUES = {
     "bond_yield", "money_supply", "policy_rate", "house_prices",
 }
 
+_IMF_GENERIC_DETAIL_MARKERS = {
+    "BCA_NGDPD": {
+        "primary income",
+        "secondary income",
+        "investment income",
+        "reserve assets",
+        "general government",
+        "compensation of employees",
+        "services",
+        "transport",
+        "repair services",
+        "construction",
+        "engineering",
+    },
+    "REV": {
+        "other revenue",
+        "tax",
+        "taxes",
+        "social contributions",
+        "property income",
+        "interest",
+        "capital levies",
+        "cash",
+        "central government",
+        "general government",
+        "budgetary central government",
+        "fiscal year",
+    },
+    "EXP": {
+        "budgetary central government",
+        "central government",
+        "fiscal year",
+        "expense",
+        "education",
+        "lower secondary education",
+    },
+    "PCPIPCH": {
+        "capital city",
+        "special indexes",
+        "communication",
+        "miscellaneous goods",
+        "recreation and culture",
+        "households",
+        "expenditure of households",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
@@ -569,6 +616,16 @@ def is_resolved_indicator_plausible(
         provider_upper in {"STATSCAN", "STATISTICS CANADA"}
         and "labour force characteristics" in candidate_text
     )
+
+    if provider_upper == "IMF":
+        detail_markers = _IMF_GENERIC_DETAIL_MARKERS.get(code_upper)
+        if detail_markers:
+            query_markers = {
+                marker for marker in detail_markers
+                if marker in query_lower
+            }
+            if query_markers and not any(marker in candidate_text for marker in query_markers):
+                return False
 
     if not query_cues:
         return True
@@ -1612,14 +1669,34 @@ async def resolve_indicator_for_fetch(
             has_explicit_code = False
 
     if has_explicit_code:
+        semantic_query = (
+            _effective_original_query(intent)
+            or str(params.get("__semantic_indicator_label") or "").strip()
+            or str(intent.indicators[0] if intent.indicators else "")
+        )
+        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        if is_resolved_indicator_plausible(
+            svc=svc,
+            provider=provider,
+            indicator_query=semantic_query,
+            resolved_code=existing_indicator,
+            resolved_name=semantic_label,
+        ):
+            logger.info(
+                "🔒 Keeping explicit %s indicator code: %s",
+                provider,
+                existing_indicator,
+            )
+            params = _apply_indicator_with_semantic_label(existing_indicator)
+            intent.parameters = params
+            return params
         logger.info(
-            "🔒 Keeping explicit %s indicator code: %s",
+            "🚫 Explicit %s indicator code rejected as implausible for query: %s -> %s",
             provider,
+            semantic_query,
             existing_indicator,
         )
-        params = _apply_indicator_with_semantic_label(existing_indicator)
-        intent.parameters = params
-        return params
+        has_explicit_code = False
 
     # Path 2-4: Dynamic resolution (direct translation -> resolver -> raw query)
     indicator_query = select_indicator_query_for_resolution(svc, intent)
@@ -1672,13 +1749,28 @@ async def resolve_indicator_for_fetch(
             selector = IndicatorSelector()
             selection = await selector.select(selector_query, provider)
             if selection.code:
-                logger.info(
-                    "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
-                    indicator_query, selection.code, selection.source,
-                )
-                params = _apply_indicator_with_semantic_label(selection.code)
-                intent.parameters = params
-                return params
+                selection_name = str(getattr(selection, "name", "") or "")
+                if not is_resolved_indicator_plausible(
+                    svc=svc,
+                    provider=provider,
+                    indicator_query=_effective_original_query(intent) or indicator_query,
+                    resolved_code=selection.code,
+                    resolved_name=selection_name,
+                ):
+                    logger.info(
+                        "🚫 IndicatorSelector candidate rejected as implausible: '%s' → %s (%s)",
+                        indicator_query,
+                        selection.code,
+                        selection_name or "<missing-name>",
+                    )
+                else:
+                    logger.info(
+                        "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
+                        indicator_query, selection.code, selection.source,
+                    )
+                    params = _apply_indicator_with_semantic_label(selection.code)
+                    intent.parameters = params
+                    return params
             if selection.needs_user_choice:
                 logger.info(
                     "🔵 IndicatorSelector needs user choice: %d options",
@@ -1855,8 +1947,11 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
     distilled_original = build_distilled_indicator_query(svc, original_query)
     semantic_indicator_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
+    provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
 
     def _fallback_to_original_or_distilled() -> str:
+        if provider_locked:
+            return original_query or distilled_original or semantic_indicator_label
         return semantic_indicator_label or distilled_original or original_query
 
     # If the indicator looks like a provider-specific code, never use it

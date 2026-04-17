@@ -515,6 +515,36 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_is_resolved_indicator_plausible_rejects_generic_imf_current_account_for_component_query(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="IMF",
+                indicator_query="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+                resolved_code="BCA_NGDPD",
+                resolved_name="Current account balance, percent of GDP",
+            )
+        )
+
+    def test_is_resolved_indicator_plausible_rejects_generic_imf_revenue_for_specific_fiscal_component_query(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="IMF",
+                indicator_query="Germany Revenue General Government Taxes Social contributions Government and Public Sector Finance from IMF",
+                resolved_code="rev",
+                resolved_name="Government revenue, percent of GDP",
+            )
+        )
+
+    def test_is_resolved_indicator_plausible_rejects_generic_imf_cpi_for_specific_component_query(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="IMF",
+                indicator_query="Germany All Items Special Indexes Capital City Consumer Prices Miscellaneous Goods and Services from IMF",
+                resolved_code="PCPIPCH",
+                resolved_name="Inflation rate, average consumer prices",
+            )
+        )
+
     def test_is_resolved_indicator_plausible_rejects_bis_xru_for_reer_query(self) -> None:
         self.assertFalse(
             self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -609,6 +639,26 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(
             selected,
             "US Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD",
+        )
+
+    def test_select_indicator_query_prefers_original_when_provider_locked_semantic_label_is_polluted(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["current account", "primary income", "investment income", "reserve assets"],
+            parameters={
+                "country": "Germany",
+                "__semantic_provider_locked": True,
+                "__semantic_indicator_label": "foreign exchange reserves",
+            },
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+        )
+
+        selected = self.service._select_indicator_query_for_resolution(intent)  # pylint: disable=protected-access
+
+        self.assertEqual(
+            selected,
+            "Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
         )
 
     def test_build_exact_indicator_title_intent_returns_fred_title_match(self) -> None:
@@ -2214,6 +2264,72 @@ class QueryServiceTests(unittest.TestCase):
 
         assert failure is not None
         self.assertIn("growth rate", failure.lower())
+
+    def test_verify_execution_result_rejects_implausible_imf_generic_current_account_series(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = False
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["current account", "primary income", "investment income", "reserve assets"],
+            parameters={"country": "DE", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            intent.originalQuery,
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                intent.originalQuery,
+                intent,
+                execution_plan,
+                [sample_series_with(
+                    source="IMF",
+                    indicator="Current account balance, percent of GDP",
+                    series_id="BCA_NGDPD",
+                    country="Germany",
+                )],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("semantically implausible", failure.lower())
+
+    def test_verify_execution_result_rejects_implausible_imf_generic_revenue_series(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        self.service.settings.use_post_fetch_semantic_judge = False
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["revenue", "general government taxes", "social contributions"],
+            parameters={"country": "DE", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany Revenue General Government Taxes Social contributions Government and Public Sector Finance from IMF",
+        )
+        execution_plan = self.service._build_minimal_execution_plan(  # pylint: disable=protected-access
+            intent.originalQuery,
+            intent,
+        )
+        assert execution_plan is not None
+
+        failure = run(
+            self.service._verify_execution_result(  # pylint: disable=protected-access
+                intent.originalQuery,
+                intent,
+                execution_plan,
+                [sample_series_with(
+                    source="IMF",
+                    indicator="Government revenue, percent of GDP",
+                    series_id="rev",
+                    country="Germany",
+                )],
+            )
+        )
+
+        assert failure is not None
+        self.assertIn("semantically implausible", failure.lower())
 
     def test_verify_execution_result_accepts_semantic_judge_pass(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
@@ -5771,6 +5887,99 @@ class QueryServiceTests(unittest.TestCase):
             "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
         )
 
+    def test_fetch_data_rejects_implausible_imf_selector_pick_and_uses_resolver(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=[
+                "current account",
+                "primary income",
+                "investment income",
+                "reserve assets",
+                "balance of payments",
+            ],
+            parameters={"country": "Germany", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+        )
+
+        class _Resolved:
+            def __init__(self):
+                self.code = "BXIPIR_BP6_EUR"
+                self.confidence = 0.96
+                self.source = "catalog"
+                self.name = "Balance of Payments, Current Account, Primary Income, Investment Income, Reserve Assets"
+                self.provider = "IMF"
+                self.metadata = {"indicator": self.name}
+
+        class _Resolver:
+            def resolve(self, *args, **kwargs):
+                return _Resolved()
+
+        fake_indicator_selector = types.ModuleType("backend.services.indicator_selector")
+
+        class _Selector:
+            async def select(self, *args, **kwargs):
+                from backend.services.indicator_selector import SelectionResult
+
+                return SelectionResult(
+                    code="BCA_NGDPD",
+                    name="Current account balance, percent of GDP",
+                    source="llm_pick",
+                )
+
+        fake_indicator_selector.IndicatorSelector = _Selector
+        from backend.services.indicator_selector import SelectionResult as _SelectionResult
+        fake_indicator_selector.SelectionResult = _SelectionResult
+
+        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.imf_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        indicator_arg = fetch_mock.call_args.kwargs.get("indicator")
+        self.assertNotEqual(indicator_arg, "BCA_NGDPD")
+        self.assertTrue(
+            indicator_arg == "BXIPIR_BP6_EUR" or "primary income" in str(indicator_arg).lower(),
+            indicator_arg,
+        )
+
+    def test_fetch_data_rejects_implausible_explicit_imf_code_and_does_not_keep_it(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["revenue", "general government taxes", "social contributions"],
+            parameters={
+                "country": "Germany",
+                "indicator": "rev",
+                "__semantic_indicator_label": "general government taxes and social contributions revenue",
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Germany Revenue General Government Taxes Social contributions Government and Public Sector Finance from IMF",
+        )
+
+        class _Resolved:
+            def __init__(self):
+                self.code = "Germany Revenue General Government Taxes Social contributions Government and Public Sector Finance from IMF"
+                self.confidence = 0.7
+                self.source = "fallback"
+                self.name = self.code
+                self.provider = "IMF"
+                self.metadata = {"indicator": self.code}
+
+        class _Resolver:
+            def resolve(self, *args, **kwargs):
+                return _Resolved()
+
+        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.imf_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        indicator_arg = fetch_mock.call_args.kwargs.get("indicator")
+        self.assertNotEqual(indicator_arg, "rev")
+
     def test_code_semantic_hint_infers_worldbank_import_ratio_cues(self) -> None:
         hint = self.service._code_semantic_hint(  # pylint: disable=protected-access
             "WORLDBANK",
@@ -6463,6 +6672,92 @@ class QueryServiceTests(unittest.TestCase):
         indicator = fallback_intent.indicators[0]
         # Must NOT be the WorldBank code
         self.assertNotEqual(indicator, "NY.GDP.MKTP.CD")
+
+    def test_try_with_fallback_skips_cross_provider_retry_for_provider_locked_intent(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["current account primary income investment income reserve assets"],
+            parameters={
+                "country": "DE",
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+        )
+
+        with patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
+             patch.object(self.service, "_fetch_data", side_effect=AssertionError("fallback should not execute")):
+            with self.assertRaises(DataNotAvailableError):
+                run(
+                    self.service._try_with_fallback(  # pylint: disable=protected-access
+                        intent,
+                        DataNotAvailableError("primary failed"),
+                    )
+                )
+
+    def test_process_query_provider_locked_imf_partial_multi_indicator_fails_closed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=[
+                "current account",
+                "primary income",
+                "investment income",
+                "reserve assets",
+                "balance of payments",
+            ],
+            parameters={"country": "Germany", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=True,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="IMF", routed_provider="IMF", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_multi_indicator_data", new=AsyncMock(return_value=[sample_series_with(source="IMF", indicator="Current account balance, percent of GDP", series_id="BCA_NGDPD", country="Germany")])), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationQuestions)
+        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
+
+    def test_process_query_provider_locked_imf_implausible_single_series_fails_closed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["Consumer Prices Miscellaneous Goods and Services"],
+            parameters={"country": "Germany", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany All Items Special Indexes Capital City Consumer Prices Miscellaneous Goods and Services from IMF",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="IMF", routed_provider="IMF", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="IMF", indicator="Inflation rate, average consumer prices", series_id="PCPIPCH", country="Germany")])), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationQuestions)
+        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
 
     def test_resolve_concept_for_fallback_from_stored_param(self) -> None:
         """_resolve_concept_for_fallback uses __catalog_concept when available."""

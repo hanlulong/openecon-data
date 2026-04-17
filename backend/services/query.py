@@ -1787,12 +1787,22 @@ class QueryService:
         if structural_failure:
             return structural_failure
 
-        if not self._use_post_fetch_semantic_judge():
-            return None
-
         verification_query = str(
             intent.resolvedQuery or query or intent.originalQuery or ""
         ).strip()
+        if self._has_implausible_top_series(verification_query, data):
+            top_meta = getattr(data[0], "metadata", None) if data else None
+            top_indicator = str(getattr(top_meta, "indicator", "") or "").strip()
+            top_series_id = str(getattr(top_meta, "seriesId", "") or "").strip()
+            rendered = top_indicator or top_series_id or "top fetched series"
+            return (
+                f"The fetched result is semantically implausible for the requested query. "
+                f"Top series: {rendered}."
+            )
+
+        if not self._use_post_fetch_semantic_judge():
+            return None
+
         judgment = await _smj_judge_execution_result(
             self,
             original_query=verification_query,
@@ -3378,6 +3388,20 @@ class QueryService:
         """
         primary_provider = normalize_provider_name(intent.apiProvider)
 
+        explicit_provider_requested = normalize_provider_name(
+            self._detect_explicit_provider(str(intent.originalQuery or "")) or ""
+        )
+        provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
+        if provider_locked or (
+            explicit_provider_requested
+            and explicit_provider_requested == primary_provider
+        ):
+            logger.info(
+                "🔒 Skipping cross-provider fallback for provider-locked intent (%s)",
+                primary_provider,
+            )
+            raise primary_error
+
         # Resolve the concept name for cross-provider fallback.
         concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
 
@@ -4385,12 +4409,44 @@ class QueryService:
             if is_multi_indicator:
                 logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
                 data = await self._fetch_multi_indicator_data(intent)
+                if (
+                    provider_locked
+                    and normalize_provider_name(intent.apiProvider or "") == "IMF"
+                    and len(data or []) < len(intent.indicators or [])
+                ):
+                    logger.info(
+                        "🚫 IMF provider-locked multi-indicator query only resolved %d/%d members; failing closed",
+                        len(data or []),
+                        len(intent.indicators or []),
+                    )
+                    return self._build_no_reliable_indicator_match_response(
+                        conversation_id=conv_id,
+                        intent=intent,
+                        query=query,
+                        processing_steps=tracker.to_list(),
+                    )
             else:
                 # Fetch data with retry logic
                 data = await retry_async(
                     lambda: self._fetch_data(intent),
                     max_attempts=3,
                     initial_delay=1.0,
+                )
+
+            if (
+                provider_locked
+                and normalize_provider_name(intent.apiProvider or "") == "IMF"
+                and data
+                and self._has_implausible_top_series(query, data)
+            ):
+                logger.info(
+                    "🚫 IMF provider-locked query returned an implausible top series; failing closed"
+                )
+                return self._build_no_reliable_indicator_match_response(
+                    conversation_id=conv_id,
+                    intent=intent,
+                    query=query,
+                    processing_steps=tracker.to_list(),
                 )
 
             # Check for empty data (silent failure case) and provide meaningful error
