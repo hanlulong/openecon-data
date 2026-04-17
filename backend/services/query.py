@@ -4411,7 +4411,7 @@ class QueryService:
                 data = await self._fetch_multi_indicator_data(intent)
                 if (
                     provider_locked
-                    and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK"}
+                    and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK", "OECD", "EUROSTAT"}
                     and len(data or []) < len(intent.indicators or [])
                 ):
                     logger.info(
@@ -4435,7 +4435,7 @@ class QueryService:
 
             if (
                 provider_locked
-                and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK"}
+                and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK", "OECD", "EUROSTAT"}
                 and data
                 and self._has_implausible_top_series(query, data)
             ):

@@ -536,6 +536,26 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_is_resolved_indicator_plausible_rejects_oecd_gdp_growth_for_sdg_query(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="OECD",
+                indicator_query="Japan Sustainable Development Goal 08 - Decent work and economic growth from OECD",
+                resolved_code="DSD_NAMAIN1@DF_QNA_EXPENDITURE_GROWTH_OECD",
+                resolved_name="Quarterly real GDP growth - OECD countries",
+            )
+        )
+
+    def test_is_resolved_indicator_plausible_rejects_eurostat_hicp_for_ppp_query(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="Eurostat",
+                indicator_query="France Purchasing power parities price level indices from Eurostat",
+                resolved_code="PRC_HICP_AIND",
+                resolved_name="HICP - annual data (average index and rate of change) (1996-2025)",
+            )
+        )
+
     def test_is_resolved_indicator_plausible_rejects_imf_cpi_for_producer_price_query(self) -> None:
         self.assertFalse(
             self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -6811,6 +6831,64 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
              patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
              patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="World Bank", indicator="School enrollment, primary (% gross)", series_id="SE.PRM.ENRR", country="India")])), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationQuestions)
+        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
+
+    def test_process_query_provider_locked_oecd_implausible_single_series_fails_closed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["DSD_NAMAIN1@DF_QNA_EXPENDITURE_GROWTH_OECD"],
+            parameters={"country": "Japan", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Japan Sustainable Development Goal 08 - Decent work and economic growth from OECD",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="OECD", routed_provider="OECD", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="OECD", indicator="Quarterly real GDP growth - OECD countries", series_id="DSD_NAMAIN1@DF_QNA_EXPENDITURE_GROWTH_OECD", country="Japan")])), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationQuestions)
+        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
+
+    def test_process_query_provider_locked_eurostat_implausible_single_series_fails_closed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["PRC_HICP_AIND"],
+            parameters={"country": "FR", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="France Purchasing power parities price level indices from Eurostat",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="EUROSTAT", routed_provider="EUROSTAT", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="Eurostat", indicator="HICP - annual data (average index and rate of change) (1996-2025)", series_id="PRC_HICP_AIND", country="France")])), \
              patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
             response = run(self.service.process_query(intent.originalQuery))
 

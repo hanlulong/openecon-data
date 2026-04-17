@@ -132,6 +132,21 @@ _WORLDBANK_GENERIC_DETAIL_MARKERS = {
     },
 }
 
+_OECD_GENERIC_DETAIL_MARKERS = {
+    "DSD_NAMAIN1@DF_QNA_EXPENDITURE_GROWTH_OECD": {
+        "sustainable development goal",
+        "good health and well-being",
+        "decent work and economic growth",
+    },
+}
+
+_EUROSTAT_GENERIC_DETAIL_MARKERS = {
+    "PRC_HICP_AIND": {
+        "purchasing power parities",
+        "price level indices",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
@@ -653,6 +668,26 @@ def is_resolved_indicator_plausible(
 
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
         detail_markers = _WORLDBANK_GENERIC_DETAIL_MARKERS.get(code_upper)
+        if detail_markers:
+            query_markers = {
+                marker for marker in detail_markers
+                if marker in query_lower
+            }
+            if query_markers and not any(marker in candidate_text for marker in query_markers):
+                return False
+
+    if provider_upper == "OECD":
+        detail_markers = _OECD_GENERIC_DETAIL_MARKERS.get(code_upper)
+        if detail_markers:
+            query_markers = {
+                marker for marker in detail_markers
+                if marker in query_lower
+            }
+            if query_markers and not any(marker in candidate_text for marker in query_markers):
+                return False
+
+    if provider_upper == "EUROSTAT":
+        detail_markers = _EUROSTAT_GENERIC_DETAIL_MARKERS.get(code_upper)
         if detail_markers:
             query_markers = {
                 marker for marker in detail_markers
