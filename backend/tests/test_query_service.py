@@ -7094,6 +7094,25 @@ class QueryServiceTests(unittest.TestCase):
         result = self.service._select_indicator_query_for_resolution(intent)
         self.assertEqual(result, "inflation rate")
 
+    def test_extract_exchange_rate_params_preserves_currency_pair_from_dimensions(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EXCHANGERATE",
+            indicators=["dynamic"],
+            parameters={
+                "__dimensions": {"Currency Pair": "USD to CHF"},
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only the last 30 days",
+        )
+
+        params = self.service._extract_exchange_rate_params(  # pylint: disable=protected-access
+            dict(intent.parameters),
+            intent,
+        )
+
+        self.assertEqual(params.get("baseCurrency"), "USD")
+        self.assertEqual(params.get("targetCurrency"), "CHF")
+
     def test_get_fallback_providers_passes_country_context_to_resolver(self) -> None:
         class _Resolved:
             confidence = 0.8

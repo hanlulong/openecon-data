@@ -558,6 +558,27 @@ def extract_exchange_rate_params(params: dict, intent: ParsedIntent) -> dict:
     base_currency = params.get("baseCurrency")
     target_currency = params.get("targetCurrency")
 
+    # Pattern 0: preserve an already materialized currency-pair dimension from
+    # multiround state, e.g. {"Currency Pair": "USD to CHF"}.
+    # This is critical for short follow-ups like "show only the last 30 days"
+    # where the raw query contains no currency codes.
+    if not base_currency or not target_currency:
+        dimension_pair = (
+            (params.get("__dimensions") or {}).get("Currency Pair")
+            or (params.get("dimensions") or {}).get("Currency Pair")
+        )
+        if dimension_pair:
+            normalized_pair = str(dimension_pair).upper().strip()
+            pair_match = _CURRENCY_TO_RE.search(normalized_pair) or _CURRENCY_SLASH_RE.search(normalized_pair)
+            if pair_match:
+                base_currency = pair_match.group(1)
+                target_currency = pair_match.group(2)
+                logger.info(
+                    "Extracted currency pair from preserved dimensions: %s -> %s",
+                    base_currency,
+                    target_currency,
+                )
+
     # Pattern 1: "X to Y" (e.g., "USD to EUR", "JPY to USD")
     to_match = _CURRENCY_TO_RE.search(query_text)
     if to_match:
