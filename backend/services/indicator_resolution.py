@@ -1119,6 +1119,7 @@ def apply_concept_provider_override(
                     "core", "headline", "ppp", "constant", "real", "nominal",
                     "growth", "per capita", "pce",
                     "monthly", "quarterly", "weekly", "daily",
+                    "brent", "wti", "west texas intermediate",
                 )
                 _has_variant_hint = any(
                     kw in _query_lower_var for kw in _variant_keywords

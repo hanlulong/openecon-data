@@ -730,6 +730,9 @@ def get_variant_for_query(
         "core": ["core", "less food and energy", "excluding food"],
         "pce": ["pce", "personal consumption expenditures"],
         "headline": ["headline"],
+        "brent": ["brent"],
+        "wti": ["wti", "west texas intermediate"],
+        "west texas intermediate": ["wti", "west texas intermediate"],
     }
 
     # Get primary variant info to exclude discriminators that already

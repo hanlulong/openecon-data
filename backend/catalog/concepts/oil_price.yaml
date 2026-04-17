@@ -47,3 +47,15 @@ providers:
         Use the query text to choose the specific FRED crude-price series.
         Generic oil-price queries can default to WTI; Brent- and WTI-specific
         queries should resolve to their matching FRED crude series.
+    brent:
+      code: DCOILBRENTEU
+      name: "Crude Oil Prices: Brent - Europe"
+      confidence: 0.95
+      coverage: global
+      frequency: daily
+    wti:
+      code: DCOILWTICO
+      name: "Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma"
+      confidence: 0.95
+      coverage: global
+      frequency: daily

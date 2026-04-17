@@ -4,6 +4,7 @@ from backend.services.catalog_service import (
     find_concept_by_term,
     get_best_provider,
     get_indicator_code,
+    get_variant_for_query,
     reload_catalog,
 )
 
@@ -131,3 +132,24 @@ def test_real_effective_exchange_rate_worldbank_fallback_code_exists():
     reload_catalog()
     code = get_indicator_code("real_effective_exchange_rate", "WorldBank")
     assert code == "PX.REX.REER"
+
+
+def test_oil_price_maps_to_oil_price_concept():
+    reload_catalog()
+    concept = find_concept_by_term("Brent oil price")
+    assert concept == "oil_price"
+
+
+def test_oil_price_variant_lookup_prefers_brent_series():
+    reload_catalog()
+    code, confidence = get_variant_for_query("oil_price", "FRED", "Brent oil price")
+    assert code == "DCOILBRENTEU"
+    assert confidence >= 0.9
+
+
+def test_oil_price_variant_lookup_prefers_wti_series():
+    reload_catalog()
+    code, confidence = get_variant_for_query("oil_price", "FRED", "WTI oil price")
+    # WTI already matches the catalog primary, so no variant override is needed.
+    assert code is None
+    assert confidence == 0.0
