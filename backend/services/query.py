@@ -305,7 +305,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-04-15.1"
+    CACHE_KEY_VERSION = "2026-04-17.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -3037,7 +3037,7 @@ class QueryService:
                 or "15 years and over" in lowered
             ):
                 continue
-            if axis_keyword == "sex" and lowered in {"both sexes", "total"}:
+            if axis_keyword == "sex" and lowered in {"both sexes", "total", "total - gender", "all"}:
                 continue
             entities.append(label)
 

@@ -94,6 +94,16 @@ _YOY_CHANGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_RANKING_FOLLOW_UP_RE = re.compile(
+    r"\b(?:top(?:\s+\d+)?|highest|lowest|largest|smallest|best|worst|rank(?:ed|ing)?)\b",
+    re.IGNORECASE,
+)
+
+_ANNUALIZED_RATE_RE = re.compile(
+    r"\bannualized\s+rate\b",
+    re.IGNORECASE,
+)
+
 _TRADE_EXPORT_IMPORT_RE = re.compile(
     r"\b(exports?|imports?)\b",
     re.IGNORECASE,
@@ -358,6 +368,14 @@ class DeltaExtractor:
         if delta:
             return delta
 
+        delta = self._try_annualized_rate_noop(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_ranking_follow_up(query_text, state)
+        if delta:
+            return delta
+
         delta = self._try_comtrade_trade_follow_up(query_text, state)
         if delta:
             return delta
@@ -462,6 +480,80 @@ class DeltaExtractor:
             return None
 
         logger.info("Delta: redundant transform request on already rate-like series → preserve current state")
+        return FollowUpDelta(
+            changed_chart_type=state.chart_type or "line",
+            raw_query=query,
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_ranking_follow_up(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Treat short ranking follow-ups as state-preserving retrieval modifiers.
+
+        This prevents generic ranking prompts like "Show only top 3" from being
+        reinterpreted as decomposition changes by the LLM when the active answer
+        set is a multi-country comparison.
+        """
+        query_text = str(query or "").strip()
+        if not _RANKING_FOLLOW_UP_RE.search(query_text):
+            return None
+        if CountryResolver.detect_all_countries_in_query(query_text):
+            return None
+        if any(
+            getattr(state, field, None)
+            for field in ("dimensions", "decomposition", "trade_flow", "trade_partner", "trade_reporter", "trade_commodity")
+        ):
+            return None
+
+        active_members = list(getattr(state, "active_answer_members", None) or [])
+        recent_members = list(getattr(state, "recent_answer_members", None) or [])
+        scope_count = 0
+        if state.countries:
+            scope_count = len(state.countries)
+        elif state.country:
+            scope_count = 1
+        scope_count = max(scope_count, len(active_members), len(recent_members))
+        if scope_count < 2:
+            return None
+
+        logger.info("Delta: ranking follow-up -> preserve current state and apply ranking projection")
+        return FollowUpDelta(
+            changed_chart_type=state.chart_type or "line",
+            raw_query=query,
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_annualized_rate_noop(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Treat 'annualized rate' phrasing as a no-op when the active series is already rate-like."""
+        if not _ANNUALIZED_RATE_RE.search(query):
+            return None
+
+        indicator_text = str(state.indicator or "").strip().lower()
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        frequency = str(state.frequency or "").strip().lower()
+        resolved_code = str(state.resolved_indicator_code or "").strip().upper()
+
+        already_rate_like = (
+            "growth" in indicator_text
+            or "inflation" in indicator_text
+            or "rate" in indicator_text
+            or provider in {"WORLDBANK", "IMF"}
+            or frequency == "annual"
+            or resolved_code in {"NGDP_RPCH", "NY.GDP.MKTP.KD.ZG", "FP.CPI.TOTL.ZG", "UNE_RT_A"}
+        )
+        if not already_rate_like:
+            return None
+
+        logger.info("Delta: annualized-rate request on already rate-like series -> preserve current state")
         return FollowUpDelta(
             changed_chart_type=state.chart_type or "line",
             raw_query=query,

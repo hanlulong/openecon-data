@@ -269,10 +269,22 @@ def _cue_present(cue: str, observed: dict[str, Any]) -> bool:
     cue_norm = normalize_cue_text(cue)
     if not cue_norm:
         return False
+    cue_aliases = {
+        "male": {"male", "males", "men"},
+        "males": {"male", "males", "men"},
+        "female": {"female", "females", "women"},
+        "females": {"female", "females", "women"},
+        "men": {"male", "males", "men"},
+        "women": {"female", "females", "women"},
+    }
+    aliases = cue_aliases.get(cue_norm, {cue_norm})
     if cue_norm in {str(tag).lower() for tag in observed.get("semantic_tags", [])}:
         return True
     cue_text = str(observed.get("cue_text") or "")
-    return bool(re.search(rf"(?<![a-z0-9]){re.escape(cue_norm)}(?![a-z0-9])", cue_text))
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", cue_text)
+        for alias in aliases
+    )
 
 
 def extract_observed(resp_json: dict[str, Any]) -> dict[str, Any]:

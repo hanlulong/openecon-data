@@ -16,6 +16,9 @@ synonyms:
     - total output
     - economic production
     - national income
+    - ppp gdp
+    - gdp ppp
+    - gdp purchasing power parity
 
 explicit_exclusions:
   - consumer price
@@ -29,6 +32,18 @@ providers:
       code: NY.GDP.MKTP.CD
       name: "GDP (current US$)"
       confidence: 0.95
+      coverage: global
+      frequency: annual
+    ppp:
+      code: NY.GDP.MKTP.PP.CD
+      name: "GDP, PPP (current international $)"
+      confidence: 0.95
+      coverage: global
+      frequency: annual
+    ppp_constant:
+      code: NY.GDP.MKTP.PP.KD
+      name: "GDP, PPP (constant 2021 international $)"
+      confidence: 0.92
       coverage: global
       frequency: annual
 

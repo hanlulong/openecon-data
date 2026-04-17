@@ -408,6 +408,24 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.clarificationNeeded)
         self.assertEqual(len(response.data or []), 1)
 
+    def test_build_exact_indicator_title_intent_rejects_generic_suffix_only_match(self) -> None:
+        class _Lookup:
+            def search(self, text, provider=None, limit=5):
+                if provider == "FRED":
+                    return [
+                        {
+                            "provider": "FRED",
+                            "code": "PCETRIM12M159SFRBDAL",
+                            "name": "Trimmed Mean PCE Inflation Rate",
+                        }
+                    ]
+                return []
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_exact_indicator_title_intent("Germany inflation rate")  # pylint: disable=protected-access
+
+        self.assertIsNone(intent)
+
     def test_build_explicit_provider_code_intent_returns_provider_locked_code(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "NER_CBS_PSD_XDC from IMF"

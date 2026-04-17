@@ -1733,13 +1733,18 @@ async def fetch_data(
             # we're now routing to WorldBank), resolve via the catalog concept
             # name instead (e.g. "gdp growth") so the new provider can find
             # its own indicator code.
+            _saved_query = intent.originalQuery
             _resolution_query = _indicator_name
             _is_code = _indicator_name and any(
                 svc._looks_like_provider_indicator_code(p, _indicator_name)
                 for p in ALL_PROVIDERS
             )
             if _is_code:
-                from ..services.catalog_service import find_concepts_by_code, is_provider_available
+                from ..services.catalog_service import (
+                    find_concept_by_term,
+                    find_concepts_by_code,
+                    is_provider_available,
+                )
                 _all_concepts: list[str] = []
                 for _p in ALL_PROVIDERS:
                     _concepts = find_concepts_by_code(_p, _indicator_name)
@@ -1747,12 +1752,29 @@ async def fetch_data(
                         _all_concepts = _concepts
                         break
                 if _all_concepts:
-                    # Prefer a concept available on the TARGET provider.
+                    # First prefer a concept that matches the semantic label or
+                    # the raw follow-up text, then prefer one available on the
+                    # target provider.
                     # e.g., PRC_HICP_AIND maps to both "hicp_inflation"
                     # (Eurostat-only) and "inflation" (WorldBank/FRED/etc).
                     # When switching to WorldBank, pick "inflation".
                     _best_concept = _all_concepts[0]
                     _target_provider = provider  # already set to the new provider
+                    _context_queries = []
+                    _semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+                    if _semantic_label:
+                        _context_queries.append(_semantic_label)
+                    if _saved_query:
+                        _context_queries.append(str(_saved_query))
+                    for _context_query in _context_queries:
+                        _context_concept = find_concept_by_term(_context_query)
+                        if (
+                            _context_concept
+                            and _context_concept in _all_concepts
+                            and is_provider_available(_context_concept, _target_provider)
+                        ):
+                            _best_concept = _context_concept
+                            break
                     for _c in _all_concepts:
                         if is_provider_available(_c, _target_provider):
                             _best_concept = _c
@@ -1769,7 +1791,6 @@ async def fetch_data(
                     # resolution uses the concept name, not the code
                     intent.indicators = [_resolution_query]
 
-            _saved_query = intent.originalQuery
             intent.originalQuery = _resolution_query
             logger.info(
                 "Delta-resolved: indicator changed to '%s', resolving (query overridden from '%s')",

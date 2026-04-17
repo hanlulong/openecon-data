@@ -943,6 +943,28 @@ class TestDeltaExtractor:
         assert delta.delta_type == "additive_country"
         assert delta.added_countries == ["GB"]
 
+    def test_ranking_follow_up_preserves_multi_country_state(self, extractor):
+        state = ConversationState(
+            indicator="GDP growth rate",
+            countries=["US", "DE", "JP"],
+            provider="IMF",
+        )
+        delta = extractor.extract("Show only top 3", state)
+        assert delta is not None
+        assert delta.delta_type == "chart_change"
+        assert delta.changed_chart_type == "line"
+
+    def test_annualized_rate_follow_up_preserves_already_rate_like_series(self, extractor):
+        state = ConversationState(
+            indicator="inflation rate",
+            countries=["US", "GB"],
+            provider="WORLDBANK",
+        )
+        delta = extractor.extract("Convert to annualized rate", state)
+        assert delta is not None
+        assert delta.delta_type == "chart_change"
+        assert delta.changed_chart_type == "line"
+
     def test_country_and_provider_follow_up_with_indicator_reaffirmation(self, extractor):
         state = ConversationState(indicator="GDP", country="US", provider="FRED")
         delta = extractor.extract("Japan GDP from World Bank", state)

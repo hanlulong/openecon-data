@@ -215,9 +215,7 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         if not normalized_name or len(normalized_name) < min_name_len:
             continue
         if any(
-            normalized_query == normalized_name
-            or normalized_query.endswith(normalized_name)
-            or normalized_name.endswith(normalized_query)
+            _is_close_exact_title_match(normalized_query, normalized_name)
             for normalized_query in (
                 re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
                 for candidate_query in search_inputs
@@ -263,9 +261,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             if not normalized_name or len(normalized_name) < min_name_len:
                 continue
             if any(
-                normalized_query == normalized_name
-                or normalized_query.endswith(normalized_name)
-                or normalized_name.endswith(normalized_query)
+                _is_close_exact_title_match(normalized_query, normalized_name)
                 for normalized_query in (
                     re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
                     for candidate_query in search_inputs
@@ -364,6 +360,36 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
                 queue.append(suffix)
 
     return search_inputs
+
+
+def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> bool:
+    """Return True only for genuinely close provider-title matches.
+
+    The old implementation allowed any provider title that merely *ended* with
+    a short generic phrase such as "inflation rate", which caused false exact-
+    title shortcuts like:
+
+    - "Germany inflation rate" -> FRED "Trimmed Mean PCE Inflation Rate"
+
+    Exact-title matching should stay strict. We still allow country/provider
+    wrappers around a pasted title, but we reject generic suffix-only matches
+    unless the query is almost the whole title.
+    """
+    if not normalized_query or not normalized_name:
+        return False
+    if normalized_query == normalized_name:
+        return True
+
+    query_tokens = normalized_query.split()
+    name_tokens = normalized_name.split()
+    token_delta = abs(len(query_tokens) - len(name_tokens))
+    shared_tokens = len(set(query_tokens) & set(name_tokens))
+    overlap_ratio = shared_tokens / max(1, min(len(query_tokens), len(name_tokens)))
+
+    if normalized_query.endswith(normalized_name) or normalized_name.endswith(normalized_query):
+        return len(query_tokens) >= 3 and token_delta <= 1 and overlap_ratio >= 0.8
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +513,14 @@ def code_semantic_hint(provider: str, code: str) -> str:
             hints.extend(["producer price", "ppi"])
         if code_upper in {"IRLT", "IRST"} or "IRLT" in code_upper:
             hints.extend(["long-term interest rate", "bond yield"])
+
+    if provider_norm == "EUROSTAT":
+        if "UNE_RT" in code_upper or "UNEMP" in code_upper:
+            hints.extend(["unemployment rate"])
+        if "HICP" in code_upper or "PRC_HICP" in code_upper:
+            hints.extend(["consumer price", "inflation", "hicp"])
+        if "GDP" in code_upper or "NAMA_10_GDP" in code_upper:
+            hints.extend(["gdp"])
 
     return " ".join(dict.fromkeys(hints))
 

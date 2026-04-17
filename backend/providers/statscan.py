@@ -577,16 +577,18 @@ class StatsCanProvider(BaseProvider):
         """
         normalized_pid = self._normalize_metadata_product_id(product_id)
         metadata = await self._get_cube_metadata(normalized_pid)
-        dim_keyword_lower = dim_keyword.lower()
+        dim_keywords = self._decomposition_axis_keywords(dim_keyword)
 
-        for dim in metadata.get("dimension", []):
-            dim_name = dim.get("dimensionNameEn", "").lower()
-            if dim_keyword_lower not in dim_name:
-                continue
-            members = dim.get("member", [])
-            result = self._find_member_id_by_keywords(members, [search_term])
-            if result is not None:
-                return result
+        for keyword in dim_keywords:
+            keyword_lower = keyword.lower()
+            for dim in metadata.get("dimension", []):
+                dim_name = dim.get("dimensionNameEn", "").lower()
+                if keyword_lower not in dim_name:
+                    continue
+                members = dim.get("member", [])
+                result = self._find_member_id_by_keywords(members, [search_term])
+                if result is not None:
+                    return result
 
         logger.debug(
             f"resolve_member_id: no match for '{search_term}' in dimension "
@@ -617,23 +619,25 @@ class StatsCanProvider(BaseProvider):
         """
         normalized_pid = self._normalize_metadata_product_id(product_id)
         metadata = await self._get_cube_metadata(normalized_pid)
-        dim_keyword_lower = dim_keyword.lower()
+        dim_keywords = self._decomposition_axis_keywords(dim_keyword)
 
-        for dim in metadata.get("dimension", []):
-            dim_name = dim.get("dimensionNameEn", "").lower()
-            if dim_keyword_lower not in dim_name:
-                continue
-            members = dim.get("member", [])
-            if parent_id is not None:
+        for keyword in dim_keywords:
+            keyword_lower = keyword.lower()
+            for dim in metadata.get("dimension", []):
+                dim_name = dim.get("dimensionNameEn", "").lower()
+                if keyword_lower not in dim_name:
+                    continue
+                members = dim.get("member", [])
+                if parent_id is not None:
+                    return [
+                        (m["memberId"], m.get("memberNameEn", ""))
+                        for m in members
+                        if m.get("parentMemberId") == parent_id
+                    ]
                 return [
                     (m["memberId"], m.get("memberNameEn", ""))
                     for m in members
-                    if m.get("parentMemberId") == parent_id
                 ]
-            return [
-                (m["memberId"], m.get("memberNameEn", ""))
-                for m in members
-            ]
         return []
 
     @staticmethod
