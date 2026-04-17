@@ -498,6 +498,25 @@ class ComtradeProvider(BaseProvider):
                 response.raise_for_status()
                 payload = response.json()
                 break  # Success, exit retry loop
+            except (httpx.ReadTimeout, httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAY_BASE * (2 ** attempt)
+                    logger.warning(
+                        "Transient Comtrade error for %s (%s), attempt %d/%d. Retrying in %ss...",
+                        reporter_raw,
+                        type(e).__name__,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(
+                    f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
+                )
+                raise DataNotAvailableError(
+                    f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
+                ) from e
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == RATE_LIMIT_STATUS and attempt < MAX_RETRIES - 1:
                     # Rate limited: wait and retry with exponential backoff

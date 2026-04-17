@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -326,6 +327,50 @@ class ProviderTests(unittest.TestCase):
         indicators = {series.metadata.indicator for series in result}
         self.assertIn("Exports - All Commodities", indicators)
         self.assertIn("Imports - All Commodities", indicators)
+
+    def test_comtrade_fetch_single_reporter_retries_timeout_then_succeeds(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+
+        class _FlakyClient:
+            def __init__(self):
+                self.calls = 0
+
+            async def get(self, url, *, params=None, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise httpx.ReadTimeout("timed out", request=httpx.Request("GET", url))
+                return MockAsyncResponse(
+                    {
+                        "data": [
+                            {
+                                "period": 2020,
+                                "periodDesc": "2020",
+                                "reporterDesc": "France",
+                                "partnerDesc": "China",
+                                "flowDesc": "Exports",
+                                "primaryValue": 200,
+                                "cmdDesc": "All Commodities",
+                            }
+                        ]
+                    },
+                    request_url=url,
+                )
+
+        result = run(
+            provider._fetch_single_reporter_data(  # pylint: disable=protected-access
+                _FlakyClient(),
+                "France",
+                "156",
+                "TOTAL",
+                "X",
+                "2020",
+                "A",
+            )
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "France")
+        self.assertEqual(result[0].data[0].value, 200)
 
     def test_comtrade_fetch_trade_balance(self) -> None:
         provider = ComtradeProvider(api_key="demo")
