@@ -3606,6 +3606,64 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
         self.assertEqual(fetched_intent.parameters.get("__statscan_product_id"), "14100287")
 
+    def test_process_query_locks_statscan_for_canada_scoped_structural_route(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["unemployment rate"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            confidence=0.8,
+            originalQuery="Canada unemployment rate",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="OECD",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        route_decision = RoutingDecision(
+            provider="StatsCan",
+            confidence=0.88,
+            match_type="catalog",
+            reasoning="Canada catalog match",
+            matched_pattern="catalog:unemployment:StatsCan",
+        )
+        fetched = [sample_series_with(
+            source="Statistics Canada",
+            indicator="unemployment rate",
+            country="Canada",
+            series_id="2062815",
+        )]
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_recover_from_uncertain_match", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=(fetched, None)), \
+             patch.object(self.service, "_build_uncertain_result_clarification", return_value=None), \
+             patch.object(self.service.unified_router, "route", return_value=route_decision), \
+             patch.object(
+                 self.service,
+                 "_fetch_data",
+                 new_callable=AsyncMock,
+                 return_value=fetched,
+             ) as fetch_mock:
+            response = run(self.service.process_query("Canada unemployment rate"))
+
+        self.assertFalse(response.error)
+        fetch_mock.assert_awaited_once()
+        fetched_intent = fetch_mock.await_args.args[0]
+        self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
+        self.assertTrue(fetched_intent.parameters.get("__semantic_provider_locked"))
+
     def test_process_query_persists_answer_members_after_direct_standard_success(self) -> None:
         self.service.settings.use_staged_state_commit = True
         conv_id = conversation_manager.get_or_create("conv-standard-direct-answer-members")

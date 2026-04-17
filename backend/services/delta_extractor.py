@@ -162,6 +162,19 @@ _INDICATOR_NOISE_WORDS = {
     "metric", "metrics", "indicator", "indicators",
 }
 
+_INDICATOR_ALIAS_EQUIVALENTS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "gdp": (("gross", "domestic", "product"),),
+    "gni": (("gross", "national", "income"),),
+    "cpi": (("consumer", "price"), ("consumer", "prices")),
+    "ppi": (("producer", "price"), ("producer", "prices")),
+    "hicp": (
+        ("harmonised", "consumer", "prices"),
+        ("harmonized", "consumer", "prices"),
+    ),
+    "reer": (("real", "effective", "exchange", "rate"),),
+    "neer": (("nominal", "effective", "exchange", "rate"),),
+}
+
 
 class DeltaExtractor:
     """Extract FollowUpDelta from a query given conversation state.
@@ -967,6 +980,14 @@ Output the query_type and any changed fields as JSON."""
             for token in re.findall(r"[a-zA-Z]+", str(text or "").lower())
             if token not in _FILLER_WORDS and token not in _INDICATOR_NOISE_WORDS and len(token) > 1
         }
+        expanded_tokens = set(tokens)
+        for alias, phrase_variants in _INDICATOR_ALIAS_EQUIVALENTS.items():
+            if alias in tokens:
+                for phrase in phrase_variants:
+                    expanded_tokens.update(phrase)
+            if any(set(phrase).issubset(tokens) for phrase in phrase_variants):
+                expanded_tokens.add(alias)
+        tokens = expanded_tokens
         return tokens
 
     def _try_country_provider_follow_up_with_indicator_reaffirmation(

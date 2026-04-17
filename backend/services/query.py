@@ -4198,6 +4198,32 @@ class QueryService:
                         if llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", ""):
                             intent.apiProvider = routed
                             logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
+                        # Country-specific provider guard: when the structural
+                        # router selects StatsCan for a Canada-scoped catalog /
+                        # country match, keep the execution pinned to StatsCan
+                        # so downstream ambiguity stages do not drift to OECD or
+                        # other broad providers for the same national-statistics
+                        # request.
+                        if (
+                            routed == "STATSCAN"
+                            and router_decision.match_type in {"catalog", "country"}
+                        ):
+                            if intent.parameters is None:
+                                intent.parameters = {}
+                            target_countries = intent.parameters.get("countries")
+                            if not target_countries:
+                                target_countries = [intent.parameters.get("country")] if intent.parameters.get("country") else []
+                            normalized_targets = {
+                                self._normalize_country_to_iso2(country) or str(country or "").upper()
+                                for country in target_countries
+                                if country
+                            }
+                            if normalized_targets == {"CA"}:
+                                intent.parameters["__semantic_provider_locked"] = True
+                                logger.info(
+                                    "🔒 Locked StatsCan provider for Canada-scoped structural route (%s)",
+                                    router_decision.match_type,
+                                )
                 except Exception as e:
                     logger.debug("UnifiedRouter override failed: %s", e)
 

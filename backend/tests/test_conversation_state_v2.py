@@ -478,6 +478,12 @@ class TestMergeState:
         merged = merge_state(state, delta)
         assert merged.chart_type == "bar"
 
+    def test_chart_type_alias_index_normalizes_to_line(self):
+        state = ConversationState(indicator="GDP", chart_type="scatter")
+        delta = FollowUpDelta(changed_chart_type="index")
+        merged = merge_state(state, delta)
+        assert merged.chart_type == "line"
+
     def test_raw_query_updates_original(self):
         state = ConversationState(
             indicator="GDP",
@@ -944,6 +950,19 @@ class TestDeltaExtractor:
         assert delta.delta_type == "compound_change"
         assert delta.changed_country == "JP"
         assert delta.changed_provider == "WORLDBANK"
+
+    def test_country_and_provider_follow_up_with_indicator_reaffirmation_handles_common_acronyms(self, extractor):
+        state = ConversationState(
+            indicator="Gross Domestic Product",
+            country="US",
+            provider="FRED",
+        )
+        delta = extractor.extract("India GDP from World Bank", state)
+        assert delta is not None
+        assert delta.delta_type == "compound_change"
+        assert delta.changed_country == "IN"
+        assert delta.changed_provider == "WORLDBANK"
+        assert delta.changed_indicator is None
 
     def test_multi_country_replacement(self, extractor):
         state = ConversationState(indicator="GDP", country="US")

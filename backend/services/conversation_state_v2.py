@@ -562,6 +562,36 @@ class FollowUpDelta(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_ALLOWED_CHART_TYPES = {"line", "bar", "scatter", "table"}
+
+
+def _normalize_chart_type(value: Optional[str]) -> Optional[str]:
+    chart_type = str(value or "").strip().lower()
+    if not chart_type:
+        return None
+    if chart_type in _ALLOWED_CHART_TYPES:
+        return chart_type
+    alias_map = {
+        "line chart": "line",
+        "bar chart": "bar",
+        "scatter plot": "scatter",
+        "scatterplot": "scatter",
+        "table view": "table",
+        # The LLM occasionally emits semantic display modes like "index" or
+        # "level" into the chart slot. These are not valid chart types, but
+        # mapping them to a stable line chart prevents hard failures while the
+        # underlying series stays intact.
+        "index": "line",
+        "level": "line",
+        "index level": "line",
+    }
+    return alias_map.get(chart_type)
+
+
+# ---------------------------------------------------------------------------
 # merge_state
 # ---------------------------------------------------------------------------
 
@@ -590,7 +620,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             start_date=delta.changed_start_date,
             end_date=delta.changed_end_date,
             frequency=delta.changed_frequency,
-            chart_type=delta.changed_chart_type,
+            chart_type=_normalize_chart_type(delta.changed_chart_type),
             decomposition=delta.changed_decomposition or decomposition_from_dimensions,
             trade_flow=delta.changed_trade_flow,
             trade_reporter=delta.changed_trade_reporter,
@@ -742,7 +772,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
 
     # --- Chart type ---
     if delta.changed_chart_type:
-        merged.chart_type = delta.changed_chart_type
+        merged.chart_type = _normalize_chart_type(delta.changed_chart_type) or merged.chart_type
 
     # --- Decomposition ---
     if delta.changed_decomposition is not None:
