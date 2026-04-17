@@ -4411,11 +4411,11 @@ class QueryService:
                 data = await self._fetch_multi_indicator_data(intent)
                 if (
                     provider_locked
-                    and normalize_provider_name(intent.apiProvider or "") == "IMF"
+                    and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK"}
                     and len(data or []) < len(intent.indicators or [])
                 ):
                     logger.info(
-                        "🚫 IMF provider-locked multi-indicator query only resolved %d/%d members; failing closed",
+                        "🚫 Provider-locked query only resolved %d/%d members; failing closed",
                         len(data or []),
                         len(intent.indicators or []),
                     )
@@ -4435,12 +4435,12 @@ class QueryService:
 
             if (
                 provider_locked
-                and normalize_provider_name(intent.apiProvider or "") == "IMF"
+                and normalize_provider_name(intent.apiProvider or "") in {"IMF", "WORLDBANK", "WORLD BANK"}
                 and data
                 and self._has_implausible_top_series(query, data)
             ):
                 logger.info(
-                    "🚫 IMF provider-locked query returned an implausible top series; failing closed"
+                    "🚫 Provider-locked query returned an implausible top series; failing closed"
                 )
                 return self._build_no_reliable_indicator_match_response(
                     conversation_id=conv_id,

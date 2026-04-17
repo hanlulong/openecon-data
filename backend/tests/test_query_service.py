@@ -506,6 +506,36 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_is_resolved_indicator_plausible_rejects_worldbank_primary_enrollment_for_tertiary_teachers(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="WorldBank",
+                indicator_query="India Teachers in tertiary education ISCED 5 programmes female (number) from World Bank",
+                resolved_code="SE.PRM.ENRR",
+                resolved_name="School enrollment, primary (% gross)",
+            )
+        )
+
+    def test_is_resolved_indicator_plausible_rejects_worldbank_trade_share_for_terms_of_trade(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="WorldBank",
+                indicator_query="United States Terms of Trade from World Bank",
+                resolved_code="NE.TRD.GNFS.ZS",
+                resolved_name="Trade (% of GDP)",
+            )
+        )
+
+    def test_is_resolved_indicator_plausible_rejects_worldbank_gov_consumption_for_lower_secondary_expenditure(self) -> None:
+        self.assertFalse(
+            self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
+                provider="WorldBank",
+                indicator_query="India Government expenditure on lower secondary education PPP$ (millions) from World Bank",
+                resolved_code="NE.CON.GOVT.ZS",
+                resolved_name="General government final consumption expenditure (% of GDP)",
+            )
+        )
+
     def test_is_resolved_indicator_plausible_rejects_imf_cpi_for_producer_price_query(self) -> None:
         self.assertFalse(
             self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -6752,6 +6782,35 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
              patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
              patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="IMF", indicator="Inflation rate, average consumer prices", series_id="PCPIPCH", country="Germany")])), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNotNone(response.clarificationQuestions)
+        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
+
+    def test_process_query_provider_locked_worldbank_implausible_single_series_fails_closed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["Teachers in tertiary education ISCED 5 programmes, female (number)"],
+            parameters={"country": "IN", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="India Teachers in tertiary education ISCED 5 programmes female (number) from World Bank",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="WORLDBANK", routed_provider="WORLDBANK", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="World Bank", indicator="School enrollment, primary (% gross)", series_id="SE.PRM.ENRR", country="India")])), \
              patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
             response = run(self.service.process_query(intent.originalQuery))
 

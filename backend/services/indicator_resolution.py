@@ -108,6 +108,30 @@ _IMF_GENERIC_DETAIL_MARKERS = {
     },
 }
 
+_WORLDBANK_GENERIC_DETAIL_MARKERS = {
+    "SE.PRM.ENRR": {
+        "tertiary education",
+        "isced 5",
+        "teachers",
+        "teacher",
+        "literacy",
+        "functional difficulty",
+        "post-secondary non-tertiary",
+        "school life expectancy",
+        "attrition",
+        "secondary education",
+        "15 to 29 years",
+    },
+    "NE.TRD.GNFS.ZS": {
+        "terms of trade",
+    },
+    "NE.CON.GOVT.ZS": {
+        "lower secondary education",
+        "education expenditure",
+        "ppp",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
@@ -619,6 +643,16 @@ def is_resolved_indicator_plausible(
 
     if provider_upper == "IMF":
         detail_markers = _IMF_GENERIC_DETAIL_MARKERS.get(code_upper)
+        if detail_markers:
+            query_markers = {
+                marker for marker in detail_markers
+                if marker in query_lower
+            }
+            if query_markers and not any(marker in candidate_text for marker in query_markers):
+                return False
+
+    if provider_upper in {"WORLDBANK", "WORLD BANK"}:
+        detail_markers = _WORLDBANK_GENERIC_DETAIL_MARKERS.get(code_upper)
         if detail_markers:
             query_markers = {
                 marker for marker in detail_markers
