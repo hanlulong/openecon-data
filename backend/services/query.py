@@ -2329,6 +2329,31 @@ class QueryService:
             member_countries = self._member_country_list(member)
             member_scope = ", ".join(member_countries) or str(getattr(member, "provider", "") or "member")
 
+            async def _recover_member_with_fallback(primary_error: Exception) -> Optional[List[NormalizedData]]:
+                try:
+                    fallback_data = await self._try_with_fallback(member_intent, primary_error)
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "Collective delta fallback failed for %s via %s: %s",
+                        member_scope,
+                        member_intent.apiProvider,
+                        fallback_exc,
+                    )
+                    return None
+
+                if fallback_data:
+                    fallback_provider = normalize_provider_name(
+                        str(getattr(fallback_data[0].metadata, "source", "") or "")
+                    ) if fallback_data else ""
+                    if fallback_provider:
+                        member_intent.apiProvider = fallback_provider
+                    logger.info(
+                        "Collective delta fallback succeeded for %s via %s",
+                        member_scope,
+                        member_intent.apiProvider,
+                    )
+                return fallback_data
+
             try:
                 member_data = await retry_async(
                     lambda intent=member_intent: self._fetch_data(intent),
@@ -2342,12 +2367,20 @@ class QueryService:
                     member_intent.apiProvider,
                     exc,
                 )
-                failed_members.append(member_scope)
-                continue
+                member_data = await _recover_member_with_fallback(exc)
+                if not member_data:
+                    failed_members.append(member_scope)
+                    continue
 
             if not member_data:
-                failed_members.append(member_scope)
-                continue
+                member_data = await _recover_member_with_fallback(
+                    DataNotAvailableError(
+                        f"No data returned for preserved member {member_scope}"
+                    )
+                )
+                if not member_data:
+                    failed_members.append(member_scope)
+                    continue
 
             member_data = self._rerank_data_by_query_relevance(member_query, member_data)
             if self._is_ranking_query(member_query):

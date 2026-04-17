@@ -4142,6 +4142,74 @@ class QueryServiceTests(unittest.TestCase):
             {("FRED", "US"), ("World Bank", "CN"), ("Eurostat", "DE")},
         )
 
+    def test_collective_answer_member_delta_uses_cross_provider_fallback_when_member_fetch_fails(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-answer-members-fallback")
+        state = ConversationState(
+            indicator="GDP growth rate",
+            turn_number=5,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=5,
+                ),
+            ],
+            recent_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="United States",
+                    countries=["United States"],
+                    source_turn=5,
+                ),
+            ],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP per capita",
+            delta_type="indicator_switch",
+            raw_query="Switch to GDP per capita",
+        )
+        fallback_data = [
+            sample_series_with(
+                source="IMF",
+                indicator="GDP per capita",
+                country="United States",
+                series_id="NGDPDPC",
+            )
+        ]
+
+        with patch.object(
+            self.service,
+            "_fetch_data",
+            new=AsyncMock(side_effect=DataNotAvailableError("worldbank timeout")),
+        ), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(return_value=fallback_data)) as fallback_mock, \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Switch to GDP per capita",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.error)
+        fallback_mock.assert_awaited_once()
+        self.assertEqual(
+            [(series.metadata.source, series.metadata.seriesId) for series in (response.data or [])],
+            [("IMF", "NGDPDPC")],
+        )
+
     def test_collective_answer_member_delta_add_back_prefers_latest_semantic_match(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-collective-answer-members-add-back-latest-match")
         state = ConversationState(
