@@ -1,0 +1,49 @@
+concept: oil_price
+category: commodities
+domain: energy
+
+description: |
+  Global crude oil spot prices. In our current provider set, FRED carries
+  strong direct spot-price series for West Texas Intermediate (WTI) and
+  Brent crude, which are the dominant direct-answer interpretations for
+  generic oil price queries.
+
+synonyms:
+  primary:
+    - oil price
+    - crude oil price
+    - petroleum price
+    - oil spot price
+    - crude oil spot price
+  secondary:
+    - brent oil price
+    - brent crude price
+    - brent crude oil price
+    - wti oil price
+    - wti crude price
+    - west texas intermediate oil price
+    - oil barrel price
+
+not_available:
+  - WorldBank
+  - IMF
+  - OECD
+  - Eurostat
+  - StatsCan
+  - Comtrade
+  - BIS
+  - CoinGecko
+  - ExchangeRate
+
+providers:
+  FRED:
+    primary:
+      code: DCOILWTICO
+      name: "Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma"
+      confidence: 0.95
+      coverage: global
+      frequency: daily
+      notes: |
+        Use the query text to choose the specific FRED crude-price series.
+        Generic oil-price queries can default to WTI; Brent- and WTI-specific
+        queries should resolve to their matching FRED crude series.

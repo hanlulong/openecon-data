@@ -198,6 +198,35 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(has_parsing, f"Expected parsing step, got: {step_names}")
         self.assertTrue(has_fetching, f"Expected fetching step, got: {step_names}")
 
+    def test_process_query_oil_price_overrides_worldbank_to_fred(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["oil price"],
+            parameters={"country": "1W"},
+            clarificationNeeded=False,
+            originalQuery="oil price",
+        )
+
+        def fake_fetch(resolved_intent: ParsedIntent):
+            self.assertEqual(resolved_intent.apiProvider, "FRED")
+            return [sample_series_with(
+                indicator="Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma",
+                series_id="DCOILWTICO",
+                source="FRED",
+                unit="Dollars per Barrel",
+            )]
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
+             patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
+             patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
+             patch.object(self.service, "_fetch_data", side_effect=fake_fetch):
+            response = run(self.service.process_query("oil price"))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertEqual(response.intent.apiProvider, "FRED")
+        self.assertEqual(response.data[0].metadata.seriesId, "DCOILWTICO")
+
     def test_select_indicator_query_uses_original_when_cues_mismatch(self) -> None:
         intent = ParsedIntent(
             apiProvider="World Bank",

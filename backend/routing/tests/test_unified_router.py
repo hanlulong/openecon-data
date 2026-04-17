@@ -401,6 +401,21 @@ class TestUnifiedRouter:
         decision = router.route("Global commodity price index 2019-2024")
         assert decision.provider == "IMF"
 
+    def test_oil_price_routes_to_fred_via_catalog(self, router):
+        """Generic oil spot-price queries should prefer FRED crude-price series."""
+        decision = router.route("oil price")
+        assert decision.provider == "FRED"
+
+    def test_brent_oil_price_routes_to_fred_via_catalog(self, router):
+        """Brent-specific oil price queries should route to FRED."""
+        decision = router.route("Brent oil price")
+        assert decision.provider == "FRED"
+
+    def test_wti_oil_price_routes_to_fred_via_catalog(self, router):
+        """WTI-specific oil price queries should route to FRED."""
+        decision = router.route("WTI oil price")
+        assert decision.provider == "FRED"
+
     def test_budget_balance_routes_to_imf(self, router):
         """Budget balance queries use IMF."""
         decision = router.route("Government budget balance")
