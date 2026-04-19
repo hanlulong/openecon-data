@@ -20,9 +20,9 @@ SAMPLER_VERSION = 'ambiguity_sampler_v1'
 
 FAMILY_TEMPLATES = {
     'transform_ambiguity': [
-        ('US GDP', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
+        ('US GDP', 'direct_answer', ['direct_answer_correct']),
         ('Canada employment', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
-        ('Germany inflation', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
+        ('Germany inflation', 'direct_answer', ['direct_answer_correct']),
     ],
     'provider_ambiguity': [
         ('Japan GDP growth rate', 'direct_answer', ['direct_answer_correct']),
@@ -35,8 +35,8 @@ FAMILY_TEMPLATES = {
         ('GDP in Europe', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
     ],
     'decomposition_ambiguity': [
-        ('Canada unemployment by age', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
-        ('Ontario employment by gender', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
+        ('Canada unemployment by age', 'direct_answer', ['direct_answer_correct']),
+        ('Ontario employment by gender', 'direct_answer', ['direct_answer_correct']),
         ('France inflation by category', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
     ],
     'terminology_ambiguity': [
