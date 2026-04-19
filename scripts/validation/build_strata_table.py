@@ -67,19 +67,56 @@ AMBIGUITY_ALLOCATION = {
 
 
 def direct_provider_allocation(rows: list[tuple[str, int]], total: int, floor: int) -> dict[str, int]:
-    providers = [provider for provider, _ in rows]
-    allocation = {provider: floor for provider in providers}
+    capacities = {provider: int(count) for provider, count in rows}
+    total_capacity = sum(capacities.values())
+    if total > total_capacity:
+        raise ValueError(f'total {total} exceeds provider capacity {total_capacity}')
+
+    allocation = {
+        provider: min(floor, capacity)
+        for provider, capacity in capacities.items()
+    }
+
     remaining = total - sum(allocation.values())
-    weight_total = sum(count for _, count in rows)
-    fractional = []
-    for provider, count in rows:
-        exact = remaining * (count / weight_total) if weight_total else 0.0
-        whole = math.floor(exact)
-        allocation[provider] += whole
-        fractional.append((exact - whole, provider))
-    leftover = total - sum(allocation.values())
-    for _, provider in sorted(fractional, reverse=True)[:leftover]:
-        allocation[provider] += 1
+    if remaining <= 0:
+        return allocation
+
+    while remaining > 0:
+        available = {
+            provider: capacities[provider] - allocation[provider]
+            for provider in capacities
+            if capacities[provider] - allocation[provider] > 0
+        }
+        if not available:
+            break
+
+        weight_total = sum(available.values())
+        fractional = []
+        allocated_this_round = 0
+        for provider, weight in available.items():
+            exact = remaining * (weight / weight_total) if weight_total else 0.0
+            whole = min(available[provider], math.floor(exact))
+            if whole > 0:
+                allocation[provider] += whole
+                allocated_this_round += whole
+            fractional.append((exact - math.floor(exact), provider))
+
+        remaining = total - sum(allocation.values())
+        if remaining <= 0:
+            break
+
+        gave_fractional = False
+        for _, provider in sorted(fractional, reverse=True):
+            if remaining <= 0:
+                break
+            if allocation[provider] >= capacities[provider]:
+                continue
+            allocation[provider] += 1
+            remaining -= 1
+            gave_fractional = True
+
+        if allocated_this_round == 0 and not gave_fractional:
+            break
     return allocation
 
 

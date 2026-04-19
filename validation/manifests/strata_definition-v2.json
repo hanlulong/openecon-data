@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated_at_utc": "2026-04-19T16:18:27.820747+00:00",
+  "generated_at_utc": "2026-04-19T16:32:10.330461+00:00",
   "catalog_db_path": "backend/data/indicators.db",
   "indicator_count": 330050,
   "git_sha": "888f85b79645d1e7cedd7aa1485eb6eff78eacab",
@@ -58,16 +58,16 @@
     "total_sessions": 18000,
     "provider_min_floor": 300,
     "provider_allocation": {
-      "FRED": 6607,
-      "IMF": 5544,
-      "WorldBank": 1630,
-      "CoinGecko": 1167,
-      "Comtrade": 680,
-      "Eurostat": 669,
-      "StatsCan": 666,
-      "OECD": 432,
-      "BIS": 303,
-      "ExchangeRate": 302
+      "FRED": 6849,
+      "IMF": 5742,
+      "WorldBank": 1670,
+      "CoinGecko": 1188,
+      "Comtrade": 681,
+      "Eurostat": 670,
+      "StatsCan": 667,
+      "OECD": 423,
+      "BIS": 61,
+      "ExchangeRate": 49
     }
   },
   "multiround_session_plan": {

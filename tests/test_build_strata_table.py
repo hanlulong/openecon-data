@@ -10,13 +10,22 @@ from scripts.validation.build_strata_table import (
 
 def test_direct_provider_allocation_respects_floor_and_total() -> None:
     rows = [("FRED", 100), ("IMF", 60), ("WorldBank", 40)]
-    allocation = direct_provider_allocation(rows, total=1000, floor=100)
+    allocation = direct_provider_allocation(rows, total=180, floor=30)
 
-    assert sum(allocation.values()) == 1000
-    assert allocation["FRED"] >= 100
-    assert allocation["IMF"] >= 100
-    assert allocation["WorldBank"] >= 100
+    assert sum(allocation.values()) == 180
+    assert allocation["FRED"] >= 30
+    assert allocation["IMF"] >= 30
+    assert allocation["WorldBank"] >= 30
     assert allocation["FRED"] > allocation["WorldBank"]
+
+
+def test_direct_provider_allocation_caps_small_provider_capacity() -> None:
+    rows = [("FRED", 1000), ("BIS", 61), ("ExchangeRate", 49)]
+    allocation = direct_provider_allocation(rows, total=500, floor=300)
+
+    assert sum(allocation.values()) == 500
+    assert allocation["BIS"] <= 61
+    assert allocation["ExchangeRate"] <= 49
 
 
 def test_scale_named_allocation_preserves_keys_and_total() -> None:

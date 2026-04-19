@@ -28,6 +28,9 @@ DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'datasets' / 'dev' / 'direct-cert-candidates.jsonl'
 SAMPLER_VERSION = 'direct_sampler_v1'
+DEFAULT_OVERSAMPLE_FACTOR = 8
+DEFAULT_OVERSAMPLE_CAP = 20000
+DEFAULT_OVERSAMPLE_BUFFER = 500
 
 
 def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_count: int, snapshot_id: str, seed: int, holdout_split: str, dataset_tier: str) -> dict:
@@ -110,6 +113,23 @@ def _select_quality_screened_records(records: list[dict], count: int) -> list[di
     return ranked[:count]
 
 
+def provider_oversample_target(
+    provider_population: int,
+    provider_sample_count: int,
+    *,
+    oversample_factor: int = DEFAULT_OVERSAMPLE_FACTOR,
+    oversample_cap: int = DEFAULT_OVERSAMPLE_CAP,
+    oversample_buffer: int = DEFAULT_OVERSAMPLE_BUFFER,
+) -> int:
+    if provider_population <= 0 or provider_sample_count <= 0:
+        return 0
+
+    factor_target = provider_sample_count * max(1, int(oversample_factor))
+    capped_factor_target = min(factor_target, max(provider_sample_count, int(oversample_cap)))
+    buffered_target = provider_sample_count + max(0, int(oversample_buffer))
+    return min(provider_population, max(buffered_target, capped_factor_target))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Generate direct-session certification candidates from the frozen provider allocation plan.')
     parser.add_argument('--db-path', type=Path, default=DEFAULT_DB)
@@ -120,6 +140,9 @@ def main() -> int:
     parser.add_argument('--scale', type=float, default=1.0, help='Scale allocations for demo runs (e.g. 0.02)')
     parser.add_argument('--dataset-tier', default='dev')
     parser.add_argument('--holdout-split', default='candidate')
+    parser.add_argument('--oversample-factor', type=int, default=DEFAULT_OVERSAMPLE_FACTOR)
+    parser.add_argument('--oversample-cap', type=int, default=DEFAULT_OVERSAMPLE_CAP)
+    parser.add_argument('--oversample-buffer', type=int, default=DEFAULT_OVERSAMPLE_BUFFER)
     args = parser.parse_args()
 
     strata = read_json(args.strata.resolve())
@@ -135,7 +158,13 @@ def main() -> int:
         if scaled_count == 0:
             continue
         provider_population = int(provider_counts[provider])
-        oversample_count = min(provider_population, max(scaled_count * 50, scaled_count + 200))
+        oversample_count = provider_oversample_target(
+            provider_population,
+            scaled_count,
+            oversample_factor=args.oversample_factor,
+            oversample_cap=args.oversample_cap,
+            oversample_buffer=args.oversample_buffer,
+        )
         samples = sample_indicator_rows(provider, oversample_count, db_path=args.db_path.resolve(), seed=args.seed)
         candidate_records = []
         for row in samples:
