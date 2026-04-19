@@ -3,6 +3,7 @@ from __future__ import annotations
 from scripts.validation.common import (
     audit_direct_query_shape,
     category_success_adjustment,
+    detect_single_country_from_text,
     default_query_for_row,
     family_success_adjustment,
     heuristic_subfamily_adjustment,
@@ -108,6 +109,24 @@ def test_default_query_for_row_avoids_prefixing_country_when_title_already_has_s
     query = default_query_for_row(row)
 
     assert query == "Bank Deposits to GDP for Japan from FRED"
+
+
+def test_default_query_for_row_prefers_country_in_origin_name_over_provider_default() -> None:
+    row = {
+        "provider": "FRED",
+        "code": "CPTEST",
+        "name": "Consumer Price Indices (CPIs, HICPs), COICOP 1999: Consumer Price Index: Total for Luxembourg",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query.lower().startswith("luxembourg ")
+    assert "united states" not in query.lower()
+
+
+def test_detect_single_country_from_text_extracts_named_country() -> None:
+    assert detect_single_country_from_text("Consumer Price Index for Luxembourg") == "Luxembourg"
 
 
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
@@ -367,12 +386,43 @@ def test_audit_direct_query_shape_flags_worldbank_ddh_prevalence_queries():
     assert "worldbank_ddh_prevalence_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Brazil Literacy rate (% of persons with any degree of seeing difficulty) from World Bank",
+            "origin": {
+                "name": "Literacy rate (% of persons with any degree of seeing difficulty)",
+                "category": "Disability Data Hub (DDH)",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
     audit = audit_direct_query_shape(
         {
             "query": "Germany Expenditure General Government Memorandum items Cash Government and Public Sector Finance from IMF",
             "origin": {
                 "name": "Government and Public Sector Finance, Expenditure, General Government, Memorandum items, Current Expenditures [2001 Manual], Cash, National Currency",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_consumer_price_weight_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Weight Nepal Definition Price Index Consumer Prices:Non-food and Services from IMF",
+            "origin": {
+                "name": "Nepal Definition, Price Index Consumer Prices:Non-food and Services, Weight",
             },
         }
     )
@@ -470,3 +520,59 @@ def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
 
     assert audit["risk_level"] == "high"
     assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Japan Share of students enrolled in school and work-based programmes from OECD",
+            "origin": {"name": "Share of students enrolled in school and work-based programmes"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_education_programme_share_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_dimension_fragments() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "France household composition and degree of urbanisation from Eurostat",
+            "origin": {
+                "name": "Persons participating in formal/informal voluntary activities or active citizenship by income quintile, household composition and degree of urbanisation",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_dimension_fragment_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_fred_hicp_catalog_family_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "FRED",
+            "query": "US Consumer Price Indices (CPIs HICPs) from FRED",
+            "origin": {
+                "name": "Consumer Price Indices (CPIs, HICPs), COICOP 1999: Consumer Price Index: Water Supply and Miscellaneous Services Relating to the Dwelling for Luxembourg",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "fred_hicp_catalog_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_coingecko_slug_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "CoinGecko",
+            "query": "grif_gg cryptocurrency price from CoinGecko",
+            "origin": {"name": "grif_gg"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "coin_slug_query" in audit["reasons"]

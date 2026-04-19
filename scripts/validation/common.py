@@ -138,6 +138,46 @@ _GENERIC_SHORT_TITLE_TOKENS = {
 }
 
 
+def detect_country_codes_in_text(text: str) -> set[str]:
+    if CountryResolver is None:
+        return set()
+    lowered = str(text or '').lower()
+    if not lowered:
+        return set()
+    codes: set[str] = set()
+    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+        alias_text = str(alias).strip().lower()
+        if not alias_text:
+            continue
+        if re.search(rf'(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])', lowered):
+            normalized = CountryResolver.normalize(alias_text)
+            if normalized:
+                codes.add(normalized)
+    return codes
+
+
+def detect_single_country_from_text(text: str) -> str | None:
+    if CountryResolver is None:
+        return None
+    lowered = str(text or '').lower()
+    if not lowered:
+        return None
+    matches: list[tuple[int, str, str]] = []
+    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+        alias_text = str(alias).strip()
+        if not alias_text:
+            continue
+        if re.search(rf'(?<![a-z0-9]){re.escape(alias_text.lower())}(?![a-z0-9])', lowered):
+            normalized = CountryResolver.normalize(alias_text)
+            if normalized:
+                matches.append((len(alias_text), normalized, alias_text))
+    codes = {code for _, code, _ in matches}
+    if len(codes) != 1 or not matches:
+        return None
+    best_alias = max(matches)[2]
+    return best_alias.title() if len(best_alias) > 2 else best_alias.upper()
+
+
 def slugify(text: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-') or 'item'
 
@@ -1010,6 +1050,14 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider, ['United States'])
     choice = defaults[stable_seed(provider, name) % len(defaults)]
     choice = preferred_default_country_for_record(provider_upper, str(row.get('category') or ''), name, defaults, choice)
+    if provider_upper not in {'EXCHANGERATE', 'COINGECKO'}:
+        inferred_country = (
+            detect_single_country_from_text(name)
+            or detect_single_country_from_text(str(row.get('coverage') or ''))
+            or detect_single_country_from_text(description)
+        )
+        if inferred_country:
+            choice = inferred_country
     phrase = natural_phrase_from_name(name, description)
 
     if provider_upper == 'COINGECKO':
@@ -1104,10 +1152,13 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     origin = dict(row.get('origin') or {})
     origin_name = str(origin.get('name') or row.get('name') or '').strip()
     origin_name_lower = origin_name.lower()
+    provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '').strip()
     reasons: list[str] = []
     query_lower = query.lower()
     _, metadata_text = provider_metadata_context(row)
     worldbank_text = f"{query_lower} {origin_name_lower} {metadata_text}".strip()
+    query_country_codes = detect_country_codes_in_text(query)
+    origin_country_codes = detect_country_codes_in_text(origin_name)
 
     punctuation_hits = sum(query.count(ch) for ch in [',', ';', ':', '(', ')'])
     if len(query) >= 120:
@@ -1131,6 +1182,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     ):
         reasons.append('indicator_code_prefix')
     if count_distinct_country_mentions(query) > 1:
+        reasons.append('country_scope_conflict')
+    elif len(query_country_codes) == 1 and len(origin_country_codes) == 1 and query_country_codes != origin_country_codes:
         reasons.append('country_scope_conflict')
     if (
         ('average age' in query_lower and any(term in query_lower for term in ['urban', 'rural', 'female', 'male', 'men', 'women']))
@@ -1198,6 +1251,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_education_finance_query')
     if any(term in worldbank_text for term in ['no functional difficulty', 'youth literacy rate', 'population 25-64 years']) and any(term in worldbank_text for term in ['rural', 'male', 'female', 'both sexes', 'literacy rate']):
         reasons.append('worldbank_demographic_literacy_slice')
+    if any(term in worldbank_text for term in ['seeing difficulty', 'hearing difficulty']) and 'literacy rate' in worldbank_text:
+        reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner']):
         reasons.append('worldbank_id_financial_inclusion_query')
     if any(term in worldbank_text for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures']):
@@ -1212,10 +1267,14 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
         reasons.append('imf_price_or_memorandum_family')
+    if 'weight' in query_lower and 'consumer prices' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_price_or_memorandum_family')
     if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
         reasons.append('eurostat_agri_breakdown_query')
     if any(term in query_lower for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in query_lower for term in ['sex', 'age', 'most frequent activity']):
         reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and any(term in query_lower for term in ['household composition', 'degree of urbanisation']) and any(term in origin_name_lower for term in ['participating', 'active citizenship', 'voluntary activities']):
+        reasons.append('eurostat_dimension_fragment_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
@@ -1224,6 +1283,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('scenario_projection_query')
     if re.search(r'total revenue for\s+\d{4}', query_lower) or any(term in query_lower for term in ['net equity in life insurance and pension funds', 'asset (ima)', 'employer firms total revenue', 'total expense for', 'establishments subject to federal income tax', 'defined benefit retirement funds', 'commercial paper; asset']):
         reasons.append('fred_low_viability_family')
+    if provider == 'FRED' and 'consumer price indices' in query_lower and 'hicp' in query_lower:
+        reasons.append('fred_hicp_catalog_family')
+    if provider == 'OECD' and 'share of students enrolled in school and work-based programmes' in query_lower:
+        reasons.append('oecd_education_programme_share_query')
+    if provider == 'CoinGecko' and re.search(r'\b[a-z0-9]+_[a-z0-9_]+\b', query):
+        reasons.append('coin_slug_query')
     methodology_markers = [
         'ppp',
         'ppps',
@@ -1282,13 +1347,17 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_macro_exposure_family',
         'worldbank_ddh_prevalence_family',
         'oecd_low_viability_family',
+        'oecd_education_programme_share_query',
         'imf_price_or_memorandum_family',
         'eurostat_agri_breakdown_query',
         'eurostat_cross_tab_query',
+        'eurostat_dimension_fragment_query',
         'subnational_abbrev_ambiguous',
         'accounting_artifact_query',
         'scenario_projection_query',
         'fred_low_viability_family',
+        'fred_hicp_catalog_family',
+        'coin_slug_query',
         'methodology_dense',
     ]):
         risk_level = 'high'

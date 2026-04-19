@@ -34,6 +34,13 @@ def structural_pass(result: dict[str, Any]) -> bool:
     return int(result.get('status_code') or 0) == 200 and not result.get('error') and int(result.get('series_count') or 0) > 0
 
 
+def clarification_path_pass(rows: list[dict[str, Any]]) -> bool:
+    return bool(rows) and all(
+        int(row.get('status_code') or 0) == 200 and not row.get('error')
+        for row in rows
+    )
+
+
 def kish_effective_n(weights: list[float]) -> float | None:
     if not weights:
         return None
@@ -280,7 +287,19 @@ def main() -> int:
         provider = str(session.get('provider_stratum') or (session.get('origin') or {}).get('source_provider') or '<missing>')
         family = family_for_session(session, kind)
         rows = sorted(raw_by_session.get(sid, []), key=lambda r: int(r.get('round_index') or 0))
+        session_clarification_detected = any(bool(row.get('clarification_detected')) for row in rows)
+        session_answer_present = any(
+            (int(row.get('series_count') or 0) > 0 or bool(row.get('response_text_present')))
+            and not bool(row.get('clarification_detected'))
+            for row in rows
+        )
+        expected_clarification = expected_clarification_for_session(session, kind)
         all_pass = bool(rows) and all(structural_pass(r) for r in rows)
+        provisional_pass = (
+            clarification_path_pass(rows) and session_clarification_detected
+            if expected_clarification is True
+            else all_pass
+        )
         any_error = next((r.get('error') for r in rows if r.get('error')), None)
         snapshot_id = str((session.get('provenance') or {}).get('snapshot_id') or '').strip()
         if snapshot_id:
@@ -291,13 +310,6 @@ def main() -> int:
         final_failure_class = canonical_failure_class(adjudication_row.get('failure_class')) if adjudication_row else None
         if adjudicated_pass is not None:
             adjudicated_records_total += 1
-        session_clarification_detected = any(bool(row.get('clarification_detected')) for row in rows)
-        session_answer_present = any(
-            (int(row.get('series_count') or 0) > 0 or bool(row.get('response_text_present')))
-            and not bool(row.get('clarification_detected'))
-            for row in rows
-        )
-        expected_clarification = expected_clarification_for_session(session, kind)
         if expected_clarification is False:
             expected_no_clarification_total += 1
             if session_clarification_detected:
@@ -329,7 +341,7 @@ def main() -> int:
             'holdout_split': split,
             'provider_stratum': provider,
             'family_stratum': family,
-            'provisional_structural_pass': all_pass,
+            'provisional_structural_pass': provisional_pass,
             'final_label': final_label,
             'final_failure_class': final_failure_class,
             'adjudicated_pass': adjudicated_pass,
@@ -347,7 +359,7 @@ def main() -> int:
         counts_by_type[kind] += 1
         counts_by_tier[tier] += 1
         counts_by_split[split] += 1
-        if all_pass:
+        if provisional_pass:
             provisional_pass_by_type[kind] += 1
             provisional_pass_by_split[split] += 1
         if adjudicated_pass:
@@ -359,7 +371,7 @@ def main() -> int:
             weighted_totals_by_type[kind] += weight
             weighted_session_counts_by_type[kind] += 1
             all_weights.append(weight)
-            if all_pass:
+            if provisional_pass:
                 weighted_pass_totals_by_type[kind] += weight
                 all_pass_weights.append(weight)
             if adjudicated_pass is not None:
@@ -385,17 +397,17 @@ def main() -> int:
                 direct_provider_adjudicated_pass_counts[provider] += 1
             if weight > 0:
                 direct_weights.append(weight)
-                if all_pass:
+                if provisional_pass:
                     direct_pass_weights.append(weight)
         elif kind == 'multiround' and family:
             multiround_family_counts[family] += 1
-            if all_pass:
+            if provisional_pass:
                 multiround_family_pass_counts[family] += 1
             if adjudicated_pass:
                 multiround_family_adjudicated_pass_counts[family] += 1
         elif kind == 'ambiguity' and family:
             ambiguity_family_counts[family] += 1
-            if all_pass:
+            if provisional_pass:
                 ambiguity_family_pass_counts[family] += 1
             if adjudicated_pass:
                 ambiguity_family_adjudicated_pass_counts[family] += 1

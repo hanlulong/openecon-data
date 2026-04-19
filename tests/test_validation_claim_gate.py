@@ -1083,6 +1083,82 @@ def test_score_certification_evaluates_multiround_and_ambiguity_family_floors(tm
     assert "ambiguity_family:dominant_interpretation_cases (high_traffic)" in report["strata"]["missing_required_strata"]
 
 
+def test_score_certification_counts_expected_clarification_as_provisional_ambiguity_success(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    policy_path = tmp_path / "policy.json"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "amb-scope-000001",
+                "dataset_tier": "cert_holdout",
+                "expected_behavior": "clarify",
+                "query": "GDP in Europe",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                    "family": "scope_ambiguity",
+                },
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "amb-scope-000001",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 0,
+                "error": None,
+                "clarification_detected": True,
+                "response_text_present": True,
+            },
+        ],
+    )
+    policy_path.write_text(
+        json.dumps(
+            {
+                "required_direct_provider_floors": {},
+                "required_multiround_family_floors": {},
+                "required_ambiguity_family_floors": {
+                    "scope_ambiguity": {"class": "critical", "floor": 0.97}
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    session = report["session_results"][0]
+    assert session["expected_clarification"] is True
+    assert session["clarification_detected"] is True
+    assert session["provisional_structural_pass"] is True
+    assert report["strata"]["ambiguity_family_success"]["scope_ambiguity"]["pass_rate"] == 1.0
+    assert "ambiguity_family:scope_ambiguity" not in " ".join(report["strata"]["failing_strata"])
+
+
 def test_score_certification_can_reach_claim_grade_with_full_coverage_and_custom_policy(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"
