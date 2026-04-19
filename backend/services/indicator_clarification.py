@@ -3263,6 +3263,18 @@ def build_no_data_indicator_clarification(
         qs._collect_indicator_choice_options(query=query, intent=intent, max_options=4),
     )
     if len(options) < 2:
+        for variant in _provider_native_query_variants(qs, query, intent)[1:]:
+            options = dedupe_indicator_choice_options(
+                qs,
+                qs._collect_indicator_choice_options(query=variant, intent=intent, max_options=4),
+            )
+            if len(options) >= 2:
+                logger.info(
+                    "No-data clarification recovered options via simplified query variant: %s",
+                    variant,
+                )
+                break
+    if len(options) < 2:
         return None
 
     clarification_questions = [
@@ -3293,6 +3305,100 @@ def build_no_data_indicator_clarification(
         clarificationOptions=build_clarification_options(qs, options),
         processingSteps=processing_steps,
     )
+
+
+def _provider_native_query_variants(
+    qs: Any,
+    query: str,
+    intent: Optional[ParsedIntent],
+) -> list[str]:
+    """Build simplified variants for explicit-provider long-tail direct queries.
+
+    The goal is framework-level recovery for verbose provider-native titles that
+    are too specific or metadata-heavy to execute directly but can still yield a
+    useful clarification set when reduced to their semantic core.
+    """
+    original = str(query or "").strip()
+    if not original:
+        return [original]
+
+    provider = normalize_provider_name((intent.apiProvider if intent else "") or "")
+    stripped = re.sub(
+        r"\bfrom\s+(world\s*bank|imf|eurostat|oecd|bis|statistics\s+canada|statscan|fred|coingecko|exchange ?rate)\b",
+        " ",
+        original,
+        flags=re.IGNORECASE,
+    )
+    stripped = re.sub(r"\s+", " ", stripped).strip(" ,;:-")
+
+    countries = []
+    try:
+        countries = qs._extract_countries_from_query(original)
+    except Exception:
+        countries = []
+    country_prefix = ""
+    if countries:
+        country_prefix = f"{countries[0]} "
+
+    variants = [original]
+    if stripped and stripped != original:
+        variants.append(stripped)
+
+    if "," in stripped:
+        segments = [segment.strip(" ,;:-") for segment in stripped.split(",") if segment.strip(" ,;:-")]
+    else:
+        segments = [segment.strip() for segment in re.split(r"\s+-\s+", stripped) if segment.strip()]
+
+    noise_segments = {
+        "IMF": {
+            "the definition", "definition", "balance of payments", "goods and services", "services",
+            "prices", "labor markets", "monthly", "persons", "number of", "all commodities",
+            "national currency", "us dollars", "euros", "index",
+        },
+        "EUROSTAT": {
+            "by analytical categories", "based on coicop 2018", "nominal and real expenditures",
+        },
+        "OECD": {
+            "local areas", "other", "all countries", "harmonized definition",
+        },
+        "BIS": {
+            "comparative tables type 1", "comparative tables type 2", "comparative tables type 3",
+        },
+    }.get(provider, set())
+
+    simplified_segments: list[str] = []
+    for segment in segments:
+        lowered = re.sub(r"\[[^\]]+\]", "", segment.lower()).strip()
+        lowered = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+        if not lowered:
+            continue
+        if lowered in noise_segments:
+            continue
+        if len(lowered.split()) <= 1 and lowered in {"the", "of", "and"}:
+            continue
+        simplified_segments.append(segment)
+
+    if simplified_segments:
+        tail = simplified_segments[-3:]
+        compact = " ".join(part.strip() for part in tail if part.strip())
+        compact = re.sub(r"\s+", " ", compact).strip(" ,;:-")
+        if compact:
+            candidate = f"{country_prefix}{compact}".strip()
+            if candidate not in variants:
+                variants.append(candidate)
+
+    if len(simplified_segments) >= 2:
+        longest = sorted(
+            simplified_segments,
+            key=lambda part: (len(re.sub(r"[^a-z0-9]+", " ", part.lower()).split()), len(part)),
+            reverse=True,
+        )[:2]
+        candidate = f"{country_prefix}{' '.join(longest)}".strip()
+        candidate = re.sub(r"\s+", " ", candidate).strip(" ,;:-")
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    return variants
 
 
 # ====================================================================

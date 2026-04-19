@@ -1632,6 +1632,44 @@ class QueryServiceTests(unittest.TestCase):
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
 
+    def test_build_no_data_indicator_clarification_uses_simplified_provider_native_variant(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-no-data-clar-simplified-variant")
+        conversation_manager.clear_pending_indicator_options(conv_id)
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["Balance of Payments, Current Account, Goods and Services, Services, Other Business Services, Credit [BPM6], National Currency"],
+            parameters={"country": "DE"},
+            clarificationNeeded=False,
+            originalQuery="Germany Current Account Services Balance of Payments Goods and Services Other Business Services from IMF",
+        )
+        options = [
+            "[IMF] Current account balance, percent of GDP (BCA_NGDPD)",
+            "[IMF] Trade Balance (% of GDP) (BT_GDP)",
+        ]
+        seen_queries: list[str] = []
+
+        def _fake_collect_indicator_choice_options(*, query, intent, max_options=3):
+            seen_queries.append(query)
+            if query != intent.originalQuery and "Other Business Services" in query:
+                return options
+            return []
+
+        with patch.object(self.service, "_collect_indicator_choice_options", side_effect=_fake_collect_indicator_choice_options):
+            clarification = self.service._build_no_data_indicator_clarification(  # pylint: disable=protected-access
+                conversation_id=conv_id,
+                query=intent.originalQuery or "",
+                intent=intent,
+                processing_steps=None,
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertGreaterEqual(len(seen_queries), 2)
+        self.assertIn("Other Business Services", " | ".join(seen_queries))
+        labels = [option.label for option in (clarification.clarificationOptions or [])]
+        self.assertIn("Current account balance, percent of GDP", labels)
+
     def test_build_group_scope_clarification_for_region_query(self) -> None:
         """Group scope clarification should fire for vague queries without specific indicators."""
         conv_id = conversation_manager.get_or_create("conv-group-scope")
