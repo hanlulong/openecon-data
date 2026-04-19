@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.validation.common import read_json, write_jsonl
 
-DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
+DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'datasets' / 'dev' / 'ambiguity-cert-candidates.jsonl'
 SAMPLER_VERSION = 'ambiguity_sampler_v1'

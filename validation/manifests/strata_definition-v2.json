@@ -1,0 +1,95 @@
+{
+  "version": 2,
+  "generated_at_utc": "2026-04-19T16:18:27.820747+00:00",
+  "catalog_db_path": "backend/data/indicators.db",
+  "indicator_count": 330050,
+  "git_sha": "888f85b79645d1e7cedd7aa1485eb6eff78eacab",
+  "catalog_db_sha256": "cd4e6113416dbc8ef1d2bba21c7a283bd52ab6bf9e57555d4a91ceed52becff1",
+  "snapshot_manifest_path": "validation/manifests/catalog_snapshot-2026-04-14.json",
+  "snapshot_id": "2026-04-14:888f85b7:330050",
+  "claim_surface": "stratified_random_certification",
+  "target_total_sessions": 30000,
+  "query_families": [
+    "direct_single_series",
+    "direct_multi_country",
+    "direct_multi_provider",
+    "provider_switch",
+    "transform_switch",
+    "additive_geography",
+    "remove_geography",
+    "time_range_change",
+    "bilateral_trade",
+    "decomposition_subnational",
+    "ambiguity_clarification"
+  ],
+  "transform_families": [
+    "level",
+    "real",
+    "nominal",
+    "growth",
+    "per_capita",
+    "ppp",
+    "deflator",
+    "ratio_percent_of_gdp",
+    "imports",
+    "exports",
+    "trade_balance",
+    "current_account",
+    "debt_credit",
+    "rate_yield"
+  ],
+  "scope_families": [
+    "single_country",
+    "multi_country",
+    "bilateral",
+    "subnational",
+    "region_group",
+    "mixed_provider_scope"
+  ],
+  "ambiguity_classes": [
+    "clearly_answerable",
+    "provider_ambiguous",
+    "transform_ambiguous",
+    "scope_ambiguous",
+    "decomposition_ambiguous",
+    "terminology_ambiguous"
+  ],
+  "direct_session_plan": {
+    "total_sessions": 18000,
+    "provider_min_floor": 300,
+    "provider_allocation": {
+      "FRED": 6607,
+      "IMF": 5544,
+      "WorldBank": 1630,
+      "CoinGecko": 1167,
+      "Comtrade": 680,
+      "Eurostat": 669,
+      "StatsCan": 666,
+      "OECD": 432,
+      "BIS": 303,
+      "ExchangeRate": 302
+    }
+  },
+  "multiround_session_plan": {
+    "total_sessions": 7000,
+    "family_allocation": {
+      "provider_switch_chain": 1953,
+      "transform_switch_chain": 1628,
+      "comtrade_bilateral_chain": 1140,
+      "statscan_decomposition_chain": 977,
+      "crypto_rotation_chain": 651,
+      "fx_pair_chain": 651
+    }
+  },
+  "ambiguity_session_plan": {
+    "total_sessions": 5000,
+    "family_allocation": {
+      "transform_ambiguity": 1250,
+      "provider_ambiguity": 875,
+      "scope_ambiguity": 875,
+      "decomposition_ambiguity": 750,
+      "terminology_ambiguity": 750,
+      "dominant_interpretation_cases": 500
+    }
+  }
+}

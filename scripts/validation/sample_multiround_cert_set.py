@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.validation.common import read_json, write_jsonl
 
-DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
+DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'datasets' / 'dev' / 'multiround-cert-candidates.jsonl'
 SAMPLER_VERSION = 'multiround_sampler_v1'
@@ -149,14 +149,12 @@ def fx_rotation(idx: int) -> dict:
 
 
 FAMILY_BUILDERS = {
-    'provider_switch_chains': mixed_provider_switch,
-    'transform_switch_chains': gdp_variant_cycle,
-    'ambiguity_to_clarification_chains': gdp_variant_cycle,
-    'multi_country_add_remove_chains': gdp_variant_cycle,
-    'comtrade_bilateral_chains': comtrade_bilateral,
-    'statscan_decomposition_chains': statscan_decomposition,
-    'crypto_fx_rapid_switch_chains': crypto_rotation,
-    'mixed_provider_stress_chains': fx_rotation,
+    'provider_switch_chain': mixed_provider_switch,
+    'transform_switch_chain': gdp_variant_cycle,
+    'comtrade_bilateral_chain': comtrade_bilateral,
+    'statscan_decomposition_chain': statscan_decomposition,
+    'crypto_rotation_chain': crypto_rotation,
+    'fx_pair_chain': fx_rotation,
 }
 
 

@@ -10,10 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
-DEFAULT_OUTPUT = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
+DEFAULT_OUTPUT = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
-DEFAULT_DIRECT_TOTAL = 8000
-DEFAULT_PROVIDER_FLOOR = 150
+DEFAULT_DIRECT_TOTAL = 18000
+DEFAULT_MULTIROUND_TOTAL = 7000
+DEFAULT_AMBIGUITY_TOTAL = 5000
+DEFAULT_PROVIDER_FLOOR = 300
 
 QUERY_FAMILIES = [
     'direct_single_series',
@@ -46,14 +48,12 @@ AMBIGUITY_CLASSES = [
 ]
 
 RISK_WEIGHTED_MULTIROUND_ALLOCATION = {
-    'provider_switch_chains': 600,
-    'transform_switch_chains': 500,
-    'ambiguity_to_clarification_chains': 450,
-    'multi_country_add_remove_chains': 400,
-    'comtrade_bilateral_chains': 350,
-    'statscan_decomposition_chains': 300,
-    'crypto_fx_rapid_switch_chains': 200,
-    'mixed_provider_stress_chains': 200,
+    'provider_switch_chain': 600,
+    'transform_switch_chain': 500,
+    'comtrade_bilateral_chain': 350,
+    'statscan_decomposition_chain': 300,
+    'crypto_rotation_chain': 200,
+    'fx_pair_chain': 200,
 }
 
 AMBIGUITY_ALLOCATION = {
@@ -83,12 +83,38 @@ def direct_provider_allocation(rows: list[tuple[str, int]], total: int, floor: i
     return allocation
 
 
+def scale_named_allocation(weights: dict[str, int], total: int) -> dict[str, int]:
+    if total <= 0:
+        raise ValueError('total must be positive')
+    if not weights:
+        raise ValueError('weights must not be empty')
+
+    allocation = {name: 0 for name in weights}
+    weight_total = sum(max(0, int(weight)) for weight in weights.values())
+    if weight_total <= 0:
+        raise ValueError('weights must sum to a positive value')
+
+    fractional = []
+    for name, weight in weights.items():
+        exact = total * (int(weight) / weight_total)
+        whole = math.floor(exact)
+        allocation[name] = whole
+        fractional.append((exact - whole, name))
+
+    leftover = total - sum(allocation.values())
+    for _, name in sorted(fractional, reverse=True)[:leftover]:
+        allocation[name] += 1
+    return allocation
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Build validation strata definition and direct-set allocation baseline')
     parser.add_argument('--db-path', type=Path, default=DEFAULT_DB)
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--snapshot', type=Path, default=DEFAULT_SNAPSHOT)
     parser.add_argument('--direct-total', type=int, default=DEFAULT_DIRECT_TOTAL)
+    parser.add_argument('--multiround-total', type=int, default=DEFAULT_MULTIROUND_TOTAL)
+    parser.add_argument('--ambiguity-total', type=int, default=DEFAULT_AMBIGUITY_TOTAL)
     parser.add_argument('--provider-floor', type=int, default=DEFAULT_PROVIDER_FLOOR)
     args = parser.parse_args()
 
@@ -107,9 +133,17 @@ def main() -> int:
         snapshot = json.loads(snapshot_path.read_text(encoding='utf-8'))
 
     provider_allocation = direct_provider_allocation(rows, args.direct_total, args.provider_floor)
+    multiround_allocation = scale_named_allocation(
+        RISK_WEIGHTED_MULTIROUND_ALLOCATION,
+        args.multiround_total,
+    )
+    ambiguity_allocation = scale_named_allocation(
+        AMBIGUITY_ALLOCATION,
+        args.ambiguity_total,
+    )
 
     payload = {
-        'version': 1,
+        'version': 2,
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
         'catalog_db_path': str(db_path.relative_to(ROOT)),
         'indicator_count': total_indicators,
@@ -117,6 +151,8 @@ def main() -> int:
         'catalog_db_sha256': snapshot.get('catalog_db_sha256') if snapshot else None,
         'snapshot_manifest_path': str(snapshot_path.relative_to(ROOT)) if snapshot else None,
         'snapshot_id': (f"{snapshot['snapshot_date']}:{str(snapshot['git_sha'])[:8]}:{snapshot['indicator_count']}" if snapshot else None),
+        'claim_surface': 'stratified_random_certification',
+        'target_total_sessions': args.direct_total + args.multiround_total + args.ambiguity_total,
         'query_families': QUERY_FAMILIES,
         'transform_families': TRANSFORM_FAMILIES,
         'scope_families': SCOPE_FAMILIES,
@@ -127,12 +163,12 @@ def main() -> int:
             'provider_allocation': provider_allocation,
         },
         'multiround_session_plan': {
-            'total_sessions': sum(RISK_WEIGHTED_MULTIROUND_ALLOCATION.values()),
-            'family_allocation': RISK_WEIGHTED_MULTIROUND_ALLOCATION,
+            'total_sessions': args.multiround_total,
+            'family_allocation': multiround_allocation,
         },
         'ambiguity_session_plan': {
-            'total_sessions': sum(AMBIGUITY_ALLOCATION.values()),
-            'family_allocation': AMBIGUITY_ALLOCATION,
+            'total_sessions': args.ambiguity_total,
+            'family_allocation': ambiguity_allocation,
         },
     }
 

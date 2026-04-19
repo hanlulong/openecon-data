@@ -25,7 +25,7 @@ DEFAULT_PARITY_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_
 DEFAULT_EVIDENCE_PACKAGE_OUTPUT = ROOT / "validation_private" / "reports" / "claim_bundle_evidence_package.json"
 DEFAULT_CATALOG_SNAPSHOT = ROOT / "validation" / "manifests" / "catalog_snapshot-2026-04-14.json"
 DEFAULT_PROVIDER_DISTRIBUTION = ROOT / "validation" / "manifests" / "provider_distribution-latest.json"
-DEFAULT_STRATA_DEFINITION = ROOT / "validation" / "manifests" / "strata_definition-v1.json"
+DEFAULT_STRATA_DEFINITION = ROOT / "validation" / "manifests" / "strata_definition-v2.json"
 
 
 def run(cmd: list[str], *, dry_run: bool) -> None:

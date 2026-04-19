@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_PROVIDER_DISTRIBUTION = ROOT / 'validation' / 'manifests' / 'provider_distribution-latest.json'
-DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
+DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'claim_evidence_package.json'
 DEFAULT_DEPLOYMENT_BASE_URL = 'https://data.openecon.ai'
 
