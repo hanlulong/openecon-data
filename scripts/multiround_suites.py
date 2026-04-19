@@ -7,7 +7,7 @@ from datetime import datetime
 
 
 DEFAULT_SUITE_NAME = "baseline"
-SUITES_VERSION = 3
+SUITES_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -490,6 +490,90 @@ def _regression_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]
     }
 
 
+def _hardening_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]:
+    timestamp = now or datetime.now()
+    latest_recent_year = timestamp.year - 1
+
+    return {
+        "Hard 1: IMF Chart Persistence": [
+            _case("US GDP", countries=("US",), cues=("gdp",), exact_series_count=1),
+            _case("Add Germany GDP", countries=("US", "DE"), cues=("gdp",), exact_series_count=2),
+            _case("Switch to GDP growth rate", countries=("US", "DE"), cues=("gdp", "growth"), exact_series_count=2),
+            _case("Show from IMF instead", providers=("IMF",), countries=("US", "DE"), cues=("gdp", "growth"), exact_series_count=2),
+            _case("Add Japan", providers=("IMF",), countries=("US", "DE", "JP"), cues=("gdp", "growth"), exact_series_count=3),
+            _case(
+                "Convert to billions",
+                providers=("IMF",),
+                countries=("US", "DE", "JP"),
+                cues=("gdp",),
+                exact_series_count=3,
+                min_points_per_series=5,
+                note="Rate-like formatting follow-up must preserve the active IMF GDP-growth chain without rerouting.",
+            ),
+        ],
+        "Hard 2: Crypto ATH Stability": [
+            _case("Bitcoin price", providers=("COINGECKO",), cues=("bitcoin",), exact_series_count=1),
+            _case("Change to last 30 days", providers=("COINGECKO",), cues=("bitcoin",), exact_series_count=1, min_points_per_series=20),
+            _case(
+                "Compare price to all-time high",
+                providers=("COINGECKO",),
+                cues=("bitcoin", "price"),
+                exact_series_count=1,
+                min_points_per_series=20,
+                latest_year_at_least=latest_recent_year,
+                note="ATH comparison must not duplicate the active BTC series or drift providers.",
+            ),
+        ],
+        "Hard 3: Trade Scope Backfill": [
+            _case("Exports share of GDP in Japan", cues=("export", "gdp"), countries=("JP",), exact_series_count=1, min_points_per_series=5),
+            _case("Add South Korea exports share of GDP", cues=("export", "gdp"), countries=("JP", "KR"), exact_series_count=2, min_points_per_series=5),
+            _case("Show only South Korea", cues=("export", "gdp"), countries=("KR",), exact_series_count=1, min_points_per_series=5),
+            _case("Switch to imports share of GDP", cues=("import", "gdp"), countries=("KR",), exact_series_count=1, min_points_per_series=5),
+            _case("Add United States imports share of GDP", cues=("import", "gdp"), countries=("KR", "US"), exact_series_count=2, min_points_per_series=5),
+            _case("Change to 2015-2024", cues=("import", "gdp"), countries=("KR", "US"), exact_series_count=2, min_points_per_series=5),
+            _case("Add Germany imports share of GDP", cues=("import", "gdp"), countries=("KR", "US", "DE"), exact_series_count=3, min_points_per_series=5),
+        ],
+        "Hard 4: Canada Decomposition Lock": [
+            _case(
+                "Canada employment rate",
+                countries=("CA",),
+                cues=("employment",),
+                exact_series_count=1,
+                note="The initial national turn may use an equivalent provider, but decomposition follow-ups must lock to StatsCan.",
+            ),
+            _case("Show by province", providers=("STATSCAN",), countries=("CA",), cues=("employment",), min_series_count=2, min_points_per_series=12),
+            _case("Show only Ontario", providers=("STATSCAN",), countries=("CA",), cues=("employment", "ontario"), exact_series_count=1, min_points_per_series=12),
+            _case("Switch to Alberta", providers=("STATSCAN",), countries=("CA",), cues=("employment", "alberta"), exact_series_count=1, min_points_per_series=12),
+            _case("Show all provinces", providers=("STATSCAN",), countries=("CA",), cues=("employment",), min_series_count=2, min_points_per_series=12),
+        ],
+        "Hard 5: Exchange Historical Persistence": [
+            _case("USD to EUR exchange rate", providers=("EXCHANGERATE",), cues=("exchange", "eur"), exact_series_count=1),
+            _case("Switch to USD to CAD", providers=("EXCHANGERATE",), cues=("exchange", "cad"), exact_series_count=1),
+            _case("Switch to EUR to GBP", providers=("EXCHANGERATE",), cues=("exchange", "eur", "gbp"), exact_series_count=1),
+            _case(
+                "Show only the last 90 days",
+                providers=("FRED",),
+                cues=("exchange", "eur", "gbp"),
+                exact_series_count=1,
+                frequencies=("daily",),
+                min_points_per_series=40,
+                latest_year_at_least=latest_recent_year,
+                note="Historical follow-up after pair switching must yield a dense daily series rather than clarifying or returning current-only data.",
+            ),
+            _case("Switch to USD to JPY", providers=("EXCHANGERATE", "FRED"), cues=("exchange", "jpy"), exact_series_count=1),
+            _case(
+                "Change to last year",
+                providers=("FRED",),
+                cues=("exchange", "jpy"),
+                exact_series_count=1,
+                frequencies=("daily",),
+                min_points_per_series=150,
+                latest_year_at_least=latest_recent_year,
+            ),
+        ],
+    }
+
+
 _SUITES: dict[str, dict[str, object]] = {
     "baseline": {
         "description": "Canonical Phase 6 multiround benchmark with round-level semantic oracles.",
@@ -508,6 +592,13 @@ _SUITES: dict[str, dict[str, object]] = {
             "including StatsCan decomposition + timeframe retention."
         ),
         "builder": _regression_suite,
+    },
+    "hardening": {
+        "description": (
+            "Stricter certification suite for framework-level persistence fixes, with denser "
+            "historical/time-range expectations and targeted provider-lock regressions."
+        ),
+        "builder": _hardening_suite,
     },
 }
 

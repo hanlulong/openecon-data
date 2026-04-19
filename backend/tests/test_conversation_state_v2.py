@@ -1191,6 +1191,22 @@ class TestDeltaExtractor:
         assert delta.delta_type == "time_change"
         assert delta.changed_start_date is not None
 
+    def test_time_change_last_n_days(self, extractor):
+        state = ConversationState(indicator="exchange rate", provider="EXCHANGERATE")
+        delta = extractor.extract("show only the last 90 days", state)
+        assert delta is not None
+        assert delta.delta_type == "time_change"
+        assert delta.changed_start_date is not None
+        assert delta.changed_end_date is not None
+
+    def test_time_change_last_year_singular_phrase(self, extractor):
+        state = ConversationState(indicator="exchange rate", provider="EXCHANGERATE")
+        delta = extractor.extract("change to last year", state)
+        assert delta is not None
+        assert delta.delta_type == "time_change"
+        assert delta.changed_start_date is not None
+        assert delta.changed_end_date is not None
+
     def test_time_change_guard_rejects_contentful_queries(self, extractor):
         assert extractor._looks_like_pure_time_change_query("last 20 years") is True
         assert (

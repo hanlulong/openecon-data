@@ -67,6 +67,14 @@ _TIME_LAST_N_RE = re.compile(
     r"\blast\s+(\d+)\s+(years?|months?|quarters?|decades?)\b",
     re.IGNORECASE,
 )
+_TIME_LAST_N_DAYS_RE = re.compile(
+    r"\blast\s+(\d+)\s+days?\b",
+    re.IGNORECASE,
+)
+_TIME_LAST_SIMPLE_RE = re.compile(
+    r"\blast\s+(year|month|quarter|week|day)\b",
+    re.IGNORECASE,
+)
 _TIME_SINCE_RE = re.compile(r"\bsince\s+(19\d{2}|20\d{2})\b", re.IGNORECASE)
 _TIME_FROM_TO_RE = re.compile(
     r"\bfrom\s+(19\d{2}|20\d{2})\s+to\s+(19\d{2}|20\d{2})\b",
@@ -1633,22 +1641,83 @@ Output the query_type and any changed fields as JSON."""
                 delta_type="time_change",
             )
 
-        # Try "last N years"
+        # Try "last N days"
+        m = _TIME_LAST_N_DAYS_RE.search(query)
+        if m:
+            from datetime import datetime, timedelta
+
+            n = int(m.group(1))
+            now = datetime.now().date()
+            start_dt = now - timedelta(days=n)
+            logger.info("Delta: time change → last %d days", n)
+            return FollowUpDelta(
+                changed_start_date=start_dt.isoformat(),
+                changed_end_date=now.isoformat(),
+                raw_query=query,
+                delta_type="time_change",
+            )
+
+        # Try "last N years/months/quarters/decades"
         m = _TIME_LAST_N_RE.search(query)
         if m:
-            from datetime import datetime
+            from datetime import datetime, timedelta
             n = int(m.group(1))
             unit = m.group(2).lower().rstrip("s")
-            now = datetime.now()
+            now = datetime.now().date()
             if unit == "year":
-                start_year = now.year - n
                 logger.info("Delta: time change → last %d years", n)
                 return FollowUpDelta(
-                    changed_start_date=f"{start_year}-01-01",
-                    changed_end_date=f"{now.year}-12-31",
+                    changed_start_date=(now - timedelta(days=365 * n)).isoformat(),
+                    changed_end_date=now.isoformat(),
                     raw_query=query,
                     delta_type="time_change",
                 )
+            if unit == "month":
+                logger.info("Delta: time change → last %d months", n)
+                return FollowUpDelta(
+                    changed_start_date=(now - timedelta(days=30 * n)).isoformat(),
+                    changed_end_date=now.isoformat(),
+                    raw_query=query,
+                    delta_type="time_change",
+                )
+            if unit == "quarter":
+                logger.info("Delta: time change → last %d quarters", n)
+                return FollowUpDelta(
+                    changed_start_date=(now - timedelta(days=91 * n)).isoformat(),
+                    changed_end_date=now.isoformat(),
+                    raw_query=query,
+                    delta_type="time_change",
+                )
+            if unit == "decade":
+                logger.info("Delta: time change → last %d decades", n)
+                return FollowUpDelta(
+                    changed_start_date=(now - timedelta(days=3652 * n)).isoformat(),
+                    changed_end_date=now.isoformat(),
+                    raw_query=query,
+                    delta_type="time_change",
+                )
+
+        # Try singular windows like "last year"
+        m = _TIME_LAST_SIMPLE_RE.search(query)
+        if m:
+            from datetime import datetime, timedelta
+
+            unit = m.group(1).lower()
+            now = datetime.now().date()
+            delta_days = {
+                "day": 1,
+                "week": 7,
+                "month": 30,
+                "quarter": 91,
+                "year": 365,
+            }[unit]
+            logger.info("Delta: time change → last %s", unit)
+            return FollowUpDelta(
+                changed_start_date=(now - timedelta(days=delta_days)).isoformat(),
+                changed_end_date=now.isoformat(),
+                raw_query=query,
+                delta_type="time_change",
+            )
 
         return None
 

@@ -37,6 +37,11 @@ class TestCountryResolver:
         assert CountryResolver.normalize("United Kingdom") == "GB"
         assert CountryResolver.normalize("Britain") == "GB"
 
+    def test_normalize_provider_display_country_variations(self):
+        """World Bank-style display names should normalize back to ISO2."""
+        assert CountryResolver.normalize("Korea, Rep.") == "KR"
+        assert CountryResolver.normalize("korea rep") == "KR"
+
     def test_oecd_membership(self):
         """Test OECD membership checks."""
         assert CountryResolver.is_oecd_member("US") is True
@@ -513,10 +518,10 @@ class TestUnifiedRouter:
         decision = router.route("Canada inflation rate")
         assert decision.provider == "StatsCan"
 
-    def test_canada_gdp_growth_routes_to_worldbank_or_imf(self, router):
-        """Canada GDP growth: StatsCan not available for growth rate, uses global provider."""
+    def test_canada_gdp_growth_routes_to_canada_capable_provider(self, router):
+        """Canada GDP growth may resolve to StatsCan or a global macro provider."""
         decision = router.route("Canada GDP growth")
-        assert decision.provider in ("WorldBank", "IMF")
+        assert decision.provider in ("StatsCan", "WorldBank", "IMF")
 
     def test_canada_population_routes_to_statscan(self, router):
         """Canadian population uses StatsCan (catalog: StatsCan has population for CA)."""

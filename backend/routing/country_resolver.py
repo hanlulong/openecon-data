@@ -80,7 +80,7 @@ class CountryResolver:
         "iceland": "IS", "is": "IS", "isl": "IS",
         "israel": "IL", "il": "IL", "isr": "IL",
         "japan": "JP", "jp": "JP", "jpn": "JP",
-        "korea": "KR", "south korea": "KR", "kr": "KR", "kor": "KR",
+        "korea": "KR", "south korea": "KR", "korea rep": "KR", "korea, rep.": "KR", "kr": "KR", "kor": "KR",
         "mexico": "MX", "mx": "MX", "mex": "MX",
         "new zealand": "NZ", "nz": "NZ", "nzl": "NZ",
         "norway": "NO", "no": "NO", "nor": "NO",
@@ -513,6 +513,10 @@ class CountryResolver:
         # Direct lookup in aliases
         if country_lower in cls.COUNTRY_ALIASES:
             return cls.COUNTRY_ALIASES[country_lower]
+
+        normalized_country = re.sub(r"[^a-z0-9]+", " ", country_lower).strip()
+        if normalized_country in cls.COUNTRY_ALIASES:
+            return cls.COUNTRY_ALIASES[normalized_country]
 
         # Check if already an ISO code (uppercase 2-letter)
         country_upper = country.upper().strip()
