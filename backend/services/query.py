@@ -454,11 +454,29 @@ class QueryService:
         explicit_provider = self._detect_explicit_provider(query)
         provider_candidates = [normalize_provider_name(explicit_provider)] if explicit_provider else list(ALL_PROVIDERS)
         provider_candidates = [provider for provider in provider_candidates if provider]
+        broad_concept = self._broad_exact_title_catalog_concept(query)
 
         matches: list[dict[str, Any]] = []
         seen = set()
         for provider in provider_candidates:
             candidate = _ir_find_exact_provider_title_match(query, provider)
+            if not candidate and broad_concept:
+                try:
+                    from .indicator_database import get_indicator_lookup
+
+                    lookup = get_indicator_lookup()
+                    broad_results = lookup.search(query, provider=provider, limit=5)
+                    candidate = next(
+                        (
+                            result
+                            for result in broad_results
+                            if str(result.get("code") or "").strip()
+                            and str(result.get("name") or "").strip()
+                        ),
+                        None,
+                    )
+                except Exception:
+                    candidate = None
             if not candidate:
                 continue
             key = (normalize_provider_name(candidate.get("provider") or provider), str(candidate.get("code") or ""))
@@ -485,7 +503,6 @@ class QueryService:
         }
         if provider == "COINGECKO":
             params["coinIds"] = [code]
-        broad_concept = self._broad_exact_title_catalog_concept(query)
         if broad_concept:
             params["__catalog_concept"] = broad_concept
         countries = self._extract_countries_from_query(query)
@@ -1545,11 +1562,6 @@ class QueryService:
             )
             if recovered_uncertain_data:
                 data = recovered_uncertain_data
-            data, coverage_warning = await self._maybe_improve_country_coverage(
-                query,
-                intent,
-                data,
-            )
             clarification_response = self._build_uncertain_result_clarification(
                 conversation_id=conv_id,
                 query=query,
@@ -1561,6 +1573,12 @@ class QueryService:
                 return clarification_response
         else:
             logger.info("Skipping post-fetch clarification for delta-resolved intent")
+
+        data, coverage_warning = await self._maybe_improve_country_coverage(
+            query,
+            intent,
+            data,
+        )
 
         verification_error = await self._verify_execution_result(
             query,
@@ -1797,7 +1815,7 @@ class QueryService:
             rendered = top_indicator or top_series_id or "top fetched series"
             return (
                 f"The fetched result is semantically implausible for the requested query. "
-                f"Top series: {rendered}."
+                f"Requested query: {verification_query}. Top series: {rendered}."
             )
 
         if not self._use_post_fetch_semantic_judge():
@@ -1950,6 +1968,12 @@ class QueryService:
         if not current_provider:
             return False
 
+        if (
+            getattr(delta, "delta_type", None) == "chart_change"
+            and getattr(delta, "query_type", None) == "parameter_delta"
+        ):
+            return True
+
         params = delta_intent.parameters or {}
         semantic_label = str(
             params.get("__semantic_indicator_label")
@@ -1981,6 +2005,49 @@ class QueryService:
         except Exception as exc:
             logger.debug("Delta provider preservation lookup failed: %s", exc)
 
+        return False
+
+    def _should_force_statscan_for_canada_decomposition_delta(
+        self,
+        state: Optional[Any],
+        delta: Optional[Any],
+    ) -> bool:
+        """Force StatsCan for Canada-scoped decomposition follow-ups.
+
+        Short delta queries like "Show by province" lose the explicit Canada
+        mention, so generic re-routing often keeps the prior OECD provider.
+        Structural Canada geography/dimension breakdowns should prefer
+        Statistics Canada as the framework-level canonical provider.
+        """
+        if state is None or delta is None:
+            return False
+        if (
+            delta.changed_decomposition is None
+            and delta.added_dimensions is None
+            and delta.removed_dimensions is None
+        ):
+            return False
+
+        scope = []
+        if getattr(state, "countries", None):
+            scope.extend(list(getattr(state, "countries", None) or []))
+        elif getattr(state, "country", None):
+            scope.append(getattr(state, "country"))
+        normalized_scope = {
+            str(self._normalize_country_to_iso2(country) or country or "").upper()
+            for country in scope
+            if str(country or "").strip()
+        }
+        if normalized_scope != {"CA"}:
+            return False
+
+        decomposition = getattr(delta, "changed_decomposition", None) or {}
+        decomp_type = str(decomposition.get("type") or "").strip().lower()
+        axis = str(decomposition.get("axis") or "").strip().lower()
+        if decomp_type in {"provinces", "regions", "states", "dimension"}:
+            return True
+        if axis in {"geography", "age group", "gender", "sex"}:
+            return True
         return False
 
     def _should_use_collective_answer_member_delta(
@@ -2726,6 +2793,46 @@ class QueryService:
             logger.debug("Cache key JSON serialization fallback: %s", _ser_exc)
             return str(sorted(cache_params.items()))
 
+    def _cached_result_has_complete_country_coverage(
+        self,
+        params: Optional[dict],
+        data: Any,
+    ) -> bool:
+        """Reject cached multi-country payloads that dropped requested countries.
+
+        Partial responses can occur transiently when upstream providers timeout
+        or return incomplete batches. If cached before post-fetch coverage
+        checks run, they poison later multiround turns with silently truncated
+        scopes. This helper enforces a framework-level invariant: explicit
+        multi-country requests are cacheable only when all requested countries
+        are present in the payload.
+        """
+        if not data:
+            return False
+
+        data_list = data if isinstance(data, list) else [data]
+        try:
+            coverage_intent = ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=[str((params or {}).get("indicator") or "__cache_probe__")],
+                parameters=dict(params or {}),
+                clarificationNeeded=False,
+            )
+            coverage = self._assess_country_coverage(coverage_intent, data_list)
+        except Exception as exc:
+            logger.debug("Cache coverage assessment failed: %s", exc)
+            return True
+
+        if coverage and not coverage.get("complete", False):
+            logger.info(
+                "Skipping incomplete multi-country cache payload: requested=%s returned=%s missing=%s",
+                coverage.get("requested_display"),
+                coverage.get("returned_display"),
+                coverage.get("missing_display"),
+            )
+            return False
+        return True
+
     def _coerce_parsed_intent(self, raw_intent: Any, query: str) -> Optional[ParsedIntent]:
         """
         Convert parsed intent payloads (dict/model) to ParsedIntent and preserve original query.
@@ -2765,17 +2872,21 @@ class QueryService:
             redis_cache = await get_redis_cache()
             query_key = self._serialize_cache_query(cache_params)
             cached_data = await redis_cache.get(provider, query_key, cache_params)
-            if cached_data:
+            if cached_data and self._cached_result_has_complete_country_coverage(params, cached_data):
                 logger.info(f"Redis cache hit for {provider}")
                 return cached_data
+            if cached_data:
+                logger.info(f"Redis cache entry rejected for {provider} due to incomplete country coverage")
         except Exception as e:
             logger.warning(f"Redis cache error: {e}, falling back to in-memory")
 
         # Fallback to in-memory cache
         cached_data = cache_service.get_data(provider, cache_params)
-        if cached_data:
+        if cached_data and self._cached_result_has_complete_country_coverage(params, cached_data):
             logger.info(f"In-memory cache hit for {provider}")
             return cached_data
+        if cached_data:
+            logger.info(f"In-memory cache entry rejected for {provider} due to incomplete country coverage")
 
         return None
 
@@ -2787,9 +2898,12 @@ class QueryService:
         """
         cache_params = self._build_cache_params(provider, params)
         stale = cache_service.get_data_stale(provider, cache_params)
-        if stale:
+        if stale and self._cached_result_has_complete_country_coverage(params, stale):
             logger.info(f"📦 Serving STALE cache for {provider} (provider may be down)")
-        return stale
+            return stale
+        if stale:
+            logger.info(f"Stale cache entry rejected for {provider} due to incomplete country coverage")
+        return None
 
     async def _save_to_cache(self, provider: str, params: dict, data: list):
         """
@@ -2806,6 +2920,9 @@ class QueryService:
         """
         if not data:
             logger.debug(f"Skipping cache save — empty data for {provider}")
+            return
+        if not self._cached_result_has_complete_country_coverage(params, data):
+            logger.info(f"Skipping cache save for {provider} — incomplete multi-country coverage")
             return
         cache_params = self._build_cache_params(provider, params)
 
@@ -3748,6 +3865,19 @@ class QueryService:
                             return _collective_response
 
                     _merged_state = merge_state(_current_conv_state, _delta)
+                    _force_statscan_canada_delta = self._should_force_statscan_for_canada_decomposition_delta(
+                        _merged_state,
+                        _delta,
+                    )
+                    if _force_statscan_canada_delta:
+                        if normalize_provider_name(
+                            _merged_state.provider or _merged_state.routed_provider or ""
+                        ) != "STATSCAN":
+                            _merged_state.resolved_indicator_code = None
+                            _merged_state.last_indicators_resolved = None
+                        _merged_state.provider = "STATSCAN"
+                        _merged_state.routed_provider = "STATSCAN"
+                        _merged_state.provider_locked = True
                     _delta_intent = materialize_intent(_merged_state)
 
                     # Route the materialized intent through UnifiedRouter.

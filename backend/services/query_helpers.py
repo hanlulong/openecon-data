@@ -13,6 +13,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 from ..models import ClarificationOption, NormalizedData, ParsedIntent, QueryResponse
 from ..routing.country_resolver import CountryResolver
 from ..services.query_complexity import QueryComplexityAnalyzer
+from ..services.provider_fallback import normalize_country_to_iso2
 from ..utils.providers import normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 
@@ -514,6 +515,76 @@ async def maybe_improve_country_coverage(
     best_data = current_data
     best_coverage = initial_coverage
 
+    missing_display = [str(item) for item in (initial_coverage.get("missing_display") or []) if item]
+    missing_fetch_targets = [
+        normalize_country_to_iso2(item) or str(item)
+        for item in (initial_coverage.get("missing_iso2") or initial_coverage.get("missing_display") or [])
+        if item
+    ]
+    if provider and missing_fetch_targets:
+        supplemental_data: List[NormalizedData] = []
+        for missing_country in missing_fetch_targets:
+            child_intent = intent.model_copy(deep=True)
+            child_params = dict(params)
+            child_params.pop("countries", None)
+            child_params["country"] = missing_country
+            child_intent.parameters = child_params
+            child_intent.apiProvider = provider
+            try:
+                fetched = await retry_async(
+                    lambda intent=child_intent: svc._fetch_data(intent),
+                    max_attempts=2,
+                    initial_delay=0.3,
+                )
+            except Exception as exc:
+                logger.info(
+                    "Coverage same-provider backfill failed for %s via %s: %s",
+                    missing_country,
+                    provider,
+                    exc,
+                )
+                continue
+            if fetched:
+                supplemental_data.extend(list(fetched))
+
+        if supplemental_data:
+            merged_data: List[NormalizedData] = []
+            seen_keys: set[tuple[str, str, str, str]] = set()
+            for series in list(current_data) + supplemental_data:
+                metadata = getattr(series, "metadata", None) if series is not None else None
+                key = (
+                    str(getattr(metadata, "source", "") or "").strip().upper(),
+                    str(getattr(metadata, "seriesId", "") or "").strip().upper(),
+                    str(getattr(metadata, "country", "") or "").strip().upper(),
+                    str(getattr(metadata, "indicator", "") or "").strip().lower(),
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged_data.append(series)
+
+            merged_coverage = svc._assess_country_coverage(intent, merged_data)
+            if merged_coverage:
+                merged_score = (
+                    float(merged_coverage.get("coverage_ratio", 0.0)),
+                    int(merged_coverage.get("covered_count", 0)),
+                )
+                best_score = (
+                    float(best_coverage.get("coverage_ratio", 0.0)),
+                    int(best_coverage.get("covered_count", 0)),
+                )
+                if merged_score > best_score:
+                    best_data = merged_data
+                    best_coverage = merged_coverage
+                    logger.info(
+                        "Same-provider coverage backfill improved country coverage to %s/%s",
+                        best_coverage.get("covered_count"),
+                        best_coverage.get("requested_count"),
+                    )
+
+    if best_coverage.get("complete"):
+        return best_data, None
+
     try:
         fallback_data = await svc._try_with_fallback(
             intent,
@@ -548,9 +619,6 @@ async def maybe_improve_country_coverage(
             logger.debug(
                 "Coverage fallback returned data without country labels; keeping primary result"
             )
-
-    if best_coverage.get("complete"):
-        return best_data, None
 
     warning_message = svc._build_country_coverage_warning_message(best_coverage)
     return best_data, warning_message or None

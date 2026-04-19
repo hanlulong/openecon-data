@@ -104,6 +104,17 @@ _ANNUALIZED_RATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_UNIT_CONVERSION_RE = re.compile(
+    r"\b(?:convert|show|display)\s+(?:to|in)\s+"
+    r"(billions?|millions?|trillions?|thousands?)\b",
+    re.IGNORECASE,
+)
+
+_ALL_TIME_HIGH_RE = re.compile(
+    r"\b(?:all[\s-]*time\s+high|ath)\b",
+    re.IGNORECASE,
+)
+
 _TRADE_EXPORT_IMPORT_RE = re.compile(
     r"\b(exports?|imports?)\b",
     re.IGNORECASE,
@@ -372,6 +383,14 @@ class DeltaExtractor:
         if delta:
             return delta
 
+        delta = self._try_rate_like_unit_conversion_noop(query_text, state)
+        if delta:
+            return delta
+
+        delta = self._try_crypto_all_time_high_follow_up(query_text, state)
+        if delta:
+            return delta
+
         delta = self._try_ranking_follow_up(query_text, state)
         if delta:
             return delta
@@ -554,6 +573,77 @@ class DeltaExtractor:
             return None
 
         logger.info("Delta: annualized-rate request on already rate-like series -> preserve current state")
+        return FollowUpDelta(
+            changed_chart_type=state.chart_type or "line",
+            raw_query=query,
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_rate_like_unit_conversion_noop(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Treat incompatible magnitude-unit requests on rate-like series as no-ops.
+
+        Follow-ups such as "Convert to billions" are formatting requests for
+        level data, but they do not make semantic sense when the active series
+        is already expressed as a rate/percent. Preserving the current state is
+        safer than re-routing to a new provider/indicator family.
+        """
+        if not _UNIT_CONVERSION_RE.search(query):
+            return None
+
+        indicator_text = str(state.indicator or "").strip().lower()
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        frequency = str(state.frequency or "").strip().lower()
+        resolved_code = str(state.resolved_indicator_code or "").strip().upper()
+
+        already_rate_like = (
+            "growth" in indicator_text
+            or "inflation" in indicator_text
+            or "rate" in indicator_text
+            or "%" in indicator_text
+            or frequency == "annual"
+            or resolved_code in {"NGDP_RPCH", "NY.GDP.MKTP.KD.ZG", "FP.CPI.TOTL.ZG", "UNE_RT_A"}
+            or provider in {"IMF", "WORLDBANK"} and any(
+                cue in indicator_text for cue in ("growth", "inflation")
+            )
+        )
+        if not already_rate_like:
+            return None
+
+        logger.info("Delta: incompatible magnitude-unit request on rate-like series -> preserve current state")
+        return FollowUpDelta(
+            changed_chart_type=state.chart_type or "line",
+            raw_query=query,
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+    def _try_crypto_all_time_high_follow_up(
+        self,
+        query: str,
+        state: ConversationState,
+    ) -> Optional[FollowUpDelta]:
+        """Treat CoinGecko ATH comparison prompts as state-preserving follow-ups.
+
+        The current framework does not model ATH as a separate benchmark series.
+        Returning a no-op chart delta prevents the follow-up from drifting into
+        an additive pseudo-indicator that duplicates the active crypto asset.
+        """
+        if not _ALL_TIME_HIGH_RE.search(query):
+            return None
+
+        provider = str(state.provider or state.routed_provider or "").strip().upper()
+        if provider != "COINGECKO":
+            return None
+
+        if not (state.coin_ids or "price" in str(state.indicator or "").strip().lower()):
+            return None
+
+        logger.info("Delta: crypto all-time-high benchmark follow-up -> preserve current state")
         return FollowUpDelta(
             changed_chart_type=state.chart_type or "line",
             raw_query=query,

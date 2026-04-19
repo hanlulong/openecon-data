@@ -2256,6 +2256,7 @@ class QueryServiceTests(unittest.TestCase):
 
         assert failure is not None
         self.assertIn("yield spread", failure.lower())
+        self.assertIn("10-year treasury yield", failure.lower())
 
     def test_verify_execution_result_rejects_m1_false_pass_via_semantic_judge(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
@@ -2293,7 +2294,8 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         assert failure is not None
-        self.assertIn("requested m1", failure.lower())
+        self.assertIn("m1 money supply", failure.lower())
+        self.assertIn("m2 money stock", failure.lower())
 
     def test_verify_execution_result_rejects_growth_false_pass_via_semantic_judge(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
@@ -2535,6 +2537,52 @@ class QueryServiceTests(unittest.TestCase):
         assert state is not None
         self.assertEqual(state.provider, "FRED")
         self.assertEqual(state.country, "US")
+
+    def test_execute_resolved_intent_still_runs_country_coverage_improvement_when_post_fetch_clarification_is_skipped(self) -> None:
+        self.service.settings.use_minimal_execution_plan = True
+        conv_id = conversation_manager.get_or_create("conv-phase2-skip-clarification-coverage")
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["imports as % of GDP"],
+            parameters={"countries": ["KR", "US"], "indicator": "NE.IMP.GNFS.ZS"},
+            clarificationNeeded=False,
+            originalQuery="Change to 2015-2024",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="WORLDBANK",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+        partial = [sample_series_with(source="World Bank", indicator="Imports of goods and services (% of GDP)", country="United States", series_id="NE.IMP.GNFS.ZS", unit="%")]
+        improved = partial + [sample_series_with(source="World Bank", indicator="Imports of goods and services (% of GDP)", country="Korea, Rep.", series_id="NE.IMP.GNFS.ZS", unit="%")]
+
+        with patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", AsyncMock(return_value=None)), \
+             patch.object(self.service, "_fetch_data", AsyncMock(return_value=partial)), \
+             patch.object(self.service, "_maybe_improve_country_coverage", AsyncMock(return_value=(improved, None))) as coverage_mock, \
+             patch.object(self.service, "_verify_execution_result", AsyncMock(return_value=None)), \
+             patch.object(self.service, "_build_uncertain_result_clarification", return_value=None):
+            response = run(
+                self.service._execute_resolved_intent(  # pylint: disable=protected-access
+                    "Change to 2015-2024",
+                    conv_id,
+                    intent,
+                    parse_result,
+                    skip_post_fetch_clarification=True,
+                )
+            )
+
+        coverage_mock.assert_awaited_once()
+        self.assertEqual(len(response.data or []), 2)
 
     def test_standard_query_processing_verification_failure_restores_previous_intent(self) -> None:
         previous_intent = ParsedIntent(
@@ -3062,6 +3110,50 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("_plan_hash", cache_params)
         self.assertNotIn("_query_hash", cache_params)
 
+    def test_cached_result_has_complete_country_coverage_rejects_partial_multicountry_payload(self) -> None:
+        partial = [sample_series_with(source="World Bank", indicator="Imports of goods and services (% of GDP)", country="United States", series_id="NE.IMP.GNFS.ZS")]
+
+        self.assertFalse(
+            self.service._cached_result_has_complete_country_coverage(  # pylint: disable=protected-access
+                {"countries": ["United States", "Korea, Rep."]},
+                partial,
+            )
+        )
+
+    def test_save_to_cache_skips_partial_multicountry_payload(self) -> None:
+        partial = [sample_series_with(source="World Bank", indicator="Imports of goods and services (% of GDP)", country="United States", series_id="NE.IMP.GNFS.ZS")]
+
+        with patch("backend.services.query.get_redis_cache", new_callable=AsyncMock) as redis_factory, \
+             patch("backend.services.query.cache_service.cache_data") as mem_cache:
+            run(
+                self.service._save_to_cache(  # pylint: disable=protected-access
+                    "WORLDBANK",
+                    {"countries": ["United States", "Korea, Rep."], "indicator": "NE.IMP.GNFS.ZS"},
+                    partial,
+                )
+            )
+
+        redis_factory.assert_not_called()
+        mem_cache.assert_not_called()
+
+    def test_get_from_cache_ignores_partial_multicountry_payload(self) -> None:
+        partial = [sample_series_with(source="World Bank", indicator="Imports of goods and services (% of GDP)", country="United States", series_id="NE.IMP.GNFS.ZS")]
+
+        class _FakeRedis:
+            async def get(self, provider, query_key, cache_params):
+                return partial
+
+        with patch("backend.services.query.get_redis_cache", new_callable=AsyncMock, return_value=_FakeRedis()), \
+             patch("backend.services.query.cache_service.get_data", return_value=None):
+            result = run(
+                self.service._get_from_cache(  # pylint: disable=protected-access
+                    "WORLDBANK",
+                    {"countries": ["United States", "Korea, Rep."], "indicator": "NE.IMP.GNFS.ZS"},
+                )
+            )
+
+        self.assertIsNone(result)
+
     def test_build_prefetch_indicator_choice_clarification_stops_on_age_variant_without_options(self) -> None:
         """Do not silently accept a youth-employment variant for a broad employment request."""
         intent = ParsedIntent(
@@ -3376,6 +3468,44 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(refined_intent.apiProvider, "IMF")
         self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
 
+    def test_delta_chart_change_preserves_existing_provider_without_reroute(self) -> None:
+        from backend.services.conversation_state_v2 import ConversationState, FollowUpDelta
+
+        conv_id = conversation_manager.get_or_create("conv-chart-change-provider-preservation")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="GDP growth rate",
+                countries=["US", "DE", "JP"],
+                provider="IMF",
+                resolved_indicator_code="NGDP_RPCH",
+                original_query="GDP growth rate from IMF",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        delta = FollowUpDelta(
+            changed_chart_type="line",
+            raw_query="Convert to billions",
+            delta_type="chart_change",
+            query_type="parameter_delta",
+        )
+
+        with patch("backend.services.query.DeltaExtractor.extract", return_value=delta), \
+             patch.object(self.service.unified_router, "route") as route_mock, \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("Convert to billions", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        route_mock.assert_not_called()
+        refined_intent = execute_intent.call_args.kwargs["intent"]
+        self.assertEqual(refined_intent.apiProvider, "IMF")
+        self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
+
     def test_delta_path_does_not_commit_state_on_failed_execution(self) -> None:
         from backend.services.conversation_state_v2 import ConversationState
 
@@ -3441,10 +3571,46 @@ class QueryServiceTests(unittest.TestCase):
             response = run(self.service.process_query("Show by province", conversation_id=conv_id))
 
         self.assertEqual(response, expected_response)
-        route_mock.assert_called_once()
+        route_mock.assert_not_called()
         refined_intent = execute_intent.call_args.kwargs["intent"]
         self.assertEqual(refined_intent.apiProvider, "STATSCAN")
         self.assertTrue(refined_intent.parameters.get("__delta_indicator_changed"))
+
+    def test_delta_decomposition_follow_up_forces_statscan_for_canada_without_router_help(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-delta-decomposition-force-statscan")
+        conversation_manager.set_conversation_state(
+            conv_id,
+            ConversationState(
+                indicator="employment rate",
+                country="Canada",
+                provider="OECD",
+                resolved_indicator_code="LREMTTTTCAQ156S",
+                original_query="Canada employment rate",
+            ),
+        )
+
+        expected_response = QueryResponse(
+            conversationId=conv_id,
+            clarificationNeeded=False,
+            message="ok",
+        )
+        delta = FollowUpDelta(
+            changed_decomposition={"type": "provinces", "entities": None, "axis": "Geography"},
+            delta_type="decomposition_change",
+            raw_query="Show by province",
+        )
+
+        with patch("backend.services.query.DeltaExtractor.extract", return_value=delta), \
+             patch.object(self.service.unified_router, "route") as route_mock, \
+             patch.object(self.service, "_execute_resolved_intent", AsyncMock(return_value=expected_response)) as execute_intent:
+            response = run(self.service.process_query("Show by province", conversation_id=conv_id))
+
+        self.assertEqual(response, expected_response)
+        route_mock.assert_not_called()
+        refined_intent = execute_intent.call_args.kwargs["intent"]
+        self.assertEqual(refined_intent.apiProvider, "STATSCAN")
+        self.assertTrue(refined_intent.parameters.get("__semantic_provider_locked"))
+        self.assertNotEqual(refined_intent.parameters.get("indicator"), "LREMTTTTCAQ156S")
 
     def test_delta_path_persists_statscan_provider_after_decomposition_followup(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-delta-persist-statscan-provider")
@@ -6669,7 +6835,8 @@ class QueryServiceTests(unittest.TestCase):
         series.metadata.country = "China"
         series.metadata.indicator = "Imports of goods and services (% of GDP)"
 
-        with patch.object(self.service, "_try_with_fallback", side_effect=DataNotAvailableError("no fallback")):
+        with patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[]), \
+             patch.object(self.service, "_try_with_fallback", side_effect=DataNotAvailableError("no fallback")):
             improved_data, warning = run(
                 self.service._maybe_improve_country_coverage(  # pylint: disable=protected-access
                     query=intent.originalQuery or "",
@@ -6682,6 +6849,95 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(warning)
         assert warning is not None
         self.assertIn("Missing", warning)
+
+    def test_maybe_improve_country_coverage_backfills_missing_countries_from_same_provider(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["imports as % of GDP"],
+            parameters={"countries": ["China", "US"], "indicator": "NE.IMP.GNFS.ZS"},
+            clarificationNeeded=False,
+            originalQuery="import share of gdp in china and us",
+        )
+        china_series = sample_series_with(
+            source="World Bank",
+            indicator="Imports of goods and services (% of GDP)",
+            country="China",
+            series_id="NE.IMP.GNFS.ZS",
+            unit="%",
+        )
+        us_series = sample_series_with(
+            source="World Bank",
+            indicator="Imports of goods and services (% of GDP)",
+            country="United States",
+            series_id="NE.IMP.GNFS.ZS",
+            unit="%",
+        )
+
+        async def _fake_fetch_data(backfill_intent):
+            if (backfill_intent.parameters or {}).get("country") == "US":
+                return [us_series]
+            return []
+
+        with patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data) as fetch_mock, \
+             patch.object(self.service, "_try_with_fallback", new_callable=AsyncMock) as fallback_mock:
+            improved_data, warning = run(
+                self.service._maybe_improve_country_coverage(  # pylint: disable=protected-access
+                    query=intent.originalQuery or "",
+                    intent=intent,
+                    data=[china_series],
+                )
+            )
+
+        self.assertEqual(len(improved_data), 2)
+        self.assertIsNone(warning)
+        fallback_mock.assert_not_awaited()
+        self.assertTrue(fetch_mock.awaited)
+
+    def test_maybe_improve_country_coverage_backfill_normalizes_provider_display_country_names(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["imports as % of GDP"],
+            parameters={"countries": ["Korea, Rep.", "US"], "indicator": "NE.IMP.GNFS.ZS"},
+            clarificationNeeded=False,
+            originalQuery="Change to 2015-2024",
+        )
+        us_series = sample_series_with(
+            source="World Bank",
+            indicator="Imports of goods and services (% of GDP)",
+            country="United States",
+            series_id="NE.IMP.GNFS.ZS",
+            unit="%",
+        )
+        kr_series = sample_series_with(
+            source="World Bank",
+            indicator="Imports of goods and services (% of GDP)",
+            country="Korea, Rep.",
+            series_id="NE.IMP.GNFS.ZS",
+            unit="%",
+        )
+
+        seen_countries: list[str | None] = []
+
+        async def _fake_fetch_data(backfill_intent):
+            seen_countries.append((backfill_intent.parameters or {}).get("country"))
+            if (backfill_intent.parameters or {}).get("country") == "KR":
+                return [kr_series]
+            return []
+
+        with patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data), \
+             patch.object(self.service, "_try_with_fallback", new_callable=AsyncMock) as fallback_mock:
+            improved_data, warning = run(
+                self.service._maybe_improve_country_coverage(  # pylint: disable=protected-access
+                    query=intent.originalQuery or "",
+                    intent=intent,
+                    data=[us_series],
+                )
+            )
+
+        self.assertIn("KR", seen_countries)
+        self.assertEqual(len(improved_data), 2)
+        self.assertIsNone(warning)
+        fallback_mock.assert_not_awaited()
 
     def test_try_with_fallback_sanitizes_provider_specific_indicator_params(self) -> None:
         intent = ParsedIntent(
