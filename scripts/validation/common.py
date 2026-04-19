@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 from html import unescape
 import json
+from functools import lru_cache
 import random
 import re
 import sqlite3
@@ -138,6 +139,20 @@ _GENERIC_SHORT_TITLE_TOKENS = {
 }
 
 
+if CountryResolver is not None:
+    _COUNTRY_ALIAS_PATTERN_ENTRIES = [
+        (
+            re.compile(rf'(?<![a-z0-9]){re.escape(str(alias).strip().lower())}(?![a-z0-9])'),
+            CountryResolver.normalize(str(alias).strip()),
+            str(alias).strip(),
+        )
+        for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True)
+        if str(alias).strip() and CountryResolver.normalize(str(alias).strip())
+    ]
+else:
+    _COUNTRY_ALIAS_PATTERN_ENTRIES = []
+
+
 def detect_country_codes_in_text(text: str) -> set[str]:
     if CountryResolver is None:
         return set()
@@ -145,14 +160,9 @@ def detect_country_codes_in_text(text: str) -> set[str]:
     if not lowered:
         return set()
     codes: set[str] = set()
-    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-        alias_text = str(alias).strip().lower()
-        if not alias_text:
-            continue
-        if re.search(rf'(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])', lowered):
-            normalized = CountryResolver.normalize(alias_text)
-            if normalized:
-                codes.add(normalized)
+    for pattern, normalized, _alias_text in _COUNTRY_ALIAS_PATTERN_ENTRIES:
+        if pattern.search(lowered):
+            codes.add(normalized)
     return codes
 
 
@@ -163,14 +173,9 @@ def detect_single_country_from_text(text: str) -> str | None:
     if not lowered:
         return None
     matches: list[tuple[int, str, str]] = []
-    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-        alias_text = str(alias).strip()
-        if not alias_text:
-            continue
-        if re.search(rf'(?<![a-z0-9]){re.escape(alias_text.lower())}(?![a-z0-9])', lowered):
-            normalized = CountryResolver.normalize(alias_text)
-            if normalized:
-                matches.append((len(alias_text), normalized, alias_text))
+    for pattern, normalized, alias_text in _COUNTRY_ALIAS_PATTERN_ENTRIES:
+        if pattern.search(lowered):
+            matches.append((len(alias_text), normalized, alias_text))
     codes = {code for _, code, _ in matches}
     if len(codes) != 1 or not matches:
         return None
@@ -753,6 +758,7 @@ def informative_tokens(text: str) -> list[str]:
     return tokens
 
 
+@lru_cache(maxsize=20000)
 def description_context_phrase(description: str) -> str:
     raw_description = str(description or '').strip()
     if not raw_description:
@@ -795,6 +801,20 @@ def provider_metadata_context(record: dict[str, Any]) -> tuple[dict[str, Any], s
         or record.get('raw_metadata')
         or record.get('metadata')
     )
+    provider = str(record.get('provider_stratum') or record.get('provider') or origin.get('source_provider') or '').upper()
+    description = str(origin.get('description') or record.get('description') or '').strip()
+    keywords = str(origin.get('keywords') or record.get('keywords') or '').strip()
+    synonyms = str(origin.get('synonyms') or record.get('synonyms') or '').strip()
+    category = str(origin.get('category') or record.get('category') or '').strip()
+    subcategory = str(origin.get('subcategory') or record.get('subcategory') or '').strip()
+
+    # Most direct-query quality heuristics only need rich metadata for providers
+    # with extremely broad catalogs and verbose source notes.
+    if provider not in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
+        metadata_text = ' '.join(
+            piece for piece in [description, keywords, synonyms, category, subcategory] if piece
+        ).lower()
+        return {}, metadata_text
 
     parsed: dict[str, Any] = {}
     if isinstance(raw_value, dict):
@@ -821,11 +841,11 @@ def provider_metadata_context(record: dict[str, Any]) -> tuple[dict[str, Any], s
         if isinstance(topic, dict) and str(topic.get('value') or '').strip()
     ]
     pieces = [
-        str(origin.get('description') or record.get('description') or '').strip(),
-        str(origin.get('keywords') or record.get('keywords') or '').strip(),
-        str(origin.get('synonyms') or record.get('synonyms') or '').strip(),
-        str(origin.get('category') or record.get('category') or '').strip(),
-        str(origin.get('subcategory') or record.get('subcategory') or '').strip(),
+        description,
+        keywords,
+        synonyms,
+        category,
+        subcategory,
         source_value,
         str(parsed.get('sourceNote') or '').strip(),
         str(parsed.get('sourceOrganization') or '').strip(),
@@ -843,8 +863,8 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     provider = str(record.get('provider_stratum') or record.get('provider') or origin.get('source_provider') or '').upper()
     lowered = f"{query} {name} {description}".lower()
     category = str(origin.get('category') or '').lower()
-    _, metadata_text = provider_metadata_context(record)
-    enriched = f"{lowered} {metadata_text}".strip()
+    metadata_text = ''
+    enriched = lowered
 
     score = 0
     score += len({token for token in informative_tokens(name)})
@@ -864,6 +884,9 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     score += family_success_adjustment(provider, name)
     score += subfamily_success_adjustment(provider, name)
     score += heuristic_subfamily_adjustment(provider, str(origin.get('category') or record.get('category') or ''), name)
+    if provider in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
+        _, metadata_text = provider_metadata_context(record)
+        enriched = f"{lowered} {metadata_text}".strip()
     if provider == 'IMF':
         if any(term in enriched for term in ['consumer prices', 'producer price', 'harmonized', 'expenditure of households', 'index']):
             score += 4
@@ -1020,24 +1043,11 @@ def derive_coin_query_name(row: dict[str, Any]) -> str:
 
 
 def query_mentions_country(text: str) -> bool:
-    lowered = str(text or '').lower()
-    return any(re.search(rf'\b{re.escape(country)}\b', lowered) for country in _COUNTRY_QUERY_TERMS)
+    return bool(detect_country_codes_in_text(text))
 
 
 def count_distinct_country_mentions(text: str) -> int:
-    lowered = str(text or '').lower()
-    matches = {
-        country
-        for country in _COUNTRY_QUERY_TERMS
-        if re.search(rf'\b{re.escape(country)}\b', lowered)
-    }
-    if {'us', 'usa', 'united states'} & matches:
-        matches -= {'us', 'usa', 'united states'}
-        matches.add('united states')
-    if {'uk', 'united kingdom'} & matches:
-        matches -= {'uk', 'united kingdom'}
-        matches.add('united kingdom')
-    return len(matches)
+    return len(detect_country_codes_in_text(text))
 
 
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
@@ -1155,7 +1165,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '').strip()
     reasons: list[str] = []
     query_lower = query.lower()
-    _, metadata_text = provider_metadata_context(row)
+    metadata_text = ''
+    if provider.upper() in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
+        _, metadata_text = provider_metadata_context(row)
     worldbank_text = f"{query_lower} {origin_name_lower} {metadata_text}".strip()
     query_country_codes = detect_country_codes_in_text(query)
     origin_country_codes = detect_country_codes_in_text(origin_name)
