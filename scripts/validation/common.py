@@ -1015,6 +1015,9 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     if provider_upper == 'COINGECKO':
         return f"{derive_coin_query_name(row)} cryptocurrency price from CoinGecko"
     if provider_upper == 'EXCHANGERATE':
+        target_code = str(row.get('code') or '').strip().upper()
+        if re.fullmatch(r'[A-Z]{3}', target_code) and target_code != 'USD':
+            return f"USD to {target_code} exchange rate from ExchangeRate"
         return f"{choice} exchange rate from ExchangeRate"
     if provider_upper == 'COMTRADE':
         commodity = re.sub(r'^\d+\s*-\s*', '', name).strip() or name

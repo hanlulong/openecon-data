@@ -12,8 +12,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import (
+    audit_direct_query_shape,
     DEFAULT_DB,
     default_query_for_row,
+    direct_query_specificity_score,
     infer_scope_family,
     infer_transform_family,
     read_json,
@@ -87,6 +89,27 @@ def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_co
     }
 
 
+def _select_quality_screened_records(records: list[dict], count: int) -> list[dict]:
+    def sort_key(record: dict) -> tuple[int, int, int, int, str]:
+        provenance = dict(record.get('provenance') or {})
+        risk_level = str(provenance.get('query_quality_risk') or 'low')
+        risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
+        reasons = list(provenance.get('query_quality_reasons') or [])
+        specificity = direct_query_specificity_score(record)
+        risk_penalty = {'low': 0, 'medium': 10, 'high': 25}.get(risk_level, 30)
+        effective_specificity = specificity - risk_penalty
+        return (
+            risk_rank,
+            -effective_specificity,
+            len(reasons),
+            len(str(record.get('query') or '')),
+            str(record.get('id') or ''),
+        )
+
+    ranked = sorted(records, key=sort_key)
+    return ranked[:count]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Generate direct-session certification candidates from the frozen provider allocation plan.')
     parser.add_argument('--db-path', type=Path, default=DEFAULT_DB)
@@ -111,19 +134,27 @@ def main() -> int:
         scaled_count = max(1, round(count * scale)) if scale > 0 else 0
         if scaled_count == 0:
             continue
-        samples = sample_indicator_rows(provider, scaled_count, db_path=args.db_path.resolve(), seed=args.seed)
+        provider_population = int(provider_counts[provider])
+        oversample_count = min(provider_population, max(scaled_count * 50, scaled_count + 200))
+        samples = sample_indicator_rows(provider, oversample_count, db_path=args.db_path.resolve(), seed=args.seed)
+        candidate_records = []
         for row in samples:
-            rows_out.append(build_record(
+            record = build_record(
                 row,
                 seq,
-                provider_count=int(provider_counts[provider]),
+                provider_count=provider_population,
                 provider_sample_count=scaled_count,
                 snapshot_id=snapshot_id,
                 seed=args.seed,
                 holdout_split=args.holdout_split,
                 dataset_tier=args.dataset_tier,
-            ))
+            )
+            quality = audit_direct_query_shape(record)
+            record['provenance']['query_quality_risk'] = quality['risk_level']
+            record['provenance']['query_quality_reasons'] = quality['reasons']
+            candidate_records.append(record)
             seq += 1
+        rows_out.extend(_select_quality_screened_records(candidate_records, scaled_count))
 
     write_jsonl(args.output.resolve(), rows_out)
     print(json.dumps({
