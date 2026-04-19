@@ -241,10 +241,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         return None
 
     search_inputs = exact_title_search_inputs(text, provider_name)
-    min_name_len = 4 if _normalize_provider_name(provider_name) == "COINGECKO" else 24
+    provider_key = _normalize_provider_name(provider_name)
+    min_name_len = 3 if provider_key == "COINGECKO" else 24
+    query_country_codes = _extract_country_codes_from_text(query_text)
 
     best_candidate: Optional[Dict[str, Any]] = None
-    best_name_len = -1
+    best_rank = (-1, -1)
     seen_codes = set()
     for search_text in search_inputs:
         try:
@@ -268,9 +270,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 )
                 if normalized_query
             ):
-                if len(normalized_name) > best_name_len:
+                candidate_country_codes = _extract_country_codes_from_text(candidate_name)
+                country_rank = len(query_country_codes & candidate_country_codes)
+                rank = (country_rank, len(normalized_name))
+                if rank > best_rank:
                     best_candidate = candidate
-                    best_name_len = len(normalized_name)
+                    best_rank = rank
     return best_candidate
 
 
@@ -305,6 +310,28 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         seen.add(candidate)
         search_inputs.append(candidate)
 
+        normalized_punctuation = re.sub(r"[,:()\[\]]+", " ", candidate)
+        normalized_punctuation = re.sub(r"\s+", " ", normalized_punctuation).strip(" ,;:-")
+        if (
+            normalized_punctuation
+            and normalized_punctuation != candidate
+            and normalized_punctuation not in seen
+        ):
+            queue.append(normalized_punctuation)
+
+        without_leading_transform = re.sub(
+            r"^(?:real|nominal)\s+",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        ).strip(" ,;:-")
+        if (
+            without_leading_transform
+            and without_leading_transform != candidate
+            and without_leading_transform not in seen
+        ):
+            queue.append(without_leading_transform)
+
         # Strip a leading country alias only when it appears as a plain prefix.
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
             stripped_country = re.sub(
@@ -336,6 +363,16 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             if stripped_prefix and stripped_prefix not in seen:
                 queue.append(stripped_prefix)
 
+        for reordered in _country_reordered_exact_title_variants(candidate):
+            if reordered not in seen:
+                queue.append(reordered)
+
+        if provider_key == "IMF":
+            without_definition = re.sub(r"\bdefinition\b", " ", candidate, flags=re.IGNORECASE)
+            without_definition = re.sub(r"\s+", " ", without_definition).strip(" ,;:-")
+            if without_definition and without_definition != candidate and without_definition not in seen:
+                queue.append(without_definition)
+
         if provider_key == "COINGECKO":
             stripped_crypto_suffix = re.sub(
                 r"\b(?:cryptocurrency|crypto|token|coin)\s+price\b",
@@ -360,6 +397,71 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
                 queue.append(suffix)
 
     return search_inputs
+
+
+def _extract_country_codes_from_text(text: str) -> set[str]:
+    """Extract ISO country codes from free text using alias matching."""
+    query_text = str(text or "").strip().lower()
+    if not query_text:
+        return set()
+
+    codes: set[str] = set()
+    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+        alias_text = str(alias).strip()
+        if not alias_text:
+            continue
+        if re.search(
+            rf"(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])",
+            query_text,
+            flags=re.IGNORECASE,
+        ):
+            normalized = CountryResolver.normalize(alias_text)
+            if normalized:
+                codes.add(normalized)
+    return codes
+
+
+def _country_reordered_exact_title_variants(candidate: str) -> list[str]:
+    """Generate country-aware search variants for provider-native titles."""
+    candidate_text = str(candidate or "").strip()
+    if not candidate_text:
+        return []
+
+    variants: list[str] = []
+    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+        alias_text = str(alias).strip()
+        if not alias_text:
+            continue
+
+        suffix_match = re.match(
+            rf"^(?P<head>.+?)\s+for\s+(?P<country>{re.escape(alias_text)})$",
+            candidate_text,
+            flags=re.IGNORECASE,
+        )
+        if suffix_match:
+            head = suffix_match.group("head").strip(" ,;:-")
+            country = suffix_match.group("country").strip()
+            if head and country:
+                variants.append(f"{country} {head}".strip())
+
+        prefixed_match = re.match(
+            rf"^(?P<country>{re.escape(alias_text)})\s*[-,:]\s*(?P<head>.+)$",
+            candidate_text,
+            flags=re.IGNORECASE,
+        )
+        if prefixed_match:
+            country = prefixed_match.group("country").strip()
+            head = prefixed_match.group("head").strip(" ,;:-")
+            if country and head:
+                variants.append(f"{country} {head}".strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        if variant and variant != candidate_text and variant not in seen:
+            seen.add(variant)
+            deduped.append(variant)
+    return deduped
 
 
 def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> bool:
@@ -388,6 +490,11 @@ def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> 
 
     if normalized_query.endswith(normalized_name) or normalized_name.endswith(normalized_query):
         return len(query_tokens) >= 3 and token_delta <= 1 and overlap_ratio >= 0.8
+
+    # Country/state wrappers and light metadata tokens ("US", "VA", "national currency")
+    # should not block near-exact pasted titles when almost all tokens align.
+    if max(len(query_tokens), len(name_tokens)) >= 5 and token_delta <= 2 and overlap_ratio >= 0.85:
+        return True
 
     return False
 
@@ -1647,6 +1754,9 @@ async def resolve_indicator_for_fetch(
         existing_indicator
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)
     )
+    exact_match_locked = bool(
+        params.get("__exact_provider_code_match") or params.get("__exact_indicator_title_match")
+    )
 
     # Qualifier-aware indicator recovery: when the LLM strips qualifiers
     # ("GDP growth G7" -> indicators=["GDP"]), recover the full indicator
@@ -1750,6 +1860,16 @@ async def resolve_indicator_for_fetch(
             _catalog_variant_fallback = existing_indicator
 
     # Path 1: Validate explicit code against query context
+    if has_explicit_code and exact_match_locked:
+        logger.info(
+            "🔒 Keeping exact %s indicator code without plausibility override: %s",
+            provider,
+            existing_indicator,
+        )
+        params = _apply_indicator_with_semantic_label(existing_indicator)
+        intent.parameters = params
+        return params
+
     if has_explicit_code:
         plausibility_query = select_indicator_query_for_resolution(svc, intent)
         if not plausibility_query:

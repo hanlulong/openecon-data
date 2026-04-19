@@ -3441,7 +3441,7 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
     provider_upper = normalize_provider_name(provider)
 
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
-        return bool(re.fullmatch(r"[A-Z]{2}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
+        return bool(re.fullmatch(r"[A-Z]{2,}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
 
     if provider_upper == "BIS":
         return bool(

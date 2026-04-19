@@ -464,6 +464,77 @@ class QueryServiceTests(unittest.TestCase):
         params = fetch_mock.call_args.args[0]
         self.assertEqual(params.get("indicator"), "DGS10")
 
+    def test_resolve_indicator_for_fetch_preserves_exact_worldbank_code(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["UIS.PTRHC.2T3.QUALIFIED"],
+            parameters={
+                "country": "IN",
+                "indicator": "UIS.PTRHC.2T3.QUALIFIED",
+                "__exact_provider_code_match": True,
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="UIS.PTRHC.2T3.QUALIFIED India from World Bank",
+        )
+
+        params = run(
+            self.service._resolve_indicator_for_fetch(  # pylint: disable=protected-access
+                "WORLDBANK",
+                intent,
+                dict(intent.parameters or {}),
+            )
+        )
+
+        self.assertEqual(params.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
+
+    def test_fetch_data_retries_exact_worldbank_title_without_default_window(self) -> None:
+        exact_series = sample_series_with(
+            source="World Bank",
+            indicator="Pupil-qualified teacher ratio in secondary (headcount basis)",
+            series_id="UIS.PTRHC.2T3.QUALIFIED",
+            country="India",
+        )
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["Pupil-qualified teacher ratio in secondary (headcount basis)"],
+            parameters={
+                "country": "IN",
+                "indicator": "UIS.PTRHC.2T3.QUALIFIED",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+            },
+            clarificationNeeded=False,
+            originalQuery="India Pupil-qualified teacher ratio in secondary (headcount basis) from World Bank",
+        )
+
+        with patch.object(self.service, "_get_from_cache", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_save_to_cache", new=AsyncMock()), \
+             patch.object(
+                 self.service,
+                 "_resolve_indicator_for_fetch",
+                 new=AsyncMock(return_value=dict(intent.parameters or {})),
+             ), \
+             patch.object(
+                 self.service.world_bank_provider,
+                 "fetch_indicator",
+                 new=AsyncMock(side_effect=[[], [exact_series]]),
+             ) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "UIS.PTRHC.2T3.QUALIFIED")
+        self.assertEqual(fetch_mock.await_count, 2)
+        first_kwargs = fetch_mock.await_args_list[0].kwargs
+        second_kwargs = fetch_mock.await_args_list[1].kwargs
+        self.assertEqual(first_kwargs.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
+        self.assertEqual(first_kwargs.get("start_date"), "2021-04-20")
+        self.assertEqual(first_kwargs.get("end_date"), "2026-04-19")
+        self.assertIsNone(second_kwargs.get("start_date"))
+        self.assertIsNone(second_kwargs.get("end_date"))
+
     def test_is_resolved_indicator_plausible_rejects_bis_debt_service_for_debt_gdp_query(self) -> None:
         self.assertFalse(
             self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -798,6 +869,118 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "libfi")
         self.assertEqual(intent.parameters.get("coinIds"), ["libfi"])
         self.assertEqual(intent.indicators, ["Liberty Finance"])
+
+    def test_build_exact_indicator_title_intent_handles_three_letter_coingecko_asset(self) -> None:
+        lookup_results = [
+            {
+                "code": "ned",
+                "provider": "CoinGecko",
+                "name": "NED",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Ned cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "ned")
+        self.assertEqual(intent.parameters.get("coinIds"), ["ned"])
+        self.assertEqual(intent.indicators, ["NED"])
+
+    def test_build_exact_indicator_title_intent_reorders_country_suffix_for_fred_titles(self) -> None:
+        def _search_side_effect(query: str, provider: str | None = None, limit: int = 5):
+            if provider == "FRED" and "new zealand real residential property prices" in query.lower():
+                return [
+                    {
+                        "code": "QNZR368BIS",
+                        "provider": "FRED",
+                        "name": "Real Residential Property Prices for New Zealand",
+                    }
+                ]
+            return []
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(side_effect=_search_side_effect)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Real Residential Property Prices for New Zealand from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "QNZR368BIS")
+        self.assertEqual(intent.indicators, ["Real Residential Property Prices for New Zealand"])
+
+    def test_build_exact_indicator_title_intent_prefers_country_matching_oecd_title(self) -> None:
+        lookup_results = [
+            {
+                "code": "DSD_REV_ASAP@DF_REVAUS",
+                "provider": "OECD",
+                "name": "Australia - tax revenues in Revenue Statistics in Asia and the Pacific",
+            },
+            {
+                "code": "DSD_REV_ASAP@DF_REVKOR",
+                "provider": "OECD",
+                "name": "Korea - tax revenues in Revenue Statistics in Asia and the Pacific",
+            },
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Korea - tax revenues in Revenue Statistics in Asia and the Pacific from OECD"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "OECD")
+        self.assertEqual(intent.parameters.get("indicator"), "DSD_REV_ASAP@DF_REVKOR")
+        self.assertEqual(
+            intent.indicators,
+            ["Korea - tax revenues in Revenue Statistics in Asia and the Pacific"],
+        )
+
+    def test_build_exact_indicator_title_intent_accepts_city_state_wrapped_fred_title(self) -> None:
+        lookup_results = [
+            {
+                "code": "HC01ESTVC1751520",
+                "provider": "FRED",
+                "name": "Bachelor's Degree or Higher (5-year estimate) in Bristol city, VA",
+            },
+            {
+                "code": "HC01ESTVC1651520",
+                "provider": "FRED",
+                "name": "High School Graduate or Higher (5-year estimate) in Bristol city, VA",
+            },
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "US VA Bachelor's Degree or Higher (5-year estimate) in Bristol city from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "HC01ESTVC1751520")
+        self.assertEqual(
+            intent.indicators,
+            ["Bachelor's Degree or Higher (5-year estimate) in Bristol city, VA"],
+        )
 
     def test_build_exact_indicator_title_intent_tags_generic_interest_rate_as_broad_concept(self) -> None:
         lookup_results = [

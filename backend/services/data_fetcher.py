@@ -52,6 +52,15 @@ _CURRENCY_SLASH_RE = re.compile(r"\b([A-Z]{3})[/\-]([A-Z]{3})\b")
 _CURRENCY_VS_RE = re.compile(r"\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b")
 _CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
+_TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+_TIME_SCOPE_RELATIVE_RE = re.compile(
+    r"\b(?:last|past|since|between|from|through|until|before|after|during)\b",
+    flags=re.IGNORECASE,
+)
+_RECENCY_CUE_RE = re.compile(
+    r"\b(?:latest|most recent|current|currently|today|yesterday|now)\b",
+    flags=re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +95,24 @@ def _years_from_params(params: dict) -> tuple[Optional[int], Optional[int]]:
     if end_year is None and params.get("endDate"):
         end_year = int(str(params["endDate"])[:4])
     return start_year, end_year
+
+
+def _query_has_explicit_time_scope(query: str) -> bool:
+    """Detect whether the user explicitly constrained the requested time window."""
+    query_text = str(query or "").strip()
+    if not query_text:
+        return False
+    if _RECENCY_CUE_RE.search(query_text):
+        return True
+    if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
+        return True
+    if re.search(
+        r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
+        query_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
 
 
 def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
@@ -1942,6 +1969,37 @@ async def fetch_data(
         result = await fetch_from_provider_dispatch(svc, intent, execution_plan)
         provider_elapsed = time.perf_counter() - provider_start
         logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
+
+    exact_query_without_time_scope = bool(
+        (params.get("__exact_provider_code_match") or params.get("__exact_indicator_title_match"))
+        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+    )
+    if (
+        exact_query_without_time_scope
+        and (not result or (len(result) == 1 and not result[0].data))
+        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+    ):
+        broadened_params = dict(params)
+        for key in ("startDate", "endDate", "start_year", "end_year"):
+            broadened_params.pop(key, None)
+        intent.parameters = broadened_params
+        retry_plan = materialize_execution_plan(
+            execution_plan=None,
+            provider=provider,
+            intent=intent,
+            params=broadened_params,
+        )
+        logger.info(
+            "Retrying exact %s query without default time window: indicator=%s query=%s",
+            provider,
+            broadened_params.get("indicator"),
+            intent.originalQuery,
+        )
+        retry_result = await fetch_from_provider_dispatch(svc, intent, retry_plan)
+        if retry_result and not (len(retry_result) == 1 and not retry_result[0].data):
+            result = retry_result
+            params = broadened_params
+            execution_plan = retry_plan
 
     if not result or (len(result) == 1 and not result[0].data):
         raise DataNotAvailableError(
