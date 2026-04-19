@@ -129,6 +129,10 @@ def test_detect_single_country_from_text_extracts_named_country() -> None:
     assert detect_single_country_from_text("Consumer Price Index for Luxembourg") == "Luxembourg"
 
 
+def test_detect_single_country_from_text_ignores_ambiguous_short_aliases() -> None:
+    assert detect_single_country_from_text("household composition and degree of urbanisation") is None
+
+
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
     row = {
         "provider": "OECD",
@@ -386,6 +390,32 @@ def test_audit_direct_query_shape_flags_worldbank_ddh_prevalence_queries():
     assert "worldbank_ddh_prevalence_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_ease_of_doing_business_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Global: Ease of doing business score (DB15 methodology) from World Bank",
+            "origin": {"name": "Ease of doing business score (DB15 methodology)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_reference_year_population_slices() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Population Age primary for Reference Year 2019; Male from World Bank",
+            "origin": {"name": "Population Age primary for Reference Year 2019; Male"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {
@@ -515,6 +545,19 @@ def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
         {
             "query": "Canada Trends of political violence in West Africa: Analysis by armed group from OECD",
             "origin": {"name": "Trends of political violence in West Africa: Analysis by armed group"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_national_accounts_distribution_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Population in the National Accounts: distributions by household type from OECD",
+            "origin": {"name": "Population in the National Accounts: distributions by household type"},
         }
     )
 

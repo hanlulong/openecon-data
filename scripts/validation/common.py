@@ -140,6 +140,7 @@ _GENERIC_SHORT_TITLE_TOKENS = {
 
 
 if CountryResolver is not None:
+    _SAFE_SHORT_COUNTRY_ALIASES = {'us', 'usa', 'uk', 'eu', 'uae'}
     _COUNTRY_ALIAS_PATTERN_ENTRIES = [
         (
             re.compile(rf'(?<![a-z0-9]){re.escape(str(alias).strip().lower())}(?![a-z0-9])'),
@@ -147,7 +148,9 @@ if CountryResolver is not None:
             str(alias).strip(),
         )
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True)
-        if str(alias).strip() and CountryResolver.normalize(str(alias).strip())
+        if str(alias).strip()
+        and CountryResolver.normalize(str(alias).strip())
+        and (len(str(alias).strip()) > 2 or str(alias).strip().lower() in _SAFE_SHORT_COUNTRY_ALIASES)
     ]
 else:
     _COUNTRY_ALIAS_PATTERN_ENTRIES = []
@@ -1267,6 +1270,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner']):
         reasons.append('worldbank_id_financial_inclusion_query')
+    if any(term in worldbank_text for term in ['ease of doing business score', 'db15 methodology']):
+        reasons.append('worldbank_specialized_source_family')
+    if 'reference year' in worldbank_text and 'population age' in worldbank_text and any(term in worldbank_text for term in ['male', 'female']):
+        reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures']):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
@@ -1276,6 +1283,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
         reasons.append('worldbank_ddh_prevalence_family')
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits', 'temporary employment by permanency of the job']):
+        reasons.append('oecd_low_viability_family')
+    if provider == 'OECD' and 'population in the national accounts' in query_lower and 'distributions by' in query_lower:
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
         reasons.append('imf_price_or_memorandum_family')
