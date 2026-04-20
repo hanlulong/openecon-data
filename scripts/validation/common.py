@@ -1288,6 +1288,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of total expenditures for goods and services',
         'share of primary education spending on rural areas',
         'share of primary education spending on urban areas',
+        'share of tertiary education spending on rural areas',
+        'share of secondary education spending on rural areas',
+        'share of total private spending on education',
+        'share of total education expenditures for poor students',
+        'share of total household education spending for salaries',
     ]):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
@@ -1299,6 +1304,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits', 'temporary employment by permanency of the job']):
         reasons.append('oecd_low_viability_family')
     if provider == 'OECD' and 'population in the national accounts' in query_lower and 'distributions by' in query_lower:
+        reasons.append('oecd_low_viability_family')
+    if provider == 'OECD' and any(term in query_lower for term in [
+        'share of new entrants and graduates in each field of education by gender',
+        'effective tax rates on taking up work when claiming minimum income benefits',
+        'employment rates of adults by educational attainment age group and gender',
+    ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
         reasons.append('imf_price_or_memorandum_family')
@@ -1312,6 +1323,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('eurostat_dimension_fragment_query')
     if provider == 'Eurostat' and all(term in query_lower for term in ['household composition', 'degree of urbanisation', 'frequency']):
         reasons.append('eurostat_dimension_fragment_query')
+    if provider == 'Eurostat' and all(term in query_lower for term in ['degree of urbanisation', 'household composition']):
+        reasons.append('eurostat_dimension_fragment_query')
+    if provider == 'Eurostat' and 'purchasing power parities price level indices' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'full-time/part-time employment and economic activity' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):

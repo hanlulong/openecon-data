@@ -455,6 +455,19 @@ def test_audit_direct_query_shape_flags_worldbank_school_fee_revenue_queries() -
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_tertiary_rural_spending_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Share of tertiary education spending on rural areas (%) from World Bank",
+            "origin": {"name": "Share of tertiary education spending on rural areas (%)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {
@@ -630,6 +643,19 @@ def test_audit_direct_query_shape_flags_oecd_national_accounts_distribution_quer
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_new_entrants_gender_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Can Share of new entrants and graduates in each field of education by gender from OECD",
+            "origin": {"name": "Share of new entrants and graduates in each field of education by gender"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -669,6 +695,19 @@ def test_audit_direct_query_shape_flags_eurostat_dimension_frequency_fragments()
 
     assert audit["risk_level"] == "high"
     assert "eurostat_dimension_fragment_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_ppp_indices_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "Germany Purchasing power parities price level indices from Eurostat",
+            "origin": {"name": "Purchasing power parities price level indices"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_cross_tab_query" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_fred_hicp_catalog_family_queries() -> None:
