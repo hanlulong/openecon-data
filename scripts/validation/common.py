@@ -1251,6 +1251,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
         reasons.append('imf_low_viability_family')
+    if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
+        reasons.append('definition_financial_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
     category_lower = str(origin.get('category') or '').lower()
@@ -1276,6 +1280,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures']):
         reasons.append('worldbank_education_expenditure_family')
+    if any(term in worldbank_text for term in ['teacher salary', 'teachers holding more than one job', 'basic education', 'pre-primary education spending on rural areas', 'pre-primary education spending on urban areas']):
+        reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
         reasons.append('worldbank_assessment_family')
     if any(term in worldbank_text for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
@@ -1295,6 +1301,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in query_lower for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in query_lower for term in ['sex', 'age', 'most frequent activity']):
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and any(term in query_lower for term in ['household composition', 'degree of urbanisation']) and any(term in origin_name_lower for term in ['participating', 'active citizenship', 'voluntary activities']):
+        reasons.append('eurostat_dimension_fragment_query')
+    if provider == 'Eurostat' and all(term in query_lower for term in ['household composition', 'degree of urbanisation', 'frequency']):
         reasons.append('eurostat_dimension_fragment_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')

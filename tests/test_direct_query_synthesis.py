@@ -416,6 +416,19 @@ def test_audit_direct_query_shape_flags_worldbank_reference_year_population_slic
     assert "worldbank_demographic_literacy_slice" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_teacher_salary_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Average monthly teacher salary (in USD or local currency) from World Bank",
+            "origin": {"name": "Average monthly teacher salary (in USD or local currency)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {
@@ -459,6 +472,32 @@ def test_audit_direct_query_shape_flags_imf_consumer_price_weight_titles() -> No
 
     assert audit["risk_level"] == "high"
     assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_merchandise_trade_chapter_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Merchandise Trade Value of Imports. Chapter 80-. Tin and tin products from IMF",
+            "origin": {"name": "Germany Merchandise Trade Value of Imports. Chapter 80-. Tin and tin products"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_central_government_redundant_labor_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Montenegro Definition Central Government Operations: Funds for redundant labor from IMF",
+            "origin": {"name": "Montenegro Definition Central Government Operations: Funds for redundant labor"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "definition_financial_query" in audit["reasons"]
 
 
 def test_category_success_adjustment_uses_probe_history():
@@ -586,6 +625,19 @@ def test_audit_direct_query_shape_flags_eurostat_dimension_fragments() -> None:
             "origin": {
                 "name": "Persons participating in formal/informal voluntary activities or active citizenship by income quintile, household composition and degree of urbanisation",
             },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_dimension_fragment_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_dimension_frequency_fragments() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "France household composition degree of urbanisation and frequency from Eurostat",
+            "origin": {"name": "Persons using professional homecare services by household type, income group, degree of urbanisation and frequency (2016)"},
         }
     )
 
