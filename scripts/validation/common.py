@@ -1257,6 +1257,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if 'by standard international trade classification' in query_lower:
         reasons.append('imf_low_viability_family')
+    if 'dataset:' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if 'goods total trade external trade' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if 'manufacture of' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_low_viability_family')
     if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
         reasons.append('definition_financial_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
@@ -1286,6 +1292,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_specialized_source_family')
     if 'reference year' in worldbank_text and 'population age' in worldbank_text and any(term in worldbank_text for term in ['male', 'female']):
         reasons.append('worldbank_demographic_literacy_slice')
+    if 'reference year' in worldbank_text and 'population age' in worldbank_text:
+        reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['household spending per student', 'public education expenditure per student', 'share of household consumption for private expenditures']):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['teacher salary', 'teachers holding more than one job', 'basic education', 'pre-primary education spending on rural areas', 'pre-primary education spending on urban areas']):
@@ -1301,6 +1309,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of total private spending on education',
         'share of total education expenditures for poor students',
         'share of total household education spending for salaries',
+        'share of education spending on rural areas',
+        'expenditures on females',
+        'repetition/drop-out inefficiency cost',
+        'capital education budget execution rate',
     ]):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
@@ -1320,6 +1332,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of young adults who are not employment nor in formal education or training',
         'earners distribution based on their level of earnings relative to the overall median',
         'earnings of workers relative to the earnings of',
+        'inactivity rates of adults by educational attainment age group and gender',
+        'share of enrolled students new entrants and graduates by gender',
+        'share of mobile students enrolled at tertiary level by country of origin',
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
@@ -1346,6 +1361,14 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'ready to have more than one hour travel time each way to work' in query_lower:
         reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'self-reported last colonoscopy' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'self-perceived health by sex age and degree of urbanisation' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'performing (non-work-related) physical activities by sex' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'eu direct investments indicators in % of gdp' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
@@ -1359,6 +1382,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'OECD' and 'share of students enrolled in school and work-based programmes' in query_lower:
         reasons.append('oecd_education_programme_share_query')
     if provider == 'CoinGecko' and re.search(r'\b[a-z0-9]+_[a-z0-9_]+\b', query):
+        reasons.append('coin_slug_query')
+    if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')
     methodology_markers = [
         'ppp',

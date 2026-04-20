@@ -468,6 +468,19 @@ def test_audit_direct_query_shape_flags_worldbank_tertiary_rural_spending_querie
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_general_rural_education_share_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Share of education spending on rural areas (%) from World Bank",
+            "origin": {"name": "Share of education spending on rural areas (%)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {
@@ -508,6 +521,19 @@ def test_audit_direct_query_shape_flags_worldbank_financial_resilience_prompts()
 
     assert audit["risk_level"] == "high"
     assert "worldbank_id_financial_inclusion_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_reference_year_population_prompts_without_gender() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Population Age 0516 for Reference Year 2019; from World Bank",
+            "origin": {"name": "Population Age 0516 for Reference Year 2019"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
@@ -571,6 +597,19 @@ def test_audit_direct_query_shape_flags_imf_sitc_trade_titles() -> None:
             "provider": "IMF",
             "query": "Germany Goods Crude materials inedible except fuels External Trade Value of Imports Free on Board (FOB) By Standard International Trade Classification (SITC) Rev. 4 from IMF",
             "origin": {"name": "Germany Goods Crude materials inedible except fuels External Trade Value of Imports Free on Board (FOB) By Standard International Trade Classification (SITC) Rev. 4"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_dataset_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "China Dataset: NAMAIN_T0101_Q from IMF",
+            "origin": {"name": "Dataset: NAMAIN_T0101_Q"},
         }
     )
 
@@ -734,6 +773,19 @@ def test_audit_direct_query_shape_flags_oecd_earners_distribution_queries() -> N
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_mobile_students_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Can Share of mobile students enrolled at tertiary level by country of origin from OECD",
+            "origin": {"name": "Share of mobile students enrolled at tertiary level by country of origin"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -814,6 +866,19 @@ def test_audit_direct_query_shape_flags_eurostat_not_employed_cross_tabs() -> No
     assert "eurostat_cross_tab_query" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_eurostat_colonoscopy_cross_tabs() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "Spain Self-reported last colonoscopy by sex age and degree of urbanisation from Eurostat",
+            "origin": {"name": "Self-reported last colonoscopy by sex age and degree of urbanisation"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_cross_tab_query" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_fred_hicp_catalog_family_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -835,6 +900,19 @@ def test_audit_direct_query_shape_flags_coingecko_slug_queries() -> None:
             "provider": "CoinGecko",
             "query": "grif_gg cryptocurrency price from CoinGecko",
             "origin": {"name": "grif_gg"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "coin_slug_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_coingecko_old_asset_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "CoinGecko",
+            "query": "Drife [OLD] cryptocurrency price from CoinGecko",
+            "origin": {"name": "Drife [OLD]"},
         }
     )
 
