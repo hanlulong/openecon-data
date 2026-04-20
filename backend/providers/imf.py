@@ -684,6 +684,7 @@ class IMFProvider(BaseProvider):
             List of NormalizedData objects (one per country)
         """
         indicator_code, indicator_label = await self._resolve_indicator_code(indicator)
+        self._raise_for_unsupported_execution_family(indicator_code, indicator_label)
 
         # Convert all country names to IMF codes
         country_codes = [self._country_code(country) for country in countries]
@@ -1047,6 +1048,46 @@ class IMFProvider(BaseProvider):
                     return candidates
 
         return candidates
+
+    def _indicator_catalog_entry(self, indicator_code: str) -> Optional[Dict[str, Any]]:
+        """Return the local IMF indicator catalog entry for a code when available."""
+        code = str(indicator_code or "").strip().upper()
+        if not code:
+            return None
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            return get_indicator_lookup().get("IMF", code)
+        except Exception as exc:
+            logger.debug("IMF indicator catalog lookup skipped for '%s': %s", indicator_code, exc)
+            return None
+
+    def _classify_execution_family(self, indicator_code: str) -> str:
+        """Classify whether a resolved IMF code is executable on the DataMapper path."""
+        entry = self._indicator_catalog_entry(indicator_code) or {}
+        category = str(entry.get("category") or "").strip().upper()
+        if category == "INDICATOR":
+            return "NON_DATAMAPPER_INDICATOR"
+        if category:
+            return f"DATAMAPPER_{category}"
+        return "DATAMAPPER_UNKNOWN"
+
+    def _raise_for_unsupported_execution_family(
+        self,
+        indicator_code: str,
+        indicator_label: Optional[str],
+    ) -> None:
+        """Fail closed when a resolved IMF code is outside the current fetch surface."""
+        family = self._classify_execution_family(indicator_code)
+        if family != "NON_DATAMAPPER_INDICATOR":
+            return
+
+        label = str(indicator_label or indicator_code).strip() or indicator_code
+        raise DataNotAvailableError(
+            f"IMF indicator '{label}' ({indicator_code}) resolved to a non-DataMapper IMF family. "
+            f"The current runtime can resolve this series from the local IMF catalog, but execution still "
+            f"requires IMF dataset-family routing beyond the legacy DataMapper v1 path."
+        )
 
     async def _resolve_from_local_catalog(
         self,

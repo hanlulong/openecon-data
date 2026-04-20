@@ -19,6 +19,7 @@ if "pybreaker" not in sys.modules:
     sys.modules["pybreaker"] = fake_pybreaker
 
 from backend.providers.imf import IMFProvider
+from backend.utils.retry import DataNotAvailableError
 
 
 class _Lookup:
@@ -163,3 +164,40 @@ def test_imf_local_catalog_keeps_earlier_candidate_when_no_stronger_signal_exist
 
     assert code == "BXSRL_USD"
     assert label is not None
+
+
+def test_imf_execution_family_classifier_marks_indicator_codes_non_datamapper() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    with patch.object(provider, "_indicator_catalog_entry", return_value={"category": "INDICATOR"}):
+        family = provider._classify_execution_family("BXSRLO_USD")  # pylint: disable=protected-access
+
+    assert family == "NON_DATAMAPPER_INDICATOR"
+
+
+def test_imf_execution_family_classifier_keeps_weo_codes_on_datamapper_path() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    with patch.object(provider, "_indicator_catalog_entry", return_value={"category": "WEO"}):
+        family = provider._classify_execution_family("NGDP_RPCH")  # pylint: disable=protected-access
+
+    assert family == "DATAMAPPER_WEO"
+
+
+def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    with patch.object(
+        provider,
+        "_resolve_indicator_code",
+        return_value=("BXSRLO_USD", "Balance of Payments ... Royalties and License Fees"),
+    ), patch.object(provider, "_indicator_catalog_entry", return_value={"category": "INDICATOR"}):
+        try:
+            run(provider.fetch_indicator("ignored", country="USA"))  # pylint: disable=protected-access
+        except DataNotAvailableError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected DataNotAvailableError")
+
+    assert "non-DataMapper IMF family" in message
+    assert "BXSRLO_USD" in message
