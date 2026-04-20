@@ -1123,11 +1123,43 @@ class IMFProvider(BaseProvider):
                 return code, discovery.get("name")
 
         indicator_lower = str(indicator or "").lower()
+        query_country_codes: set[str] = set()
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+                alias_text = str(alias).strip()
+                if not alias_text:
+                    continue
+                if re.search(
+                    rf"(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])",
+                    indicator_lower,
+                    flags=re.IGNORECASE,
+                ):
+                    iso2 = CountryResolver.normalize(alias_text)
+                    iso3 = CountryResolver.to_iso3(iso2) if iso2 else None
+                    if iso3:
+                        query_country_codes.add(iso3)
+        except Exception as exc:
+            logger.debug("IMF local catalog country extraction skipped for '%s': %s", indicator, exc)
 
         def _local_rank(index: int, candidate: dict[str, Any]) -> tuple[int, int]:
             code = str(candidate.get("code") or "").upper()
             name = str(candidate.get("name") or "").lower()
             score = 0
+            country_prefix = re.match(r"^([A-Z]{3})_", code)
+            if country_prefix and query_country_codes:
+                try:
+                    from ..routing.country_resolver import CountryResolver
+
+                    prefix = country_prefix.group(1)
+                    if CountryResolver.to_iso2(prefix):
+                        if prefix in query_country_codes:
+                            score += 2
+                        else:
+                            score -= 3
+                except Exception:
+                    pass
             if " real " in f" {indicator_lower} ":
                 if " real " in f" {name} " or "_R_" in code:
                     score += 3

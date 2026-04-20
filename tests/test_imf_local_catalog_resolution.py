@@ -166,6 +166,34 @@ def test_imf_local_catalog_keeps_earlier_candidate_when_no_stronger_signal_exist
     assert label is not None
 
 
+def test_imf_local_catalog_penalizes_wrong_country_prefixed_candidates() -> None:
+    query = "US Current Account Services Balance of Payments Goods and Services Insurance and pension services from IMF"
+    provider = IMFProvider(metadata_search_service=None)
+
+    lookup = _Lookup(
+        {
+            "current account services balance of payments goods and services insurance and pension services": [
+                {
+                    "code": "TLS_BP_BCASMIN_USD",
+                    "name": "Timor-Leste Definition, Balance of Payments, Balance of Payments Country Presentation, Current Account Exclude other primary income, Current Account, Goods and Services, Services, Imports, Insurance & pension services, US Dollars",
+                    "description": "Timor-Leste imports insurance and pension services",
+                },
+                {
+                    "code": "BMS_BP6_USD",
+                    "name": "Balance of Payments, Current Account, Goods and Services, Services, Insurance and pension services, Debit [BPM6], US Dollars",
+                    "description": "Insurance and pension services debit, US dollars",
+                },
+            ]
+        }
+    )
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+
+    assert code == "BMS_BP6_USD"
+    assert label is not None
+
+
 def test_imf_execution_family_classifier_marks_indicator_codes_non_datamapper() -> None:
     provider = IMFProvider(metadata_search_service=None)
 
