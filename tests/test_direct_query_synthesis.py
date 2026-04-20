@@ -484,6 +484,32 @@ def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() ->
     assert "worldbank_demographic_literacy_slice" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_disability_age_literacy_prompts() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Brazil Literacy rate (% of persons aged 30 to 44 years with disability i.e. at least a lot of functional difficulty) from World Bank",
+            "origin": {"name": "Literacy rate (% of persons aged 30 to 44 years with disability i.e. at least a lot of functional difficulty)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_financial_resilience_prompts() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "borrowing selling something Less than two weeks can be covered using savings seeking help from friends and family or other ways in case household loses its main source of income secondary education or more (% age 15+) from World Bank",
+            "origin": {"name": "Less than two weeks can be covered using savings seeking help from friends and family or other ways"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_id_financial_inclusion_query" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_price_or_memorandum_family():
     audit = audit_direct_query_shape(
         {
@@ -519,6 +545,32 @@ def test_audit_direct_query_shape_flags_imf_merchandise_trade_chapter_titles() -
             "provider": "IMF",
             "query": "Germany Merchandise Trade Value of Imports. Chapter 80-. Tin and tin products from IMF",
             "origin": {"name": "Germany Merchandise Trade Value of Imports. Chapter 80-. Tin and tin products"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_hs_external_trade_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Exports Value Railway tramway locomotives External Trade By Harmonized Commodity Description and Coding Systems (HS 2017) Rev. 5 from IMF",
+            "origin": {"name": "Germany Exports Value Railway tramway locomotives External Trade By Harmonized Commodity Description and Coding Systems (HS 2017) Rev. 5"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_sitc_trade_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Goods Crude materials inedible except fuels External Trade Value of Imports Free on Board (FOB) By Standard International Trade Classification (SITC) Rev. 4 from IMF",
+            "origin": {"name": "Germany Goods Crude materials inedible except fuels External Trade Value of Imports Free on Board (FOB) By Standard International Trade Classification (SITC) Rev. 4"},
         }
     )
 
@@ -656,6 +708,32 @@ def test_audit_direct_query_shape_flags_oecd_new_entrants_gender_queries() -> No
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_neet_migration_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Share of young adults who are not employment nor in formal education or training (NEET) by country of birth and age at migration from OECD",
+            "origin": {"name": "Share of young adults who are not employment nor in formal education or training (NEET) by country of birth and age at migration"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_earners_distribution_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Canada Earners distribution based on their level of earnings relative to the overall median by age group gender and educational attainment level from OECD",
+            "origin": {"name": "Earners distribution based on their level of earnings relative to the overall median by age group gender and educational attainment level"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -703,6 +781,32 @@ def test_audit_direct_query_shape_flags_eurostat_ppp_indices_queries() -> None:
             "provider": "Eurostat",
             "query": "Germany Purchasing power parities price level indices from Eurostat",
             "origin": {"name": "Purchasing power parities price level indices"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_cross_tab_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_weekly_hours_cross_tabs() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "Spain Average actual weekly hours worked in the main job of persons who worked in this job during the reference week by professional status full-time/part-time employment and economic activity (NACE Rev. 2) (2008-2026) - quarterly data from Eurostat",
+            "origin": {"name": "Average actual weekly hours worked in the main job by professional status and economic activity"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_cross_tab_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_not_employed_cross_tabs() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "Germany Number of not employed persons who would have stayed longer at work (or not) if more flexible working time arrangements had been available - by sex and occupation (previous job) (1 000) from Eurostat",
+            "origin": {"name": "Number of not employed persons who would have stayed longer at work by sex and occupation"},
         }
     )
 

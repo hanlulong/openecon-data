@@ -1253,6 +1253,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')
+    if 'external trade by harmonized commodity description and coding systems' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if 'by standard international trade classification' in query_lower:
+        reasons.append('imf_low_viability_family')
     if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
         reasons.append('definition_financial_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
@@ -1272,7 +1276,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['seeing difficulty', 'hearing difficulty']) and 'literacy rate' in worldbank_text:
         reasons.append('worldbank_demographic_literacy_slice')
+    if 'literacy rate' in worldbank_text and any(term in worldbank_text for term in ['aged 30 to 44 years', 'aged 15 to 29 years']) and 'functional difficulty' in worldbank_text:
+        reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['challenge:', 'without an id', 'formal financial institution', 'smes with at least one female owner']):
+        reasons.append('worldbank_id_financial_inclusion_query')
+    if 'can be covered using savings seeking help from friends and family' in worldbank_text:
         reasons.append('worldbank_id_financial_inclusion_query')
     if any(term in worldbank_text for term in ['ease of doing business score', 'db15 methodology']):
         reasons.append('worldbank_specialized_source_family')
@@ -1309,6 +1317,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of new entrants and graduates in each field of education by gender',
         'effective tax rates on taking up work when claiming minimum income benefits',
         'employment rates of adults by educational attainment age group and gender',
+        'share of young adults who are not employment nor in formal education or training',
+        'earners distribution based on their level of earnings relative to the overall median',
+        'earnings of workers relative to the earnings of',
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
@@ -1328,6 +1339,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'Eurostat' and 'purchasing power parities price level indices' in query_lower:
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'full-time/part-time employment and economic activity' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'average actual weekly hours worked' in query_lower and 'professional status' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'not employed persons who would have stayed longer at work' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'ready to have more than one hour travel time each way to work' in query_lower:
         reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
