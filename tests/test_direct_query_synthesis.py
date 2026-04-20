@@ -429,6 +429,32 @@ def test_audit_direct_query_shape_flags_worldbank_teacher_salary_family() -> Non
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_public_capital_education_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Public capital expenditure on education as % of GDP from World Bank",
+            "origin": {"name": "Public capital expenditure on education as % of GDP"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_school_fee_revenue_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Share of total education revenue from school fees (%) from World Bank",
+            "origin": {"name": "Share of total education revenue from school fees (%)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {

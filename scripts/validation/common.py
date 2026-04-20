@@ -1282,6 +1282,14 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['teacher salary', 'teachers holding more than one job', 'basic education', 'pre-primary education spending on rural areas', 'pre-primary education spending on urban areas']):
         reasons.append('worldbank_education_expenditure_family')
+    if any(term in worldbank_text for term in [
+        'public capital expenditure on education',
+        'share of total education revenue from school fees',
+        'share of total expenditures for goods and services',
+        'share of primary education spending on rural areas',
+        'share of primary education spending on urban areas',
+    ]):
+        reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
         reasons.append('worldbank_assessment_family')
     if any(term in worldbank_text for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
