@@ -391,9 +391,10 @@ class IndicatorDatabase:
         cursor = conn.cursor()
 
         # Build FTS query with proper escaping
-        # Escape special FTS5 characters: " ' ( ) * - : ^
+        # Escape special FTS5 characters and punctuation that causes provider-title
+        # token mismatches in exact-title search flows: " ' ( ) * - : ^ % /
         safe_query = query
-        for char in ['"', "'", '(', ')', '*', '-', ':', '^']:
+        for char in ['"', "'", '(', ')', '*', '-', ':', '^', '%', '/']:
             safe_query = safe_query.replace(char, ' ')
 
         # Split into words and filter empty strings

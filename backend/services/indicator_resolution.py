@@ -310,7 +310,7 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         seen.add(candidate)
         search_inputs.append(candidate)
 
-        normalized_punctuation = re.sub(r"[,:()\[\]%]+", " ", candidate)
+        normalized_punctuation = re.sub(r"[,:()\[\]%/]+", " ", candidate)
         normalized_punctuation = re.sub(r"\s+", " ", normalized_punctuation).strip(" ,;:-")
         if (
             normalized_punctuation
