@@ -115,11 +115,38 @@ def _query_has_explicit_time_scope(query: str) -> bool:
     return False
 
 
+def _coingecko_contract_coin_ids(params: dict[str, Any]) -> list[str]:
+    raw_coin_ids = params.get("coinIds")
+    if isinstance(raw_coin_ids, list):
+        return [str(cid).strip() for cid in raw_coin_ids if str(cid).strip()]
+    if isinstance(raw_coin_ids, str):
+        return [part.strip() for part in raw_coin_ids.split(",") if part.strip()]
+    return []
+
+
+def _coingecko_contract_vs_currency(params: dict[str, Any]) -> str:
+    raw_vs = str(params.get("vsCurrency") or "usd").strip().lower()
+    invalid_tokens = {
+        "right",
+        "now",
+        "today",
+        "current",
+        "recent",
+        "latest",
+        "trend",
+        "performance",
+        "history",
+        "historical",
+    }
+    return raw_vs if raw_vs not in invalid_tokens and re.fullmatch(r"[a-z]{3,10}", raw_vs) else "usd"
+
+
 def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
     provider_norm = _normalize_provider_name(provider) or "UNKNOWN"
     code = _execution_plan_candidate_code(intent, params)
     countries = params.get("countries")
-    country_scope = list(countries) if isinstance(countries, list) else []
+    raw_country_list = [str(country).strip() for country in countries] if isinstance(countries, list) else []
+    country_scope = list(raw_country_list)
     if not country_scope and params.get("country"):
         country_scope = [params.get("country")]
 
@@ -156,6 +183,26 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["dimensions"] = dict(params.get("__dimensions") or params.get("dimensions") or {})
         contract["decomposition_axis"] = str(params.get("__statscan_decomposition_axis") or "").strip() or None
         contract["product_id"] = str(params.get("__statscan_product_id") or "").strip() or None
+
+    if provider_norm == "IMF":
+        contract["indicator"] = str(code or "").strip()
+        contract["country"] = str(params.get("country") or "").strip() or None
+        contract["countries"] = raw_country_list
+        contract["default_country"] = "USA" if not contract["country_scope"] else None
+
+    if provider_norm == "OECD":
+        contract["indicator"] = str(code or "").strip()
+        contract["country"] = str(params.get("country") or "").strip() or None
+        contract["countries"] = raw_country_list
+        if not contract["country"] and not contract["countries"]:
+            contract["country"] = "OECD"
+
+    if provider_norm == "COINGECKO":
+        contract["coin_ids"] = _coingecko_contract_coin_ids(params)
+        contract["vs_currency"] = _coingecko_contract_vs_currency(params)
+        contract["days"] = params.get("days")
+        contract["start_date"] = params.get("startDate")
+        contract["end_date"] = params.get("endDate")
 
     return contract
 
@@ -232,6 +279,7 @@ async def fetch_from_coingecko(
     coingecko_provider: Any,
     intent: ParsedIntent,
     params: dict,
+    execution_plan: Optional[ExecutionPlan] = None,
 ) -> list:
     """Fetch cryptocurrency data from CoinGecko.
 
@@ -246,6 +294,13 @@ async def fetch_from_coingecko(
     """
     logger.info("CoinGecko Query Parameters:")
     logger.info(f"   - Indicators: {intent.indicators}")
+    coingecko_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    if coingecko_request.get("start_date") and not params.get("startDate"):
+        params["startDate"] = coingecko_request["start_date"]
+    if coingecko_request.get("end_date") and not params.get("endDate"):
+        params["endDate"] = coingecko_request["end_date"]
+    if coingecko_request.get("days") and not params.get("days"):
+        params["days"] = coingecko_request["days"]
 
     query_lower = intent.originalQuery.lower() if intent.originalQuery else ""
 
@@ -277,7 +332,9 @@ async def fetch_from_coingecko(
             params.pop("endDate", None)
 
     # Parse coin IDs from params
-    raw_coin_ids = params.get("coinIds")
+    raw_coin_ids = coingecko_request.get("coin_ids")
+    if not raw_coin_ids:
+        raw_coin_ids = params.get("coinIds")
     if isinstance(raw_coin_ids, list):
         coin_ids = [str(cid).strip() for cid in raw_coin_ids if str(cid).strip()]
     elif isinstance(raw_coin_ids, str):
@@ -286,7 +343,7 @@ async def fetch_from_coingecko(
         coin_ids = []
 
     # Sanitize vs_currency
-    raw_vs = str(params.get("vsCurrency") or "usd").strip().lower()
+    raw_vs = str(coingecko_request.get("vs_currency") or params.get("vsCurrency") or "usd").strip().lower()
     invalid_tokens = {"right", "now", "today", "current", "recent", "latest",
                       "trend", "performance", "history", "historical"}
     vs_currency = raw_vs if raw_vs not in invalid_tokens and re.fullmatch(r"[a-z]{3,10}", raw_vs) else "usd"
@@ -880,7 +937,7 @@ async def fetch_from_provider_dispatch(
         return await _fetch_from_statscan(svc, intent, params)
 
     if provider == "IMF":
-        return await _fetch_from_imf(svc, intent, params)
+        return await _fetch_from_imf(svc, intent, params, execution_plan)
 
     if provider in {"EXCHANGERATE", "EXCHANGE_RATE", "FX"}:
         return await fetch_exchange_rate_with_historical_fallback(svc, intent, params)
@@ -901,10 +958,10 @@ async def fetch_from_provider_dispatch(
         return await _fetch_from_eurostat(svc, intent, params, execution_plan)
 
     if provider == "OECD":
-        return await _fetch_from_oecd(svc, intent, params)
+        return await _fetch_from_oecd(svc, intent, params, execution_plan)
 
     if provider in {"COINGECKO", "COIN GECKO"}:
-        return await fetch_from_coingecko(svc.coingecko_provider, intent, params)
+        return await fetch_from_coingecko(svc.coingecko_provider, intent, params, execution_plan)
 
     raise DataNotAvailableError(
         f"Provider {intent.apiProvider} is not yet implemented. Available providers: FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate, BIS, Eurostat, OECD, CoinGecko"
@@ -1436,10 +1493,29 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             raise DataNotAvailableError("No indicator specified for Statistics Canada query")
 
 
-async def _fetch_from_imf(svc: Any, intent: ParsedIntent, params: dict) -> List[NormalizedData]:
+async def _fetch_from_imf(
+    svc: Any,
+    intent: ParsedIntent,
+    params: dict,
+    execution_plan: Optional[ExecutionPlan] = None,
+) -> List[NormalizedData]:
     """IMF provider dispatch."""
-    countries_param = params.get("countries") or params.get("country")
-    resolved_indicator = str(params.get("indicator") or "").strip()
+    imf_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    countries_param = (
+        imf_request.get("countries")
+        or imf_request.get("country_scope")
+        or imf_request.get("country")
+        or params.get("countries")
+        or params.get("country")
+    )
+    resolved_indicator = str(
+        imf_request.get("indicator")
+        or imf_request.get("code")
+        or params.get("indicator")
+        or ""
+    ).strip()
+    request_start_year = imf_request.get("start_year")
+    request_end_year = imf_request.get("end_year")
 
     # Resolve countries/regions to list of country codes
     resolved_countries: List[str] = []
@@ -1449,7 +1525,7 @@ async def _fetch_from_imf(svc: Any, intent: ParsedIntent, params: dict) -> List[
     elif isinstance(countries_param, str):
         resolved_countries = svc.imf_provider._resolve_countries(countries_param)
     else:
-        resolved_countries = ["USA"]
+        resolved_countries = [str(imf_request.get("default_country") or "USA")]
 
     # Remove duplicates while preserving order
     resolved_countries = list(dict.fromkeys(resolved_countries))
@@ -1474,8 +1550,8 @@ async def _fetch_from_imf(svc: Any, intent: ParsedIntent, params: dict) -> List[
             series_list = await svc.imf_provider.fetch_batch_indicator(
                 indicator=indicator,
                 countries=resolved_countries,
-                start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                start_year=request_start_year,
+                end_year=request_end_year,
             )
             all_data.extend(series_list)
         return all_data
@@ -1490,18 +1566,18 @@ async def _fetch_from_imf(svc: Any, intent: ParsedIntent, params: dict) -> List[
                 series = await svc.imf_provider.fetch_indicator(
                     indicator=indicator,
                     country=country,
-                    start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                    end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                    start_year=request_start_year,
+                    end_year=request_end_year,
                 )
                 all_data.append(series)
             return all_data
         else:
             indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
             series = await svc.imf_provider.fetch_indicator(
-                indicator=indicator,
+                indicator=resolved_indicator or indicator,
                 country=country,
-                start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                start_year=request_start_year,
+                end_year=request_end_year,
             )
             return [series]
 
@@ -1600,13 +1676,27 @@ async def _fetch_from_eurostat(
     return [series]
 
 
-async def _fetch_from_oecd(svc: Any, intent: ParsedIntent, params: dict) -> List[NormalizedData]:
+async def _fetch_from_oecd(
+    svc: Any,
+    intent: ParsedIntent,
+    params: dict,
+    execution_plan: Optional[ExecutionPlan] = None,
+) -> List[NormalizedData]:
     """OECD provider dispatch."""
-    indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "GDP"))
+    oecd_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    indicator = str(
+        oecd_request.get("indicator")
+        or oecd_request.get("code")
+        or params.get("indicator")
+        or (intent.indicators[0] if intent.indicators else "GDP")
+    )
     params["indicator"] = indicator
 
-    country_param = params.get("country")
-    countries_param = params.get("countries") or []
+    scoped_countries = list(oecd_request.get("country_scope") or [])
+    country_param = oecd_request.get("country") or params.get("country")
+    countries_param = oecd_request.get("countries") or params.get("countries") or scoped_countries
+    request_start_year = oecd_request.get("start_year")
+    request_end_year = oecd_request.get("end_year")
 
     # Handle LLM parsing "OECD unemployment" as countries=["ALL_OECD"]
     if countries_param and len(countries_param) == 1:
@@ -1642,8 +1732,8 @@ async def _fetch_from_oecd(svc: Any, intent: ParsedIntent, params: dict) -> List
             series_list = await svc.oecd_provider.fetch_multi_country(
                 indicator=indicator,
                 countries=countries,
-                start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-                end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+                start_year=request_start_year,
+                end_year=request_end_year,
             )
             return series_list
         except Exception as exc:
@@ -1663,8 +1753,8 @@ async def _fetch_from_oecd(svc: Any, intent: ParsedIntent, params: dict) -> List
         series = await svc.oecd_provider.fetch_indicator(
             indicator=indicator,
             country=country_param,
-            start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
-            end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
+            start_year=request_start_year,
+            end_year=request_end_year,
         )
         return [series]
     except Exception as exc:
