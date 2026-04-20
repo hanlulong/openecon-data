@@ -576,7 +576,7 @@ class WorldBankProvider(BaseProvider):
                 f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
             )
         indic = await self._resolve_indicator_code(indicator)
-        country_list = countries or [country or "USA"]
+        country_list = countries or ([country] if country else ["all"])
 
         # Detect when the country list represents a known WB aggregate region.
         # When the query service has pre-expanded "Sub-Saharan Africa" into

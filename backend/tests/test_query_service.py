@@ -535,6 +535,44 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNone(second_kwargs.get("start_date"))
         self.assertIsNone(second_kwargs.get("end_date"))
 
+    def test_worldbank_provider_fetch_uses_all_when_no_country_is_supplied(self) -> None:
+        provider = self.service.world_bank_provider
+
+        class _Response:
+            status_code = 200
+            headers = {"Date": "Mon, 20 Apr 2026 00:00:00 GMT"}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+            @staticmethod
+            def json():
+                return [
+                    {"pages": 1, "total": 1},
+                    [
+                        {
+                            "country": {"id": "WLD", "value": "World"},
+                            "countryiso3code": "WLD",
+                            "date": "2020",
+                            "value": 1.0,
+                            "indicator": {"id": "PER.SR.PPC", "value": "Share of household consumption for private expenditures on primary education (%)"},
+                        }
+                    ],
+                ]
+
+        client = Mock()
+        client.get = AsyncMock(return_value=_Response())
+
+        with patch.object(provider, "_resolve_indicator_code", new=AsyncMock(return_value="PER.SR.PPC")), \
+             patch.object(provider, "_country_code", side_effect=lambda value: value), \
+             patch("backend.providers.worldbank.get_http_client", return_value=client):
+            result = run(provider.fetch_indicator("PER.SR.PPC", country=None, countries=None))
+
+        self.assertEqual(len(result), 1)
+        called_url = client.get.await_args.args[0]
+        self.assertIn("/country/all/indicator/PER.SR.PPC", called_url)
+
     def test_is_resolved_indicator_plausible_rejects_bis_debt_service_for_debt_gdp_query(self) -> None:
         self.assertFalse(
             self.service._is_resolved_indicator_plausible(  # pylint: disable=protected-access
@@ -950,6 +988,28 @@ class QueryServiceTests(unittest.TestCase):
             intent.indicators,
             ["Korea - tax revenues in Revenue Statistics in Asia and the Pacific"],
         )
+
+    def test_build_exact_indicator_title_intent_handles_worldbank_percent_titles(self) -> None:
+        lookup_results = [
+            {
+                "code": "PER.SR.PPC",
+                "provider": "WorldBank",
+                "name": "Share of household consumption for private expenditures on primary education (%)",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Germany World Bank: Share of household consumption for private expenditures on primary education (%) from World Bank"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "PER.SR.PPC")
 
     def test_build_exact_indicator_title_intent_accepts_city_state_wrapped_fred_title(self) -> None:
         lookup_results = [
