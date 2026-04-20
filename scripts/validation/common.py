@@ -1249,6 +1249,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
+    if 'current account primary income investment income reserve assets' in query_lower:
+        reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
         reasons.append('imf_low_viability_family')
     if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
@@ -1265,6 +1267,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
         reasons.append('definition_financial_query')
+    if 'gross value added' in query_lower and 'base year' in query_lower:
+        reasons.append('classification_gva_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
     category_lower = str(origin.get('category') or '').lower()
@@ -1313,10 +1317,16 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'expenditures on females',
         'repetition/drop-out inefficiency cost',
         'capital education budget execution rate',
+        'school feeding programs',
+        'share of subnational education expenditures for salaries',
+        'share of junior secondary expenditures for administration',
+        'education budget execution rate pre-primary',
     ]):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
         reasons.append('worldbank_assessment_family')
+    if 'current allocation - modality' in worldbank_text:
+        reasons.append('worldbank_specialized_source_family')
     if any(term in worldbank_text for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
         reasons.append('worldbank_macro_exposure_family')
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
@@ -1335,6 +1345,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'inactivity rates of adults by educational attainment age group and gender',
         'share of enrolled students new entrants and graduates by gender',
         'share of mobile students enrolled at tertiary level by country of origin',
+        "teachers' actual salary relative to earnings of tertiary-educated workers",
+        "adults' gender distribution by educational attainment level and age group",
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
@@ -1374,6 +1386,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'Eurostat' and 'performing (non-work-related) physical activities by sex' in query_lower:
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'eu direct investments indicators in % of gdp' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'functional limitations by sex age and degree of urbanisation' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'daily consumption of fruit and vegetables by sex' in query_lower:
         reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
