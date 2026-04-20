@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import asyncio
 import json
 import logging
@@ -996,6 +996,115 @@ class IMFProvider(BaseProvider):
 
         return (preferred + secondary)[:limit]
 
+    def _search_local_indicator_catalog(
+        self,
+        indicator: str,
+        *,
+        limit: int = 12,
+    ) -> List[Dict[str, Any]]:
+        """Search the local IMF indicator catalog using normalized query variants.
+
+        This is a bounded recovery path for long-tail IMF titles that the
+        DataMapper metadata endpoint may not surface well. It searches the
+        repo-local indicator database with country/provider wrappers stripped
+        and preserves ranked, deduplicated candidates for downstream selection.
+        """
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+            from ..services.indicator_resolution import exact_title_search_inputs
+
+            lookup = get_indicator_lookup()
+            search_queries = exact_title_search_inputs(indicator, "IMF")
+        except Exception as exc:
+            logger.debug("IMF local catalog search unavailable for '%s': %s", indicator, exc)
+            return []
+
+        seen: set[str] = set()
+        candidates: list[dict[str, Any]] = []
+        for query_text in search_queries:
+            try:
+                results = lookup.search(query_text, provider="IMF", limit=limit)
+            except Exception as exc:
+                logger.debug("IMF local catalog lookup failed for '%s': %s", query_text, exc)
+                continue
+
+            for result in results:
+                code = str(result.get("code") or "").strip().upper()
+                name = str(result.get("name") or "").strip()
+                if not code or not name or code in seen:
+                    continue
+                seen.add(code)
+                candidates.append(
+                    {
+                        "code": code,
+                        "id": code,
+                        "name": name,
+                        "description": str(result.get("description") or name),
+                        "source": "LOCAL_IMF_CATALOG",
+                    }
+                )
+                if len(candidates) >= limit:
+                    return candidates
+
+        return candidates
+
+    async def _resolve_from_local_catalog(
+        self,
+        indicator: str,
+    ) -> Optional[tuple[str, Optional[str]]]:
+        """Resolve an IMF indicator via the local indicator catalog."""
+        local_catalog_results = self._search_local_indicator_catalog(indicator)
+        if not local_catalog_results:
+            return None
+
+        logger.info(
+            "IMF: local catalog fallback found %d candidates for '%s'",
+            len(local_catalog_results),
+            indicator,
+        )
+        if self.metadata_search:
+            discovery = await self.metadata_search.discover_indicator(
+                provider="IMF",
+                indicator_name=indicator,
+                search_results=local_catalog_results,
+            )
+            if discovery and discovery.get("ambiguous"):
+                options = discovery.get("options", [])
+                options_text = "\n".join([
+                    f"  • {opt['name']}" for opt in options[:5]
+                ])
+                raise DataNotAvailableError(
+                    f"Your query '{indicator}' matches multiple datasets. Please be more specific:\n{options_text}\n\n"
+                    f"Try specifying the exact metric you need."
+                )
+            if discovery and discovery.get("code"):
+                code = str(discovery["code"]).strip()
+                return code, discovery.get("name")
+
+        indicator_lower = str(indicator or "").lower()
+
+        def _local_rank(index: int, candidate: dict[str, Any]) -> tuple[int, int]:
+            code = str(candidate.get("code") or "").upper()
+            name = str(candidate.get("name") or "").lower()
+            score = 0
+            if " real " in f" {indicator_lower} ":
+                if " real " in f" {name} " or "_R_" in code:
+                    score += 3
+                elif " nominal " in f" {name} ":
+                    score -= 1
+            if " nominal " in f" {indicator_lower} ":
+                if " nominal " in f" {name} ":
+                    score += 3
+                if " real " in f" {name} " or "_R_" in code:
+                    score -= 1
+            return score, -index
+
+        top_local = max(
+            enumerate(local_catalog_results),
+            key=lambda item: _local_rank(item[0], item[1]),
+        )[1]
+        return top_local["code"], top_local.get("name")
+
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:
         """Resolve IMF indicator code through hardcoded mappings, translator, or metadata search."""
         # Step 0: Check if indicator is explicitly unsupported
@@ -1070,6 +1179,16 @@ class IMFProvider(BaseProvider):
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
 
+        indicator_text = str(indicator or "").strip()
+        prioritize_local_catalog = (
+            not self._looks_like_imf_code(indicator_text)
+            and len(indicator_text.split()) >= 5
+        )
+        if prioritize_local_catalog:
+            local_resolution = await self._resolve_from_local_catalog(indicator)
+            if local_resolution:
+                return local_resolution
+
         # Step 2: Try cross-provider indicator translator (handles indicator names from other systems)
         translator = get_indicator_translator()
         translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
@@ -1077,6 +1196,14 @@ class IMFProvider(BaseProvider):
             logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
             label_hint = concept_name or indicator
             return translated_code, self._friendly_indicator_label(label_hint, translated_code)
+
+        # Step 3: Try the local indicator catalog with normalized query variants.
+        # This is especially important for long-tail IMF component titles where
+        # DataMapper metadata search often returns zero exact keyword matches,
+        # but the local catalog still has provider-native series entries.
+        local_resolution = await self._resolve_from_local_catalog(indicator)
+        if local_resolution:
+            return local_resolution
 
         # Note: We used to allow raw IMF codes without validation (if uppercase + underscore),
         # but this led to errors when LLMs generated fake codes like "CORPORATE_DEBT".
