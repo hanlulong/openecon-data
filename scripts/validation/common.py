@@ -1251,6 +1251,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_complex_finance_family')
     if 'current account primary income investment income reserve assets' in query_lower:
         reasons.append('imf_complex_finance_family')
+    if 'current account primary income investment income' in query_lower:
+        reasons.append('imf_complex_finance_family')
+    if 'current account goods net balance of payments goods and services' in query_lower:
+        reasons.append('imf_complex_finance_family')
+    if 'current account credit' in query_lower and 'balance of payments' in query_lower:
+        reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
         reasons.append('imf_low_viability_family')
     if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
@@ -1321,6 +1327,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of subnational education expenditures for salaries',
         'share of junior secondary expenditures for administration',
         'education budget execution rate pre-primary',
+        'share of secondary schools privately managed',
+        'recurrent education budget execution rate',
+        'utilities (% of recurrent education expenditure)',
+        'wastage index (%) recurrent education expenditures',
+        'pupils/class',
     ]):
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
@@ -1347,6 +1358,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of mobile students enrolled at tertiary level by country of origin',
         "teachers' actual salary relative to earnings of tertiary-educated workers",
         "adults' gender distribution by educational attainment level and age group",
+        'minimum relative to average wages of full-time workers',
+        'tax and non-tax revenues',
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
@@ -1354,6 +1367,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if 'weight' in query_lower and 'consumer prices' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
     if 'consumer prices expenditure of households' in query_lower:
+        reasons.append('imf_price_or_memorandum_family')
+    if 'all commodities producer price index' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
     if 'revenue other revenue' in query_lower:
         reasons.append('definition_financial_query')
@@ -1391,6 +1406,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'daily consumption of fruit and vegetables by sex' in query_lower:
         reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'performing health-enhancing physical activity by sex' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
@@ -1404,6 +1421,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'OECD' and 'share of students enrolled in school and work-based programmes' in query_lower:
         reasons.append('oecd_education_programme_share_query')
     if provider == 'CoinGecko' and re.search(r'\b[a-z0-9]+_[a-z0-9_]+\b', query):
+        reasons.append('coin_slug_query')
+    if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')
     if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')

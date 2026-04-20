@@ -481,6 +481,19 @@ def test_audit_direct_query_shape_flags_worldbank_general_rural_education_share_
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_school_feeding_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: School Feeding Programs (% of total recurrent expenditures) from World Bank",
+            "origin": {"name": "School Feeding Programs (% of total recurrent expenditures)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_literacy_disability_slice() -> None:
     audit = audit_direct_query_shape(
         {
@@ -641,6 +654,19 @@ def test_audit_direct_query_shape_flags_imf_dataset_titles() -> None:
 
     assert audit["risk_level"] == "high"
     assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_current_account_reserve_assets_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "US Current Account Primary Income Investment income Fiscal Year Balance of Payments from IMF",
+            "origin": {"name": "US Current Account Primary Income Investment income Fiscal Year Balance of Payments"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_complex_finance_family" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_central_government_redundant_labor_titles() -> None:
@@ -812,6 +838,19 @@ def test_audit_direct_query_shape_flags_oecd_mobile_students_queries() -> None:
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_teachers_salary_relative_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Are Teachers' actual salary relative to earnings of tertiary-educated workers from OECD",
+            "origin": {"name": "Teachers' actual salary relative to earnings of tertiary-educated workers"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -898,6 +937,19 @@ def test_audit_direct_query_shape_flags_eurostat_colonoscopy_cross_tabs() -> Non
             "provider": "Eurostat",
             "query": "Spain Self-reported last colonoscopy by sex age and degree of urbanisation from Eurostat",
             "origin": {"name": "Self-reported last colonoscopy by sex age and degree of urbanisation"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "eurostat_cross_tab_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_health_enhancing_activity_cross_tabs() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Eurostat",
+            "query": "Italy Performing health-enhancing physical activity by sex from Eurostat",
+            "origin": {"name": "Performing health-enhancing physical activity by sex"},
         }
     )
 
