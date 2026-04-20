@@ -464,6 +464,21 @@ class QueryServiceTests(unittest.TestCase):
         params = fetch_mock.call_args.args[0]
         self.assertEqual(params.get("indicator"), "DGS10")
 
+    def test_build_distilled_indicator_query_preserves_producer_price_index_wording(self) -> None:
+        distilled = self.service._build_distilled_indicator_query(  # pylint: disable=protected-access
+            "Germany All Commodities Producer Price Index Human health and social work activities from IMF"
+        )
+
+        self.assertEqual(distilled, "producer price index")
+
+    def test_build_distilled_indicator_query_preserves_current_account_component_queries(self) -> None:
+        query = "US Current Account Services Credit Balance of Payments Goods and Services Royalties and License Fees from IMF"
+        distilled = self.service._build_distilled_indicator_query(  # pylint: disable=protected-access
+            query
+        )
+
+        self.assertEqual(distilled, query)
+
     def test_resolve_indicator_for_fetch_preserves_exact_worldbank_code(self) -> None:
         intent = ParsedIntent(
             apiProvider="WORLDBANK",

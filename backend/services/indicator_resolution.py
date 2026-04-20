@@ -2361,6 +2361,8 @@ def build_distilled_indicator_query(svc: Any, query: str) -> str:
     if "employment_rate" in cues:
         return "employment rate"
     if "producer_price" in cues:
+        if "producer price index" in query_lower or "all commodities producer price index" in query_lower:
+            return "producer price index"
         return "producer price inflation"
     if "house_prices" in cues:
         return "house price index"
@@ -2391,6 +2393,20 @@ def build_distilled_indicator_query(svc: Any, query: str) -> str:
     if "reserves" in cues:
         return "foreign exchange reserves"
     if "current_account" in cues:
+        if any(
+            term in query_lower
+            for term in (
+                "primary income",
+                "investment income",
+                "goods net",
+                "repairs on goods",
+                "royalties and license fees",
+                "insurance and pension services",
+                "services credit",
+                "current account credit",
+            )
+        ):
+            return query_text
         return "current account balance (% of GDP)"
     if "real_effective_exchange_rate" in cues:
         return "real effective exchange rate"
