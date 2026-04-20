@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..models import NormalizedData, ParsedIntent
 from ..routing.country_resolver import CountryResolver
@@ -171,6 +171,109 @@ def _effective_original_query(intent: ParsedIntent) -> str:
     if intent.isFollowUp and intent.resolvedQuery:
         return str(intent.resolvedQuery).strip()
     return str(intent.originalQuery or "").strip()
+
+
+def is_provider_locked(params: Optional[dict]) -> bool:
+    """Return True when semantic/provider clarification has locked the provider."""
+    return bool((params or {}).get("__semantic_provider_locked"))
+
+
+def is_exact_match_locked(params: Optional[dict]) -> bool:
+    """Return True when the current params represent an exact provider-native match."""
+    params = params or {}
+    return bool(
+        params.get("__exact_provider_code_match")
+        or params.get("__exact_indicator_title_match")
+    )
+
+
+def build_exact_indicator_title_intent(
+    query: str,
+    *,
+    explicit_provider: Optional[str] = None,
+    broad_concept: Optional[str] = None,
+    countries: Optional[List[str]] = None,
+    all_providers: Optional[List[str]] = None,
+) -> Optional[ParsedIntent]:
+    """Build a provider-locked ParsedIntent for an exact provider-title shortcut."""
+    provider_candidates = (
+        [_normalize_provider_name(explicit_provider)] if explicit_provider else list(all_providers or [])
+    )
+    provider_candidates = [provider for provider in provider_candidates if provider]
+
+    matches: list[dict[str, Any]] = []
+    seen = set()
+    for provider in provider_candidates:
+        candidate = find_exact_provider_title_match(query, provider)
+        if not candidate and broad_concept:
+            try:
+                from .indicator_database import get_indicator_lookup
+
+                lookup = get_indicator_lookup()
+                broad_results = lookup.search(query, provider=provider, limit=5)
+                candidate = next(
+                    (
+                        result
+                        for result in broad_results
+                        if str(result.get("code") or "").strip()
+                        and str(result.get("name") or "").strip()
+                    ),
+                    None,
+                )
+            except Exception:
+                candidate = None
+        if not candidate:
+            continue
+        key = (_normalize_provider_name(candidate.get("provider") or provider), str(candidate.get("code") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(candidate)
+
+    if len(matches) != 1:
+        return None
+
+    candidate = matches[0]
+    provider = _normalize_provider_name(candidate.get("provider") or "")
+    code = str(candidate.get("code") or "").strip()
+    name = str(candidate.get("name") or query).strip()
+    if not provider or not code:
+        return None
+
+    params: dict[str, Any] = {
+        "indicator": code,
+        "__semantic_indicator_label": name,
+        "__semantic_provider_locked": True,
+        "__exact_indicator_title_match": True,
+    }
+    if provider == "COINGECKO":
+        params["coinIds"] = [code]
+    if broad_concept:
+        params["__catalog_concept"] = broad_concept
+
+    countries = list(countries or [])
+    if len(countries) == 1:
+        params["country"] = countries[0]
+    elif len(countries) > 1:
+        params["countries"] = countries
+
+    return ParsedIntent(
+        apiProvider=provider,
+        indicators=[name],
+        parameters=params,
+        clarificationNeeded=False,
+        confidence=0.99,
+        recommendedChartType="line",
+        queryType="data_fetch",
+        originalQuery=query,
+        isFollowUp=False,
+        followUpType=None,
+        resolvedQuery=None,
+        needsDecomposition=False,
+        decompositionType=None,
+        decompositionEntities=None,
+        useProMode=False,
+    )
 
 
 def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool:
@@ -1110,7 +1213,7 @@ def apply_concept_provider_override(
     explicit_provider_locked = bool(
         explicit_provider_requested and explicit_provider_requested == provider
     )
-    if params.get("__semantic_provider_locked"):
+    if is_provider_locked(params):
         explicit_provider_locked = True
 
     blocked_override_providers = {
@@ -1605,7 +1708,7 @@ def apply_catalog_availability_override(
 
     original_query = intent.originalQuery or ""
     explicit_provider_requested = _normalize_provider_name(svc._detect_explicit_provider(original_query) or "")
-    if params.get("__semantic_provider_locked"):
+    if is_provider_locked(params):
         logger.info(f"📋 Skipping catalog override - semantic clarification locked {provider}")
         return provider, params
 
@@ -1754,9 +1857,7 @@ async def resolve_indicator_for_fetch(
         existing_indicator
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)
     )
-    exact_match_locked = bool(
-        params.get("__exact_provider_code_match") or params.get("__exact_indicator_title_match")
-    )
+    exact_match_locked = is_exact_match_locked(params)
 
     # Qualifier-aware indicator recovery: when the LLM strips qualifiers
     # ("GDP growth G7" -> indicators=["GDP"]), recover the full indicator
@@ -2170,7 +2271,7 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
     distilled_original = build_distilled_indicator_query(svc, original_query)
     semantic_indicator_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
-    provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
+    provider_locked = is_provider_locked(intent.parameters or {})
 
     def _fallback_to_original_or_distilled() -> str:
         if provider_locked:

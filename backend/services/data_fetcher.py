@@ -23,6 +23,7 @@ import time
 from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
+from ..services.indicator_resolution import is_exact_match_locked
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
@@ -2061,7 +2062,7 @@ async def fetch_data(
         logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
 
     exact_query_without_time_scope = bool(
-        (params.get("__exact_provider_code_match") or params.get("__exact_indicator_title_match"))
+        is_exact_match_locked(params)
         and not _query_has_explicit_time_scope(intent.originalQuery or "")
     )
     if (

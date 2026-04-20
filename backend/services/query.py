@@ -121,8 +121,9 @@ from ..services.semantic_match_judge import (
 from ..services.execution_planner import build_minimal_execution_plan as _ep_build_minimal_execution_plan
 from ..services.indicator_resolution import (
     _effective_original_query as _ir_effective_original_query,
+    build_exact_indicator_title_intent as _ir_build_exact_indicator_title_intent,
     code_semantic_hint as _ir_code_semantic_hint,
-    find_exact_provider_title_match as _ir_find_exact_provider_title_match,
+    is_provider_locked as _ir_is_provider_locked,
     score_resolved_indicator_relevance as _ir_score_resolved_indicator_relevance,
     minimum_resolved_relevance_threshold as _ir_minimum_resolved_relevance_threshold,
     is_placeholder_indicator_code as _ir_is_placeholder_indicator_code,
@@ -451,82 +452,12 @@ class QueryService:
 
     def _build_exact_indicator_title_intent(self, query: str) -> Optional[ParsedIntent]:
         """Fast path for raw queries that already match a provider-native title."""
-        explicit_provider = self._detect_explicit_provider(query)
-        provider_candidates = [normalize_provider_name(explicit_provider)] if explicit_provider else list(ALL_PROVIDERS)
-        provider_candidates = [provider for provider in provider_candidates if provider]
-        broad_concept = self._broad_exact_title_catalog_concept(query)
-
-        matches: list[dict[str, Any]] = []
-        seen = set()
-        for provider in provider_candidates:
-            candidate = _ir_find_exact_provider_title_match(query, provider)
-            if not candidate and broad_concept:
-                try:
-                    from .indicator_database import get_indicator_lookup
-
-                    lookup = get_indicator_lookup()
-                    broad_results = lookup.search(query, provider=provider, limit=5)
-                    candidate = next(
-                        (
-                            result
-                            for result in broad_results
-                            if str(result.get("code") or "").strip()
-                            and str(result.get("name") or "").strip()
-                        ),
-                        None,
-                    )
-                except Exception:
-                    candidate = None
-            if not candidate:
-                continue
-            key = (normalize_provider_name(candidate.get("provider") or provider), str(candidate.get("code") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            matches.append(candidate)
-
-        if len(matches) != 1:
-            return None
-
-        candidate = matches[0]
-        provider = normalize_provider_name(candidate.get("provider") or "")
-        code = str(candidate.get("code") or "").strip()
-        name = str(candidate.get("name") or query).strip()
-        if not provider or not code:
-            return None
-
-        params: dict[str, Any] = {
-            "indicator": code,
-            "__semantic_indicator_label": name,
-            "__semantic_provider_locked": True,
-            "__exact_indicator_title_match": True,
-        }
-        if provider == "COINGECKO":
-            params["coinIds"] = [code]
-        if broad_concept:
-            params["__catalog_concept"] = broad_concept
-        countries = self._extract_countries_from_query(query)
-        if len(countries) == 1:
-            params["country"] = countries[0]
-        elif len(countries) > 1:
-            params["countries"] = countries
-
-        return ParsedIntent(
-            apiProvider=provider,
-            indicators=[name],
-            parameters=params,
-            clarificationNeeded=False,
-            confidence=0.99,
-            recommendedChartType="line",
-            queryType="data_fetch",
-            originalQuery=query,
-            isFollowUp=False,
-            followUpType=None,
-            resolvedQuery=None,
-            needsDecomposition=False,
-            decompositionType=None,
-            decompositionEntities=None,
-            useProMode=False,
+        return _ir_build_exact_indicator_title_intent(
+            query,
+            explicit_provider=self._detect_explicit_provider(query),
+            broad_concept=self._broad_exact_title_catalog_concept(query),
+            countries=self._extract_countries_from_query(query),
+            all_providers=list(ALL_PROVIDERS),
         )
 
     def _add_provider_transparency(
@@ -3541,7 +3472,7 @@ class QueryService:
         explicit_provider_requested = normalize_provider_name(
             self._detect_explicit_provider(str(intent.originalQuery or "")) or ""
         )
-        provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
+        provider_locked = _ir_is_provider_locked(intent.parameters or {})
         if provider_locked or (
             explicit_provider_requested
             and explicit_provider_requested == primary_provider
@@ -4316,7 +4247,7 @@ class QueryService:
                 _current_conv_state,
                 intent,
             )
-            provider_locked = bool((intent.parameters or {}).get("__semantic_provider_locked"))
+            provider_locked = _ir_is_provider_locked(intent.parameters or {})
             if preserve_statscan_followup:
                 logger.info(
                     "Preserving StatsCan provider for dimension/decomposition follow-up (llm=%s)",
