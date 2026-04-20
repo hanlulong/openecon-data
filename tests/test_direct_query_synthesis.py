@@ -565,6 +565,32 @@ def test_audit_direct_query_shape_flags_imf_consumer_price_weight_titles() -> No
     assert "imf_price_or_memorandum_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_household_expenditure_consumer_price_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany All Items Glassware BY2015 Consumer Prices Expenditure of Households tableware and household utensils from IMF",
+            "origin": {"name": "Germany All Items Glassware BY2015 Consumer Prices Expenditure of Households tableware and household utensils"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_other_revenue_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "US Revenue Other Revenue Accrual Fiscal Social Security Central Government Sales of Goods and Services from IMF",
+            "origin": {"name": "US Revenue Other Revenue Accrual Fiscal Social Security Central Government Sales of Goods and Services"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "definition_financial_query" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_merchandise_trade_chapter_titles() -> None:
     audit = audit_direct_query_shape(
         {

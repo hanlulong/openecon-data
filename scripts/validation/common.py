@@ -1341,6 +1341,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_price_or_memorandum_family')
     if 'weight' in query_lower and 'consumer prices' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
+    if 'consumer prices expenditure of households' in query_lower:
+        reasons.append('imf_price_or_memorandum_family')
+    if 'revenue other revenue' in query_lower:
+        reasons.append('definition_financial_query')
+    if 'taxes income profits government and public sector finance' in query_lower:
+        reasons.append('definition_financial_query')
     if any(term in query_lower for term in ['wine-grape vine varieties', 'vine variety', 'age of the vines']):
         reasons.append('eurostat_agri_breakdown_query')
     if any(term in query_lower for term in ['activity limitation', 'poverty threshold', 'previous year']) and any(term in query_lower for term in ['sex', 'age', 'most frequent activity']):
@@ -1382,6 +1388,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'OECD' and 'share of students enrolled in school and work-based programmes' in query_lower:
         reasons.append('oecd_education_programme_share_query')
     if provider == 'CoinGecko' and re.search(r'\b[a-z0-9]+_[a-z0-9_]+\b', query):
+        reasons.append('coin_slug_query')
+    if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')
     if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')
