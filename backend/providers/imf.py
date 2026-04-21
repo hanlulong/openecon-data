@@ -1072,6 +1072,48 @@ class IMFProvider(BaseProvider):
             return f"DATAMAPPER_{category}"
         return "DATAMAPPER_UNKNOWN"
 
+    def _likely_dataset_family_hint(
+        self,
+        indicator_code: str,
+        indicator_label: Optional[str],
+    ) -> Optional[str]:
+        """Infer the most likely IMF dataset family for a non-DataMapper series."""
+        code = str(indicator_code or "").strip().upper()
+        label = str(indicator_label or "").strip().lower()
+        if not code and not label:
+            return None
+
+        if (
+            "balance of payments" in label
+            or "_BP6_" in code
+            or code.startswith(("BX", "BM", "BS"))
+        ):
+            return "IMF.STA:BOP"
+
+        if (
+            label.startswith("labor markets")
+            or label.startswith("labour markets")
+            or code.startswith(("LER_", "LUR_", "LUE_", "LFE_"))
+        ):
+            return "IMF.STA:LS"
+
+        if (
+            label.startswith("national accounts")
+            or code.startswith(("NGDPVA_", "NGDP_", "NPGDP"))
+        ):
+            return "IMF.STA:NA_MAIN"
+
+        entry = self._indicator_catalog_entry(code) or {}
+        keywords = str(entry.get("keywords") or "").lower()
+        if "balance of payments" in keywords:
+            return "IMF.STA:BOP"
+        if "labor markets" in keywords or "employment rate" in keywords:
+            return "IMF.STA:LS"
+        if "national accounts" in keywords or "gross value added" in keywords:
+            return "IMF.STA:NA_MAIN"
+
+        return None
+
     def _raise_for_unsupported_execution_family(
         self,
         indicator_code: str,
@@ -1083,10 +1125,13 @@ class IMFProvider(BaseProvider):
             return
 
         label = str(indicator_label or indicator_code).strip() or indicator_code
+        dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
+        dataset_suffix = f" Likely next dataset family: {dataset_hint}." if dataset_hint else ""
         raise DataNotAvailableError(
             f"IMF indicator '{label}' ({indicator_code}) resolved to a non-DataMapper IMF family. "
             f"The current runtime can resolve this series from the local IMF catalog, but execution still "
             f"requires IMF dataset-family routing beyond the legacy DataMapper v1 path."
+            f"{dataset_suffix}"
         )
 
     async def _resolve_from_local_catalog(

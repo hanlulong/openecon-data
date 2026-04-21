@@ -229,3 +229,54 @@ def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> Non
 
     assert "non-DataMapper IMF family" in message
     assert "BXSRLO_USD" in message
+
+
+def test_imf_dataset_family_hint_maps_bop_like_codes() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    hint = provider._likely_dataset_family_hint(  # pylint: disable=protected-access
+        "BXSRLO_USD",
+        "Balance of Payments, Current Account, Goods and Services, Services, Royalties and License Fees, Other Royalties and License Fees, Credit, US Dollars",
+    )
+
+    assert hint == "IMF.STA:BOP"
+
+
+def test_imf_dataset_family_hint_maps_labor_market_codes() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    hint = provider._likely_dataset_family_hint(  # pylint: disable=protected-access
+        "LER_ISIC31_C_PT",
+        "Labor Markets, Employment, Employment Rate, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 3.1, Mining and quarrying, Percent",
+    )
+
+    assert hint == "IMF.STA:LS"
+
+
+def test_imf_dataset_family_hint_maps_national_accounts_codes() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    hint = provider._likely_dataset_family_hint(  # pylint: disable=protected-access
+        "NGDPVA_R_ISIC4_C28_XDC",
+        "National Accounts, Gross Value Added, Real, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 4, Miscellaneous machinery and equipment manufacturing, National Currency",
+    )
+
+    assert hint == "IMF.STA:NA_MAIN"
+
+
+def test_imf_non_datamapper_failure_includes_dataset_hint() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    with patch.object(
+        provider,
+        "_resolve_indicator_code",
+        return_value=("BXSRLO_USD", "Balance of Payments ... Royalties and License Fees"),
+    ), patch.object(provider, "_indicator_catalog_entry", return_value={"category": "INDICATOR"}):
+        try:
+            run(provider.fetch_indicator("ignored", country="USA"))  # pylint: disable=protected-access
+        except DataNotAvailableError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected DataNotAvailableError")
+
+    assert "Likely next dataset family: IMF.STA:BOP" in message
