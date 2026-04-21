@@ -218,7 +218,10 @@ def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> Non
     with patch.object(
         provider,
         "_resolve_indicator_code",
-        return_value=("BXSRLO_USD", "Balance of Payments ... Royalties and License Fees"),
+        return_value=(
+            "LER_ISIC31_C_PT",
+            "Labor Markets, Employment, Employment Rate, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 3.1, Mining and quarrying, Percent",
+        ),
     ), patch.object(provider, "_indicator_catalog_entry", return_value={"category": "INDICATOR"}):
         try:
             run(provider.fetch_indicator("ignored", country="USA"))  # pylint: disable=protected-access
@@ -228,7 +231,7 @@ def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> Non
             raise AssertionError("Expected DataNotAvailableError")
 
     assert "non-DataMapper IMF family" in message
-    assert "BXSRLO_USD" in message
+    assert "LER_ISIC31_C_PT" in message
 
 
 def test_imf_dataset_family_hint_maps_bop_like_codes() -> None:
@@ -270,7 +273,10 @@ def test_imf_non_datamapper_failure_includes_dataset_hint() -> None:
     with patch.object(
         provider,
         "_resolve_indicator_code",
-        return_value=("BXSRLO_USD", "Balance of Payments ... Royalties and License Fees"),
+        return_value=(
+            "NGDPVA_R_ISIC4_C28_XDC",
+            "National Accounts, Gross Value Added, Real, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 4, Miscellaneous machinery and equipment manufacturing, National Currency",
+        ),
     ), patch.object(provider, "_indicator_catalog_entry", return_value={"category": "INDICATOR"}):
         try:
             run(provider.fetch_indicator("ignored", country="USA"))  # pylint: disable=protected-access
@@ -279,4 +285,4 @@ def test_imf_non_datamapper_failure_includes_dataset_hint() -> None:
         else:  # pragma: no cover - defensive
             raise AssertionError("Expected DataNotAvailableError")
 
-    assert "Likely next dataset family: IMF.STA:BOP" in message
+    assert "Likely next dataset family: IMF.STA:NA_MAIN" in message

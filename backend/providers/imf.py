@@ -446,6 +446,7 @@ class IMFProvider(BaseProvider):
         super().__init__(timeout=timeout)  # Initialize BaseProvider
         settings = get_settings()
         self.base_url = settings.imf_base_url.rstrip("/")
+        self.engine_base_url = "https://data.imf.org"
         self.metadata_search = metadata_search_service
 
     async def _fetch_data(self, **params) -> NormalizedData | list[NormalizedData]:
@@ -684,7 +685,18 @@ class IMFProvider(BaseProvider):
             List of NormalizedData objects (one per country)
         """
         indicator_code, indicator_label = await self._resolve_indicator_code(indicator)
-        self._raise_for_unsupported_execution_family(indicator_code, indicator_label)
+        execution_family = self._classify_execution_family(indicator_code)
+        if execution_family == "NON_DATAMAPPER_INDICATOR":
+            dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
+            if dataset_hint == "IMF.STA:BOP":
+                return await self._fetch_bop_family(
+                    indicator_code=indicator_code,
+                    indicator_label=indicator_label,
+                    countries=countries,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+            self._raise_for_unsupported_execution_family(indicator_code, indicator_label)
 
         # Convert all country names to IMF codes
         country_codes = [self._country_code(country) for country in countries]
@@ -1113,6 +1125,158 @@ class IMFProvider(BaseProvider):
             return "IMF.STA:NA_MAIN"
 
         return None
+
+    def _split_bop_series_code(self, indicator_code: str) -> Dict[str, str]:
+        """Split a BOP-style IMF code into dimension components."""
+        code = str(indicator_code or "").strip().upper()
+        if len(code) < 3:
+            return {}
+
+        accounting_entry = code[:2]
+        remainder = code[2:]
+        if "_" in remainder:
+            indicator_part, unit = remainder.rsplit("_", 1)
+        else:
+            indicator_part, unit = remainder, ""
+
+        return {
+            "BOP_ACCOUNTING_ENTRY": accounting_entry,
+            "INDICATOR": indicator_part,
+            "UNIT": unit,
+        }
+
+    def _build_bop_query_payload(
+        self,
+        indicator_code: str,
+        countries: List[str],
+        start_year: Optional[int],
+        end_year: Optional[int],
+        *,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Build the first bounded BOP-family SDMX engine query payload."""
+        country_codes = [self._country_code(country) for country in countries]
+        split_code = self._split_bop_series_code(indicator_code)
+        filters: List[Dict[str, Any]] = []
+        if country_codes:
+            filters.append({"dimensionId": "COUNTRY", "values": country_codes})
+        for dim in ("BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT"):
+            value = split_code.get(dim)
+            if value:
+                filters.append({"dimensionId": dim, "values": [value]})
+        if start_year or end_year:
+            filters.append(
+                {
+                    "dimensionId": "TIME_PERIOD",
+                    "values": [
+                        str(start_year) if start_year is not None else "",
+                        str(end_year) if end_year is not None else "",
+                    ],
+                }
+            )
+
+        return {
+            "agencyID": "IMF.STA",
+            "resourceID": "BOP",
+            "version": "21.0.0",
+            "filters": filters,
+            "detail": "full",
+            "includeHistory": "false",
+            "messageVersion": "2.0.0",
+            "limit": limit,
+            "attributes": "none",
+            "_type": "SdmxDataQueryV3",
+            "dimensionAtObservation": "AllDimensions",
+            "firstNObservations": 0,
+        }
+
+    async def _submit_engine_query(self, payload: Dict[str, Any]) -> str:
+        """Submit a SDMX engine query and return the OTT token."""
+        client = get_http_client()
+        response = await client.post(
+            f"{self.engine_base_url}/platform/rest/v2/engine/data/sync/submit",
+            json=payload,
+            timeout=effective_timeout(60.0),
+        )
+        response.raise_for_status()
+        token = str(getattr(response, "text", "") or "").strip()
+        if not token:
+            raise DataNotAvailableError("IMF engine query returned no OTT token")
+        return token
+
+    async def _retrieve_engine_ott(self, ott_token: str) -> httpx.Response:
+        """Retrieve the result of a previously submitted SDMX engine query."""
+        client = get_http_client()
+        response = await client.get(
+            f"{self.engine_base_url}/api/platform/v2/engine/data/sync/ott/{ott_token}",
+            timeout=effective_timeout(60.0),
+        )
+        return response
+
+    def _extract_embedded_engine_error(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Extract a trailing embedded error object from an OTT response body."""
+        text = str(response_text or "").strip()
+        marker = '{"status":'
+        marker_idx = text.find(marker)
+        if marker_idx <= 0:
+            return None
+        try:
+            candidate = json.loads(text[marker_idx:])
+        except Exception:
+            return None
+        if isinstance(candidate, dict) and "status" in candidate and "message" in candidate:
+            return candidate
+        return None
+
+    async def _fetch_bop_family(
+        self,
+        *,
+        indicator_code: str,
+        indicator_label: Optional[str],
+        countries: List[str],
+        start_year: Optional[int],
+        end_year: Optional[int],
+    ) -> List[NormalizedData]:
+        """Prototype BOP-first non-WEO execution lane.
+
+        This is intentionally bounded: it proves routing and engine reachability
+        first, while remaining fail-closed until end-to-end payload semantics
+        and result normalization are proven stable.
+        """
+        payload = self._build_bop_query_payload(
+            indicator_code=indicator_code,
+            countries=countries,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        try:
+            ott_token = await self._submit_engine_query(payload)
+        except Exception as exc:
+            raise DataNotAvailableError(
+                f"IMF BOP execution lane could not submit an SDMX engine query for {indicator_code}: {exc}"
+            ) from exc
+
+        response = await self._retrieve_engine_ott(ott_token)
+        if response.status_code >= 500:
+            raise DataNotAvailableError(
+                f"IMF BOP execution lane reached the SDMX engine submit step for {indicator_code}, "
+                f"but OTT retrieval is currently unavailable (HTTP {response.status_code})."
+            )
+        if response.status_code >= 400:
+            raise DataNotAvailableError(
+                f"IMF BOP execution lane returned HTTP {response.status_code} during OTT retrieval for {indicator_code}."
+            )
+
+        embedded_error = self._extract_embedded_engine_error(getattr(response, "text", ""))
+        if embedded_error:
+            raise DataNotAvailableError(
+                f"IMF BOP execution lane reached OTT retrieval for {indicator_code}, but the engine returned "
+                f"an embedded error {embedded_error.get('status')}: {embedded_error.get('message')}."
+            )
+
+        raise DataNotAvailableError(
+            f"IMF BOP execution lane obtained an OTT result for {indicator_code}, but result parsing is not implemented yet."
+        )
 
     def _raise_for_unsupported_execution_family(
         self,
