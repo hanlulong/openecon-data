@@ -6839,6 +6839,8 @@ class QueryServiceTests(unittest.TestCase):
                 "__statscan_product_id": "14100287",
                 "__statscan_decomposition_axis": "Age group",
                 "__semantic_indicator_label": "employment rate",
+                "startDate": "2006-01-01",
+                "endDate": "2026-03-01",
             },
             clarificationNeeded=False,
             needsDecomposition=True,
@@ -6871,6 +6873,9 @@ class QueryServiceTests(unittest.TestCase):
         params = fetch_multi_dim.await_args.args[0]
         self.assertEqual(params["axis"], "Age group")
         self.assertEqual(params["dimensions"], {"Geography": "Ontario"})
+        self.assertEqual(params["periods"], 243)
+        self.assertEqual(params["startDate"], "2006-01-01")
+        self.assertEqual(params["endDate"], "2026-03-01")
 
     def test_fetch_data_statscan_dimension_decomposition_falls_back_to_semantic_product_with_richer_axis(self) -> None:
         intent = ParsedIntent(
@@ -6882,6 +6887,8 @@ class QueryServiceTests(unittest.TestCase):
                 "__statscan_product_id": "14100330",
                 "__statscan_decomposition_axis": "Age group",
                 "__semantic_indicator_label": "employment rate",
+                "startDate": "2006-01-01",
+                "endDate": "2026-03-01",
             },
             clarificationNeeded=False,
             needsDecomposition=True,
@@ -6921,6 +6928,10 @@ class QueryServiceTests(unittest.TestCase):
         second_params = fetch_multi_dim.await_args_list[1].args[0]
         self.assertEqual(first_params["productId"], "14100330")
         self.assertEqual(second_params["productId"], "14100287")
+        self.assertEqual(first_params["periods"], 243)
+        self.assertEqual(second_params["periods"], 243)
+        self.assertEqual(first_params["startDate"], "2006-01-01")
+        self.assertEqual(second_params["endDate"], "2026-03-01")
         self.assertEqual(intent.parameters.get("indicator"), "14100287")
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 

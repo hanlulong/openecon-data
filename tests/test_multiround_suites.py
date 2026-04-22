@@ -98,6 +98,20 @@ def test_regression_suite_covers_reported_statscan_sex_timeframe_bug() -> None:
 
 
 @pytest.mark.unit
+def test_regression_suite_covers_statscan_province_single_turn_horizon_bug() -> None:
+    suite = load_suite("regression", now=datetime(2026, 4, 15, 12, 0, 0))
+
+    province_case = suite["Reg 3: StatsCan Province Single-turn Horizon"][0]
+    assert province_case.query == "give me unemployment by province in Canada in last 20 years"
+    assert province_case.oracle.accepted_providers == ("STATSCAN",)
+    assert province_case.oracle.accepted_frequencies == ("monthly",)
+    assert province_case.oracle.exact_series_count == 10
+    assert province_case.oracle.min_points_per_series >= 200
+    assert province_case.oracle.earliest_year_at_most == 2007
+    assert province_case.oracle.latest_year_at_least == 2025
+
+
+@pytest.mark.unit
 def test_oracle_evaluator_fails_data_presence_without_semantic_match() -> None:
     case = RoundCase(
         query="US GDP growth rate",

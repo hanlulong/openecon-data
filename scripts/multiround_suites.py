@@ -487,6 +487,20 @@ def _regression_suite(now: datetime | None = None) -> dict[str, list[RoundCase]]
                 latest_year_at_least=latest_year_for_recent_data,
             ),
         ],
+        "Reg 3: StatsCan Province Single-turn Horizon": [
+            _case(
+                "give me unemployment by province in Canada in last 20 years",
+                providers=("STATSCAN",),
+                countries=("CA",),
+                cues=("unemployment",),
+                frequencies=("monthly",),
+                exact_series_count=10,
+                min_points_per_series=200,
+                earliest_year_at_most=earliest_year_for_last_20,
+                latest_year_at_least=latest_year_for_recent_data,
+                note="Province decomposition must keep the full requested time horizon instead of collapsing to the latest 20 monthly points.",
+            ),
+        ],
     }
 
 
