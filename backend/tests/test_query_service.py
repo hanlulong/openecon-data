@@ -7816,6 +7816,56 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(response.clarificationQuestions)
         self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
 
+    def test_process_query_provider_locked_eurostat_ppp_series_returns_data(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["PRC_PPP_IND"],
+            parameters={
+                "country": "FR",
+                "indicator": "PRC_PPP_IND",
+                "__semantic_provider_locked": True,
+                "__semantic_indicator_label": "Purchasing power parities price level indices",
+            },
+            clarificationNeeded=False,
+            originalQuery="France Purchasing power parities price level indices from Eurostat",
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="EUROSTAT", routed_provider="EUROSTAT", validation_warning=None))), \
+             patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
+             patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+             patch.object(
+                 self.service,
+                 "_fetch_data",
+                 new=AsyncMock(
+                     return_value=[
+                         sample_series_with(
+                             source="Eurostat",
+                             indicator="Purchasing power parities, price level indices, nominal and real expenditures by analytical categories - based on COICOP 1999",
+                             series_id="prc_ppp_ind",
+                             country="France",
+                             unit="index (2015=100)",
+                         )
+                     ]
+                 ),
+             ), \
+             patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
+            response = run(self.service.process_query(intent.originalQuery))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertIsNone(response.error)
+        self.assertIsNotNone(response.data)
+        assert response.data is not None
+        self.assertEqual(response.data[0].metadata.seriesId, "prc_ppp_ind")
+
     def test_resolve_concept_for_fallback_from_stored_param(self) -> None:
         """_resolve_concept_for_fallback uses __catalog_concept when available."""
         intent = ParsedIntent(

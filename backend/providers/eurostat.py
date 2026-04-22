@@ -241,7 +241,10 @@ class EurostatProvider(BaseProvider):
         "prc_hicp_aind_core": {"coicop": "TOT_X_NRG_FOOD"},  # HICP inflation - CORE (excluding energy, food)
         "prc_hicp_manr": {"coicop": "CP00"},  # HICP monthly - headline
         "prc_hicp_midx": {"coicop": "CP00"},  # HICP index - headline
-        "prc_ppp_ind": {"na_item": "B1GQ"},  # Price level indices
+        # PPP price-level datasets expose many analytical categories and forcing a
+        # GDP-only na_item filter can zero out otherwise valid series (for
+        # example the direct-cert PPP price-level query for Germany).
+        "prc_ppp_ind": {},  # Price level indices
         "prc_hpi_a": {"purchase": "TOTAL"},  # House price index
 
         # === International Trade ===

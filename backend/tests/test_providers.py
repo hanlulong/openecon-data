@@ -741,6 +741,59 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataset_code, "tec00118")
         self.assertIsNone(dataset_label)
 
+    def test_eurostat_ppp_indices_do_not_force_gdp_filter(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 1.10, "1": 1.12},
+                "dimension": {
+                    "time": {
+                        "category": {
+                            "index": {"2023": 0, "2024": 1},
+                            "label": {"2023": "2023", "2024": "2024"},
+                        }
+                    },
+                    "geo": {
+                        "category": {
+                            "index": {"DE": 0},
+                            "label": {"DE": "Germany"},
+                        }
+                    },
+                    "unit": {
+                        "category": {
+                            "index": {"PLI_EU27_2020": 0},
+                            "label": {"PLI_EU27_2020": "Price level index (EU27_2020=100)"},
+                        }
+                    },
+                },
+                "id": ["geo", "time"],
+                "size": [1, 2],
+                "updated": "2026-01-01",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="PRC_PPP_IND", country="DE", start_year=2023, end_year=2024))
+
+        self.assertEqual(series.metadata.seriesId, "prc_ppp_ind")
+        self.assertEqual(series.metadata.country, "DE")
+        self.assertEqual(len(series.data), 2)
+        self.assertEqual(len(client.calls), 1)
+        _, params = client.calls[0]
+        self.assertNotIn("na_item", params)
+
     def test_oecd_resolve_indicator_expands_catalog_code_alias(self) -> None:
         class StubMetadata:
             def __init__(self):
