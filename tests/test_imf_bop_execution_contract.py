@@ -178,7 +178,10 @@ def test_fetch_bop_family_reports_embedded_engine_error_explicitly() -> None:
         post_response=_MockHTTPResponse(status_code=200, text="test-ott"),
         get_response=_MockHTTPResponse(
             status_code=200,
-            text='{"meta":{},"data":{"dataSets":[]}}{"status":500,"message":"Internal Server Error"}',
+            text=(
+                '{"meta":{},"data":{"dataSets":[{"structure":0}],"structures":[{"dimensions":{"series":[{"id":"COUNTRY","values":[]},{"id":"INDICATOR","values":[]}]}}]}}'
+                '{"status":500,"message":"Internal Server Error"}'
+            ),
         ),
     )
 
@@ -200,6 +203,8 @@ def test_fetch_bop_family_reports_embedded_engine_error_explicitly() -> None:
 
     assert "embedded error 500" in message
     assert "payload_fingerprint=" in message
+    assert "ott_parts=2" in message
+    assert "series_dimensions=COUNTRY" in message
 
 
 def test_payload_fingerprint_is_stable_for_equivalent_payloads() -> None:
@@ -218,3 +223,32 @@ def test_payload_fingerprint_is_stable_for_equivalent_payloads() -> None:
     )
 
     assert provider._payload_fingerprint(payload_a) == provider._payload_fingerprint(payload_b)  # pylint: disable=protected-access
+
+
+def test_decode_engine_ott_parts_handles_concatenated_json_objects() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    response_text = (
+        '{"meta":{},"data":{"structures":[{"dimensions":{"series":[{"id":"COUNTRY","values":[]}]}}]}}'
+        '{"status":500,"message":"Internal Server Error"}'
+    )
+
+    parts = provider._decode_engine_ott_parts(response_text)  # pylint: disable=protected-access
+
+    assert len(parts) == 2
+    assert parts[0]["data"]["structures"][0]["dimensions"]["series"][0]["id"] == "COUNTRY"
+    assert parts[1]["status"] == 500
+
+
+def test_classify_bop_ott_response_extracts_structure_summary_and_error() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    response_text = (
+        '{"meta":{},"data":{"structures":[{"dimensions":{"series":[{"id":"COUNTRY","values":[]},{"id":"INDICATOR","values":[]}]}}]}}'
+        '{"status":500,"message":"Internal Server Error"}'
+    )
+
+    classification = provider._classify_bop_ott_response(response_text)  # pylint: disable=protected-access
+
+    assert classification["kind"] == "embedded_error"
+    assert classification["parts"] == 2
+    assert classification["error"]["status"] == 500
+    assert classification["structure_summary"]["series_dimensions"] == ["COUNTRY", "INDICATOR"]

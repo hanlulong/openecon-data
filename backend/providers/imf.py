@@ -1229,6 +1229,73 @@ class IMFProvider(BaseProvider):
             return candidate
         return None
 
+    def _decode_engine_ott_parts(self, response_text: str) -> List[Any]:
+        """Decode concatenated JSON parts from an OTT response body."""
+        text = str(response_text or "").strip()
+        if not text:
+            return []
+
+        decoder = json.JSONDecoder()
+        parts: List[Any] = []
+        idx = 0
+        while idx < len(text):
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+            if idx >= len(text):
+                break
+            obj, end = decoder.raw_decode(text, idx)
+            parts.append(obj)
+            idx = end
+        return parts
+
+    def _classify_bop_ott_response(self, response_text: str) -> Dict[str, Any]:
+        """Classify the current OTT response body into a structured diagnostic."""
+        parts = self._decode_engine_ott_parts(response_text)
+        structure_part = None
+        embedded_error = None
+
+        for part in parts:
+            if (
+                isinstance(part, dict)
+                and isinstance(part.get("data"), dict)
+                and isinstance(part["data"].get("structures"), list)
+            ):
+                structure_part = part
+            elif isinstance(part, dict) and "status" in part and "message" in part:
+                embedded_error = part
+
+        structure_summary = None
+        if structure_part:
+            structures = structure_part.get("data", {}).get("structures", [])
+            first_structure = structures[0] if structures else {}
+            series_dimensions = first_structure.get("dimensions", {}).get("series", [])
+            structure_summary = {
+                "series_dimensions": [d.get("id") for d in series_dimensions],
+                "dimension_value_sizes": {
+                    str(d.get("id") or ""): len(d.get("values", []))
+                    for d in series_dimensions
+                },
+            }
+
+        if embedded_error:
+            return {
+                "kind": "embedded_error",
+                "parts": len(parts),
+                "error": embedded_error,
+                "structure_summary": structure_summary,
+            }
+        if structure_part:
+            return {
+                "kind": "structure_only",
+                "parts": len(parts),
+                "structure_summary": structure_summary,
+            }
+        return {
+            "kind": "unclassified",
+            "parts": len(parts),
+            "structure_summary": structure_summary,
+        }
+
     def _payload_fingerprint(self, payload: Dict[str, Any]) -> str:
         """Build a short stable fingerprint for an engine payload."""
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -1289,11 +1356,20 @@ class IMFProvider(BaseProvider):
                 f"{self._payload_observability_suffix(payload)}"
             )
 
-        embedded_error = self._extract_embedded_engine_error(getattr(response, "text", ""))
-        if embedded_error:
+        ott_classification = self._classify_bop_ott_response(getattr(response, "text", ""))
+        if ott_classification.get("kind") == "embedded_error":
+            embedded_error = ott_classification.get("error") or {}
+            structure_summary = ott_classification.get("structure_summary") or {}
+            structure_suffix = ""
+            if structure_summary:
+                structure_suffix = (
+                    f" ott_parts={ott_classification.get('parts')}; "
+                    f"series_dimensions={','.join(structure_summary.get('series_dimensions') or []) or 'none'}"
+                )
             raise DataNotAvailableError(
                 f"IMF BOP execution lane reached OTT retrieval for {indicator_code}, but the engine returned "
                 f"an embedded error {embedded_error.get('status')}: {embedded_error.get('message')}."
+                f"{structure_suffix}"
                 f"{self._payload_observability_suffix(payload)}"
             )
 
