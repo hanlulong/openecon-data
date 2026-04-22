@@ -3302,6 +3302,115 @@ class QueryServiceTests(unittest.TestCase):
         normalized_intent = decompose_mock.await_args.args[1]
         self.assertEqual(normalized_intent.decompositionEntities, CANADIAN_PROVINCES)
 
+    def test_fetch_data_retries_eurostat_recent_default_window_with_broader_history(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["TRNG_CVT_20S"],
+            parameters={
+                "country": "IT",
+                "indicator": "TRNG_CVT_20S",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+                "startDate": "2021-04-23",
+                "endDate": "2026-04-22",
+            },
+            clarificationNeeded=False,
+            originalQuery="Italy Cost of CVT courses by type and size class - cost per training hour from Eurostat",
+        )
+
+        returned = sample_series_with(
+            source="Eurostat",
+            indicator="Cost of CVT courses by type and size class - cost per training hour",
+            country="IT",
+            series_id="TRNG_CVT_20S",
+        )
+
+        calls = []
+
+        async def _fake_fetch_indicator(*, indicator, country, start_year=None, end_year=None):
+            calls.append((indicator, country, start_year, end_year))
+            if len(calls) == 1:
+                raise DataNotAvailableError("No data found for IT in dataset trng_cvt_20s")
+            return returned
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(calls[0], ("trng_cvt_20s", "IT", 2021, 2026))
+        self.assertEqual(calls[1][0:2], ("trng_cvt_20s", "IT"))
+        self.assertLess(calls[1][2], calls[0][2])
+
+    def test_fetch_data_does_not_retry_eurostat_when_time_scope_is_explicit(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["TRNG_CVT_20S"],
+            parameters={
+                "country": "IT",
+                "indicator": "TRNG_CVT_20S",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+                "startDate": "2021-01-01",
+                "endDate": "2024-12-31",
+            },
+            clarificationNeeded=False,
+            originalQuery="Italy Cost of CVT courses by type and size class - cost per training hour from Eurostat 2021-2024",
+        )
+
+        calls = []
+
+        async def _fake_fetch_indicator(*, indicator, country, start_year=None, end_year=None):
+            calls.append((indicator, country, start_year, end_year))
+            raise DataNotAvailableError("No data found for IT in dataset trng_cvt_20s")
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
+            with self.assertRaises(DataNotAvailableError):
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(calls, [("trng_cvt_20s", "IT", 2021, 2024)])
+
+    def test_fetch_data_retries_eurostat_sparse_history_for_multi_country_queries(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["TRNG_CVT_20S"],
+            parameters={
+                "countries": ["IT", "DE"],
+                "indicator": "TRNG_CVT_20S",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+                "startDate": "2021-04-23",
+                "endDate": "2026-04-22",
+            },
+            clarificationNeeded=False,
+            originalQuery="Italy and Germany Cost of CVT courses by type and size class - cost per training hour from Eurostat",
+        )
+
+        calls = []
+        failures_by_country = {"IT": 0}
+
+        async def _fake_fetch_indicator(*, indicator, country, start_year=None, end_year=None):
+            calls.append((indicator, country, start_year, end_year))
+            if country == "IT" and failures_by_country["IT"] == 0:
+                failures_by_country["IT"] += 1
+                raise DataNotAvailableError("No recent data found for IT in dataset trng_cvt_20s")
+            return sample_series_with(
+                source="Eurostat",
+                indicator="Cost of CVT courses by type and size class - cost per training hour",
+                country=country,
+                series_id="TRNG_CVT_20S",
+            )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual({series.metadata.country for series in data}, {"IT", "DE"})
+        self.assertEqual(sum(1 for _, country, _, _ in calls if country == "DE"), 1)
+        self.assertEqual(sum(1 for _, country, _, _ in calls if country == "IT"), 2)
+        self.assertTrue(any(country == "IT" and start_year < 2021 for _, country, start_year, _ in calls))
+
     def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
         intent = ParsedIntent(

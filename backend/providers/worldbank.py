@@ -971,6 +971,21 @@ class WorldBankProvider(BaseProvider):
             logger.info(f"🔒 WorldBank: Using pre-resolved indicator code: {indicator}")
             return indicator
 
+        exact_title_text = str(indicator or "").strip()
+        if exact_title_text:
+            try:
+                from ..services.indicator_resolution import find_exact_provider_title_match
+
+                exact_match = find_exact_provider_title_match(exact_title_text, "WorldBank")
+            except Exception as exc:
+                logger.debug("WorldBank exact-title lookup skipped for '%s': %s", indicator, exc)
+                exact_match = None
+
+            if exact_match and exact_match.get("code"):
+                code = str(exact_match["code"]).strip()
+                logger.info("🔒 WorldBank: Using exact local indicator code '%s' from provider-title match", code)
+                return code
+
         # Use IndicatorResolver as the unified first attempt
         # This consolidates FTS5 search, translator, and catalog into one service
         try:

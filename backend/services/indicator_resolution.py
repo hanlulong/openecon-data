@@ -349,7 +349,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
     query_country_codes = _extract_country_codes_from_text(query_text)
 
     best_candidate: Optional[Dict[str, Any]] = None
-    best_rank = (-1, -1)
+    best_rank = (-1, -999, -1, -999)
     seen_codes = set()
     for search_text in search_inputs:
         try:
@@ -375,7 +375,19 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             ):
                 candidate_country_codes = _extract_country_codes_from_text(candidate_name)
                 country_rank = len(query_country_codes & candidate_country_codes)
-                rank = (country_rank, len(normalized_name))
+                query_token_lengths = [
+                    len(normalized_query.split())
+                    for normalized_query in (
+                        re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
+                        for candidate_query in search_inputs
+                    )
+                    if normalized_query
+                ]
+                query_token_len = min(query_token_lengths) if query_token_lengths else len(normalized_text.split())
+                name_token_len = len(normalized_name.split())
+                token_delta = abs(name_token_len - query_token_len)
+                shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
+                rank = (country_rank, -token_delta, shared_tokens, -name_token_len)
                 if rank > best_rank:
                     best_candidate = candidate
                     best_rank = rank

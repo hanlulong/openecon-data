@@ -735,6 +735,11 @@ class StatsCanProvider(BaseProvider):
         if "basis" in dimension_name_lower:
             return self._find_member_id_by_keywords(members, ["balance of payments", "bop", "customs basis"]) or 1
 
+        if "characteristics" in dimension_name_lower:
+            if any(term in indicator_lower for term in ["rate", "ratio", "share", "percent", "%"]):
+                return self._find_member_id_by_keywords(members, ["percent"]) or 1
+            return self._find_member_id_by_keywords(members, ["percent", "number of persons", "number", "value"]) or 1
+
         if any(term in dimension_name_lower for term in ["statistics", "statistic"]):
             return self._find_member_id_by_keywords(members, ["estimate", "number", "value", "total"]) or 1
 

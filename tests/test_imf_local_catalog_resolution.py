@@ -212,6 +212,16 @@ def test_imf_execution_family_classifier_keeps_weo_codes_on_datamapper_path() ->
     assert family == "DATAMAPPER_WEO"
 
 
+def test_imf_resolve_indicator_preserves_exact_short_weo_code() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    code, label = run(provider._resolve_indicator_code("BCA"))  # pylint: disable=protected-access
+
+    assert code == "BCA"
+    assert label is not None
+    assert "current account" in label.lower()
+
+
 def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> None:
     provider = IMFProvider(metadata_search_service=None)
 

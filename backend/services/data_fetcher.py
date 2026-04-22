@@ -1602,6 +1602,41 @@ async def _fetch_from_eurostat(
     scoped_countries = list(eurostat_request.get("country_scope") or [])
     request_start_year = eurostat_request.get("start_year")
     request_end_year = eurostat_request.get("end_year")
+    original_query = str(params.get("__original_query") or intent.originalQuery or "")
+    explicit_time_scope = _query_has_explicit_time_scope(original_query)
+    current_year = datetime.utcnow().year
+    default_recent_start_year = current_year - 5
+    should_retry_sparse_history = (
+        not explicit_time_scope
+        and request_start_year is not None
+        and int(request_start_year) >= default_recent_start_year
+    )
+    fallback_start_year = max(2000, current_year - 15)
+
+    async def _fetch_indicator_with_sparse_history_retry(country_code: str) -> NormalizedData:
+        try:
+            return await svc.eurostat_provider.fetch_indicator(
+                indicator=indicator,
+                country=country_code,
+                start_year=request_start_year,
+                end_year=request_end_year,
+            )
+        except DataNotAvailableError:
+            if not should_retry_sparse_history or fallback_start_year >= int(request_start_year):
+                raise
+            logger.info(
+                "Eurostat sparse-history retry: indicator=%s country=%s start_year=%s -> %s",
+                indicator,
+                country_code,
+                request_start_year,
+                fallback_start_year,
+            )
+            return await svc.eurostat_provider.fetch_indicator(
+                indicator=indicator,
+                country=country_code,
+                start_year=fallback_start_year,
+                end_year=request_end_year,
+            )
 
     country_param = params.get("country") or (scoped_countries[0] if len(scoped_countries) == 1 else None)
     countries_param = params.get("countries") or scoped_countries
@@ -1642,12 +1677,7 @@ async def _fetch_from_eurostat(
         async def _fetch_eurostat_country(country_code: str) -> Optional[NormalizedData]:
             async with eurostat_sem:
                 try:
-                    return await svc.eurostat_provider.fetch_indicator(
-                        indicator=indicator,
-                        country=country_code,
-                        start_year=request_start_year,
-                        end_year=request_end_year,
-                    )
+                    return await _fetch_indicator_with_sparse_history_retry(country_code)
                 except Exception as e:
                     logger.warning(f"Failed to fetch {indicator} for {country_code}: {e}")
                     return None
@@ -1668,12 +1698,7 @@ async def _fetch_from_eurostat(
 
     # Single country query (default to EU aggregate if not specified)
     single_country = country_param if country_param else "EU27_2020"
-    series = await svc.eurostat_provider.fetch_indicator(
-        indicator=indicator,
-        country=single_country,
-        start_year=request_start_year,
-        end_year=request_end_year,
-    )
+    series = await _fetch_indicator_with_sparse_history_retry(single_country)
     return [series]
 
 

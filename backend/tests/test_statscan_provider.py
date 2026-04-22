@@ -172,6 +172,26 @@ def test_select_default_member_id_prefers_total_retail_all_stores(statscan_provi
     assert adjustment_member == 2
 
 
+def test_select_default_member_id_avoids_statistical_difference_characteristic(statscan_provider):
+    members = [
+        {"memberId": 1, "memberNameEn": "Number of persons"},
+        {"memberId": 2, "memberNameEn": "Low 95% confidence interval, number of persons"},
+        {"memberId": 3, "memberNameEn": "High 95% confidence interval, number of persons"},
+        {"memberId": 4, "memberNameEn": "Percent"},
+        {"memberId": 5, "memberNameEn": "Low 95% confidence interval, percent"},
+        {"memberId": 6, "memberNameEn": "High 95% confidence interval, percent"},
+        {"memberId": 7, "memberNameEn": "Statistically different from the Canada (excluding territories) rate"},
+    ]
+
+    member = statscan_provider._select_default_member_id(
+        "Characteristics",
+        members,
+        "health indicator statistics, annual estimates",
+    )
+
+    assert member == 1
+
+
 @pytest.mark.asyncio
 async def test_fetch_multi_province_data_rejects_explicit_unsupported_geography_for_product(statscan_provider):
     with pytest.raises(ValueError, match="does not expose geography 'Yukon'"):

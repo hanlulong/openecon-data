@@ -214,6 +214,13 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(data.data[0].date, "2020-01-01")
         self.assertEqual(data.data[0].value, 21000000000000)
 
+    def test_worldbank_resolve_indicator_prefers_exact_provider_title_match(self) -> None:
+        provider = WorldBankProvider(metadata_search_service=None)
+
+        code = run(provider._resolve_indicator_code("Completion rate, upper secondary education, female (%)"))
+
+        self.assertEqual(code, "UIS.CR.3.F")
+
     def test_worldbank_small_multi_country_prefers_parallel_single_country_fetch(self) -> None:
         provider = WorldBankProvider()
 

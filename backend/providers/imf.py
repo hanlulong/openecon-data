@@ -1540,13 +1540,7 @@ class IMFProvider(BaseProvider):
         # while still failing closed for fake codes because they will miss the
         # local exact lookup and continue down the normal validation path.
         exact_code_candidate = str(indicator or "").upper().strip()
-        structured_exact_code = (
-            "_" in exact_code_candidate
-            or "." in exact_code_candidate
-            or any(char.isdigit() for char in exact_code_candidate)
-            or len(exact_code_candidate) >= 8
-        )
-        if structured_exact_code and re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{2,}", exact_code_candidate):
+        if re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_candidate):
             try:
                 from ..services.indicator_database import get_indicator_lookup
 
