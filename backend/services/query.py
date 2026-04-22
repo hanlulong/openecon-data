@@ -59,7 +59,7 @@ from ..providers.bis import BISProvider
 from ..providers.eurostat import EurostatProvider
 from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
-from ..utils.geographies import normalize_canadian_region_list
+from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.http_pool import extended_timeout
@@ -195,6 +195,7 @@ from ..services.data_fetcher import (
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
+    _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
 )
 from ..services.provider_strategy import (
     collect_target_countries as _ps_collect_target_countries,
@@ -237,6 +238,16 @@ def _get_cached_parse_result(query_hash: str) -> Optional[Any]:
         # Stale — remove
         del _intent_cache[query_hash]
     return None
+
+
+def _normalize_province_decomposition_entities(
+    entities: Optional[List[str]],
+) -> List[str]:
+    """Normalize a Canadian province breakdown to the 10 provinces only."""
+    province_set = set(CANADIAN_PROVINCES)
+    normalized = normalize_canadian_region_list(entities)
+    provinces_only = [region for region in normalized if region in province_set]
+    return provinces_only or CANADIAN_PROVINCES.copy()
 
 
 def _put_cached_parse_result(query_hash: str, result: Any) -> None:
@@ -1252,9 +1263,8 @@ class QueryService:
         execution_plan = self._build_minimal_execution_plan(query, intent)
 
         if intent.needsDecomposition and intent.decompositionType == "provinces":
-            intent.decompositionEntities = normalize_canadian_region_list(
-                intent.decompositionEntities,
-                fill_missing_territories=True
+            intent.decompositionEntities = _normalize_province_decomposition_entities(
+                intent.decompositionEntities
             )
         await self._maybe_expand_statscan_dimension_decomposition_entities(conv_id, intent)
 
@@ -4404,9 +4414,8 @@ class QueryService:
             execution_plan = self._build_minimal_execution_plan(query, intent)
 
             if intent.needsDecomposition and intent.decompositionType == "provinces":
-                intent.decompositionEntities = normalize_canadian_region_list(
-                    intent.decompositionEntities,
-                    fill_missing_territories=True
+                intent.decompositionEntities = _normalize_province_decomposition_entities(
+                    intent.decompositionEntities
                 )
             await self._maybe_expand_statscan_dimension_decomposition_entities(conv_id, intent)
             if (
@@ -6706,8 +6715,10 @@ class QueryService:
                         "indicator": indicator_name,
                         "indicatorLabel": str((intent.parameters or {}).get("__semantic_indicator_label") or indicator_name),
                         "provinces": intent.decompositionEntities,
-                        "periods": intent.parameters.get("periods", 20),
-                        "dimensions": intent.parameters.get("dimensions", {})
+                        "periods": _df_statscan_periods_from_date_range(intent.parameters or {}, 20),
+                        "dimensions": intent.parameters.get("dimensions", {}),
+                        "startDate": intent.parameters.get("startDate"),
+                        "endDate": intent.parameters.get("endDate"),
                     }
 
                     # Call batch method - returns List[NormalizedData]

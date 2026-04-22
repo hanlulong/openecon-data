@@ -18,6 +18,7 @@ from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
 from backend.services.semantic_match_judge import ExecutionResultJudgment
 from backend.tests.utils import run
+from backend.utils.geographies import CANADIAN_PROVINCES
 from backend.utils.retry import DataNotAvailableError
 
 
@@ -3197,6 +3198,109 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["productId"], "14100287")
         self.assertEqual(intent.parameters.get("indicator"), "14100287")
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+
+    def test_decompose_and_aggregate_statscan_provinces_uses_date_derived_periods(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={
+                "country": "CA",
+                "indicator": "14100287",
+                "__statscan_product_id": "14100287",
+                "__semantic_indicator_label": "unemployment rate",
+                "startDate": "2006-01-01",
+                "endDate": "2026-03-01",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="provinces",
+            decompositionEntities=["Ontario", "Alberta"],
+            originalQuery="give me unemployment by province in Canada in last 20 years",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Ontario unemployment rate",
+                country="Canada",
+                series_id="14100287:7.7.1.1.1.1.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Alberta unemployment rate",
+                country="Canada",
+                series_id="14100287:10.7.1.1.1.1.0.0.0.0",
+            ),
+        ]
+
+        async def _fake_resolve(provider, current_intent, params):
+            return dict(params)
+
+        with patch.object(self.service, "_infer_statscan_product_id_for_followup", return_value="14100287"), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_fake_resolve), \
+             patch.object(self.service.statscan_provider, "fetch_multi_province_data", new_callable=AsyncMock, return_value=returned) as batch_fetch:
+            data = run(
+                self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                    "give me unemployment by province in Canada in last 20 years",
+                    intent,
+                    "conv-statscan-province-horizon",
+                )
+            )
+
+        self.assertEqual(len(data), 2)
+        params = batch_fetch.await_args.args[0]
+        self.assertEqual(params["periods"], 243)
+        self.assertEqual(params["startDate"], "2006-01-01")
+        self.assertEqual(params["endDate"], "2026-03-01")
+
+    def test_process_query_statscan_province_decomposition_keeps_provinces_only(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["14100287"],
+            parameters={"country": "CA", "startDate": "2006-01-01"},
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="provinces",
+            decompositionEntities=None,
+            originalQuery="give me unemployment by province in Canada in last 20 years",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="STATSCAN",
+            validation_warning=None,
+        )
+        fetched = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Ontario unemployment rate",
+                country="Canada",
+                series_id="14100287:7.7.1.1.1.1.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Quebec unemployment rate",
+                country="Canada",
+                series_id="14100287:6.7.1.1.1.1.0.0.0.0",
+            ),
+        ]
+
+        with patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, return_value=parse_result), \
+             patch.object(self.service, "_decompose_and_aggregate", new_callable=AsyncMock, return_value=fetched) as decompose_mock, \
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None):
+            response = run(
+                self.service.process_query(
+                    "give me unemployment by province in Canada in last 20 years",
+                    auto_pro_mode=False,
+                    use_orchestrator=False,
+                    allow_orchestrator=False,
+                )
+            )
+
+        self.assertIsNone(response.error)
+        normalized_intent = decompose_mock.await_args.args[1]
+        self.assertEqual(normalized_intent.decompositionEntities, CANADIAN_PROVINCES)
 
     def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
         self.service.settings.use_minimal_execution_plan = True
