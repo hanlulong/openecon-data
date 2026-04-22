@@ -166,6 +166,8 @@ def test_fetch_bop_family_reports_ott_retrieval_failure_explicitly() -> None:
             raise AssertionError("Expected DataNotAvailableError")
 
     assert "OTT retrieval is currently unavailable" in message
+    assert "payload_fingerprint=" in message
+    assert "filter_dimensions=COUNTRY,BOP_ACCOUNTING_ENTRY,INDICATOR,UNIT,TIME_PERIOD" in message
     assert client.post_calls
     assert client.get_calls
 
@@ -197,3 +199,22 @@ def test_fetch_bop_family_reports_embedded_engine_error_explicitly() -> None:
             raise AssertionError("Expected DataNotAvailableError")
 
     assert "embedded error 500" in message
+    assert "payload_fingerprint=" in message
+
+
+def test_payload_fingerprint_is_stable_for_equivalent_payloads() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    payload_a = provider._build_bop_query_payload(  # pylint: disable=protected-access
+        indicator_code="BXSRLO_USD",
+        countries=["USA"],
+        start_year=2020,
+        end_year=2021,
+    )
+    payload_b = provider._build_bop_query_payload(  # pylint: disable=protected-access
+        indicator_code="BXSRLO_USD",
+        countries=["USA"],
+        start_year=2020,
+        end_year=2021,
+    )
+
+    assert provider._payload_fingerprint(payload_a) == provider._payload_fingerprint(payload_b)  # pylint: disable=protected-access

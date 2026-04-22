@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -1228,6 +1229,24 @@ class IMFProvider(BaseProvider):
             return candidate
         return None
 
+    def _payload_fingerprint(self, payload: Dict[str, Any]) -> str:
+        """Build a short stable fingerprint for an engine payload."""
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+    def _payload_observability_suffix(self, payload: Dict[str, Any]) -> str:
+        """Return a compact observability suffix for BOP engine errors."""
+        fingerprint = self._payload_fingerprint(payload)
+        filter_ids = [
+            str(item.get("dimensionId") or "").strip()
+            for item in payload.get("filters", [])
+            if isinstance(item, dict) and str(item.get("dimensionId") or "").strip()
+        ]
+        return (
+            f" payload_fingerprint={fingerprint}; "
+            f"filter_dimensions={','.join(filter_ids) or 'none'}"
+        )
+
     async def _fetch_bop_family(
         self,
         *,
@@ -1253,7 +1272,8 @@ class IMFProvider(BaseProvider):
             ott_token = await self._submit_engine_query(payload)
         except Exception as exc:
             raise DataNotAvailableError(
-                f"IMF BOP execution lane could not submit an SDMX engine query for {indicator_code}: {exc}"
+                f"IMF BOP execution lane could not submit an SDMX engine query for {indicator_code}: {exc}."
+                f"{self._payload_observability_suffix(payload)}"
             ) from exc
 
         response = await self._retrieve_engine_ott(ott_token)
@@ -1261,10 +1281,12 @@ class IMFProvider(BaseProvider):
             raise DataNotAvailableError(
                 f"IMF BOP execution lane reached the SDMX engine submit step for {indicator_code}, "
                 f"but OTT retrieval is currently unavailable (HTTP {response.status_code})."
+                f"{self._payload_observability_suffix(payload)}"
             )
         if response.status_code >= 400:
             raise DataNotAvailableError(
                 f"IMF BOP execution lane returned HTTP {response.status_code} during OTT retrieval for {indicator_code}."
+                f"{self._payload_observability_suffix(payload)}"
             )
 
         embedded_error = self._extract_embedded_engine_error(getattr(response, "text", ""))
@@ -1272,10 +1294,12 @@ class IMFProvider(BaseProvider):
             raise DataNotAvailableError(
                 f"IMF BOP execution lane reached OTT retrieval for {indicator_code}, but the engine returned "
                 f"an embedded error {embedded_error.get('status')}: {embedded_error.get('message')}."
+                f"{self._payload_observability_suffix(payload)}"
             )
 
         raise DataNotAvailableError(
             f"IMF BOP execution lane obtained an OTT result for {indicator_code}, but result parsing is not implemented yet."
+            f"{self._payload_observability_suffix(payload)}"
         )
 
     def _raise_for_unsupported_execution_family(
