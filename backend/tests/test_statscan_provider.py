@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from backend.providers.statscan import StatsCanProvider
+from backend.utils.retry import DataNotAvailableError
 
 
 class _FailingHttpClient:
@@ -10,6 +11,32 @@ class _FailingHttpClient:
 
     async def post(self, *args, **kwargs):
         raise httpx.ConnectError("offline")
+
+
+class _MockResponse:
+    def __init__(self, payload, status_code: int = 200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=httpx.Request("POST", "https://www150.statcan.gc.ca"),
+                response=httpx.Response(self.status_code),
+            )
+
+    def json(self):
+        return self._payload
+
+
+class _MockPostClient:
+    def __init__(self, payload, status_code: int = 200):
+        self.payload = payload
+        self.status_code = status_code
+
+    async def post(self, *args, **kwargs):
+        return _MockResponse(self.payload, self.status_code)
 
 
 @pytest.fixture
@@ -143,6 +170,56 @@ def test_select_default_member_id_prefers_total_retail_all_stores(statscan_provi
     assert store_member == 1
     assert component_member == 3
     assert adjustment_member == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_multi_province_data_rejects_explicit_unsupported_geography_for_product(statscan_provider):
+    with pytest.raises(ValueError, match="does not expose geography 'Yukon'"):
+        await statscan_provider.fetch_multi_province_data(
+            {
+                "productId": "14100287",
+                "indicator": "14100287",
+                "indicatorLabel": "unemployment rate",
+                "provinces": ["Yukon"],
+                "periods": 20,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_multi_province_data_fails_closed_on_incomplete_batch_payload(monkeypatch, statscan_provider):
+    payload = [
+        {
+            "status": "SUCCESS",
+            "object": {
+                "coordinate": "7.7.1.1.1.1.0.0.0.0",
+                "vectorDataPoint": [
+                    {
+                        "refPer": "2026-03-01",
+                        "value": 6.8,
+                        "frequencyCode": 6,
+                        "scalarFactorCode": 0,
+                        "releaseTime": "2026-04-10T08:30",
+                    }
+                ],
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        "backend.providers.statscan.get_http_client",
+        lambda: _MockPostClient(payload),
+    )
+
+    with pytest.raises(DataNotAvailableError, match="incomplete province coverage"):
+        await statscan_provider.fetch_multi_province_data(
+            {
+                "productId": "14100287",
+                "indicator": "14100287",
+                "indicatorLabel": "unemployment rate",
+                "provinces": ["Ontario", "Alberta"],
+                "periods": 20,
+            }
+        )
 
 
 @pytest.mark.asyncio

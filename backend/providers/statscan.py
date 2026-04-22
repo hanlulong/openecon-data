@@ -10,6 +10,7 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
+from ..utils.geographies import canonicalize_canadian_region
 from ..utils.retry import DataNotAvailableError
 from ..services.rate_limiter import wait_for_provider, record_provider_request
 from .base import BaseProvider
@@ -3083,6 +3084,31 @@ class StatsCanProvider(BaseProvider):
                 f"cannot run a multi-province query."
             )
 
+        explicit_geo_member_ids: Dict[str, int] = {}
+        for member in geo_members:
+            member_id = member.get("memberId")
+            member_name = str(member.get("memberNameEn", "") or "").strip()
+            if not member_name or member_id in (None, 1):
+                continue
+            normalized_name = canonicalize_canadian_region(member_name) or member_name
+            explicit_geo_member_ids[" ".join(normalized_name.upper().split())] = member_id
+
+        available_explicit_geographies = sorted(explicit_geo_member_ids)
+
+        def _resolve_explicit_geography_member_id(raw_name: Any) -> tuple[int, str]:
+            requested_name = str(raw_name or "").strip()
+            normalized_name = canonicalize_canadian_region(requested_name) or requested_name
+            lookup_key = " ".join(normalized_name.upper().split())
+            member_id = explicit_geo_member_ids.get(lookup_key)
+            if member_id is not None:
+                return member_id, normalized_name
+
+            available = ", ".join(available_explicit_geographies) if available_explicit_geographies else "none"
+            raise ValueError(
+                f"Product {product_id} does not expose geography '{requested_name}'. "
+                f"Available geographies: {available}."
+            )
+
         # Determine which provinces to query -- dynamically from metadata
         if provinces_param == "all" or provinces_param is None:
             # Use get_dimension_members to get provinces (children of Canada=1)
@@ -3098,11 +3124,11 @@ class StatsCanProvider(BaseProvider):
         elif isinstance(provinces_param, list):
             provinces_to_query_with_ids = []
             for pname in provinces_param:
-                mid = await self.resolve_member_id(product_id, "geogr", pname)
-                provinces_to_query_with_ids.append((mid, pname))
+                mid, normalized_name = _resolve_explicit_geography_member_id(pname)
+                provinces_to_query_with_ids.append((mid, normalized_name))
         else:
-            mid = await self.resolve_member_id(product_id, "geogr", provinces_param)
-            provinces_to_query_with_ids = [(mid, provinces_param)]
+            mid, normalized_name = _resolve_explicit_geography_member_id(provinces_param)
+            provinces_to_query_with_ids = [(mid, normalized_name)]
 
         # Validate provinces (reject cities / non-Canadian)
         for _, province_name in provinces_to_query_with_ids:
@@ -3229,11 +3255,15 @@ class StatsCanProvider(BaseProvider):
         # Parse results for each province
         results = []
         failed_provinces = []
+        expected_coordinates = set(province_map)
+        returned_coordinates = set()
 
         for i, result_obj in enumerate(payload):
             # Extract coordinate from nested object (StatsCan API structure)
             data_object = result_obj.get("object", {})
             coordinate = data_object.get("coordinate", "")
+            if coordinate:
+                returned_coordinates.add(coordinate)
             province_name = province_map.get(coordinate, f"Province_{i+1}")
 
             if result_obj.get("status") != "SUCCESS":
@@ -3310,6 +3340,12 @@ class StatsCanProvider(BaseProvider):
 
             results.append(NormalizedData(metadata=metadata, data=data_points))
 
+        missing_coordinates = expected_coordinates - returned_coordinates
+        for coordinate in sorted(missing_coordinates):
+            province_name = province_map.get(coordinate, coordinate)
+            logger.warning("⚠️ Missing StatsCan payload entry for %s", province_name)
+            failed_provinces.append(province_name)
+
         if not results:
             provinces_str = ", ".join(failed_provinces) if failed_provinces else "all provinces"
             raise DataNotAvailableError(
@@ -3319,10 +3355,13 @@ class StatsCanProvider(BaseProvider):
             )
 
         if failed_provinces:
-            logger.warning(f"⚠️ Data retrieved for {len(results)}/{len(coordinate_requests)} provinces. "
-                          f"Failed: {', '.join(failed_provinces[:5])}")
-        else:
-            logger.info(f"✅ Successfully fetched data for {len(results)} provinces")
+            provinces_str = ", ".join(failed_provinces[:5])
+            raise DataNotAvailableError(
+                f"StatsCan batch query returned incomplete province coverage for product {product_id}. "
+                f"Failed or missing: {provinces_str}."
+            )
+
+        logger.info(f"✅ Successfully fetched data for {len(results)} provinces")
 
         return results
 
