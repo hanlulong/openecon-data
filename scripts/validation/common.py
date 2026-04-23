@@ -1165,6 +1165,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     origin = dict(row.get('origin') or {})
     origin_name = str(origin.get('name') or row.get('name') or '').strip()
     origin_name_lower = origin_name.lower()
+    origin_code_upper = str(
+        origin.get('source_indicator_code')
+        or row.get('code')
+        or ''
+    ).strip().upper()
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '').strip()
     reasons: list[str] = []
     query_lower = query.lower()
@@ -1258,6 +1263,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if 'current account credit' in query_lower and 'balance of payments' in query_lower:
         reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
+        reasons.append('imf_low_viability_family')
+    if provider.upper() == 'IMF' and origin_code_upper.startswith(('TXG_H5_', 'TMG_H5_', 'TX_H5_', 'TM_H5_', 'TXG_SI', 'TMG_SI')):
+        reasons.append('imf_low_viability_family')
+    if 'merchandise trade value of exports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')
     if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')

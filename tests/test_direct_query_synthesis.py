@@ -617,6 +617,22 @@ def test_audit_direct_query_shape_flags_imf_merchandise_trade_chapter_titles() -
     assert "imf_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_merchandise_trade_export_chapter_codes() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Merchandise Trade Value of Exports. Chapter 60- Knitted goods from IMF",
+            "origin": {
+                "name": "Merchandise Trade, Value of Exports. Chapter 60- Knitted goods, Euros",
+                "source_indicator_code": "TXG_H5_60_EUR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_hs_external_trade_titles() -> None:
     audit = audit_direct_query_shape(
         {
@@ -628,6 +644,21 @@ def test_audit_direct_query_shape_flags_imf_hs_external_trade_titles() -> None:
 
     assert audit["risk_level"] == "high"
     assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_does_not_flag_imf_aggregate_exports_query() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany exports of goods from IMF",
+            "origin": {
+                "name": "Exports of goods",
+                "source_indicator_code": "XG_FOB_USD",
+            },
+        }
+    )
+
+    assert "imf_low_viability_family" not in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_sitc_trade_titles() -> None:
