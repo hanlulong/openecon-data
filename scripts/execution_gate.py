@@ -22,6 +22,7 @@ REPORTS_DIR = ROOT / ".omx" / "reports"
 STATE_DIR = ROOT / ".omx" / "state" / "sessions"
 GATE_PATH = REPORTS_DIR / "execution-gate.json"
 RED_FAMILIES_PATH = REPORTS_DIR / "red-families.json"
+PLAN_OBJECTIVE_STATUS_PATH = REPORTS_DIR / "plan-objective-status.json"
 
 MANUAL_REPORT_CANDIDATES = [
     REPORTS_DIR / "phase1-manual-10-chain-inprocess-real-keys.json",
@@ -38,6 +39,7 @@ ORACLE_REPORTS = {
 class GateStatus:
     generated_at: str
     active_ralph: bool
+    active_plan_path: str | None
     manual_report_path: str | None
     manual_report_mode: str | None
     manual_report_exists: bool
@@ -50,6 +52,13 @@ class GateStatus:
     oracle_report_paths: dict[str, str]
     oracle_pass_rates: dict[str, float | None]
     oracle_required_pass_rate: float
+    objective_status_path: str
+    objective_status_exists: bool
+    objective_status_plan_path: str | None
+    objective_status_all_complete: bool | None
+    objective_status_completed_objectives: int | None
+    objective_status_total_objectives: int | None
+    objective_status_open_objectives: list[str]
     red_families: list[str]
     tracked_worktree_dirty: bool
     can_stop: bool
@@ -76,6 +85,29 @@ def _find_active_ralph_state() -> dict[str, Any] | None:
         if latest is None or mtime > latest[0]:
             latest = (mtime, payload)
     return latest[1] if latest else None
+
+
+def _active_plan_path(active_state: dict[str, Any] | None) -> str | None:
+    if not active_state:
+        return None
+    for key in ("driving_plan", "plan_path", "prd"):
+        value = str(active_state.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _repo_relative_or_absolute(path_text: str | None) -> str | None:
+    value = str(path_text or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = ROOT / path
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except Exception:
+        return str(path.resolve())
 
 
 def _is_live_ralph_state(payload: dict[str, Any]) -> bool:
@@ -132,6 +164,64 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _objective_text(objective: Any, index: int) -> str:
+    if isinstance(objective, dict):
+        return str(
+            objective.get("id")
+            or objective.get("name")
+            or objective.get("title")
+            or objective.get("description")
+            or f"objective_{index}"
+        )
+    return str(objective or f"objective_{index}")
+
+
+def _objective_is_complete(objective: Any) -> bool:
+    if isinstance(objective, dict):
+        if "complete" in objective:
+            return bool(objective.get("complete"))
+        status = str(objective.get("status") or "").strip().lower()
+        return status in {"complete", "completed", "verified_complete"}
+    return False
+
+
+def _read_objective_status(path: Path = PLAN_OBJECTIVE_STATUS_PATH) -> dict[str, Any]:
+    payload = _load_json(path)
+    if payload is None:
+        return {
+            "exists": False,
+            "plan_path": None,
+            "all_complete": None,
+            "completed": None,
+            "total": None,
+            "open": [],
+        }
+
+    objectives = payload.get("objectives") or []
+    if not isinstance(objectives, list):
+        objectives = []
+
+    open_objectives = [
+        _objective_text(objective, index)
+        for index, objective in enumerate(objectives, start=1)
+        if not _objective_is_complete(objective)
+    ]
+    completed = len(objectives) - len(open_objectives)
+    explicit_all_complete = payload.get("all_objectives_complete")
+    if explicit_all_complete is None:
+        explicit_all_complete = payload.get("all_complete")
+    all_complete = bool(explicit_all_complete) and bool(objectives) and not open_objectives
+
+    return {
+        "exists": True,
+        "plan_path": str(payload.get("plan_path") or payload.get("driving_plan") or "").strip() or None,
+        "all_complete": all_complete,
+        "completed": completed,
+        "total": len(objectives),
+        "open": open_objectives,
+    }
+
+
 def _choose_manual_report() -> tuple[Path | None, dict[str, Any] | None]:
     ranked: list[tuple[int, float, Path, dict[str, Any]]] = []
     for priority, candidate in enumerate(MANUAL_REPORT_CANDIDATES):
@@ -184,7 +274,9 @@ def _read_oracle_rates() -> dict[str, float | None]:
 
 
 def build_gate_status() -> GateStatus:
-    active_ralph = _find_active_ralph_state() is not None
+    active_state = _find_active_ralph_state()
+    active_ralph = active_state is not None
+    active_plan_path = _active_plan_path(active_state)
     manual_path, manual_payload, manual_passed, manual_total, manual_pass_rate, red_families = (
         _read_manual_report()
     )
@@ -192,6 +284,12 @@ def build_gate_status() -> GateStatus:
     manual_required_total = int(os.getenv("EXECUTION_GATE_REQUIRED_MANUAL_TOTAL_CHAINS", "10"))
     oracle_required_rate = float(os.getenv("EXECUTION_GATE_MIN_ORACLE_PASS_RATE", "0.99"))
     oracle_rates = _read_oracle_rates()
+    objective_status_path = Path(
+        os.getenv("EXECUTION_GATE_OBJECTIVE_STATUS_PATH", str(PLAN_OBJECTIVE_STATUS_PATH))
+    )
+    if not objective_status_path.is_absolute():
+        objective_status_path = ROOT / objective_status_path
+    objective_status = _read_objective_status(objective_status_path)
     dirty = _tracked_worktree_dirty()
 
     manual_mode = str(manual_payload.get("mode")) if manual_payload else None
@@ -218,6 +316,33 @@ def build_gate_status() -> GateStatus:
         )
     if active_ralph and red_families:
         blockers.append(f"red families remain: {', '.join(red_families)}")
+    if active_ralph and active_plan_path:
+        active_plan_normalized = _repo_relative_or_absolute(active_plan_path)
+        objective_plan_normalized = _repo_relative_or_absolute(objective_status.get("plan_path"))
+        if not objective_status["exists"]:
+            blockers.append(
+                f"plan objective status is missing for {active_plan_normalized}; "
+                f"write {objective_status_path} only after all plan objectives are verified complete"
+            )
+        elif objective_plan_normalized != active_plan_normalized:
+            blockers.append(
+                "plan objective status does not match active Ralph plan "
+                f"({objective_plan_normalized or '<missing>'} != {active_plan_normalized})"
+            )
+        elif not objective_status["all_complete"]:
+            open_objectives = objective_status["open"]
+            completed = objective_status["completed"]
+            total = objective_status["total"]
+            if open_objectives:
+                blockers.append(
+                    "plan objectives remain incomplete "
+                    f"({completed}/{total} complete): {', '.join(open_objectives[:8])}"
+                )
+            else:
+                blockers.append(
+                    "plan objective status is not explicitly all_objectives_complete=true "
+                    f"({completed}/{total} complete)"
+                )
     if active_ralph:
         for label, rate in oracle_rates.items():
             if rate is None:
@@ -233,6 +358,7 @@ def build_gate_status() -> GateStatus:
     return GateStatus(
         generated_at=_utc_now(),
         active_ralph=active_ralph,
+        active_plan_path=active_plan_path,
         manual_report_path=str(manual_path) if manual_path else None,
         manual_report_mode=manual_mode,
         manual_report_exists=manual_path is not None,
@@ -245,6 +371,13 @@ def build_gate_status() -> GateStatus:
         oracle_report_paths={label: str(path) for label, path in ORACLE_REPORTS.items()},
         oracle_pass_rates=oracle_rates,
         oracle_required_pass_rate=oracle_required_rate,
+        objective_status_path=str(objective_status_path),
+        objective_status_exists=bool(objective_status["exists"]),
+        objective_status_plan_path=objective_status["plan_path"],
+        objective_status_all_complete=objective_status["all_complete"],
+        objective_status_completed_objectives=objective_status["completed"],
+        objective_status_total_objectives=objective_status["total"],
+        objective_status_open_objectives=list(objective_status["open"]),
         red_families=red_families,
         tracked_worktree_dirty=dirty,
         can_stop=can_stop,

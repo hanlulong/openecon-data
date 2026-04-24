@@ -23,6 +23,7 @@ def make_status(module, *, can_stop: bool, blockers: list[str] | None = None):
     return module.GateStatus(
         generated_at="2026-04-14T00:00:00Z",
         active_ralph=True,
+        active_plan_path=".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
         manual_report_path=None,
         manual_report_mode=None,
         manual_report_exists=False,
@@ -35,6 +36,13 @@ def make_status(module, *, can_stop: bool, blockers: list[str] | None = None):
         oracle_report_paths={"baseline": "baseline.json", "alternative": "alternative.json"},
         oracle_pass_rates={"baseline": None, "alternative": None},
         oracle_required_pass_rate=0.99,
+        objective_status_path=".omx/reports/plan-objective-status.json",
+        objective_status_exists=False,
+        objective_status_plan_path=None,
+        objective_status_all_complete=None,
+        objective_status_completed_objectives=None,
+        objective_status_total_objectives=None,
+        objective_status_open_objectives=[],
         red_families=[],
         tracked_worktree_dirty=False,
         can_stop=can_stop,
@@ -192,3 +200,157 @@ def test_find_active_ralph_state_returns_none_when_only_terminal_active_files_ex
     monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
 
     assert module._find_active_ralph_state() is None  # pylint: disable=protected-access
+
+
+def install_green_legacy_gate(monkeypatch, module, objective_status_path: Path) -> None:
+    monkeypatch.setenv("EXECUTION_GATE_OBJECTIVE_STATUS_PATH", str(objective_status_path))
+    monkeypatch.setattr(
+        module,
+        "_find_active_ralph_state",
+        lambda: {
+            "active": True,
+            "current_phase": "executing",
+            "driving_plan": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_read_manual_report",
+        lambda: (
+            module.ROOT / ".omx/reports/phase1-manual-10-chain-inprocess-real-keys.json",
+            {"mode": "in_process_manual_10_chain_real_keys"},
+            10,
+            10,
+            1.0,
+            [],
+        ),
+    )
+    monkeypatch.setattr(module, "_read_oracle_rates", lambda: {"baseline": 1.0, "alternative": 1.0})
+    monkeypatch.setattr(module, "_tracked_worktree_dirty", lambda: False)
+
+
+def test_active_plan_blocks_stop_when_objective_status_is_missing(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "missing-objectives.json"
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert status.objective_status_exists is False
+    assert any("plan objective status is missing" in blocker for blocker in status.blockers)
+
+
+def test_active_plan_blocks_stop_when_objectives_are_incomplete(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": False,
+                "objectives": [
+                    {"id": "score-balanced-smoke", "status": "complete"},
+                    {"id": "run-full-30k", "status": "pending"},
+                ],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert status.objective_status_completed_objectives == 1
+    assert status.objective_status_total_objectives == 2
+    assert status.objective_status_open_objectives == ["run-full-30k"]
+    assert any("plan objectives remain incomplete (1/2 complete): run-full-30k" in blocker for blocker in status.blockers)
+
+
+def test_active_plan_allows_stop_when_objectives_and_legacy_gates_are_green(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": True,
+                "objectives": [
+                    {"id": "score-balanced-smoke", "status": "complete"},
+                    {"id": "run-full-30k", "status": "complete"},
+                ],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is True
+    assert status.blockers == []
+    assert status.objective_status_all_complete is True
+
+
+def test_active_plan_complete_objectives_still_require_legacy_gates_green(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": True,
+                "objectives": [
+                    {"id": "score-balanced-smoke", "status": "verified_complete"},
+                    {"id": "run-full-30k", "status": "verified_complete"},
+                ],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+    monkeypatch.setattr(module, "_read_oracle_rates", lambda: {"baseline": 0.98, "alternative": 1.0})
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert "baseline strict oracle pass rate 0.980 is below required 0.990" in status.blockers
+
+
+def test_active_plan_does_not_treat_legacy_green_status_as_objective_complete(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": True,
+                "objectives": [{"id": "claim-grade-adjudication", "status": "green"}],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert status.objective_status_open_objectives == ["claim-grade-adjudication"]
+
+
+def test_stop_hook_reports_incomplete_objectives(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": False,
+                "objectives": [{"id": "production-parity", "status": "pending"}],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    output = module.build_stop_hook_output(module.build_gate_status())
+
+    assert output["decision"] == "block"
+    assert "execution-gate: stop denied" in output["reason"]
+    assert "production-parity" in output["reason"]
