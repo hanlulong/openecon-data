@@ -78,11 +78,15 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
 
     origin = dict(row.get('origin') or {})
     provider = str(row.get('provider_stratum') or row.get('provider') or origin.get('source_provider') or '').upper()
+    payload = audit if audit is not None else audit_direct_query_shape(row)
+    reasons = {str(reason) for reason in payload.get('reasons') or []}
+
+    if provider == 'OECD' and 'oecd_non_production_dataflow' in reasons:
+        return 'oecd_non_production_dataflow_unsupported'
+
     if provider != 'IMF':
         return None
 
-    payload = audit if audit is not None else audit_direct_query_shape(row)
-    reasons = {str(reason) for reason in payload.get('reasons') or []}
     category = str(origin.get('category') or row.get('category') or '').strip().lower()
     if 'imf_low_viability_family' in reasons and category and category != 'weo':
         return 'imf_non_weo_public_surface_unsupported'

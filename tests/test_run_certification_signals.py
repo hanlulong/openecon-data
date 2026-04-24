@@ -316,6 +316,46 @@ def test_preflight_can_separate_unsupported_imf_from_executable_high_risk(tmp_pa
         )
 
 
+def test_preflight_classifies_oecd_non_production_dataflow_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    unsupported_oecd = {
+        "id": "direct-oecd-1",
+        "provider_stratum": "OECD",
+        "query": "America Hourly earnings ratio of formal to informal employees from OECD",
+        "origin": {
+            "source_provider": "OECD",
+            "source_indicator_code": "DSD_KIIBIH@DF_B18",
+            "name": "Hourly earnings ratio of formal to informal employees",
+            "raw_metadata": json.dumps(
+                {
+                    "annotations": [
+                        {"type": "NonProductionDataflow", "text": "true"},
+                    ]
+                }
+            ),
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [unsupported_oecd],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "oecd_non_production_dataflow_unsupported": 1
+    }
+    assert audit["flagged_rows_sample"][0]["execution_mode"] == "supportability_blocked"
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-oecd.json",
+        [unsupported_oecd],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
 def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []
