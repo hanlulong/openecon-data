@@ -433,6 +433,29 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("Exports - All Commodities", indicators)
         self.assertIn("Imports - All Commodities", indicators)
 
+    def test_comtrade_commodity_code_resolves_catalog_heading_titles(self) -> None:
+        class _Lookup:
+            def search(self, text, provider=None, limit=3):
+                self.text = text
+                self.provider = provider
+                return [
+                    {
+                        "provider": "Comtrade",
+                        "code": "5106",
+                        "name": "5106 - Yarn of carded wool, not put up for retail sale",
+                    }
+                ]
+
+        lookup = _Lookup()
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            code = ComtradeProvider._commodity_code(  # pylint: disable=protected-access
+                "exports of Yarn of carded wool, not put up for retail sale"
+            )
+
+        self.assertEqual(code, "5106")
+        self.assertEqual(lookup.provider, "Comtrade")
+        self.assertEqual(lookup.text, "Yarn of carded wool, not put up for retail sale")
+
     def test_comtrade_fetch_single_reporter_retries_timeout_then_succeeds(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 

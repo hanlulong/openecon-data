@@ -349,8 +349,47 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
     query_country_codes = _extract_country_codes_from_text(query_text)
 
     best_candidate: Optional[Dict[str, Any]] = None
-    best_rank = (-1, -999, -1, -999)
+    best_rank = (-999, -1, -999, -1, -999)
     seen_codes = set()
+
+    def _unit_compatibility_rank(query: str, name: str) -> int:
+        """Prefer exact-title candidates with the same measurement family.
+
+        WorldBank and other broad catalogs often contain near-duplicate title
+        families such as "female (number)" and "who are female (%)".  Token
+        closeness alone can rank the percentage variant above the count variant,
+        even when the query pasted the count title.  Keep this generic: use only
+        explicit unit/measurement words present in the query and candidate name.
+        """
+
+        query_tokens = set(query.split())
+        name_tokens = set(name.split())
+        count_cues = {"number", "count", "counts", "total"}
+        ratio_cues = {
+            "percent",
+            "percentage",
+            "rate",
+            "ratio",
+            "share",
+            "proportion",
+            "per",
+        }
+
+        query_wants_count = bool(query_tokens & count_cues)
+        query_wants_ratio = bool(query_tokens & ratio_cues)
+        name_is_count = bool(name_tokens & count_cues)
+        name_is_ratio = bool(name_tokens & ratio_cues)
+
+        if query_wants_count and name_is_count and not name_is_ratio:
+            return 2
+        if query_wants_ratio and name_is_ratio and not name_is_count:
+            return 2
+        if query_wants_count and name_is_ratio and not name_is_count:
+            return -2
+        if query_wants_ratio and name_is_count and not name_is_ratio:
+            return -2
+        return 0
+
     for search_text in search_inputs:
         try:
             results = lookup.search(search_text, provider=provider_name, limit=5)
@@ -386,8 +425,9 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 query_token_len = min(query_token_lengths) if query_token_lengths else len(normalized_text.split())
                 name_token_len = len(normalized_name.split())
                 token_delta = abs(name_token_len - query_token_len)
+                unit_rank = _unit_compatibility_rank(normalized_text, normalized_name)
                 shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
-                rank = (country_rank, -token_delta, shared_tokens, -name_token_len)
+                rank = (unit_rank, country_rank, -token_delta, shared_tokens, -name_token_len)
                 if rank > best_rank:
                     best_candidate = candidate
                     best_rank = rank

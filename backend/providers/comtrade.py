@@ -220,6 +220,12 @@ class ComtradeProvider(BaseProvider):
         if not commodity:
             return "TOTAL"
         commodity = commodity.strip()
+        commodity = re.sub(
+            r"^(?:exports?|imports?|re-exports?|re-imports?)\s+of\s+",
+            "",
+            commodity,
+            flags=re.IGNORECASE,
+        ).strip(" ,;:-")
 
         # Tier 1: Direct numeric code (highest priority)
         if commodity.isdigit() and 2 <= len(commodity) <= 6:
@@ -257,7 +263,22 @@ class ComtradeProvider(BaseProvider):
         if code:
             return code
 
-        # Tier 6: Partial match - find commodity containing this term
+        # Tier 6: Provider-local catalog search for long-tail HS headings.
+        # The sampled certification surface contains thousands of specific
+        # Comtrade heading titles that are too broad to hardcode but available
+        # in the local indicator catalog (e.g. "Yarn of carded wool...").
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+            for candidate in lookup.search(commodity, provider="Comtrade", limit=3):
+                candidate_code = str(candidate.get("code") or "").strip()
+                if candidate_code.isdigit() and 2 <= len(candidate_code) <= 6:
+                    return candidate_code
+        except Exception:
+            pass
+
+        # Tier 7: Partial match - find commodity containing this term
         for mapping_key, mapping_code in ComtradeProvider.COMMODITY_MAPPINGS.items():
             if key in mapping_key or mapping_key in key:
                 return mapping_code

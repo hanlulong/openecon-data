@@ -206,6 +206,17 @@ class ParameterValidator:
         countries = params.get('countries')
 
         if not country and not countries:
+            if params.get("__exact_indicator_title_match") or params.get("__exact_provider_code_match"):
+                # Provider-native exact-title/code queries can be valid without
+                # a user-specified country.  The WorldBank provider already
+                # knows how to fetch the cross-country "all" surface; do not
+                # fail validation before it gets a chance to return data.
+                params['country'] = 'all'
+                intent.parameters = params
+                return True, None, {
+                    'note': 'Defaulted exact WorldBank title/code query to all countries',
+                }
+
             # Allow global/commodity indicators that don't need a country.
             # WorldBank has global aggregates using country code "1W" (World).
             # Indicators like PE.USG.LNDN (gold price) are global by nature.

@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 from backend.services.indicator_resolution import (
     build_exact_indicator_title_intent,
+    find_exact_provider_title_match,
     is_exact_match_locked,
     is_provider_locked,
 )
@@ -81,6 +82,36 @@ def test_build_exact_indicator_title_intent_preserves_broad_catalog_concept() ->
     assert intent is not None
     assert intent.parameters["__catalog_concept"] == "interest rate"
     assert intent.parameters["__exact_indicator_title_match"] is True
+
+
+def test_exact_title_match_prefers_count_variant_over_percentage_variant() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            if provider != "WorldBank":
+                return []
+            if text == "Are Teachers in post-secondary non-tertiary education female (number)":
+                return [
+                    {
+                        "provider": "WorldBank",
+                        "code": "UIS.FTP.4",
+                        "name": "Percentage of teachers in post-secondary non-tertiary education who are female (%)",
+                    },
+                    {
+                        "provider": "WorldBank",
+                        "code": "UIS.T.4.F",
+                        "name": "Teachers in post-secondary non-tertiary education, female (number)",
+                    },
+                ]
+            return []
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "Are Teachers in post-secondary non-tertiary education female (number) from World Bank",
+            "WorldBank",
+        )
+
+    assert match is not None
+    assert match["code"] == "UIS.T.4.F"
 
 
 def test_exact_and_provider_lock_helpers_read_shared_flags() -> None:
