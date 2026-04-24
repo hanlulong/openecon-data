@@ -2019,6 +2019,21 @@ async def fetch_data(
     if intent.originalQuery and "__original_query" not in params:
         params["__original_query"] = intent.originalQuery
 
+    # Exact FRED title/code matches are provider-native catalog targets. If the
+    # user did not ask for a time window, strip friendly default dates before
+    # dispatch/cache materialization so stale exact series are not blocked by a
+    # recent default window. Explicit time scopes remain strict.
+    if (
+        provider == "FRED"
+        and is_exact_match_locked(params)
+        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+    ):
+        params = dict(params)
+        for key in ("startDate", "endDate", "start_year", "end_year"):
+            params.pop(key, None)
+        intent.parameters = params
+
     execution_plan = materialize_execution_plan(
         execution_plan,
         provider=provider,

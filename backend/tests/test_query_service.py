@@ -551,6 +551,78 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNone(second_kwargs.get("start_date"))
         self.assertIsNone(second_kwargs.get("end_date"))
 
+    def test_fetch_data_strips_default_window_before_exact_fred_dispatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico"],
+            parameters={
+                "country": "US",
+                "indicator": "QTAXT51QTAXCAT3NMNO",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery="State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico from FRED",
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        fred_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fred_params.get("indicator"), "QTAXT51QTAXCAT3NMNO")
+        self.assertNotIn("startDate", fred_params)
+        self.assertNotIn("endDate", fred_params)
+        self.assertNotIn("start_year", fred_params)
+        self.assertNotIn("end_year", fred_params)
+
+    def test_fetch_data_preserves_explicit_time_for_exact_fred_dispatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico"],
+            parameters={
+                "country": "US",
+                "indicator": "QTAXT51QTAXCAT3NMNO",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery=(
+                "State Tax Collections: T51 Documentary and Stock Transfer Taxes "
+                "for New Mexico from FRED from 2021 to 2026"
+            ),
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        fred_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fred_params.get("startDate"), "2021-04-20")
+        self.assertEqual(fred_params.get("endDate"), "2026-04-19")
+        self.assertEqual(fred_params.get("start_year"), 2021)
+        self.assertEqual(fred_params.get("end_year"), 2026)
+
     def test_worldbank_provider_fetch_uses_all_when_no_country_is_supplied(self) -> None:
         provider = self.service.world_bank_provider
 
