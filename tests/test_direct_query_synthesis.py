@@ -430,6 +430,23 @@ def test_audit_direct_query_shape_flags_imf_non_datamapper_indicator_category() 
     assert "imf_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_non_weo_catalog_category() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Revenue Cash Fiscal Central Government and Social Security Funds from IMF",
+            "origin": {
+                "name": "Fiscal, Central Government and Social Security Funds, Revenue, 2001 Manual, Cash, Euros",
+                "source_indicator_code": "GCGR_G01_CA_EUR",
+                "category": "ALT_FISCAL",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_local_government_fiscal_family() -> None:
     audit = audit_direct_query_shape(
         {

@@ -1294,7 +1294,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
     category_lower = str(origin.get('category') or '').lower()
-    if provider_upper == 'IMF' and category_lower == 'indicator':
+    if provider_upper == 'IMF' and category_lower and category_lower != 'weo':
         reasons.append('imf_low_viability_family')
     if 'current account primary income investment income reserve assets' in query_lower:
         reasons.append('imf_complex_finance_family')
