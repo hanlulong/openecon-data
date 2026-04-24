@@ -809,6 +809,35 @@ def test_select_quality_screened_direct_records_prefers_imf_consumer_prices_over
     assert [row["id"] for row in selected] == ["imf-cpi"]
 
 
+def test_select_quality_screened_direct_records_prefers_supported_imf_candidate_over_h5_trade_family():
+    records = [
+        {
+            "id": "imf-h5-code-only",
+            "query": "Germany aggregate trade indicator from IMF",
+            "provider_stratum": "IMF",
+            "origin": {
+                "name": "Aggregate trade indicator",
+                "source_indicator_code": "TMG_H5_80_EUR",
+            },
+            "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["imf_low_viability_family"]},
+        },
+        {
+            "id": "imf-aggregate-trade",
+            "query": "Germany exports of goods from IMF",
+            "provider_stratum": "IMF",
+            "origin": {
+                "name": "Exports of goods",
+                "source_indicator_code": "XG_FOB_USD",
+            },
+            "provenance": {"query_quality_risk": "low", "query_quality_reasons": []},
+        },
+    ]
+
+    selected = select_quality_screened_direct_records(records, 1)
+
+    assert [row["id"] for row in selected] == ["imf-aggregate-trade"]
+
+
 def test_select_quality_screened_direct_records_prefers_fred_cpi_over_naics_revenue():
     records = [
         {

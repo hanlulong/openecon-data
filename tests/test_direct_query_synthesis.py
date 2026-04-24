@@ -133,6 +133,15 @@ def test_detect_single_country_from_text_ignores_ambiguous_short_aliases() -> No
     assert detect_single_country_from_text("household composition and degree of urbanisation") is None
 
 
+def test_detect_single_country_from_text_ignores_ambiguous_america_region_alias() -> None:
+    assert detect_single_country_from_text("Latin America and the Caribbean informal employment") is None
+
+
+def test_detect_single_country_from_text_ignores_currency_and_preposition_aliases() -> None:
+    assert detect_single_country_from_text("Current account balance U.S. dollars") is None
+    assert detect_single_country_from_text("Cost per training hour") is None
+
+
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
     row = {
         "provider": "OECD",
@@ -276,6 +285,48 @@ def test_audit_direct_query_shape_flags_oecd_publication_table_queries():
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_informality_nonproduction_family():
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "America Hourly earnings ratio of formal to informal employees from OECD",
+            "origin": {
+                "name": "Hourly earnings ratio of formal to informal employees",
+                "description": (
+                    "The OECD Key Indicators of Informality based on Individuals and their Households "
+                    "database provides comparable indicators and harmonised data on informal employment."
+                ),
+                "raw_metadata": (
+                    '{"annotations":[{"type":"NonProductionDataflow","text":"true"}]}'
+                ),
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+    assert "oecd_non_production_dataflow" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_oecd_nonproduction_alone_below_high_risk():
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Korea tax revenues in Revenue Statistics in Asia and the Pacific from OECD",
+            "origin": {
+                "name": "Korea - tax revenues in Revenue Statistics in Asia and the Pacific",
+                "raw_metadata": (
+                    '{"annotations":[{"type":"NonProductionDataflow","text":"true"}]}'
+                ),
+            },
+        }
+    )
+
+    assert "oecd_non_production_dataflow" in audit["reasons"]
+    assert "oecd_low_viability_family" not in audit["reasons"]
+    assert audit["risk_level"] == "medium"
+
+
 def test_audit_direct_query_shape_flags_eurostat_vine_breakdown_queries():
     audit = audit_direct_query_shape(
         {
@@ -298,6 +349,70 @@ def test_audit_direct_query_shape_flags_imf_debt_schedule_queries():
 
     assert audit["risk_level"] == "high"
     assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_code_only_unsupported_trade_prefixes() -> None:
+    for code in ["TMG_H5_80_EUR", "TX_H5_60_USD", "TM_H5_18_USD", "TXG_SI3_USD", "TMG_SI5_USD"]:
+        audit = audit_direct_query_shape(
+            {
+                "provider": "IMF",
+                "query": "Germany aggregate trade indicator from IMF",
+                "origin": {
+                    "name": "Aggregate trade indicator",
+                    "source_indicator_code": code,
+                },
+            }
+        )
+
+        assert audit["risk_level"] == "high"
+        assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_labour_market_family_by_code() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Rate Labour Market Employment to Population Ratio from IMF",
+            "origin": {
+                "name": "Labour Market, Employment to Population Ratio, Rate",
+                "source_indicator_code": "LE_PLP_RATE",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_local_government_fiscal_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Local Government Revenue Tax Trade Exchange Taxes Accrual Fiscal from IMF",
+            "origin": {
+                "name": "Fiscal, Local Government, Revenue, Tax, Trade, Exchange Taxes, 2001 Manual, Accrual, National Currency",
+                "source_indicator_code": "GLRTTXT_G01_AC_XDC",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_does_not_apply_imf_trade_screen_to_other_providers() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "Comtrade",
+            "query": "Japan Merchandise Trade Value of Exports Chapter 60 knitted goods from Comtrade",
+            "origin": {
+                "name": "Merchandise Trade Value of Exports Chapter 60 knitted goods",
+                "source_indicator_code": "600110",
+            },
+        }
+    )
+
+    assert "imf_low_viability_family" not in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_fred_naics_revenue_queries():
@@ -329,6 +444,22 @@ def test_audit_direct_query_shape_flags_worldbank_education_expenditure_queries(
         {
             "query": "Germany World Bank: Share of household consumption for private expenditures on primary education (%) from World Bank",
             "origin": {"name": "World Bank: Share of household consumption for private expenditures on primary education (%)"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_urban_education_expenditure_code_family():
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "World Bank: Share of tertiary education spending on urban areas (%) from World Bank",
+            "origin": {
+                "name": "World Bank: Share of tertiary education spending on urban areas (%)",
+                "source_indicator_code": "PER.OC.GEO.URB.TER",
+            },
         }
     )
 

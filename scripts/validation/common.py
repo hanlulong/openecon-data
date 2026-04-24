@@ -95,7 +95,9 @@ else:
         'nigeria',
     }
 _AMBIGUOUS_COUNTRY_TERMS = {
+    'america',
     'can',
+    'per',
     'world',
 }
 _COUNTRY_QUERY_TERMS -= _AMBIGUOUS_COUNTRY_TERMS
@@ -149,11 +151,16 @@ if CountryResolver is not None:
         )
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True)
         if str(alias).strip()
+        and str(alias).strip().lower() not in _AMBIGUOUS_COUNTRY_TERMS
         and CountryResolver.normalize(str(alias).strip())
         and (len(str(alias).strip()) > 2 or str(alias).strip().lower() in _SAFE_SHORT_COUNTRY_ALIASES)
     ]
 else:
     _COUNTRY_ALIAS_PATTERN_ENTRIES = []
+
+
+def _ignore_country_alias_match(normalized: str, following_text: str) -> bool:
+    return normalized == 'US' and re.match(r'\s+dollars?\b', following_text) is not None
 
 
 def detect_country_codes_in_text(text: str) -> set[str]:
@@ -164,8 +171,12 @@ def detect_country_codes_in_text(text: str) -> set[str]:
         return set()
     codes: set[str] = set()
     for pattern, normalized, _alias_text in _COUNTRY_ALIAS_PATTERN_ENTRIES:
-        if pattern.search(lowered):
-            codes.add(normalized)
+        match = pattern.search(lowered)
+        if not match:
+            continue
+        if _ignore_country_alias_match(normalized, lowered[match.end():]):
+            continue
+        codes.add(normalized)
     return codes
 
 
@@ -177,8 +188,12 @@ def detect_single_country_from_text(text: str) -> str | None:
         return None
     matches: list[tuple[int, str, str]] = []
     for pattern, normalized, alias_text in _COUNTRY_ALIAS_PATTERN_ENTRIES:
-        if pattern.search(lowered):
-            matches.append((len(alias_text), normalized, alias_text))
+        match = pattern.search(lowered)
+        if not match:
+            continue
+        if _ignore_country_alias_match(normalized, lowered[match.end():]):
+            continue
+        matches.append((len(alias_text), normalized, alias_text))
     codes = {code for _, code, _ in matches}
     if len(codes) != 1 or not matches:
         return None
@@ -858,6 +873,28 @@ def provider_metadata_context(record: dict[str, Any]) -> tuple[dict[str, Any], s
     return parsed, metadata_text
 
 
+def _metadata_annotation_is_true(parsed_metadata: dict[str, Any], annotation_type: str) -> bool:
+    target = str(annotation_type or '').strip().lower()
+    if not target:
+        return False
+    annotations = parsed_metadata.get('annotations') or []
+    if not isinstance(annotations, list):
+        return False
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            continue
+        annotation_kind = str(annotation.get('type') or '').strip().lower()
+        if annotation_kind != target:
+            continue
+        value = annotation.get('text')
+        if value is None:
+            texts = annotation.get('texts') or {}
+            if isinstance(texts, dict):
+                value = texts.get('en')
+        return str(value or '').strip().lower() == 'true'
+    return False
+
+
 def direct_query_specificity_score(record: dict[str, Any]) -> int:
     origin = dict(record.get('origin') or {})
     query = str(record.get('query') or '')
@@ -1171,11 +1208,13 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         or ''
     ).strip().upper()
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '').strip()
+    provider_upper = provider.upper()
     reasons: list[str] = []
     query_lower = query.lower()
+    parsed_metadata: dict[str, Any] = {}
     metadata_text = ''
-    if provider.upper() in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
-        _, metadata_text = provider_metadata_context(row)
+    if provider_upper in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
+        parsed_metadata, metadata_text = provider_metadata_context(row)
     worldbank_text = f"{query_lower} {origin_name_lower} {metadata_text}".strip()
     query_country_codes = detect_country_codes_in_text(query)
     origin_country_codes = detect_country_codes_in_text(origin_name)
@@ -1264,21 +1303,27 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
         reasons.append('imf_low_viability_family')
-    if provider.upper() == 'IMF' and origin_code_upper.startswith(('TXG_H5_', 'TMG_H5_', 'TX_H5_', 'TM_H5_', 'TXG_SI', 'TMG_SI')):
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('TXG_H5_', 'TMG_H5_', 'TX_H5_', 'TM_H5_', 'TXG_SI', 'TMG_SI')):
         reasons.append('imf_low_viability_family')
-    if 'merchandise trade value of exports' in query_lower and 'chapter' in query_lower:
+    if provider_upper == 'IMF' and origin_code_upper.startswith('LE_'):
         reasons.append('imf_low_viability_family')
-    if 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'BGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
         reasons.append('imf_low_viability_family')
-    if 'external trade by harmonized commodity description and coding systems' in query_lower:
+    if provider_upper == 'IMF' and 'labour market' in query_lower:
         reasons.append('imf_low_viability_family')
-    if 'by standard international trade classification' in query_lower:
+    if provider_upper == 'IMF' and 'merchandise trade value of exports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')
-    if 'dataset:' in query_lower and 'from imf' in query_lower:
+    if provider_upper == 'IMF' and 'merchandise trade value of imports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')
-    if 'goods total trade external trade' in query_lower:
+    if provider_upper == 'IMF' and 'external trade by harmonized commodity description and coding systems' in query_lower:
         reasons.append('imf_low_viability_family')
-    if 'manufacture of' in query_lower and 'from imf' in query_lower:
+    if provider_upper == 'IMF' and 'by standard international trade classification' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'dataset:' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'goods total trade external trade' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'manufacture of' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_low_viability_family')
     if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
         reasons.append('definition_financial_query')
@@ -1317,6 +1362,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['teacher salary', 'teachers holding more than one job', 'basic education', 'pre-primary education spending on rural areas', 'pre-primary education spending on urban areas']):
         reasons.append('worldbank_education_expenditure_family')
+    if provider_upper == 'WORLDBANK' and origin_code_upper.startswith('PER.OC.GEO.'):
+        reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in [
         'public capital expenditure on education',
         'share of total education revenue from school fees',
@@ -1324,11 +1371,14 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'share of primary education spending on rural areas',
         'share of primary education spending on urban areas',
         'share of tertiary education spending on rural areas',
+        'share of tertiary education spending on urban areas',
         'share of secondary education spending on rural areas',
+        'share of secondary education spending on urban areas',
         'share of total private spending on education',
         'share of total education expenditures for poor students',
         'share of total household education spending for salaries',
         'share of education spending on rural areas',
+        'share of education spending on urban areas',
         'expenditures on females',
         'repetition/drop-out inefficiency cost',
         'capital education budget execution rate',
@@ -1352,6 +1402,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
         reasons.append('worldbank_ddh_prevalence_family')
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits', 'temporary employment by permanency of the job']):
+        reasons.append('oecd_low_viability_family')
+    if provider_upper == 'OECD' and _metadata_annotation_is_true(parsed_metadata, 'NonProductionDataflow'):
+        reasons.append('oecd_non_production_dataflow')
+    if provider_upper == 'OECD' and any(term in worldbank_text for term in ['key indicators of informality', 'formal to informal employees', 'informal employment']):
         reasons.append('oecd_low_viability_family')
     if provider == 'OECD' and 'population in the national accounts' in query_lower and 'distributions by' in query_lower:
         reasons.append('oecd_low_viability_family')
@@ -1460,6 +1514,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('methodology_dense')
     if origin_name.count(',') >= 3:
         reasons.append('multi_modifier_title')
+    reasons = list(dict.fromkeys(reasons))
 
     risk_level = 'low'
     if any(reason in reasons for reason in [
