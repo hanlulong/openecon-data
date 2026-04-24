@@ -1293,6 +1293,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
+    category_lower = str(origin.get('category') or '').lower()
+    if provider_upper == 'IMF' and category_lower == 'indicator':
+        reasons.append('imf_low_viability_family')
     if 'current account primary income investment income reserve assets' in query_lower:
         reasons.append('imf_complex_finance_family')
     if 'current account primary income investment income' in query_lower:
@@ -1307,9 +1310,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith('LE_'):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and re.match(r'^(?:[A-Z]{3}_)?L(?:E|ER|EW|UR|UE|FE|MI|LF|LFPR|PR)(?:_|[A-Z0-9])', origin_code_upper):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'BGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'labour market' in query_lower:
+    if provider_upper == 'IMF' and re.search(r'\b(?:labou?r markets?|labor force|labour force)\b', worldbank_text):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'merchandise trade value of exports' in query_lower and 'chapter' in query_lower:
         reasons.append('imf_low_viability_family')
@@ -1331,7 +1336,6 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
-    category_lower = str(origin.get('category') or '').lower()
     if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub']):
         reasons.append('worldbank_niche_catalog_family')
     if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement']):

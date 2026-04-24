@@ -1104,9 +1104,8 @@ class IMFProvider(BaseProvider):
             return "IMF.STA:BOP"
 
         if (
-            label.startswith("labor markets")
-            or label.startswith("labour markets")
-            or code.startswith(("LER_", "LUR_", "LUE_", "LFE_"))
+            re.search(r"\b(?:labou?r markets?|labor force|labour force)\b", label)
+            or re.match(r"^(?:[A-Z]{3}_)?L(?:E|ER|EW|UR|UE|FE|MI|LF|LFPR|PR)(?:_|[A-Z0-9])", code)
         ):
             return "IMF.STA:LS"
 
@@ -1120,7 +1119,7 @@ class IMFProvider(BaseProvider):
         keywords = str(entry.get("keywords") or "").lower()
         if "balance of payments" in keywords:
             return "IMF.STA:BOP"
-        if "labor markets" in keywords or "employment rate" in keywords:
+        if re.search(r"\b(?:labou?r markets?|labor force|labour force)\b", keywords) or "employment rate" in keywords:
             return "IMF.STA:LS"
         if "national accounts" in keywords or "gross value added" in keywords:
             return "IMF.STA:NA_MAIN"

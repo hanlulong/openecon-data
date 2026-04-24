@@ -1016,6 +1016,110 @@ def test_score_certification_emits_semantic_behavior_proxies(tmp_path: Path):
     assert metrics["ambiguity_resolution_success"] == 1.0
 
 
+def test_score_certification_claim_lower95_uses_design_strata(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    adjudication_path = tmp_path / "adjudication.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-fred-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "gold": {"clarification_expected": False},
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            },
+            {
+                "id": "direct-fred-000003",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US CPI",
+                "gold": {"clarification_expected": False},
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            },
+            {
+                "id": "direct-imf-000002",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Japan GDP",
+                "gold": {"clarification_expected": False},
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            },
+            {
+                "id": "direct-imf-000004",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Japan CPI",
+                "gold": {"clarification_expected": False},
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {"session_id": "direct-fred-000001", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-fred-000003", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-imf-000002", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-imf-000004", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+        ],
+    )
+    write_jsonl(
+        adjudication_path,
+        [
+            {"session_id": "direct-fred-000001", "final_label": "pass"},
+            {"session_id": "direct-fred-000003", "final_label": "pass"},
+            {"session_id": "direct-imf-000002", "final_label": "pass"},
+            {"session_id": "direct-imf-000004", "final_label": "pass"},
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    confidence = report["metrics"]["overall_weighted_adjudicated_design_confidence"]
+    assert confidence["method"] == "stratified_weighted_wilson_by_design_stratum"
+    assert confidence["strata_count"] == 2
+    assert set(confidence["strata"]) == {"direct_provider:FRED", "direct_provider:IMF"}
+    assert report["metrics"]["claim_confidence_method"] == confidence["method"]
+    assert report["metrics"]["claim_lower95"] == confidence["lower95"]
+    assert report["metrics"]["overall_weighted_adjudicated_lower95_approx"] > confidence["lower95"]
+
+
 def test_score_certification_evaluates_multiround_and_ambiguity_family_floors(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"

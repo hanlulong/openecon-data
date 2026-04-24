@@ -51,6 +51,25 @@ def kish_effective_n(weights: list[float]) -> float | None:
     return (total * total) / denom
 
 
+def design_stratum_for_session(session: dict[str, Any], kind: str) -> str:
+    """Return the primary certification-design stratum for a session.
+
+    The 30K certification surface is intentionally stratified across direct
+    providers plus multiround/ambiguity families.  Confidence reporting should
+    therefore preserve those strata instead of collapsing immediately to one
+    pooled Kish effective-n approximation.
+    """
+    if kind == 'direct':
+        provider = str(session.get('provider_stratum') or (session.get('origin') or {}).get('source_provider') or '<missing>')
+        return f'direct_provider:{provider}'
+    family = family_for_session(session, kind)
+    if kind == 'multiround':
+        return f'multiround_family:{family or "<missing>"}'
+    if kind == 'ambiguity':
+        return f'ambiguity_family:{family or "<missing>"}'
+    return f'{kind}:<missing>'
+
+
 def wilson_lower(successes: int, total: int, z: float = 1.96) -> float | None:
     if total <= 0:
         return None
@@ -59,6 +78,103 @@ def wilson_lower(successes: int, total: int, z: float = 1.96) -> float | None:
     center = (p + z * z / (2 * total)) / denom
     margin = (z * ((p * (1 - p) + z * z / (4 * total)) / total) ** 0.5) / denom
     return center - margin
+
+
+def design_aware_weighted_confidence(
+    records: list[dict[str, Any]],
+    *,
+    success_key: str,
+    z: float = 1.96,
+) -> dict[str, Any] | None:
+    """Compute a conservative stratified lower bound for weighted success.
+
+    This intentionally supersedes the older single pooled Kish approximation
+    for claim gating.  Each design stratum receives its own weighted pass-rate
+    estimate and Wilson lower bound using that stratum's Kish effective n; the
+    overall lower bound is the population-weighted sum of stratum lower bounds.
+
+    This is still a bounded, auditable estimator rather than a full survey
+    statistics package, but it is design-aware in the ways that matter for this
+    certification lane: weak providers/families remain visible, small strata are
+    penalized instead of averaged away, and missing/unreviewed outcomes do not
+    contribute to the claim-bound path.
+    """
+    eligible = [
+        row
+        for row in records
+        if row.get(success_key) is not None
+        and float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) > 0
+    ]
+    if not eligible:
+        return None
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in eligible:
+        grouped[str(row.get('design_stratum') or '<missing>')].append(row)
+
+    total_weight = sum(float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) for row in eligible)
+    if total_weight <= 0:
+        return None
+
+    overall_success = 0.0
+    lower95 = 0.0
+    stratum_reports: dict[str, dict[str, Any]] = {}
+    for stratum, rows in sorted(grouped.items()):
+        weights = [float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) for row in rows]
+        stratum_weight = sum(weights)
+        if stratum_weight <= 0:
+            continue
+        pass_weight = sum(
+            float(((row.get('provenance') or {}).get('selection_weight')) or 0.0)
+            for row in rows
+            if row.get(success_key) is True
+        )
+        pass_rate = pass_weight / stratum_weight
+        effective_n = kish_effective_n(weights)
+        rounded_effective_n = int(round(effective_n)) if effective_n else 0
+        successes_effective = round(pass_rate * rounded_effective_n) if rounded_effective_n > 0 else None
+        stratum_lower = (
+            wilson_lower(int(successes_effective), rounded_effective_n, z=z)
+            if successes_effective is not None and rounded_effective_n > 0
+            else None
+        )
+        population_share = stratum_weight / total_weight
+        overall_success += population_share * pass_rate
+        if stratum_lower is not None:
+            lower95 += population_share * stratum_lower
+        stratum_reports[stratum] = {
+            'n': len(rows),
+            'weight_total': stratum_weight,
+            'population_weight_share': population_share,
+            'weighted_success': pass_rate,
+            'effective_n': effective_n,
+            'rounded_effective_n': rounded_effective_n,
+            'effective_successes': successes_effective,
+            'lower95': stratum_lower,
+        }
+
+    nominal_n = len(eligible)
+    effective_n_total = sum(
+        float(report.get('effective_n') or 0.0)
+        for report in stratum_reports.values()
+    )
+    return {
+        'method': 'stratified_weighted_wilson_by_design_stratum',
+        'description': (
+            'Population-weighted sum of per-design-stratum Wilson lower bounds; '
+            'each stratum uses Kish effective n from selection weights.'
+        ),
+        'confidence_level': 0.95,
+        'z': z,
+        'success_key': success_key,
+        'observed_success': overall_success,
+        'lower95': max(0.0, min(1.0, lower95)),
+        'nominal_n': nominal_n,
+        'effective_n': effective_n_total,
+        'design_effect': (nominal_n / effective_n_total) if effective_n_total > 0 else None,
+        'strata_count': len(stratum_reports),
+        'strata': stratum_reports,
+    }
 
 
 def ratio(numerator: float, denominator: float) -> float | None:
@@ -294,6 +410,7 @@ def main() -> int:
             for row in rows
         )
         expected_clarification = expected_clarification_for_session(session, kind)
+        design_stratum = design_stratum_for_session(session, kind)
         all_pass = bool(rows) and all(structural_pass(r) for r in rows)
         provisional_pass = (
             clarification_path_pass(rows) and session_clarification_detected
@@ -341,6 +458,7 @@ def main() -> int:
             'holdout_split': split,
             'provider_stratum': provider,
             'family_stratum': family,
+            'design_stratum': design_stratum,
             'provisional_structural_pass': provisional_pass,
             'final_label': final_label,
             'final_failure_class': final_failure_class,
@@ -433,9 +551,30 @@ def main() -> int:
     overall_adjudicated_weighted_success = ratio(overall_adjudicated_weight_pass, overall_weight_total)
     overall_adjudicated_weighted_successes_approx = round((overall_adjudicated_weighted_success or 0.0) * overall_effective_n) if overall_effective_n and overall_adjudication_weight_coverage == 1.0 else None
     overall_adjudicated_weighted_lower95 = wilson_lower(int(overall_adjudicated_weighted_successes_approx), int(round(overall_effective_n))) if overall_effective_n and overall_adjudicated_weighted_successes_approx is not None else None
+    overall_design_confidence = design_aware_weighted_confidence(
+        session_results,
+        success_key='provisional_structural_pass',
+    )
+    overall_adjudicated_design_confidence = (
+        design_aware_weighted_confidence(
+            session_results,
+            success_key='adjudicated_pass',
+        )
+        if overall_adjudication_weight_coverage == 1.0
+        else None
+    )
     claim_metric_source = 'adjudicated_structural' if overall_adjudication_weight_coverage == 1.0 and overall_adjudicated_weighted_success is not None else None
     claim_observed_success = overall_adjudicated_weighted_success if claim_metric_source else None
-    claim_lower95 = overall_adjudicated_weighted_lower95 if claim_metric_source else None
+    claim_confidence_method = (
+        overall_adjudicated_design_confidence.get('method')
+        if claim_metric_source and overall_adjudicated_design_confidence
+        else None
+    )
+    claim_lower95 = (
+        overall_adjudicated_design_confidence.get('lower95')
+        if claim_metric_source and overall_adjudicated_design_confidence
+        else None
+    )
     wrong_confident_answer_rate = None
     unnecessary_clarification_rate = None
     ambiguity_resolution_success = None
@@ -571,10 +710,13 @@ def main() -> int:
         'overall_weighted_provisional_success': overall_weighted_success,
         'overall_weighted_effective_n': overall_effective_n,
         'overall_weighted_lower95_approx': overall_weighted_lower95,
+        'overall_weighted_design_confidence': overall_design_confidence,
         'overall_adjudication_weight_coverage': overall_adjudication_weight_coverage,
         'overall_weighted_adjudicated_success': overall_adjudicated_weighted_success,
         'overall_weighted_adjudicated_lower95_approx': overall_adjudicated_weighted_lower95,
+        'overall_weighted_adjudicated_design_confidence': overall_adjudicated_design_confidence,
         'claim_metric_source': claim_metric_source,
+        'claim_confidence_method': claim_confidence_method,
         'claim_observed_success': claim_observed_success,
         'claim_lower95': claim_lower95,
         'weighted_by_type': {
@@ -669,9 +811,9 @@ def main() -> int:
             'This scorer only checks provisional structural success (status/error/non-empty result).',
             'Optional adjudication labels can override the automated pass/fail view, but the scorer still does not compute the full claim-grade semantic/error-family metrics.',
             'The wrong_confident_answer_rate_proxy, unnecessary_clarification_rate_proxy, expected_clarification_rate_proxy, and ambiguity_resolution_success_proxy metrics are early behavioral proxies, not final claim-grade semantic metrics.',
-            'Weighted lower95 is only an approximation using Kish effective sample size and is not a full design-based variance estimator.',
+            'Claim lower95 uses a stratified weighted Wilson estimator over certification-design strata; legacy pooled Kish lower95 fields remain only for back-compatibility diagnostics.',
             'It does not yet perform semantic adjudication or claim-grade weighted inference.',
-            'Provider/query floor evaluation currently applies only to direct provider strata and does not yet cover multiround, ambiguity, or semantic-family floors.',
+            'Provider/family floor evaluation covers direct provider, multiround family, and ambiguity family strata, but not every future semantic-family floor.',
             'A public 99% claim must not rely on this report alone.'
         ],
     }

@@ -258,12 +258,28 @@ def test_imf_dataset_family_hint_maps_bop_like_codes() -> None:
 def test_imf_dataset_family_hint_maps_labor_market_codes() -> None:
     provider = IMFProvider(metadata_search_service=None)
 
-    hint = provider._likely_dataset_family_hint(  # pylint: disable=protected-access
-        "LER_ISIC31_C_PT",
-        "Labor Markets, Employment, Employment Rate, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 3.1, Mining and quarrying, Percent",
-    )
+    examples = [
+        (
+            "LER_ISIC31_C_PT",
+            "Labor Markets, Employment, Employment Rate, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 3.1, Mining and quarrying, Percent",
+        ),
+        (
+            "LEW_ISIC4_G_USD",
+            "Labor Markets, Employment, Wages, By International Standard Industrial Classification of All Economic Activities (ISIC) Rev. 4, Wholesale and retail trade; repair of motor vehicles and motorcycles, US Dollars",
+        ),
+        (
+            "LE_PLP_RATE",
+            "Labour Market, Employment to Population Ratio, Rate",
+        ),
+    ]
 
-    assert hint == "IMF.STA:LS"
+    for code, label in examples:
+        hint = provider._likely_dataset_family_hint(  # pylint: disable=protected-access
+            code,
+            label,
+        )
+
+        assert hint == "IMF.STA:LS"
 
 
 def test_imf_dataset_family_hint_maps_national_accounts_codes() -> None:

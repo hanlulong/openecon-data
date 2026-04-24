@@ -384,6 +384,52 @@ def test_audit_direct_query_shape_flags_imf_labour_market_family_by_code() -> No
     assert "imf_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_labor_markets_plural_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": (
+                "Germany Employment Wages Labor Markets Wholesale and retail trade; "
+                "repair of motor vehicles and motorcycles from IMF"
+            ),
+            "origin": {
+                "name": (
+                    "Labor Markets, Employment, Wages, By International Standard Industrial "
+                    "Classification of All Economic Activities (ISIC) Rev. 4, Wholesale and "
+                    "retail trade; repair of motor vehicles and motorcycles, US Dollars"
+                ),
+                "source_indicator_code": "LEW_ISIC4_G_USD",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_non_datamapper_indicator_category() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": (
+                "Germany Current Account Services Transportation Air Transport Other "
+                "Net Balance of Payments Goods and Services from IMF"
+            ),
+            "origin": {
+                "name": (
+                    "Balance of Payments, Current Account, Goods and Services, Services, "
+                    "Transport, Air Transport, Other, Net, US Dollars"
+                ),
+                "source_indicator_code": "BSTRAO_USD",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_local_government_fiscal_family() -> None:
     audit = audit_direct_query_shape(
         {
