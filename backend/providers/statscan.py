@@ -1017,6 +1017,35 @@ class StatsCanProvider(BaseProvider):
     def _map_scalar_factor(self, scalar_code: int) -> str:
         return self.SCALAR_FACTOR_MAP.get(scalar_code, "")
 
+    @staticmethod
+    def _raise_for_status_or_data_unavailable(response, context: str) -> None:
+        """Convert upstream StatsCan HTTP failures into data-unavailable errors.
+
+        QueryService handles ``DataNotAvailableError`` as a provider/data
+        availability failure (HTTP 200 with an explanatory error body).  Letting
+        raw ``httpx.HTTPStatusError`` escape turns transient upstream WDS 5xx/429
+        responses into internal ``processing_error`` 500s, which obscures
+        certification evidence and user-facing provider status.
+        """
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code == 429:
+                raise DataNotAvailableError(
+                    f"Statistics Canada API rate limit exceeded while {context}. "
+                    "Please try again shortly."
+                ) from exc
+            if status_code >= 500:
+                raise DataNotAvailableError(
+                    f"Statistics Canada API temporarily unavailable while {context} "
+                    f"(HTTP {status_code}). Please try again shortly."
+                ) from exc
+            raise DataNotAvailableError(
+                f"Statistics Canada API request failed while {context} "
+                f"(HTTP {status_code}): {exc}"
+            ) from exc
+
     def _filter_by_date_range(
         self,
         data_points: List[Dict[str, any]],
@@ -1471,7 +1500,10 @@ class StatsCanProvider(BaseProvider):
             timeout=300.0,
         )
 
-        response.raise_for_status()
+        self._raise_for_status_or_data_unavailable(
+            response,
+            f"fetching product {product_id} coordinate {coordinate}",
+        )
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -1728,17 +1760,20 @@ class StatsCanProvider(BaseProvider):
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
-        response.raise_for_status()
+        self._raise_for_status_or_data_unavailable(
+            response,
+            f"fetching vector {target_vector}",
+        )
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
-            raise RuntimeError(f"StatsCan vector {target_vector} not found or error occurred")
+            raise DataNotAvailableError(f"StatsCan vector {target_vector} not found or error occurred")
 
         data_object = payload[0]["object"]
         vector_data = data_object.get("vectorDataPoint", [])
 
         if not vector_data:
-            raise RuntimeError(f"No data found for vector {target_vector}")
+            raise DataNotAvailableError(f"No data found for vector {target_vector}")
 
         # Get indicator name from parameters or use vector ID
         indicator_name = params.get("indicator", f"Vector {target_vector}")
@@ -2136,7 +2171,10 @@ class StatsCanProvider(BaseProvider):
                 f"This may indicate the product structure has changed."
             )
 
-        response.raise_for_status()
+        self._raise_for_status_or_data_unavailable(
+            response,
+            f"fetching product {product_id} coordinate {coordinate}",
+        )
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -2499,7 +2537,10 @@ class StatsCanProvider(BaseProvider):
             timeout=300.0,
         )
 
-        response.raise_for_status()
+        self._raise_for_status_or_data_unavailable(
+            response,
+            f"fetching product {product_id} coordinate {coordinate}",
+        )
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":

@@ -281,6 +281,45 @@ async def test_fetch_dynamic_data_uses_exact_product_id_without_search(monkeypat
     assert result == "ok"
 
 
+@pytest.mark.asyncio
+async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch, statscan_provider):
+    monkeypatch.setattr(
+        "backend.providers.statscan.get_http_client",
+        lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
+    )
+
+    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
+        await statscan_provider.fetch_series({"indicator": "32100095", "periods": 12})
+
+
+@pytest.mark.asyncio
+async def test_fetch_from_product_with_discovery_wraps_statscan_503_as_data_not_available(
+    monkeypatch,
+    statscan_provider,
+):
+    metadata = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Geography",
+                "member": [{"memberId": 1, "memberNameEn": "Canada"}],
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "backend.providers.statscan.get_http_client",
+        lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
+    )
+
+    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
+        await statscan_provider.fetch_from_product_with_discovery(
+            product_id="11100024",
+            indicator="Low income entry and exit rates of tax filers in Canada",
+            metadata=metadata,
+            geography=None,
+            periods=12,
+        )
+
+
 # =====================================================================
 # Tests for extract_dimension_modifiers (metadata-driven, no hardcoded lists)
 # =====================================================================
