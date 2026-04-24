@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,11 @@ from typing import Any
 import requests
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.validation.common import audit_direct_query_shape  # noqa: E402
+
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-raw-results.jsonl'
 DEFAULT_BASE_URL = 'http://localhost:3001'
 
@@ -42,6 +49,176 @@ def dry_run_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         'by_tier': dict(by_tier),
         'by_split': dict(by_split),
     }
+
+
+def preflight_audit_path(output: Path) -> Path:
+    return output.with_name(output.name + '.preflight-audit.json')
+
+
+def preflight_audit_rows(rows: list[dict[str, Any]], *, flagged_limit: int = 50) -> dict[str, Any]:
+    risk_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    type_counts: Counter[str] = Counter()
+    flagged_rows: list[dict[str, Any]] = []
+    direct_count = 0
+
+    for row in rows:
+        kind = detect_dataset_type(row)
+        type_counts[kind] += 1
+        if kind != 'direct':
+            continue
+        direct_count += 1
+        audit = audit_direct_query_shape(row)
+        risk_level = str(audit.get('risk_level') or 'low')
+        reasons = [str(reason) for reason in audit.get('reasons') or []]
+        risk_counts[risk_level] += 1
+        for reason in reasons:
+            reason_counts[reason] += 1
+        if risk_level != 'low' and len(flagged_rows) < flagged_limit:
+            flagged_rows.append({
+                'id': row.get('id'),
+                'dataset_type': kind,
+                'provider_stratum': row.get('provider_stratum') or (row.get('origin') or {}).get('source_provider'),
+                'query': row.get('query'),
+                'risk_level': risk_level,
+                'reasons': reasons,
+                'query_length': audit.get('query_length'),
+                'punctuation_hits': audit.get('punctuation_hits'),
+            })
+
+    return {
+        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'summary': {
+            'row_count': len(rows),
+            'direct_rows_audited': direct_count,
+            'by_type': dict(type_counts),
+            'risk_counts': dict(risk_counts),
+            'reason_counts': dict(reason_counts),
+            'high_risk_rows': risk_counts.get('high', 0),
+        },
+        'flagged_rows_sample': flagged_rows,
+    }
+
+
+def write_preflight_audit(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = preflight_audit_rows(rows)
+    atomic_write_json(path, payload)
+    return payload
+
+
+def enforce_preflight_audit(path: Path, rows: list[dict[str, Any]], *, allow_high_risk_direct: bool) -> dict[str, Any]:
+    payload = write_preflight_audit(path, rows)
+    high_risk_rows = int((payload.get('summary') or {}).get('high_risk_rows') or 0)
+    if high_risk_rows and not allow_high_risk_direct:
+        raise RuntimeError(
+            f'preflight audit blocked certification run: {high_risk_rows} high-risk direct rows; '
+            f'regenerate/audit the dataset or pass --allow-high-risk-direct explicitly. audit={path}'
+        )
+    return payload
+
+
+def select_rows(
+    rows: list[dict[str, Any]],
+    *,
+    start_index: int = 0,
+    max_sessions: int | None = None,
+) -> list[dict[str, Any]]:
+    if start_index < 0:
+        raise ValueError('start_index must be 0 or greater')
+    if max_sessions is not None and max_sessions < 0:
+        raise ValueError('max_sessions must be 0 or greater')
+    selected = rows[start_index:]
+    if max_sessions is not None:
+        selected = selected[:max_sessions]
+    return selected
+
+
+def validate_unique_session_ids(rows: list[dict[str, Any]]) -> None:
+    counts = Counter(str(row.get('id') or '') for row in rows)
+    duplicates = sorted(session_id for session_id, count in counts.items() if session_id and count > 1)
+    if duplicates:
+        preview = ', '.join(duplicates[:5])
+        raise ValueError(f'resume/skip-completed requires unique session ids; duplicates: {preview}')
+
+
+def expected_round_indexes_for_session(row: dict[str, Any]) -> set[int]:
+    if detect_dataset_type(row) == 'multiround':
+        rounds = row.get('rounds') or []
+        if not isinstance(rounds, list):
+            return set()
+        return set(range(1, len(rounds) + 1))
+    return {1}
+
+
+def completed_session_ids_from_results(
+    rows: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> set[str]:
+    expected_by_id = {
+        str(row.get('id') or ''): expected_round_indexes_for_session(row)
+        for row in rows
+        if row.get('id') is not None
+    }
+    rounds_by_id: dict[str, list[int]] = defaultdict(list)
+    for record in records:
+        if record.get('request_failed'):
+            continue
+        session_id = str(record.get('session_id') or '')
+        if session_id not in expected_by_id:
+            continue
+        try:
+            round_index = int(record.get('round_index') or 0)
+        except (TypeError, ValueError):
+            round_index = 0
+        rounds_by_id[session_id].append(round_index)
+
+    completed: set[str] = set()
+    for session_id, expected_rounds in expected_by_id.items():
+        observed_rounds = rounds_by_id.get(session_id, [])
+        if expected_rounds and set(observed_rounds) == expected_rounds and len(observed_rounds) == len(expected_rounds):
+            completed.add(session_id)
+    return completed
+
+
+def keep_complete_session_records(
+    rows: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    completed_ids = completed_session_ids_from_results(rows, records)
+    expected_by_id = {
+        str(row.get('id') or ''): expected_round_indexes_for_session(row)
+        for row in rows
+        if row.get('id') is not None
+    }
+    kept: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for record in records:
+        session_id = str(record.get('session_id') or '')
+        if session_id not in completed_ids:
+            continue
+        try:
+            round_index = int(record.get('round_index') or 0)
+        except (TypeError, ValueError):
+            continue
+        key = (session_id, round_index)
+        if round_index not in expected_by_id.get(session_id, set()) or key in seen:
+            continue
+        kept.append(record)
+        seen.add(key)
+    return kept
+
+
+def load_existing_results(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    return list(iter_jsonl(path))
+
+
+def load_resume_records(output_path: Path, progress_output: Path) -> list[dict[str, Any]]:
+    progress_records = load_existing_results(progress_output)
+    if progress_records:
+        return progress_records
+    return load_existing_results(output_path)
 
 
 def detect_clarification(resp_json: dict[str, Any]) -> bool:
@@ -119,86 +296,208 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def record_response(row: dict[str, Any], dataset_type: str, round_index: int, query: str, resp, elapsed: float, data: dict[str, Any]) -> dict[str, Any]:
+    response_signals = extract_response_signals(data)
+    return {
+        'session_id': row['id'],
+        'dataset_type': dataset_type,
+        'round_index': round_index,
+        'query': query,
+        'status_code': resp.status_code,
+        'elapsed_seconds': round(elapsed, 3),
+        'error': data.get('error'),
+        'series_count': response_signals['series_count'],
+        'providers': response_signals['providers'],
+        'countries': response_signals['countries'],
+        'series_ids': response_signals['series_ids'],
+        'clarification_detected': response_signals['clarification_detected'],
+        'clarification_options_count': response_signals['clarification_options_count'],
+        'clarification_questions_count': response_signals['clarification_questions_count'],
+        'response_text_present': response_signals['response_text_present'],
+    }
+
+
+def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, query: str, elapsed: float, exc: Exception) -> dict[str, Any]:
+    return {
+        'session_id': row.get('id'),
+        'dataset_type': dataset_type,
+        'round_index': round_index,
+        'query': query,
+        'status_code': None,
+        'elapsed_seconds': round(elapsed, 3),
+        'error': str(exc),
+        'request_failed': True,
+        'series_count': 0,
+        'providers': [],
+        'countries': [],
+        'series_ids': [],
+        'clarification_detected': False,
+        'clarification_options_count': 0,
+        'clarification_questions_count': 0,
+        'response_text_present': False,
+    }
+
+
+def append_failure_checkpoint(
+    *,
+    row: dict[str, Any],
+    dataset_type: str,
+    round_index: int,
+    query: str,
+    elapsed: float,
+    exc: Exception,
+    results: list[dict[str, Any]],
+    progress_output: Path | None,
+    progress_meta: Path | None,
+    session_index: int,
+    total_sessions: int,
+    start_index: int,
+    skipped_sessions: int,
+    completed_session_ids_count: int,
+) -> None:
+    record = record_failure(row, dataset_type, round_index, query, elapsed, exc)
+    results.append(record)
+    if progress_output is not None:
+        append_jsonl_row(progress_output, record)
+    if progress_meta is not None:
+        write_progress_summary(
+            progress_meta,
+            completed_sessions=max(0, session_index - 1),
+            total_sessions=total_sessions,
+            results_written=len(results),
+            done=False,
+            last_session_id=str(row.get('id') or ''),
+            last_dataset_type=dataset_type,
+            start_index=start_index,
+            skipped_sessions=skipped_sessions,
+            completed_session_ids_count=completed_session_ids_count,
+            last_error=str(exc),
+        )
+
+
 def execute_rows(
     rows: list[dict[str, Any]],
     base_url: str,
     *,
     progress_output: Path | None = None,
     progress_meta: Path | None = None,
+    start_index: int = 0,
+    skip_completed_session_ids: set[str] | None = None,
+    existing_results: list[dict[str, Any]] | None = None,
+    preserve_progress_output: bool = False,
 ) -> list[dict[str, Any]]:
+    if start_index < 0:
+        raise ValueError('start_index must be 0 or greater')
     base = base_url.rstrip('/') + '/api/query'
-    results = []
+    results = list(existing_results or [])
+    skipped_completed = skip_completed_session_ids or set()
+    skipped_sessions = 0
     total_sessions = len(rows)
-    if progress_output is not None and progress_output.exists():
-        progress_output.unlink()
+
+    if progress_output is not None:
+        if progress_output.exists() and not preserve_progress_output:
+            progress_output.unlink()
+        if preserve_progress_output:
+            write_jsonl(progress_output, results)
     if progress_meta is not None:
         write_progress_summary(
             progress_meta,
             completed_sessions=0,
             total_sessions=total_sessions,
-            results_written=0,
+            results_written=len(results),
             done=False,
             last_session_id=None,
             last_dataset_type=None,
+            start_index=start_index,
+            skipped_sessions=0,
+            completed_session_ids_count=len(skipped_completed),
         )
     for session_index, row in enumerate(rows, start=1):
+        session_id = str(row.get('id') or '')
         dataset_type = detect_dataset_type(row)
+        if session_index <= start_index:
+            skipped_sessions += 1
+            continue
+        if session_id in skipped_completed:
+            skipped_sessions += 1
+            if progress_meta is not None:
+                write_progress_summary(
+                    progress_meta,
+                    completed_sessions=session_index,
+                    total_sessions=total_sessions,
+                    results_written=len(results),
+                    done=False,
+                    last_session_id=session_id,
+                    last_dataset_type=dataset_type,
+                    start_index=start_index,
+                    skipped_sessions=skipped_sessions,
+                    completed_session_ids_count=len(skipped_completed),
+                )
+            continue
         if dataset_type == 'multiround':
             conv = None
             for i, round_case in enumerate(row['rounds'], start=1):
-                payload = {'query': round_case['query']}
+                query = round_case['query']
+                payload = {'query': query}
                 if conv:
                     payload['conversationId'] = conv
                 t0 = time.time()
-                resp = requests.post(base, json=payload, timeout=120)
-                elapsed = time.time() - t0
-                data = resp.json()
+                try:
+                    resp = requests.post(base, json=payload, timeout=120)
+                    elapsed = time.time() - t0
+                    data = resp.json()
+                except Exception as exc:
+                    elapsed = time.time() - t0
+                    append_failure_checkpoint(
+                        row=row,
+                        dataset_type=dataset_type,
+                        round_index=i,
+                        query=query,
+                        elapsed=elapsed,
+                        exc=exc,
+                        results=results,
+                        progress_output=progress_output,
+                        progress_meta=progress_meta,
+                        session_index=session_index,
+                        total_sessions=total_sessions,
+                        start_index=start_index,
+                        skipped_sessions=skipped_sessions,
+                        completed_session_ids_count=len(skipped_completed),
+                    )
+                    raise
                 conv = data.get('conversationId') or data.get('conversation_id') or conv
-                response_signals = extract_response_signals(data)
-                record = {
-                    'session_id': row['id'],
-                    'dataset_type': dataset_type,
-                    'round_index': i,
-                    'query': round_case['query'],
-                    'status_code': resp.status_code,
-                    'elapsed_seconds': round(elapsed, 3),
-                    'error': data.get('error'),
-                    'series_count': response_signals['series_count'],
-                    'providers': response_signals['providers'],
-                    'countries': response_signals['countries'],
-                    'series_ids': response_signals['series_ids'],
-                    'clarification_detected': response_signals['clarification_detected'],
-                    'clarification_options_count': response_signals['clarification_options_count'],
-                    'clarification_questions_count': response_signals['clarification_questions_count'],
-                    'response_text_present': response_signals['response_text_present'],
-                }
+                record = record_response(row, dataset_type, i, query, resp, elapsed, data)
                 results.append(record)
                 if progress_output is not None:
                     append_jsonl_row(progress_output, record)
         else:
-            payload = {'query': row['query']}
+            query = row['query']
+            payload = {'query': query}
             t0 = time.time()
-            resp = requests.post(base, json=payload, timeout=120)
-            elapsed = time.time() - t0
-            data = resp.json()
-            response_signals = extract_response_signals(data)
-            record = {
-                'session_id': row['id'],
-                'dataset_type': dataset_type,
-                'round_index': 1,
-                'query': row['query'],
-                'status_code': resp.status_code,
-                'elapsed_seconds': round(elapsed, 3),
-                'error': data.get('error'),
-                'series_count': response_signals['series_count'],
-                'providers': response_signals['providers'],
-                'countries': response_signals['countries'],
-                'series_ids': response_signals['series_ids'],
-                'clarification_detected': response_signals['clarification_detected'],
-                'clarification_options_count': response_signals['clarification_options_count'],
-                'clarification_questions_count': response_signals['clarification_questions_count'],
-                'response_text_present': response_signals['response_text_present'],
-            }
+            try:
+                resp = requests.post(base, json=payload, timeout=120)
+                elapsed = time.time() - t0
+                data = resp.json()
+            except Exception as exc:
+                elapsed = time.time() - t0
+                append_failure_checkpoint(
+                    row=row,
+                    dataset_type=dataset_type,
+                    round_index=1,
+                    query=query,
+                    elapsed=elapsed,
+                    exc=exc,
+                    results=results,
+                    progress_output=progress_output,
+                    progress_meta=progress_meta,
+                    session_index=session_index,
+                    total_sessions=total_sessions,
+                    start_index=start_index,
+                    skipped_sessions=skipped_sessions,
+                    completed_session_ids_count=len(skipped_completed),
+                )
+                raise
+            record = record_response(row, dataset_type, 1, query, resp, elapsed, data)
             results.append(record)
             if progress_output is not None:
                 append_jsonl_row(progress_output, record)
@@ -211,6 +510,9 @@ def execute_rows(
                 done=False,
                 last_session_id=str(row.get('id') or ''),
                 last_dataset_type=dataset_type,
+                start_index=start_index,
+                skipped_sessions=skipped_sessions,
+                completed_session_ids_count=len(skipped_completed),
             )
     if progress_meta is not None:
         write_progress_summary(
@@ -221,6 +523,9 @@ def execute_rows(
             done=True,
             last_session_id=str(rows[-1].get('id') or '') if rows else None,
             last_dataset_type=detect_dataset_type(rows[-1]) if rows else None,
+            start_index=start_index,
+            skipped_sessions=skipped_sessions,
+            completed_session_ids_count=len(skipped_completed),
         )
     return results
 
@@ -230,12 +535,16 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open('w', encoding='utf-8') as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def append_jsonl_row(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def progress_output_path(output: Path) -> Path:
@@ -244,6 +553,16 @@ def progress_output_path(output: Path) -> Path:
 
 def progress_meta_path(output: Path) -> Path:
     return output.with_name(output.name + '.progress.json')
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp')
+    with tmp.open('w', encoding='utf-8') as f:
+        f.write(json.dumps(payload, indent=2) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
 
 
 def write_progress_summary(
@@ -255,8 +574,13 @@ def write_progress_summary(
     done: bool,
     last_session_id: str | None,
     last_dataset_type: str | None,
+    start_index: int | None = None,
+    skipped_sessions: int | None = None,
+    completed_session_ids_count: int | None = None,
+    last_error: str | None = None,
 ) -> None:
     payload = {
+        'updated_at_utc': datetime.now(timezone.utc).isoformat(),
         'completed_sessions': completed_sessions,
         'total_sessions': total_sessions,
         'results_written': results_written,
@@ -264,8 +588,15 @@ def write_progress_summary(
         'last_session_id': last_session_id,
         'last_dataset_type': last_dataset_type,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+    if start_index is not None:
+        payload['start_index'] = start_index
+    if skipped_sessions is not None:
+        payload['skipped_sessions'] = skipped_sessions
+    if completed_session_ids_count is not None:
+        payload['completed_session_ids_count'] = completed_session_ids_count
+    if last_error is not None:
+        payload['last_error'] = last_error
+    atomic_write_json(path, payload)
 
 
 def main() -> int:
@@ -275,36 +606,78 @@ def main() -> int:
     parser.add_argument('--base-url', default=DEFAULT_BASE_URL)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--max-sessions', type=int, default=None)
+    parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
+    parser.add_argument('--resume', action='store_true', help='Load existing .inprogress or final output and skip completed sessions.')
+    parser.add_argument('--skip-completed', action='store_true', help='Skip sessions already complete in existing .inprogress or final output.')
+    parser.add_argument('--preflight-audit-output', type=Path, default=None, help='Path for current direct-query audit gate output; defaults beside --output.')
+    parser.add_argument('--allow-high-risk-direct', action='store_true', help='Allow execution even when current preflight audit finds high-risk direct rows.')
+    parser.add_argument('--skip-preflight-audit', action='store_true', help='Skip the current direct-query audit gate before execution.')
     args = parser.parse_args()
 
     rows: list[dict[str, Any]] = []
     for path in args.dataset:
         rows.extend(list(iter_jsonl(path.resolve())))
-    if args.max_sessions is not None:
-        rows = rows[:args.max_sessions]
+    selected_rows = select_rows(rows, start_index=args.start_index, max_sessions=args.max_sessions)
 
     if args.dry_run:
+        preflight = None if args.skip_preflight_audit else preflight_audit_rows(selected_rows)
         summary = {
             'generated_at_utc': datetime.now(timezone.utc).isoformat(),
             'mode': 'dry_run',
-            'summary': dry_run_summary(rows),
+            'summary': dry_run_summary(selected_rows),
+            'preflight_audit': preflight,
+            'total_input_records': len(rows),
+            'start_index': args.start_index,
+            'max_sessions': args.max_sessions,
+            'resume': args.resume,
+            'skip_completed': args.skip_completed,
             'output': str(args.output.resolve()),
+            'progress_output': str(progress_output_path(args.output.resolve())),
+            'progress_meta': str(progress_meta_path(args.output.resolve())),
         }
         print(json.dumps(summary, indent=2))
         return 0
 
     output_path = args.output.resolve()
+    if not args.skip_preflight_audit:
+        audit_output = args.preflight_audit_output.resolve() if args.preflight_audit_output else preflight_audit_path(output_path)
+        try:
+            enforce_preflight_audit(audit_output, selected_rows, allow_high_risk_direct=args.allow_high_risk_direct)
+        except RuntimeError as exc:
+            print(json.dumps({
+                'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+                'mode': 'preflight_blocked',
+                'error': str(exc),
+                'audit_output': str(audit_output),
+            }, indent=2), file=sys.stderr)
+            return 2
+    progress_output = progress_output_path(output_path)
+    progress_meta = progress_meta_path(output_path)
+    existing_records: list[dict[str, Any]] = []
+    completed_session_ids: set[str] = set()
+    if args.resume or args.skip_completed:
+        validate_unique_session_ids(selected_rows)
+        existing_records = load_resume_records(output_path, progress_output)
+        existing_records = keep_complete_session_records(selected_rows, existing_records)
+        completed_session_ids = completed_session_ids_from_results(selected_rows, existing_records)
     results = execute_rows(
-        rows,
+        selected_rows,
         args.base_url,
-        progress_output=progress_output_path(output_path),
-        progress_meta=progress_meta_path(output_path),
+        progress_output=progress_output,
+        progress_meta=progress_meta,
+        start_index=0,
+        skip_completed_session_ids=completed_session_ids,
+        existing_results=existing_records,
+        preserve_progress_output=args.resume or args.skip_completed,
     )
     write_jsonl(output_path, results)
     print(json.dumps({
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
         'mode': 'execute',
         'records': len(results),
+        'selected_sessions': len(selected_rows),
+        'start_index': args.start_index,
+        'skipped_completed_sessions': len(completed_session_ids),
         'output': str(output_path),
     }, indent=2))
     return 0

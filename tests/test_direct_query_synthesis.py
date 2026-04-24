@@ -490,6 +490,23 @@ def test_audit_direct_query_shape_flags_fred_naics_revenue_queries():
     assert "fred_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_fred_hicp_by_origin_code():
+    audit = audit_direct_query_shape(
+        {
+            "provider_stratum": "FRED",
+            "query": "US harmonized inflation from FRED",
+            "origin": {
+                "source_provider": "FRED",
+                "name": "Harmonized Index of Consumer Prices: All Items",
+                "source_indicator_code": "HICPUSAINDEX",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "fred_hicp_catalog_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_id_challenge_queries():
     audit = audit_direct_query_shape(
         {

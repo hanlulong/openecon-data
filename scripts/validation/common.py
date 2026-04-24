@@ -1483,7 +1483,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('scenario_projection_query')
     if re.search(r'total revenue for\s+\d{4}', query_lower) or any(term in query_lower for term in ['net equity in life insurance and pension funds', 'asset (ima)', 'employer firms total revenue', 'total expense for', 'establishments subject to federal income tax', 'defined benefit retirement funds', 'commercial paper; asset']):
         reasons.append('fred_low_viability_family')
-    if provider == 'FRED' and 'consumer price indices' in query_lower and 'hicp' in query_lower:
+    fred_catalog_text = f"{query_lower} {origin_name_lower} {origin_code_upper.lower()}"
+    if provider_upper == 'FRED' and (
+        'hicp' in fred_catalog_text
+        or origin_code_upper.startswith('HICP')
+    ):
         reasons.append('fred_hicp_catalog_family')
     if provider == 'OECD' and 'share of students enrolled in school and work-based programmes' in query_lower:
         reasons.append('oecd_education_programme_share_query')

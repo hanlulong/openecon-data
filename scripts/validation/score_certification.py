@@ -318,6 +318,7 @@ def main() -> int:
     parser.add_argument('--floor-policy', type=Path, default=DEFAULT_FLOOR_POLICY)
     parser.add_argument('--adjudication-records', type=Path, default=None)
     parser.add_argument('--max-sessions', type=int, default=None)
+    parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
     args = parser.parse_args()
 
     sessions: dict[str, dict[str, Any]] = {}
@@ -344,9 +345,15 @@ def main() -> int:
             if sid not in sessions:
                 session_order.append(sid)
             sessions[sid] = row
+    if args.start_index < 0:
+        raise ValueError('--start-index must be 0 or greater')
+    if args.max_sessions is not None and args.max_sessions < 0:
+        raise ValueError('--max-sessions must be 0 or greater')
+    selected_session_order = session_order[args.start_index:]
     if args.max_sessions is not None:
-        allowed_ids = set(session_order[:args.max_sessions])
-        sessions = {sid: sessions[sid] for sid in session_order if sid in allowed_ids}
+        selected_session_order = selected_session_order[:args.max_sessions]
+    allowed_ids = set(selected_session_order)
+    sessions = {sid: sessions[sid] for sid in selected_session_order if sid in allowed_ids}
 
     raw_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in iter_jsonl(args.raw_results.resolve()):

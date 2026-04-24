@@ -148,6 +148,54 @@ def test_run_claim_bundle_propagates_max_sessions_to_score_step(tmp_path: Path):
     assert "--max-sessions" in payload["commands"]["score_certification"]
 
 
+def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_to_score(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "id": "direct-fred-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BUNDLE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--run-resume",
+            "--start-index",
+            "29",
+            "--run-skip-completed",
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    run_cmd = payload["commands"]["run_certification"]
+    score_cmd = payload["commands"]["score_certification"]
+    assert "--resume" in run_cmd
+    assert "--start-index" in run_cmd
+    assert "29" in run_cmd
+    assert "--skip-completed" in run_cmd
+    assert "--start-index" in score_cmd
+    assert "29" in score_cmd
+
+
 def test_run_claim_bundle_can_plan_production_replay(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     production_dataset_path = tmp_path / "prod_replay.jsonl"
