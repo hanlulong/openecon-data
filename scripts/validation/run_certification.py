@@ -487,7 +487,13 @@ def append_failure_checkpoint(
         )
 
 
-def execute_session(row: dict[str, Any], base: str, *, classify_unsupported_direct: bool = False) -> list[dict[str, Any]]:
+def execute_session(
+    row: dict[str, Any],
+    base: str,
+    *,
+    classify_unsupported_direct: bool = False,
+    request_timeout: float = 120,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     dataset_type = detect_dataset_type(row)
     if classify_unsupported_direct:
@@ -503,7 +509,7 @@ def execute_session(row: dict[str, Any], base: str, *, classify_unsupported_dire
                 payload['conversationId'] = conv
             t0 = time.time()
             try:
-                resp = requests.post(base, json=payload, timeout=120)
+                resp = requests.post(base, json=payload, timeout=request_timeout)
                 elapsed = time.time() - t0
                 data = resp.json()
             except Exception as exc:
@@ -515,7 +521,7 @@ def execute_session(row: dict[str, Any], base: str, *, classify_unsupported_dire
         query = row['query']
         t0 = time.time()
         try:
-            resp = requests.post(base, json={'query': query}, timeout=120)
+            resp = requests.post(base, json={'query': query}, timeout=request_timeout)
             elapsed = time.time() - t0
             data = resp.json()
         except Exception as exc:
@@ -538,6 +544,7 @@ def execute_rows_concurrent(
     preserve_progress_output: bool = False,
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
+    request_timeout: float = 120,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -580,7 +587,13 @@ def execute_rows_concurrent(
     completed_runnable = 0
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(execute_session, row, base, classify_unsupported_direct=classify_unsupported_direct): (session_index, row)
+            executor.submit(
+                execute_session,
+                row,
+                base,
+                classify_unsupported_direct=classify_unsupported_direct,
+                request_timeout=request_timeout,
+            ): (session_index, row)
             for session_index, row in runnable
         }
         for future in as_completed(futures):
@@ -664,6 +677,7 @@ def execute_rows(
     concurrency: int = 1,
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
+    request_timeout: float = 120,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -682,6 +696,7 @@ def execute_rows(
             preserve_progress_output=preserve_progress_output,
             classify_unsupported_direct=classify_unsupported_direct,
             continue_on_error=continue_on_error,
+            request_timeout=request_timeout,
         )
     base = base_url.rstrip('/') + '/api/query'
     results = list(existing_results or [])
@@ -758,7 +773,7 @@ def execute_rows(
                     payload['conversationId'] = conv
                 t0 = time.time()
                 try:
-                    resp = requests.post(base, json=payload, timeout=120)
+                    resp = requests.post(base, json=payload, timeout=request_timeout)
                     elapsed = time.time() - t0
                     data = resp.json()
                 except Exception as exc:
@@ -792,7 +807,7 @@ def execute_rows(
             payload = {'query': query}
             t0 = time.time()
             try:
-                resp = requests.post(base, json=payload, timeout=120)
+                resp = requests.post(base, json=payload, timeout=request_timeout)
                 elapsed = time.time() - t0
                 data = resp.json()
             except Exception as exc:
@@ -930,6 +945,7 @@ def main() -> int:
     parser.add_argument('--max-sessions', type=int, default=None)
     parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
     parser.add_argument('--concurrency', type=int, default=1, help='Number of certification sessions to execute concurrently; multiround sessions remain ordered internally.')
+    parser.add_argument('--request-timeout', type=float, default=120, help='Per-round HTTP request timeout in seconds.')
     parser.add_argument('--resume', action='store_true', help='Load existing .inprogress or final output and skip completed sessions.')
     parser.add_argument('--skip-completed', action='store_true', help='Skip sessions already complete in existing .inprogress or final output.')
     parser.add_argument('--preflight-audit-output', type=Path, default=None, help='Path for current direct-query audit gate output; defaults beside --output.')
@@ -970,6 +986,7 @@ def main() -> int:
             'start_index': args.start_index,
             'max_sessions': args.max_sessions,
             'concurrency': args.concurrency,
+            'request_timeout': args.request_timeout,
             'resume': args.resume,
             'skip_completed': args.skip_completed,
             'classify_unsupported_direct': args.classify_unsupported_direct,
@@ -1020,6 +1037,7 @@ def main() -> int:
         concurrency=args.concurrency,
         classify_unsupported_direct=args.classify_unsupported_direct,
         continue_on_error=args.continue_on_error,
+        request_timeout=args.request_timeout,
     )
     write_jsonl(output_path, results)
     print(json.dumps({
@@ -1031,6 +1049,7 @@ def main() -> int:
         'skipped_completed_sessions': len(completed_session_ids),
         'classify_unsupported_direct': args.classify_unsupported_direct,
         'continue_on_error': args.continue_on_error,
+        'request_timeout': args.request_timeout,
         'output': str(output_path),
     }, indent=2))
     return 0

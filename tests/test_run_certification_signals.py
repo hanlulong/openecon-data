@@ -132,6 +132,57 @@ def test_execute_rows_preserves_inprogress_when_resume_enabled(tmp_path: Path, m
     assert json.loads(lines[1])["session_id"] == "direct-1"
 
 
+def test_execute_rows_passes_custom_request_timeout(monkeypatch):
+    module = load_module()
+    timeouts: list[float] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    def fake_post(url, json, timeout):
+        timeouts.append(timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    module.execute_rows(
+        [{"id": "direct-1", "query": "US GDP"}],
+        "http://localhost:3001",
+        request_timeout=12.5,
+    )
+
+    assert timeouts == [12.5]
+
+
+def test_execute_rows_concurrent_passes_custom_request_timeout(monkeypatch):
+    module = load_module()
+    timeouts: list[float] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    def fake_post(url, json, timeout):
+        timeouts.append(timeout)
+        return FakeResponse()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    module.execute_rows(
+        [{"id": "direct-1", "query": "US GDP"}],
+        "http://localhost:3001",
+        concurrency=2,
+        request_timeout=9,
+    )
+
+    assert timeouts == [9]
+
+
 def test_select_rows_applies_start_index_before_max_sessions():
     module = load_module()
     rows = [

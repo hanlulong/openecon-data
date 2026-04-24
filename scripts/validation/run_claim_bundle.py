@@ -67,6 +67,7 @@ def main() -> int:
     parser.add_argument("--max-sessions", type=int, default=None)
     parser.add_argument("--start-index", type=int, default=0, help="0-based session index passed to run_certification.py and score_certification.py.")
     parser.add_argument("--run-concurrency", type=int, default=None, help="Pass --concurrency to run_certification.py.")
+    parser.add_argument("--run-request-timeout", type=float, default=None, help="Pass --request-timeout to run_certification.py.")
     parser.add_argument("--run-resume", action="store_true", help="Pass --resume to run_certification.py.")
     parser.add_argument("--run-start-index", type=int, default=None, help="Deprecated alias: pass --start-index to run_certification.py and score_certification.py.")
     parser.add_argument("--run-skip-completed", action="store_true", help="Pass --skip-completed to run_certification.py.")
@@ -120,6 +121,8 @@ def main() -> int:
         run_cert_cmd += ["--max-sessions", str(args.max_sessions)]
     if args.run_concurrency is not None:
         run_cert_cmd += ["--concurrency", str(args.run_concurrency)]
+    if args.run_request_timeout is not None:
+        run_cert_cmd += ["--request-timeout", str(args.run_request_timeout)]
     if effective_start_index:
         run_cert_cmd += ["--start-index", str(effective_start_index)]
     if args.run_resume:

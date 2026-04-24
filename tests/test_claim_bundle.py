@@ -179,6 +179,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
             "29",
             "--run-concurrency",
             "8",
+            "--run-request-timeout",
+            "45",
             "--run-skip-completed",
             "--run-classify-unsupported-direct",
             "--run-continue-on-error",
@@ -197,6 +199,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
     assert "29" in run_cmd
     assert "--concurrency" in run_cmd
     assert "8" in run_cmd
+    assert "--request-timeout" in run_cmd
+    assert "45.0" in run_cmd
     assert "--skip-completed" in run_cmd
     assert "--classify-unsupported-direct" in run_cmd
     assert "--continue-on-error" in run_cmd
