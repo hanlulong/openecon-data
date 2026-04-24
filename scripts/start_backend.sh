@@ -20,6 +20,39 @@ fi
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_ROOT" || exit 1
 
+stop_stale_3001_guards() {
+  # Certification/replay jobs may leave a temporary guard that kills anything
+  # binding production port 3001.  Production deploys must remove that guard
+  # before starting uvicorn, otherwise the fresh backend can be SIGKILLed during
+  # startup and Apache will return 503.
+  local guard_name="kill_stray_3001_guard.py"
+  local pid_file="${LOG_DIR}/kill_stray_3001_guard.pid"
+  local candidate
+
+  if [ -f "$pid_file" ]; then
+    candidate="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$candidate" ] && [ -r "/proc/${candidate}/cmdline" ]; then
+      if tr '\0' ' ' < "/proc/${candidate}/cmdline" | grep -q "$guard_name"; then
+        echo "🛑 Stopping stale 3001 guard (PID: $candidate)..."
+        kill "$candidate" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  for candidate in /proc/[0-9]*; do
+    [ -r "${candidate}/cmdline" ] || continue
+    if tr '\0' ' ' < "${candidate}/cmdline" | grep -q "${PROJECT_ROOT}/.omx/logs/${guard_name}"; then
+      candidate="${candidate#/proc/}"
+      if [ "$candidate" != "$$" ]; then
+        echo "🛑 Stopping stale 3001 guard (PID: $candidate)..."
+        kill "$candidate" 2>/dev/null || true
+      fi
+    fi
+  done
+}
+
+stop_stale_3001_guards
+
 echo "🧹 Cleaning up existing processes..."
 lsof -ti:3001 2>/dev/null | xargs kill -9 2>/dev/null || true
 sleep 2
