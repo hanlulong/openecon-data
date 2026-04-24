@@ -1294,14 +1294,21 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
     category_lower = str(origin.get('category') or '').lower()
-    if provider_upper == 'IMF' and category_lower and category_lower != 'weo':
-        reasons.append('imf_low_viability_family')
+    # Do not treat every non-WEO IMF catalog category as unsupported. Several
+    # IMF DataMapper-backed families in the catalog (for example GDD and
+    # high-level fiscal aggregates) are executable through the public runtime.
+    # Keep this guard to evidence-backed low-viability code/query families below
+    # so certification does not hide runtime-supported IMF rows as
+    # supportability blockers.
     if 'current account primary income investment income reserve assets' in query_lower:
         reasons.append('imf_complex_finance_family')
     if 'current account primary income investment income' in query_lower:
         reasons.append('imf_complex_finance_family')
     if 'current account goods net balance of payments goods and services' in query_lower:
         reasons.append('imf_complex_finance_family')
+    if 'current account services' in query_lower and 'balance of payments' in query_lower:
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
     if 'current account credit' in query_lower and 'balance of payments' in query_lower:
         reasons.append('imf_complex_finance_family')
     if any(term in query_lower for term in ['debt-service payment schedule', 'wages and salaries in kind', 'other postal services', 'equities domestic company', 'financial market prices end of period']) or ('industrial production' in query_lower and 'manufacture of' in query_lower) or ('producer price index' in query_lower and 'weight' in query_lower and 'manufacture of' in query_lower):
@@ -1312,7 +1319,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.match(r'^(?:[A-Z]{3}_)?L(?:E|ER|EW|UR|UE|FE|MI|LF|LFPR|PR)(?:_|[A-Z0-9])', origin_code_upper):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'BGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'BGR', 'GCGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.search(r'\b(?:labou?r markets?|labor force|labour force)\b', worldbank_text):
         reasons.append('imf_low_viability_family')

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from scripts.validation.common import (
     audit_direct_query_shape,
     category_success_adjustment,
@@ -445,6 +447,44 @@ def test_audit_direct_query_shape_flags_imf_non_weo_catalog_category() -> None:
 
     assert audit["risk_level"] == "high"
     assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_datamapper_imf_debt_category_executable() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "United States General Government Debt from IMF",
+            "origin": {
+                "name": "General Government Debt",
+                "source_indicator_code": "GG_DEBT_GDP",
+                "category": "GDD",
+                "raw_metadata": json.dumps(
+                    {
+                        "source": "Global Debt Database (Sep 2025)",
+                        "dataset": "GDD",
+                    }
+                ),
+            },
+        }
+    )
+
+    assert "imf_low_viability_family" not in audit["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_high_level_imf_fiscal_aggregate_executable() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Brazil General Government net lending Fiscal from IMF",
+            "origin": {
+                "name": "Fiscal, General Government, net lending",
+                "source_indicator_code": "HN_GGO_F_081",
+                "category": "ALT_FISCAL",
+            },
+        }
+    )
+
+    assert "imf_low_viability_family" not in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_local_government_fiscal_family() -> None:
