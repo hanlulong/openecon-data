@@ -177,6 +177,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
             "--run-resume",
             "--start-index",
             "29",
+            "--run-concurrency",
+            "8",
             "--run-skip-completed",
             "--dry-run",
         ],
@@ -191,6 +193,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
     assert "--resume" in run_cmd
     assert "--start-index" in run_cmd
     assert "29" in run_cmd
+    assert "--concurrency" in run_cmd
+    assert "8" in run_cmd
     assert "--skip-completed" in run_cmd
     assert "--start-index" in score_cmd
     assert "29" in score_cmd

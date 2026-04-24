@@ -157,6 +157,104 @@ def test_execute_rows_rejects_negative_start_index(tmp_path: Path):
         raise AssertionError("negative start_index should fail")
 
 
+def test_execute_rows_rejects_invalid_concurrency():
+    module = load_module()
+
+    with pytest.raises(ValueError, match="concurrency"):
+        module.execute_rows([], "http://localhost:3001", concurrency=0)
+
+
+def test_execute_rows_concurrent_preserves_session_outputs(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, source: str):
+            self.source = source
+
+        def json(self):
+            return {
+                "data": [
+                    {
+                        "metadata": {"source": self.source, "seriesId": self.source.upper()},
+                        "observations": [{"date": "2024", "value": 1}],
+                    }
+                ]
+            }
+
+    def fake_post(url, json, timeout):
+        calls.append(json["query"])
+        return FakeResponse(json["query"])
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    output_path = tmp_path / "results.jsonl"
+    rows = [
+        {"id": "direct-1", "query": "fred"},
+        {"id": "direct-2", "query": "imf"},
+    ]
+
+    results = module.execute_rows(
+        rows,
+        "http://localhost:3001",
+        progress_output=module.progress_output_path(output_path),
+        progress_meta=module.progress_meta_path(output_path),
+        concurrency=2,
+    )
+
+    assert sorted(calls) == ["fred", "imf"]
+    assert {record["session_id"] for record in results} == {"direct-1", "direct-2"}
+    assert {record["series_count"] for record in results} == {1}
+    progress = json.loads(module.progress_meta_path(output_path).read_text(encoding="utf-8"))
+    assert progress["done"] is True
+    assert progress["concurrency"] == 2
+
+
+def test_execute_rows_concurrent_keeps_multiround_session_order(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, conversation_id: str):
+            self.conversation_id = conversation_id
+
+        def json(self):
+            return {
+                "conversationId": self.conversation_id,
+                "data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}],
+            }
+
+    def fake_post(url, json, timeout):
+        calls.append(dict(json))
+        return FakeResponse("conv-1")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    rows = [
+        {
+            "id": "multi-1",
+            "rounds": [
+                {"query": "first"},
+                {"query": "second"},
+            ],
+        }
+    ]
+
+    results = module.execute_rows(
+        rows,
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        concurrency=2,
+    )
+
+    assert [call["query"] for call in calls] == ["first", "second"]
+    assert calls[1]["conversationId"] == "conv-1"
+    assert [record["round_index"] for record in results] == [1, 2]
+
+
 def test_completed_session_ids_requires_all_multiround_rounds():
     module = load_module()
     rows = [
@@ -258,6 +356,78 @@ def test_resume_loads_existing_complete_results_before_appending(tmp_path: Path,
     assert completed_ids == {"direct-1"}
     assert [call["query"] for call in calls] == ["second"]
     assert [record["session_id"] for record in results] == ["direct-1", "direct-2"]
+
+
+def test_execute_rows_concurrency_runs_sessions_and_preserves_multiround_order(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, query: str):
+            self.query = query
+
+        def json(self):
+            return {
+                "conversationId": f"conv-{self.query}",
+                "data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}],
+            }
+
+    def fake_post(url, json, timeout):
+        calls.append(dict(json))
+        return FakeResponse(json["query"])
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    rows = [
+        {"id": "multi-1", "rounds": [{"query": "first"}, {"query": "second"}]},
+        {"id": "direct-1", "query": "direct"},
+    ]
+
+    results = module.execute_rows(
+        rows,
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        concurrency=2,
+    )
+
+    assert sorted(record["session_id"] for record in results) == ["direct-1", "multi-1", "multi-1"]
+    first_payload = next(call for call in calls if call["query"] == "first")
+    second_payload = next(call for call in calls if call["query"] == "second")
+    assert "conversationId" not in first_payload
+    assert second_payload["conversationId"] == "conv-first"
+    progress = json.loads((tmp_path / "results.jsonl.progress.json").read_text(encoding="utf-8"))
+    assert progress["done"] is True
+    assert progress["concurrency"] == 2
+
+
+def test_execute_rows_concurrency_writes_failure_checkpoint_before_reraising(tmp_path: Path, monkeypatch):
+    module = load_module()
+
+    def fake_post(url, json, timeout):
+        raise module.requests.Timeout("timed out")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    progress_path = tmp_path / "results.jsonl.inprogress"
+    meta_path = tmp_path / "results.jsonl.progress.json"
+
+    with pytest.raises(module.requests.Timeout):
+        module.execute_rows(
+            [{"id": "direct-1", "query": "US GDP"}],
+            "http://localhost:3001",
+            progress_output=progress_path,
+            progress_meta=meta_path,
+            concurrency=2,
+        )
+
+    record = json.loads(progress_path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["session_id"] == "direct-1"
+    assert record["request_failed"] is True
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert payload["done"] is False
+    assert payload["concurrency"] == 2
+    assert "timed out" in payload["last_error"]
 
 
 def test_load_resume_records_prefers_nonempty_inprogress(tmp_path: Path):

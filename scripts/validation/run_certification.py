@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,13 @@ from scripts.validation.common import audit_direct_query_shape  # noqa: E402
 
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-raw-results.jsonl'
 DEFAULT_BASE_URL = 'http://localhost:3001'
+
+
+class SessionExecutionError(Exception):
+    def __init__(self, failure_record: dict[str, Any], original: Exception):
+        super().__init__(str(original))
+        self.failure_record = failure_record
+        self.original = original
 
 
 def detect_dataset_type(row: dict[str, Any]) -> str:
@@ -375,6 +383,161 @@ def append_failure_checkpoint(
         )
 
 
+def execute_session(row: dict[str, Any], base: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    dataset_type = detect_dataset_type(row)
+    if dataset_type == 'multiround':
+        conv = None
+        for i, round_case in enumerate(row['rounds'], start=1):
+            query = round_case['query']
+            payload = {'query': query}
+            if conv:
+                payload['conversationId'] = conv
+            t0 = time.time()
+            try:
+                resp = requests.post(base, json=payload, timeout=120)
+                elapsed = time.time() - t0
+                data = resp.json()
+            except Exception as exc:
+                elapsed = time.time() - t0
+                raise SessionExecutionError(record_failure(row, dataset_type, i, query, elapsed, exc), exc) from exc
+            conv = data.get('conversationId') or data.get('conversation_id') or conv
+            records.append(record_response(row, dataset_type, i, query, resp, elapsed, data))
+    else:
+        query = row['query']
+        t0 = time.time()
+        try:
+            resp = requests.post(base, json={'query': query}, timeout=120)
+            elapsed = time.time() - t0
+            data = resp.json()
+        except Exception as exc:
+            elapsed = time.time() - t0
+            raise SessionExecutionError(record_failure(row, dataset_type, 1, query, elapsed, exc), exc) from exc
+        records.append(record_response(row, dataset_type, 1, query, resp, elapsed, data))
+    return records
+
+
+def execute_rows_concurrent(
+    rows: list[dict[str, Any]],
+    base_url: str,
+    *,
+    concurrency: int,
+    progress_output: Path | None = None,
+    progress_meta: Path | None = None,
+    start_index: int = 0,
+    skip_completed_session_ids: set[str] | None = None,
+    existing_results: list[dict[str, Any]] | None = None,
+    preserve_progress_output: bool = False,
+) -> list[dict[str, Any]]:
+    if start_index < 0:
+        raise ValueError('start_index must be 0 or greater')
+    if concurrency < 1:
+        raise ValueError('concurrency must be 1 or greater')
+    base = base_url.rstrip('/') + '/api/query'
+    results = list(existing_results or [])
+    skipped_completed = skip_completed_session_ids or set()
+    total_sessions = len(rows)
+    skipped_sessions = 0
+    runnable: list[tuple[int, dict[str, Any]]] = []
+
+    for session_index, row in enumerate(rows, start=1):
+        session_id = str(row.get('id') or '')
+        if session_index <= start_index or session_id in skipped_completed:
+            skipped_sessions += 1
+            continue
+        runnable.append((session_index, row))
+
+    if progress_output is not None:
+        if progress_output.exists() and not preserve_progress_output:
+            progress_output.unlink()
+        if preserve_progress_output:
+            write_jsonl(progress_output, results)
+    if progress_meta is not None:
+        write_progress_summary(
+            progress_meta,
+            completed_sessions=skipped_sessions,
+            total_sessions=total_sessions,
+            results_written=len(results),
+            done=False,
+            last_session_id=None,
+            last_dataset_type=None,
+            start_index=start_index,
+            skipped_sessions=skipped_sessions,
+            completed_session_ids_count=len(skipped_completed),
+            concurrency=concurrency,
+        )
+
+    completed_runnable = 0
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {
+            executor.submit(execute_session, row, base): (session_index, row)
+            for session_index, row in runnable
+        }
+        for future in as_completed(futures):
+            session_index, row = futures[future]
+            dataset_type = detect_dataset_type(row)
+            session_id = str(row.get('id') or '')
+            try:
+                session_records = future.result()
+            except SessionExecutionError as exc:
+                results.append(exc.failure_record)
+                if progress_output is not None:
+                    append_jsonl_row(progress_output, exc.failure_record)
+                if progress_meta is not None:
+                    write_progress_summary(
+                        progress_meta,
+                        completed_sessions=skipped_sessions + completed_runnable,
+                        total_sessions=total_sessions,
+                        results_written=len(results),
+                        done=False,
+                        last_session_id=session_id,
+                        last_dataset_type=dataset_type,
+                        start_index=start_index,
+                        skipped_sessions=skipped_sessions,
+                        completed_session_ids_count=len(skipped_completed),
+                        last_error=str(exc.original),
+                        concurrency=concurrency,
+                    )
+                for pending in futures:
+                    pending.cancel()
+                raise exc.original
+            results.extend(session_records)
+            if progress_output is not None:
+                for record in session_records:
+                    append_jsonl_row(progress_output, record)
+            completed_runnable += 1
+            if progress_meta is not None:
+                write_progress_summary(
+                    progress_meta,
+                    completed_sessions=skipped_sessions + completed_runnable,
+                    total_sessions=total_sessions,
+                    results_written=len(results),
+                    done=False,
+                    last_session_id=session_id,
+                    last_dataset_type=dataset_type,
+                    start_index=start_index,
+                    skipped_sessions=skipped_sessions,
+                    completed_session_ids_count=len(skipped_completed),
+                    concurrency=concurrency,
+                )
+
+    if progress_meta is not None:
+        write_progress_summary(
+            progress_meta,
+            completed_sessions=total_sessions,
+            total_sessions=total_sessions,
+            results_written=len(results),
+            done=True,
+            last_session_id=str(rows[-1].get('id') or '') if rows else None,
+            last_dataset_type=detect_dataset_type(rows[-1]) if rows else None,
+            start_index=start_index,
+            skipped_sessions=skipped_sessions,
+            completed_session_ids_count=len(skipped_completed),
+            concurrency=concurrency,
+        )
+    return results
+
+
 def execute_rows(
     rows: list[dict[str, Any]],
     base_url: str,
@@ -385,9 +548,24 @@ def execute_rows(
     skip_completed_session_ids: set[str] | None = None,
     existing_results: list[dict[str, Any]] | None = None,
     preserve_progress_output: bool = False,
+    concurrency: int = 1,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
+    if concurrency < 1:
+        raise ValueError('concurrency must be 1 or greater')
+    if concurrency > 1:
+        return execute_rows_concurrent(
+            rows,
+            base_url,
+            concurrency=concurrency,
+            progress_output=progress_output,
+            progress_meta=progress_meta,
+            start_index=start_index,
+            skip_completed_session_ids=skip_completed_session_ids,
+            existing_results=existing_results,
+            preserve_progress_output=preserve_progress_output,
+        )
     base = base_url.rstrip('/') + '/api/query'
     results = list(existing_results or [])
     skipped_completed = skip_completed_session_ids or set()
@@ -578,6 +756,7 @@ def write_progress_summary(
     skipped_sessions: int | None = None,
     completed_session_ids_count: int | None = None,
     last_error: str | None = None,
+    concurrency: int | None = None,
 ) -> None:
     payload = {
         'updated_at_utc': datetime.now(timezone.utc).isoformat(),
@@ -596,6 +775,8 @@ def write_progress_summary(
         payload['completed_session_ids_count'] = completed_session_ids_count
     if last_error is not None:
         payload['last_error'] = last_error
+    if concurrency is not None:
+        payload['concurrency'] = concurrency
     atomic_write_json(path, payload)
 
 
@@ -607,6 +788,7 @@ def main() -> int:
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--max-sessions', type=int, default=None)
     parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
+    parser.add_argument('--concurrency', type=int, default=1, help='Number of certification sessions to execute concurrently; multiround sessions remain ordered internally.')
     parser.add_argument('--resume', action='store_true', help='Load existing .inprogress or final output and skip completed sessions.')
     parser.add_argument('--skip-completed', action='store_true', help='Skip sessions already complete in existing .inprogress or final output.')
     parser.add_argument('--preflight-audit-output', type=Path, default=None, help='Path for current direct-query audit gate output; defaults beside --output.')
@@ -629,6 +811,7 @@ def main() -> int:
             'total_input_records': len(rows),
             'start_index': args.start_index,
             'max_sessions': args.max_sessions,
+            'concurrency': args.concurrency,
             'resume': args.resume,
             'skip_completed': args.skip_completed,
             'output': str(args.output.resolve()),
@@ -669,6 +852,7 @@ def main() -> int:
         skip_completed_session_ids=completed_session_ids,
         existing_results=existing_records,
         preserve_progress_output=args.resume or args.skip_completed,
+        concurrency=args.concurrency,
     )
     write_jsonl(output_path, results)
     print(json.dumps({
