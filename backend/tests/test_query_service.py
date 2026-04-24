@@ -1331,6 +1331,12 @@ class QueryServiceTests(unittest.TestCase):
         self.assertGreaterEqual(len(expanded), 5)
         self.assertIn("SG", expanded)
 
+    def test_detect_regions_in_query_recognizes_plain_europe(self) -> None:
+        regions = CountryResolver.detect_regions_in_query("GDP in Europe")
+        self.assertIn("EU", regions)
+        expanded = CountryResolver.expand_regions_in_query("GDP in Europe")
+        self.assertEqual(set(expanded), set(CountryResolver.EU_MEMBERS))
+
     def test_expand_regions_in_query_returns_all_g20_members(self) -> None:
         expanded = CountryResolver.expand_regions_in_query(
             "employment rate across G20 member countries"
@@ -2037,6 +2043,34 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options[1].value, "economic data for the G20 group as a whole")
         pending = conversation_manager.get_pending_semantic_clarification(conv_id)
         self.assertIsNotNone(pending)
+
+    def test_build_group_scope_clarification_for_plain_europe_query(self) -> None:
+        """Plain Europe is a regional scope and should ask member-vs-group clarification."""
+        conv_id = conversation_manager.get_or_create("conv-group-scope-europe")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["NY.GDP.MKTP.CD"],
+            parameters={"countries": ["European Union"]},
+            clarificationNeeded=False,
+            originalQuery="GDP in Europe",
+        )
+
+        clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id=conv_id,
+            query="GDP in Europe",
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIn("European Union", " ".join(clarification.clarificationQuestions or []))
+        options = clarification.clarificationOptions or []
+        self.assertEqual(options[0].value, "GDP across European Union member countries")
+        self.assertEqual(options[1].value, "GDP for the European Union group as a whole")
 
     def test_build_group_scope_clarification_skips_explicit_comparison_query(self) -> None:
         clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
@@ -5811,6 +5845,66 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("policy rate", labels)
         self.assertIn("long-term government bond yield", labels)
         self.assertIn("real interest rate", labels)
+
+    def test_post_parse_clarifies_missing_category_decomposition_entities(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-category-decomp-missing")
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["PRC_HICP_AIND"],
+            parameters={
+                "country": "FR",
+                "indicator": "PRC_HICP_AIND",
+                "__semantic_indicator_label": "inflation by category",
+            },
+            clarificationNeeded=False,
+            originalQuery="France inflation by category",
+            needsDecomposition=True,
+            decompositionType="categories",
+            decompositionEntities=None,
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="EUROSTAT",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(
+            self.service,
+            "_build_prefetch_indicator_choice_clarification",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            clarification = run(
+                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="France inflation by category",
+                    parse_result=parse_result,
+                    validation=validation,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertIn("category", " ".join(clarification.clarificationQuestions or []).lower())
+        labels = [option.label for option in (clarification.clarificationOptions or [])]
+        self.assertIn("specify categories", labels)
+        self.assertIn("use the main overall series", labels)
+        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+        self.assertIsNotNone(pending)
+        assert pending is not None
+        self.assertEqual(pending.get("kind"), "missing_decomposition_entities")
 
     def test_process_query_generic_exact_title_interest_rate_returns_clarification(self) -> None:
         lookup_results = [

@@ -1715,6 +1715,7 @@ def humanize_region_name(region: str) -> str:
 
     replacements = {
         "BRICS_PLUS": "BRICS+",
+        "EU": "European Union",
         "EUROZONE": "euro area",
         "LATAM": "Latin America",
         "MENA": "Middle East and North Africa",
@@ -1785,6 +1786,16 @@ def rewrite_group_scope_query(
     if region_upper and region_upper != region_label:
         region_patterns.append(re.escape(region_upper.replace("_", " ")))
     region_patterns.append(re.escape(region_upper))
+    if region_upper == "EU":
+        region_patterns.extend(
+            re.escape(alias)
+            for alias in (
+                "Europe",
+                "European",
+                "European countries",
+                "European economies",
+            )
+        )
     region_regex = "|".join(pattern for pattern in region_patterns if pattern)
 
     rewritten = query_text
@@ -1888,6 +1899,89 @@ def build_group_scope_clarification(
         "kind": "group_scope",
         "region": region,
         "original_query": str(query or "").strip(),
+        "question_lines": clarification_questions,
+        "options": [option.model_dump() for option in options],
+    }
+    store_pending_semantic_clarification(conversation_id, payload)
+
+    return QueryResponse(
+        conversationId=conversation_id,
+        intent=intent,
+        clarificationNeeded=True,
+        clarificationQuestions=clarification_questions,
+        clarificationOptions=options,
+        processingSteps=processing_steps,
+    )
+
+
+def build_missing_decomposition_entities_clarification(
+    conversation_id: str,
+    query: str,
+    intent: Optional[ParsedIntent],
+    processing_steps: Optional[List[Any]] = None,
+) -> Optional[QueryResponse]:
+    """Ask for dimensions/categories when decomposition was requested without members.
+
+    A parsed intent like "France inflation by category" can correctly detect a
+    category breakdown request but omit the actual category members. Fetching a
+    single overall series in that state is a wrong-confident answer; ask the
+    user to specify the breakdown instead.
+    """
+    if not intent or not intent.needsDecomposition or intent.decompositionEntities:
+        return None
+
+    decomp_type = str(intent.decompositionType or "").strip().lower()
+    category_like_types = {
+        "category",
+        "categories",
+        "dimension",
+        "dimensions",
+        "breakdown",
+        "components",
+        "component",
+    }
+    if decomp_type not in category_like_types:
+        return None
+
+    query_text = str(query or intent.originalQuery or "").strip()
+    category_label = "category" if decomp_type in {"category", "categories"} else "breakdown member"
+    category_plural = "categories" if category_label == "category" else "breakdown members"
+    base_query = query_text or "this query"
+    overall_value = re.sub(
+        r"\s+\bby\s+(?:category|categories|dimension|dimensions|component|components|breakdown)\b",
+        "",
+        base_query,
+        flags=re.IGNORECASE,
+    ).strip(" ,;:-") or base_query
+    specify_value = f"{base_query} for categories: <name the categories>"
+
+    options = [
+        ClarificationOption(
+            id="1",
+            label=f"specify {category_plural}",
+            value=specify_value,
+        ),
+        ClarificationOption(
+            id="2",
+            label="use the main overall series",
+            value=overall_value,
+        ),
+    ]
+    clarification_questions = [
+        f"Your query asks for a {category_label} breakdown, but no specific {category_plural} were named.",
+        f"Which {category_plural} should I use?",
+    ]
+    clarification_questions.extend(
+        f"{option.id}. {option.label}" for option in options
+    )
+    clarification_questions.append(
+        f"Reply with the option number, or type the specific {category_plural} you want."
+    )
+
+    payload = {
+        "kind": "missing_decomposition_entities",
+        "decomposition_type": decomp_type,
+        "original_query": base_query,
         "question_lines": clarification_questions,
         "options": [option.model_dump() for option in options],
     }
@@ -2683,6 +2777,15 @@ async def build_post_parse_clarification(
     )
     if concept_clarification:
         return concept_clarification
+
+    missing_decomposition_entities = build_missing_decomposition_entities_clarification(
+        conversation_id=conversation_id,
+        query=query,
+        intent=intent,
+        processing_steps=processing_steps,
+    )
+    if missing_decomposition_entities:
+        return missing_decomposition_entities
 
     group_scope_clarification = build_group_scope_clarification(
         qs=qs,
