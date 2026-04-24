@@ -1533,7 +1533,19 @@ class IMFProvider(BaseProvider):
         if mapped:
             return mapped, self._friendly_indicator_label(indicator, mapped)
 
-        # Step 1.5: If the caller already supplied an exact IMF code that exists
+        # Step 1.5: Try cross-provider indicator translator before trusting
+        # exact-looking local catalog codes.  Some common user phrases are also
+        # valid catalog tokens (for example "GDP"), but as natural-language
+        # indicator requests they should resolve to the canonical DataMapper
+        # series (NGDPD) rather than to a broad local catalog placeholder.
+        translator = get_indicator_translator()
+        translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
+        if translated_code:
+            logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
+            label_hint = concept_name or indicator
+            return translated_code, self._friendly_indicator_label(label_hint, translated_code)
+
+        # Step 2: If the caller already supplied an exact IMF code that exists
         # in the local indicator catalog, trust it directly. This preserves
         # explicit provider-code queries without re-running metadata discovery,
         # while still failing closed for fake codes because they will miss the
@@ -1554,6 +1566,11 @@ class IMFProvider(BaseProvider):
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
 
+        # Step 3: Prefer local catalog recovery only for specific long-tail
+        # titles.  Short fuzzy phrases can produce misleading FTS matches
+        # (e.g. "custom imf" -> "Customs Revenues"), so when a live metadata
+        # search service is available we let that provider-specific discovery
+        # path arbitrate short phrases before falling back to local FTS.
         indicator_text = str(indicator or "").strip()
         prioritize_local_catalog = (
             not self._looks_like_imf_code(indicator_text)
@@ -1564,15 +1581,35 @@ class IMFProvider(BaseProvider):
             if local_resolution:
                 return local_resolution
 
-        # Step 2: Try cross-provider indicator translator (handles indicator names from other systems)
-        translator = get_indicator_translator()
-        translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
-        if translated_code:
-            logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
-            label_hint = concept_name or indicator
-            return translated_code, self._friendly_indicator_label(label_hint, translated_code)
+        if self.metadata_search:
+            # Use hierarchical search: SDMX first, then IMF DataMapper API.
+            search_results = await self.metadata_search.search_with_sdmx_fallback(
+                provider="IMF",
+                indicator=indicator,
+            )
+            if search_results:
+                discovery = await self.metadata_search.discover_indicator(
+                    provider="IMF",
+                    indicator_name=indicator,
+                    search_results=search_results,
+                )
 
-        # Step 3: Try the local indicator catalog with normalized query variants.
+                # Check if discovery returned ambiguity flag (multiple diverse options)
+                if discovery and discovery.get("ambiguous"):
+                    options = discovery.get("options", [])
+                    options_text = "\n".join([
+                        f"  • {opt['name']}" for opt in options[:5]
+                    ])
+                    raise DataNotAvailableError(
+                        f"Your query '{indicator}' matches multiple datasets. Please be more specific:\n{options_text}\n\n"
+                        f"Try specifying the exact metric you need."
+                    )
+
+                if discovery and discovery.get("code"):
+                    code = discovery["code"]
+                    return code, discovery.get("name")
+
+        # Step 4: Try the local indicator catalog with normalized query variants.
         # This is especially important for long-tail IMF component titles where
         # DataMapper metadata search often returns zero exact keyword matches,
         # but the local catalog still has provider-native series entries.
@@ -1588,37 +1625,6 @@ class IMFProvider(BaseProvider):
             raise DataNotAvailableError(
                 f"IMF indicator '{indicator}' not recognized. Provide the official IMF code (e.g., NGDP_RPCH) or enable metadata discovery."
             )
-
-        # Use hierarchical search: SDMX first, then IMF DataMapper API
-        search_results = await self.metadata_search.search_with_sdmx_fallback(
-            provider="IMF",
-            indicator=indicator,
-        )
-        if not search_results:
-            raise DataNotAvailableError(
-                f"IMF indicator '{indicator}' not found. Try a different description or provide the IMF indicator code."
-            )
-
-        discovery = await self.metadata_search.discover_indicator(
-            provider="IMF",
-            indicator_name=indicator,
-            search_results=search_results,
-        )
-
-        # Check if discovery returned ambiguity flag (multiple diverse options)
-        if discovery and discovery.get("ambiguous"):
-            options = discovery.get("options", [])
-            options_text = "\n".join([
-                f"  • {opt['name']}" for opt in options[:5]
-            ])
-            raise DataNotAvailableError(
-                f"Your query '{indicator}' matches multiple datasets. Please be more specific:\n{options_text}\n\n"
-                f"Try specifying the exact metric you need."
-            )
-
-        if discovery and discovery.get("code"):
-            code = discovery["code"]
-            return code, discovery.get("name")
 
         raise DataNotAvailableError(
             f"IMF indicator '{indicator}' not found. Try refining your query or consult IMF DataMapper for available indicators."
