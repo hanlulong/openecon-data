@@ -568,11 +568,13 @@ class ProviderTests(unittest.TestCase):
         provider_b = ComtradeProvider(api_key="demo")
         active = 0
         max_active = 0
+        start_times = []
 
         async def _fake_fetch(
             self, client, reporter_raw, partner_code, commodity_code, flow_code, period_param, freq_code
         ):
             nonlocal active, max_active
+            start_times.append(asyncio.get_running_loop().time())
             active += 1
             max_active = max(max_active, active)
             await asyncio.sleep(0.01)
@@ -580,7 +582,10 @@ class ProviderTests(unittest.TestCase):
             return []
 
         async def _run_two_fetches():
-            with patch.object(ComtradeProvider, "_fetch_single_reporter_data", new=_fake_fetch):
+            with (
+                patch.object(ComtradeProvider, "_fetch_single_reporter_data", new=_fake_fetch),
+                patch("backend.providers.comtrade.GLOBAL_REQUEST_MIN_INTERVAL_SECONDS", 0.02),
+            ):
                 await asyncio.gather(
                     provider_a.fetch_trade_data(
                         reporter="United States",
@@ -601,6 +606,8 @@ class ProviderTests(unittest.TestCase):
         run(_run_two_fetches())
 
         self.assertEqual(max_active, 1)
+        self.assertEqual(len(start_times), 2)
+        self.assertGreaterEqual(start_times[1] - start_times[0], 0.015)
 
     def test_worldbank_metadata_discovery(self) -> None:
         class StubMetadata:

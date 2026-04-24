@@ -33,9 +33,13 @@ RETRY_DELAY_BASE = 1.5
 REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1-10s when healthy)
 RATE_LIMIT_STATUS = 429
 GLOBAL_REQUEST_CONCURRENCY = 1
+GLOBAL_REQUEST_MIN_INTERVAL_SECONDS = 1.25
 
 _GLOBAL_REQUEST_SEMAPHORES: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+_GLOBAL_REQUEST_LAST_STARTED: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, float
 ] = weakref.WeakKeyDictionary()
 
 
@@ -52,6 +56,25 @@ def _global_request_semaphore() -> asyncio.Semaphore:
         semaphore = asyncio.Semaphore(GLOBAL_REQUEST_CONCURRENCY)
         _GLOBAL_REQUEST_SEMAPHORES[loop] = semaphore
     return semaphore
+
+
+async def _respect_global_request_spacing() -> None:
+    """Pace Comtrade calls on the current event loop.
+
+    The process-wide semaphore prevents overlapping requests, but certification
+    runs can still start serial requests back-to-back quickly enough to trip
+    Comtrade's short-window 429 guard.  Space request starts while the global
+    semaphore is held so concurrent sessions share one provider-level cadence.
+    """
+    loop = asyncio.get_running_loop()
+    last_started = _GLOBAL_REQUEST_LAST_STARTED.get(loop)
+    now = loop.time()
+    if last_started is not None:
+        wait_seconds = GLOBAL_REQUEST_MIN_INTERVAL_SECONDS - (now - last_started)
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+            now = loop.time()
+    _GLOBAL_REQUEST_LAST_STARTED[loop] = now
 
 
 class ComtradeProvider(BaseProvider):
@@ -1008,10 +1031,10 @@ class ComtradeProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance (timeout passed per-request)
         client = get_http_client()
-        # Fetch combinations with bounded concurrency to reduce 429 bursts.
-        # Comtrade applies aggressive short-window rate limits, but serialising
-        # annual requests entirely (concurrency=1) is the main contributor to
-        # high latency when there are multiple reporters or period chunks.
+        # Fetch combinations with local bounded concurrency, then pass each
+        # outbound Comtrade request through the process-local global gate below.
+        # The local semaphore limits per-query fan-out; the global gate/spacing
+        # protects the shared subscription key from cross-session 429 bursts.
         max_concurrent_requests = 2 if freq_code == "A" else 3
         semaphore = asyncio.Semaphore(max_concurrent_requests)
 
@@ -1022,6 +1045,7 @@ class ComtradeProvider(BaseProvider):
         ) -> List[NormalizedData]:
             async with semaphore:
                 async with _global_request_semaphore():
+                    await _respect_global_request_spacing()
                     return await self._fetch_single_reporter_data(
                         client,
                         reporter_raw,
