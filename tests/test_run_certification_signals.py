@@ -396,6 +396,32 @@ def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, m
     assert progress["completed_sessions"] == 2
 
 
+def test_runtime_unavailable_records_count_complete_for_resume():
+    module = load_module()
+    rows = [
+        {"id": "direct-1", "query": "US GDP"},
+        {
+            "id": "multi-1",
+            "rounds": [
+                {"query": "first"},
+                {"query": "second"},
+            ],
+        },
+    ]
+    records = [
+        module.record_runtime_unavailable(rows[0], "direct", 1, "US GDP", "health probe timed out"),
+        module.record_runtime_unavailable(rows[1], "multiround", 1, "first", "health probe timed out"),
+        module.record_runtime_unavailable(rows[1], "multiround", 2, "second", "health probe timed out"),
+    ]
+
+    assert module.completed_session_ids_from_results(rows, records) == {"direct-1", "multi-1"}
+    assert [record["session_id"] for record in module.keep_complete_session_records(rows, records)] == [
+        "direct-1",
+        "multi-1",
+        "multi-1",
+    ]
+
+
 def test_runtime_unavailable_mode_preserves_supportability_classification_first(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

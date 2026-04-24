@@ -229,7 +229,7 @@ def completed_session_ids_from_results(
     }
     rounds_by_id: dict[str, list[int]] = defaultdict(list)
     for record in records:
-        if record.get('request_failed'):
+        if record.get('request_failed') and not record.get('runtime_unavailable'):
             continue
         session_id = str(record.get('session_id') or '')
         if session_id not in expected_by_id:
@@ -716,6 +716,76 @@ def execute_rows_concurrent(
     return results
 
 
+def execute_rows_runtime_unavailable(
+    rows: list[dict[str, Any]],
+    *,
+    reason: str,
+    progress_output: Path | None = None,
+    progress_meta: Path | None = None,
+    start_index: int = 0,
+    skip_completed_session_ids: set[str] | None = None,
+    existing_results: list[dict[str, Any]] | None = None,
+    preserve_progress_output: bool = False,
+    classify_unsupported_direct: bool = False,
+    concurrency: int | None = None,
+) -> list[dict[str, Any]]:
+    """Generate fail-closed runtime-unavailable rows without per-row HTTP/fsync.
+
+    This path is intentionally only for a proven-unhealthy runtime target.  It
+    preserves full certification surface accounting while making every ordinary
+    executable session fail closed; unsupported direct rows can still be
+    classified separately when requested.
+    """
+    if start_index < 0:
+        raise ValueError('start_index must be 0 or greater')
+
+    results = list(existing_results or [])
+    skipped_completed = skip_completed_session_ids or set()
+    skipped_sessions = 0
+    completed_sessions = 0
+    last_session_id: str | None = None
+    last_dataset_type: str | None = None
+
+    for session_index, row in enumerate(rows, start=1):
+        session_id = str(row.get('id') or '')
+        dataset_type = detect_dataset_type(row)
+        if session_index <= start_index or session_id in skipped_completed:
+            skipped_sessions += 1
+            continue
+        if classify_unsupported_direct:
+            blocked_record = supportability_blocked_record(row)
+            if blocked_record is not None:
+                session_records = [blocked_record]
+            else:
+                session_records = runtime_unavailable_records(row, reason)
+        else:
+            session_records = runtime_unavailable_records(row, reason)
+        results.extend(session_records)
+        completed_sessions += 1
+        last_session_id = session_id
+        last_dataset_type = dataset_type
+
+    if progress_output is not None:
+        if progress_output.exists() and not preserve_progress_output:
+            progress_output.unlink()
+        write_jsonl(progress_output, results)
+    if progress_meta is not None:
+        write_progress_summary(
+            progress_meta,
+            completed_sessions=skipped_sessions + completed_sessions,
+            total_sessions=len(rows),
+            results_written=len(results),
+            done=True,
+            last_session_id=last_session_id,
+            last_dataset_type=last_dataset_type,
+            start_index=start_index,
+            skipped_sessions=skipped_sessions,
+            completed_session_ids_count=len(skipped_completed),
+            concurrency=concurrency,
+        )
+    return results
+
+
 def execute_rows(
     rows: list[dict[str, Any]],
     base_url: str,
@@ -736,6 +806,19 @@ def execute_rows(
         raise ValueError('start_index must be 0 or greater')
     if concurrency < 1:
         raise ValueError('concurrency must be 1 or greater')
+    if runtime_unavailable_reason:
+        return execute_rows_runtime_unavailable(
+            rows,
+            reason=runtime_unavailable_reason,
+            progress_output=progress_output,
+            progress_meta=progress_meta,
+            start_index=start_index,
+            skip_completed_session_ids=skip_completed_session_ids,
+            existing_results=existing_results,
+            preserve_progress_output=preserve_progress_output,
+            classify_unsupported_direct=classify_unsupported_direct,
+            concurrency=concurrency,
+        )
     if concurrency > 1:
         return execute_rows_concurrent(
             rows,
