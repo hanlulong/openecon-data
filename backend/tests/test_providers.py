@@ -173,6 +173,104 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result.data[0].value, 100.0)
         self.assertIsNone(result.data[1].value)
 
+    def test_fred_exact_stale_series_skips_default_observation_window(self) -> None:
+        provider = FREDProvider(api_key="test-key")
+        calls: list[dict] = []
+
+        class RecordingClient(MockAsyncClient):
+            async def get(self, url: str, *, params: dict | None = None, **kwargs) -> MockAsyncResponse:
+                calls.append(dict(params or {}))
+                return await super().get(url, params=params, **kwargs)
+
+        responses = [
+            MockAsyncResponse(
+                {
+                    "seriess": [
+                        {
+                            "title": "State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico",
+                            "units": "Thousands of Dollars",
+                            "frequency": "Annual",
+                            "last_updated": "2024-01-01",
+                            "observation_start": "1957-01-01",
+                            "observation_end": "2020-01-01",
+                        }
+                    ]
+                }
+            ),
+            MockAsyncResponse(
+                {
+                    "observations": [
+                        {"date": "2020-01-01", "value": "100"},
+                    ]
+                }
+            ),
+        ]
+
+        with patch("backend.providers.fred.get_http_client", return_value=RecordingClient(responses)):
+            result = run(
+                provider.fetch_series(
+                    {
+                        "indicator": "QTAXT51QTAXCAT3NMNO",
+                        "startDate": "2021-04-20",
+                        "endDate": "2026-04-19",
+                        "__exact_indicator_title_match": True,
+                        "__original_query": "State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico from FRED",
+                    }
+                )
+            )
+
+        self.assertEqual(result.metadata.seriesId, "QTAXT51QTAXCAT3NMNO")
+        self.assertEqual(len(result.data), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["series_id"], "QTAXT51QTAXCAT3NMNO")
+        self.assertNotIn("observation_start", calls[1])
+        self.assertNotIn("observation_end", calls[1])
+
+    def test_fred_exact_stale_series_respects_explicit_time_scope(self) -> None:
+        provider = FREDProvider(api_key="test-key")
+        calls: list[dict] = []
+
+        class RecordingClient(MockAsyncClient):
+            async def get(self, url: str, *, params: dict | None = None, **kwargs) -> MockAsyncResponse:
+                calls.append(dict(params or {}))
+                return await super().get(url, params=params, **kwargs)
+
+        responses = [
+            MockAsyncResponse(
+                {
+                    "seriess": [
+                        {
+                            "title": "State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico",
+                            "units": "Thousands of Dollars",
+                            "frequency": "Annual",
+                            "last_updated": "2024-01-01",
+                            "observation_start": "1957-01-01",
+                            "observation_end": "2020-01-01",
+                        }
+                    ]
+                }
+            ),
+            MockAsyncResponse({"observations": []}),
+        ]
+
+        with patch("backend.providers.fred.get_http_client", return_value=RecordingClient(responses)):
+            result = run(
+                provider.fetch_series(
+                    {
+                        "indicator": "QTAXT51QTAXCAT3NMNO",
+                        "startDate": "2021-04-20",
+                        "endDate": "2026-04-19",
+                        "__exact_indicator_title_match": True,
+                        "__original_query": "State Tax Collections T51 for New Mexico from FRED from 2021 to 2026",
+                    }
+                )
+            )
+
+        self.assertEqual(result.metadata.seriesId, "QTAXT51QTAXCAT3NMNO")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["observation_start"], "2021-04-20")
+        self.assertEqual(calls[1]["observation_end"], "2026-04-19")
+
     def test_worldbank_fetch_indicator(self) -> None:
         provider = WorldBankProvider()
 

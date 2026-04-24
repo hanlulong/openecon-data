@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import get_settings
@@ -11,6 +12,44 @@ from ..services.http_pool import get_http_client
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+
+_TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+_TIME_SCOPE_RELATIVE_RE = re.compile(
+    r"\b(?:last|past|since|between|from|through|until|before|after|during)\b",
+    flags=re.IGNORECASE,
+)
+_RECENCY_CUE_RE = re.compile(
+    r"\b(?:latest|most recent|current|currently|today|yesterday|now)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _query_has_explicit_time_scope(query: str) -> bool:
+    """Detect whether the user explicitly constrained the requested time window."""
+    query_text = str(query or "").strip()
+    if not query_text:
+        return False
+    if _RECENCY_CUE_RE.search(query_text):
+        return True
+    if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
+        return True
+    if re.search(
+        r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
+        query_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 class FREDProvider(BaseProvider):
@@ -379,6 +418,47 @@ class FREDProvider(BaseProvider):
             f"Use fetch_series() for dynamic search support, or provide an explicit FRED series ID."
         )
 
+    @staticmethod
+    def _should_skip_default_window_for_exact_series(
+        params: Dict[str, Any],
+        info: Dict[str, Any],
+    ) -> bool:
+        """Avoid a doomed default-window observations call for stale exact FRED rows.
+
+        Certification exact-title rows often omit an explicit date range.  The
+        query pipeline supplies a friendly recent default (usually 5 years) so
+        broad end-user queries do not ask clarifying questions.  Some exact
+        FRED series are historical/discontinued, and the recent-window
+        observations call can take tens of seconds before returning no data,
+        only for data_fetcher to broaden and retry.  When the series metadata
+        already proves the default window cannot intersect the series, skip the
+        doomed call and fetch the available historical observations directly.
+
+        Explicit user time scopes remain strict and are not broadened here.
+        """
+        if not (
+            params.get("__exact_indicator_title_match")
+            or params.get("__exact_provider_code_match")
+        ):
+            return False
+
+        if _query_has_explicit_time_scope(str(params.get("__original_query") or "")):
+            return False
+
+        requested_start = _parse_iso_date(params.get("startDate"))
+        requested_end = _parse_iso_date(params.get("endDate"))
+        if not requested_start and not requested_end:
+            return False
+
+        series_start = _parse_iso_date(info.get("observation_start"))
+        series_end = _parse_iso_date(info.get("observation_end"))
+
+        if requested_start and series_end and series_end < requested_start:
+            return True
+        if requested_end and series_start and series_start > requested_end:
+            return True
+        return False
+
     def _map_frequency(self, fred_frequency: str) -> str:
         return self.FREQUENCY_MAP.get(fred_frequency, fred_frequency.lower())
 
@@ -441,15 +521,29 @@ class FREDProvider(BaseProvider):
             raise DataNotAvailableError(f"FRED series '{target_series}' not found. Please check the series ID or try a different indicator.")
         info = info_payload["seriess"][0]
 
+        effective_params = dict(params)
+        if self._should_skip_default_window_for_exact_series(params, info):
+            logger.info(
+                "Skipping default FRED time window for exact historical series: "
+                "series=%s requested=%s..%s available=%s..%s",
+                target_series,
+                params.get("startDate"),
+                params.get("endDate"),
+                info.get("observation_start"),
+                info.get("observation_end"),
+            )
+            for key in ("startDate", "endDate", "start_year", "end_year"):
+                effective_params.pop(key, None)
+
         obs_params = {
             "series_id": target_series,
             "api_key": self.api_key,
             "file_type": "json",
         }
-        if params.get("startDate"):
-            obs_params["observation_start"] = params["startDate"]
-        if params.get("endDate"):
-            obs_params["observation_end"] = params["endDate"]
+        if effective_params.get("startDate"):
+            obs_params["observation_start"] = effective_params["startDate"]
+        if effective_params.get("endDate"):
+            obs_params["observation_end"] = effective_params["endDate"]
 
         # Add transformation if specified (e.g., 'pc1' for percent change from year ago)
         if transformation:
@@ -466,10 +560,10 @@ class FREDProvider(BaseProvider):
             "series_id": target_series,
             "file_type": "json",
         }
-        if params.get("startDate"):
-            api_url_params["observation_start"] = params["startDate"]
-        if params.get("endDate"):
-            api_url_params["observation_end"] = params["endDate"]
+        if effective_params.get("startDate"):
+            api_url_params["observation_start"] = effective_params["startDate"]
+        if effective_params.get("endDate"):
+            api_url_params["observation_end"] = effective_params["endDate"]
 
         query_string = "&".join(f"{key}={value}" for key, value in api_url_params.items())
         api_url = f"{self.base_url}/series/observations?{query_string}&api_key=***"
