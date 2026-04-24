@@ -387,6 +387,52 @@ def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
     assert audit["flagged_rows_sample"][0]["execution_mode"] == "ordinary_runtime"
 
 
+
+def test_preflight_classifies_worldbank_niche_and_specialized_sources_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    niche_worldbank = {
+        "id": "direct-worldbank-niche",
+        "provider_stratum": "WorldBank",
+        "query": "China Annualized Mean Income Growth Bottom 40 Percent 2004-2014 from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "5.0.AMeanIncGr.B40",
+            "name": "Annualized Mean Income Growth Bottom 40 Percent (2004-2014)",
+            "category": "LAC Equity Lab",
+        },
+    }
+    specialized_worldbank = {
+        "id": "direct-worldbank-specialized",
+        "provider_stratum": "WorldBank",
+        "query": "Brazil Time to export days DB06-15 methodology from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "TRD.ACRS.BRDR.EXPT.DURS.DY.DB0615",
+            "name": "Time to export (days) (DB06-15 methodology)",
+            "category": "Doing Business",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [niche_worldbank, specialized_worldbank],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 2
+    assert audit["summary"]["supportability_blocked_rows"] == 2
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "worldbank_niche_catalog_unsupported": 1,
+        "worldbank_specialized_source_unsupported": 1,
+    }
+    assert {row["execution_mode"] for row in audit["flagged_rows_sample"]} == {"supportability_blocked"}
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-worldbank.json",
+        [niche_worldbank, specialized_worldbank],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
 def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

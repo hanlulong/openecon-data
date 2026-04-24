@@ -1319,7 +1319,42 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.match(r'^(?:[A-Z]{3}_)?L(?:E|ER|EW|UR|UE|FE|MI|LF|LFPR|PR)(?:_|[A-Z0-9])', origin_code_upper):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'BGR', 'GCGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'GCR', 'BGR', 'GCGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('GR_', 'GRG', 'GRK', 'GGRK')) and any(term in query_lower for term in ['government', 'public sector', 'revenue', 'grants', 'fiscal']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'public enterprises' in query_lower and any(term in query_lower for term in ['operation balance', 'fiscal']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and re.match(r'^F(?:M|O)\d', origin_code_upper):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and ('merchanting' in query_lower or origin_code_upper.startswith(('BXMGT_', 'BMG_', 'BXS_'))):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('BF', 'BOP_', 'BRN_BOP_', 'DCB_')):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['balance of payments', 'external debt', 'international investment position']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'definition' in query_lower and any(term in query_lower for term in ['interest rates', 'fiscal', 'government', 'balance of payments']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'external trade' in query_lower and 'goods' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'industrial production' in query_lower and any(term in query_lower for term in ['manufacturing', 'manufacture']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and ('memorandum items' in query_lower and 'isic' in origin_code_upper.lower()):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'government and public sector finance' in query_lower and any(term in query_lower for term in ['expenditure', 'expense', 'subsidies']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'external sector' in query_lower and 'imports of goods and services' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'monetary and financial accounts' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'interest rates' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['isic', 'activities', 'activity']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['total outlays', 'revenue grants', 'central government consolidation', 'budgetary central government']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.search(r'\b(?:labou?r markets?|labor force|labour force)\b', worldbank_text):
         reasons.append('imf_low_viability_family')
@@ -1343,9 +1378,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
-    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub']):
+    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'fpn datahub archive', 'lac equity lab']):
         reasons.append('worldbank_niche_catalog_family')
-    if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement']):
+    if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement', 'pefa', 'doing business']):
         reasons.append('worldbank_specialized_source_family')
     if any(term in category_lower for term in ['quarterly public sector debt', 'exporter dynamics database', 'gender statistics']):
         reasons.append('worldbank_specialized_source_family')

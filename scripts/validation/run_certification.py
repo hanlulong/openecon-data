@@ -88,6 +88,11 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     ):
         return 'oecd_non_production_dataflow_unsupported'
 
+    if provider == 'WORLDBANK' and 'worldbank_niche_catalog_family' in reasons:
+        return 'worldbank_niche_catalog_unsupported'
+    if provider == 'WORLDBANK' and 'worldbank_specialized_source_family' in reasons:
+        return 'worldbank_specialized_source_unsupported'
+
     if provider != 'IMF':
         return None
 

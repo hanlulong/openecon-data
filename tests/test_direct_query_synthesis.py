@@ -1278,3 +1278,280 @@ def test_audit_direct_query_shape_flags_coingecko_old_asset_queries() -> None:
 
     assert audit["risk_level"] == "high"
     assert "coin_slug_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_public_sector_revenue_indicator_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Government and Public Sector Finance from IMF",
+            "origin": {
+                "name": "Government and Public Sector Finance, Revenue General Government [2014 Manual], National Currency",
+                "source_indicator_code": "GR_G14_GG_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_monetary_aggregate_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany M4 Monetary from IMF",
+            "origin": {
+                "name": "Monetary, M4, National Currency",
+                "source_indicator_code": "FM4_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_archive_and_pefa_sources() -> None:
+    archive = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India Cost of a nutrient adequate diet in PPP dollars from World Bank",
+            "origin": {
+                "name": "Cost of a nutrient adequate diet in PPP dollars",
+                "source_indicator_code": "CoNA_PPP",
+                "category": "FPN Datahub Archive",
+            },
+        }
+    )
+    pefa = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India Existence and operation of a procurement complaints mechanism from World Bank",
+            "origin": {
+                "name": "(vii) Existence and operation of a procurement complaints mechanism",
+                "source_indicator_code": "PI-19.7",
+                "category": "PEFA 2011",
+            },
+        }
+    )
+
+    assert archive["risk_level"] == "high"
+    assert "worldbank_niche_catalog_family" in archive["reasons"]
+    assert pefa["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in pefa["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_public_enterprises_operation_balance() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany General Government Fiscal operation balance (public enterprises) from IMF",
+            "origin": {
+                "name": "Fiscal, General Government, operation balance (public enterprises)",
+                "source_indicator_code": "HN_GGO_B_094",
+                "category": "ALT_FISCAL",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_bop_reserve_and_external_debt_families() -> None:
+    reserve = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Financial Account Reserve assets Securities Balance of Payments Other reserve assets from IMF",
+            "origin": {
+                "name": "Balance of Payments, Financial Account, Reserve assets, Other reserve assets, Securities, Equity and investment fund shares [BPM6], National Currency",
+                "source_indicator_code": "BFRAOSE_BP6_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    debt = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Central Bank Long-term External Debt Exchange rate changes Special drawing rights allocations from IMF",
+            "origin": {
+                "name": "External Debt, Central Bank, Exchange rate changes, Long-term, Special drawing rights (allocations), BPM6, US Dollars",
+                "source_indicator_code": "DCB_FXCLS_BP6_USD",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert reserve["risk_level"] == "high"
+    assert "imf_low_viability_family" in reserve["reasons"]
+    assert debt["risk_level"] == "high"
+    assert "imf_low_viability_family" in debt["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_public_finance_expenditure_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Expenditure General Government Expense Subsidies Government and Public Sector Finance from IMF",
+            "origin": {
+                "name": "Government and Public Sector Finance, Expenditure, General Government, Expense, Subsidies, To Private Enterprises [2001 Manual], National Currency",
+                "source_indicator_code": "GGESTP_G01_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+
+def test_audit_direct_query_shape_flags_imf_bop_external_debt_and_iip_families() -> None:
+    bop = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Services Rail Transport Freight Net Balance of Payments Extended Classification of Other Transport from IMF",
+            "origin": {
+                "name": "Balance of Payments, Services, Extended Classification of Other Transport, Rail Transport, Freight, Net, National Currency",
+                "source_indicator_code": "BSOOTRF_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    debt = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Other sectors Short-term External Debt External assets in debt instruments Currency and deposits from IMF",
+            "origin": {
+                "name": "External Debt, Other sectors, External assets in debt instruments, Short-term, Currency and deposits, BPM6, US Dollars",
+                "source_indicator_code": "DODS_SDIC_BP6_USD",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    iip = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Assets Other investment Loans General government International Investment Position from IMF",
+            "origin": {
+                "name": "International Investment Position, Assets, Other investment, Loans, General government, Credit and loans with the IMF (other than reserves) [BPM6], Euros",
+                "source_indicator_code": "IAOLNGIMF_BP6_EUR",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    for audit in (bop, debt, iip):
+        assert audit["risk_level"] == "high"
+        assert "imf_complex_finance_family" in audit["reasons"]
+        assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_definition_and_central_government_fiscal_families() -> None:
+    interest_rate_definition = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Interest Rates Congo Democratic Rep. Definition BCC CREDIT RATE -at 84 days Percent Per Annum from IMF",
+            "origin": {
+                "name": "Congo Democratic Rep. Definition, Interest Rates, BCC CREDIT RATE -at 84 days, Percent Per Annum",
+                "source_indicator_code": "COD_INR_BC_84J_PA",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    fiscal_definition = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Fiscal Expense Cash Rwanda Definition Use of goods and services from IMF",
+            "origin": {
+                "name": "Rwanda Definition, Fiscal, Expense, Use of goods and services, 2014 Manual, Cash, National Currency",
+                "source_indicator_code": "RWA_GEGS_G14_CA_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    central_government_tax = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Central Government Revenue Tax Individuals Cash Fiscal Income and Profits from IMF",
+            "origin": {
+                "name": "Fiscal, Central Government, Revenue, Tax, Income and Profits, Individuals, 2001 Manual, Cash, National Currency",
+                "source_indicator_code": "GCRTII_G01_CA_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    for audit in (interest_rate_definition, fiscal_definition, central_government_tax):
+        assert audit["risk_level"] == "high"
+        assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_monetary_fiscal_interest_and_gva_families() -> None:
+    monetary = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Monetary and Financial Accounts Central Bank Survey Other Items Net Share and Alternate from IMF",
+            "origin": {
+                "name": "Monetary and Financial Accounts, Central Bank Survey, Other Items (Net), Share and Alternate, National Currency",
+                "source_indicator_code": "FASEOALT_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    fiscal = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Total Outlays Economic Affairs Electricity Cash Fiscal Budgetary Central Government Fuel and Energy from IMF",
+            "origin": {
+                "name": "Fiscal, Budgetary Central Government, Total Outlays, Economic Affairs, Fuel and Energy, Electricity, 2001 Manual, Cash, US Dollars",
+                "source_indicator_code": "GBEAFE_G01_CA_USD",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    interest = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Interest Rates 364 Days Financial Treasury Bills Monthly Average Discount Factor Percent per Annum from IMF",
+            "origin": {
+                "name": "Financial, Interest Rates, Treasury Bills (Monthly Average Discount Factor), 364 Days, Percent per Annum",
+                "source_indicator_code": "FITBDF_12M_PA",
+                "category": "INDICATOR",
+            },
+        }
+    )
+    gva = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Real Seasonally Adjusted Gross Value Added Real estate activities from IMF",
+            "origin": {
+                "name": "National Accounts, Gross Value Added, Real, Seasonally Adjusted, Real estate activities, ISIC Rev. 4, US Dollars",
+                "source_indicator_code": "NGDPVA_R_ISIC4_L_SA_USD",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    for audit in (monetary, fiscal, interest, gva):
+        assert audit["risk_level"] == "high"
+        assert "imf_low_viability_family" in audit["reasons"]
+
+def test_audit_direct_query_shape_flags_worldbank_doing_business_methodology() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Brazil Time to export days DB06-15 methodology from World Bank",
+            "origin": {
+                "name": "Time to export (days) (DB06-15 methodology)",
+                "source_indicator_code": "TRD.ACRS.BRDR.EXPT.DURS.DY.DB0615",
+                "category": "Doing Business",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in audit["reasons"]
