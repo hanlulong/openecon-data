@@ -356,6 +356,37 @@ def test_preflight_classifies_oecd_non_production_dataflow_as_supportability_blo
     )
 
 
+def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
+    module = load_module()
+    runnable_oecd = {
+        "id": "direct-oecd-runnable",
+        "provider_stratum": "OECD",
+        "query": "Canada Average usual weekly hours worked on the main job from OECD",
+        "origin": {
+            "source_provider": "OECD",
+            "source_indicator_code": "DSD_HW@DF_AVG_USL_WK_WKD",
+            "name": "Average usual weekly hours worked on the main job",
+            "raw_metadata": json.dumps(
+                {
+                    "annotations": [
+                        {"type": "NonProductionDataflow", "text": "true"},
+                    ]
+                }
+            ),
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [runnable_oecd],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_rows"] == 0
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["flagged_rows_sample"][0]["execution_mode"] == "ordinary_runtime"
+
+
 def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

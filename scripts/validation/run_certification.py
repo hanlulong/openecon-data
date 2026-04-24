@@ -81,7 +81,11 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     payload = audit if audit is not None else audit_direct_query_shape(row)
     reasons = {str(reason) for reason in payload.get('reasons') or []}
 
-    if provider == 'OECD' and 'oecd_non_production_dataflow' in reasons:
+    if (
+        provider == 'OECD'
+        and 'oecd_non_production_dataflow' in reasons
+        and 'oecd_low_viability_family' in reasons
+    ):
         return 'oecd_non_production_dataflow_unsupported'
 
     if provider != 'IMF':

@@ -432,7 +432,7 @@ def test_audit_direct_query_shape_flags_imf_non_datamapper_indicator_category() 
     assert "imf_low_viability_family" in audit["reasons"]
 
 
-def test_audit_direct_query_shape_flags_imf_non_weo_catalog_category() -> None:
+def test_audit_direct_query_shape_flags_imf_central_government_revenue_family() -> None:
     audit = audit_direct_query_shape(
         {
             "provider": "IMF",
