@@ -34,6 +34,7 @@ REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1
 RATE_LIMIT_STATUS = 429
 GLOBAL_REQUEST_CONCURRENCY = 1
 GLOBAL_REQUEST_MIN_INTERVAL_SECONDS = 1.25
+TRANSIENT_HTTP_STATUSES = {RATE_LIMIT_STATUS, 500, 502, 503, 504}
 
 _GLOBAL_REQUEST_SEMAPHORES: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Semaphore
@@ -556,7 +557,11 @@ class ComtradeProvider(BaseProvider):
         # Use correct URL path based on frequency
         url_path = f"{self.base_url}/C/{freq_code}/HS"
 
-        # Implement exponential backoff retry for rate limiting
+        # Implement exponential backoff retry for rate limiting and transient
+        # upstream outages. UN Comtrade occasionally returns HTTP 500 during
+        # otherwise valid bilateral lookups under load; treat that like a
+        # retryable provider transient rather than immediately falling into
+        # cross-provider fallback for a locked Comtrade conversation.
         for attempt in range(MAX_RETRIES):
             try:
                 response = await client.get(url_path, params=params, timeout=REQUEST_TIMEOUT)
@@ -583,24 +588,37 @@ class ComtradeProvider(BaseProvider):
                     f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
                 ) from e
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == RATE_LIMIT_STATUS and attempt < MAX_RETRIES - 1:
-                    # Rate limited: wait and retry with exponential backoff
+                status_code = e.response.status_code
+                if status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
+                    # Rate-limited or transient upstream error: wait and retry
+                    # with exponential backoff.
                     delay = RETRY_DELAY_BASE * (2 ** attempt)
-                    logger.warning(
-                        f"Rate limited (429) for {reporter_raw}, attempt {attempt + 1}/{MAX_RETRIES}. "
-                        f"Waiting {delay}s before retry..."
-                    )
+                    if status_code == RATE_LIMIT_STATUS:
+                        logger.warning(
+                            f"Rate limited (429) for {reporter_raw}, attempt {attempt + 1}/{MAX_RETRIES}. "
+                            f"Waiting {delay}s before retry..."
+                        )
+                    else:
+                        logger.warning(
+                            "Transient Comtrade HTTP %s for %s, attempt %d/%d. "
+                            "Waiting %ss before retry...",
+                            status_code,
+                            reporter_raw,
+                            attempt + 1,
+                            MAX_RETRIES,
+                            delay,
+                        )
                     await asyncio.sleep(delay)
                     continue
                 else:
                     # Not a rate limit error, or final retry exhausted
                     logger.error(
                         f"Comtrade API error for reporter {reporter_raw}: "
-                        f"HTTP {e.response.status_code}: {str(e)}"
+                        f"HTTP {status_code}: {str(e)}"
                     )
                     raise DataNotAvailableError(
                         f"Comtrade API error for reporter {reporter_raw}: "
-                        f"HTTP {e.response.status_code}"
+                        f"HTTP {status_code}"
                     ) from e
             except DataNotAvailableError:
                 raise  # Let DataNotAvailableError propagate directly

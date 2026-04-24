@@ -501,6 +501,57 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result[0].metadata.country, "France")
         self.assertEqual(result[0].data[0].value, 200)
 
+    def test_comtrade_fetch_single_reporter_retries_transient_http_500_then_succeeds(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+
+        class _Http500Response(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__({}, status_code=500, request_url="https://example.com/comtrade")
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    500,
+                    request=httpx.Request("GET", "https://example.com/comtrade"),
+                )
+                raise httpx.HTTPStatusError("server error", request=response.request, response=response)
+
+        responses = [
+            _Http500Response(),
+            MockAsyncResponse(
+                {
+                    "data": [
+                        {
+                            "period": 2020,
+                            "periodDesc": "2020",
+                            "reporterDesc": "Germany",
+                            "partnerDesc": "France",
+                            "flowDesc": "Imports",
+                            "primaryValue": 300,
+                            "cmdDesc": "All Commodities",
+                        }
+                    ]
+                }
+            ),
+        ]
+        client = MockAsyncClient(responses)
+
+        with patch("backend.providers.comtrade.asyncio.sleep", new=AsyncMock()):
+            result = run(
+                provider._fetch_single_reporter_data(  # pylint: disable=protected-access
+                    client,
+                    "Germany",
+                    "251",
+                    "TOTAL",
+                    "M",
+                    "2020",
+                    "A",
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "Germany")
+        self.assertEqual(result[0].data[0].value, 300)
+
     def test_comtrade_fetch_trade_balance(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 
