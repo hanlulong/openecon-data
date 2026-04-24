@@ -402,6 +402,9 @@ def main() -> int:
     wrong_confident_weight_total = 0.0
     reviewed_failure_class_missing = 0
     adjudicated_replay_conflicts: list[str] = []
+    supportability_blocked_total = 0
+    supportability_blocked_by_provider = Counter()
+    supportability_blocked_reason_counts = Counter()
 
     for sid, session in sessions.items():
         kind = dataset_type(session)
@@ -411,6 +414,12 @@ def main() -> int:
         family = family_for_session(session, kind)
         rows = sorted(raw_by_session.get(sid, []), key=lambda r: int(r.get('round_index') or 0))
         session_clarification_detected = any(bool(row.get('clarification_detected')) for row in rows)
+        supportability_blocked = any(bool(row.get('supportability_blocked')) for row in rows)
+        supportability_reasons = sorted({
+            str(row.get('supportability_reason'))
+            for row in rows
+            if row.get('supportability_reason')
+        })
         session_answer_present = any(
             (int(row.get('series_count') or 0) > 0 or bool(row.get('response_text_present')))
             and not bool(row.get('clarification_detected'))
@@ -473,6 +482,8 @@ def main() -> int:
             'expected_clarification': expected_clarification,
             'clarification_detected': session_clarification_detected,
             'answer_present_without_clarification': session_answer_present,
+            'supportability_blocked': supportability_blocked,
+            'supportability_reasons': supportability_reasons,
             'adjudicated_replay_conflict': replay_conflict,
             'round_count_expected': len(session.get('rounds', [])) if kind == 'multiround' else 1,
             'round_count_observed': len(rows),
@@ -490,6 +501,11 @@ def main() -> int:
         if adjudicated_pass:
             adjudicated_pass_by_type[kind] += 1
             adjudicated_pass_by_split[split] += 1
+        if supportability_blocked:
+            supportability_blocked_total += 1
+            supportability_blocked_by_provider[provider] += 1
+            for reason in supportability_reasons:
+                supportability_blocked_reason_counts[reason] += 1
 
         weight = float(((session.get('provenance') or {}).get('selection_weight')) or 0.0)
         if weight > 0:
@@ -735,6 +751,9 @@ def main() -> int:
             for kind in sorted(weighted_totals_by_type)
         },
         'weighted_session_counts_by_type': dict(weighted_session_counts_by_type),
+        'supportability_blocked_sessions': supportability_blocked_total,
+        'supportability_blocked_by_provider': dict(supportability_blocked_by_provider),
+        'supportability_blocked_reason_counts': dict(supportability_blocked_reason_counts),
         'adjudicated_replay_conflict_count': len(adjudicated_replay_conflicts),
         'wrong_confident_answer_rate_proxy': ratio(wrong_confident_total, adjudicated_records_total),
         'unnecessary_clarification_rate_proxy': ratio(expected_no_clarification_with_unnecessary, expected_no_clarification_total),
@@ -760,6 +779,14 @@ def main() -> int:
     if adjudicated_replay_conflicts:
         claim_grade_blockers.append(
             f'adjudicated replay conflicts present: {", ".join(adjudicated_replay_conflicts)}'
+        )
+    if supportability_blocked_total:
+        rendered = ', '.join(
+            f'{provider}={count}'
+            for provider, count in sorted(supportability_blocked_by_provider.items())
+        )
+        claim_grade_blockers.append(
+            f'supportability-blocked certification sessions remain unresolved ({supportability_blocked_total}: {rendered})'
         )
     if failing_strata:
         claim_grade_blockers.append(f'required strata failed: {", ".join(failing_strata)}')

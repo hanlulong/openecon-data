@@ -70,6 +70,16 @@ def main() -> int:
     parser.add_argument("--run-resume", action="store_true", help="Pass --resume to run_certification.py.")
     parser.add_argument("--run-start-index", type=int, default=None, help="Deprecated alias: pass --start-index to run_certification.py and score_certification.py.")
     parser.add_argument("--run-skip-completed", action="store_true", help="Pass --skip-completed to run_certification.py.")
+    parser.add_argument(
+        "--run-classify-unsupported-direct",
+        action="store_true",
+        help="Pass --classify-unsupported-direct to run_certification.py for explicit supportability-blocked rows.",
+    )
+    parser.add_argument(
+        "--run-continue-on-error",
+        action="store_true",
+        help="Pass --continue-on-error to run_certification.py so long baselines record transport failures and continue.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -116,6 +126,10 @@ def main() -> int:
         run_cert_cmd += ["--resume"]
     if args.run_skip_completed:
         run_cert_cmd += ["--skip-completed"]
+    if args.run_classify_unsupported_direct:
+        run_cert_cmd += ["--classify-unsupported-direct"]
+    if args.run_continue_on_error:
+        run_cert_cmd += ["--continue-on-error"]
 
     score_cmd = [
         sys.executable,

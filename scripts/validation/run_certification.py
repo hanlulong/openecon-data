@@ -63,10 +63,42 @@ def preflight_audit_path(output: Path) -> Path:
     return output.with_name(output.name + '.preflight-audit.json')
 
 
-def preflight_audit_rows(rows: list[dict[str, Any]], *, flagged_limit: int = 50) -> dict[str, Any]:
+def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any] | None = None) -> str | None:
+    """Return a claim-integrity reason when a direct row is not executable yet.
+
+    Some catalog families are real catalog surface area, but they are not yet
+    available through OpenEcon's documented public/runtime provider surface.
+    Treating those rows as ordinary direct runtime calls creates misleading
+    certification noise; dropping them would hide a weak stratum.  The middle
+    path is to keep them in the certification output as explicit failures that
+    block the claim until the framework grows true support.
+    """
+    if detect_dataset_type(row) != 'direct':
+        return None
+
+    origin = dict(row.get('origin') or {})
+    provider = str(row.get('provider_stratum') or row.get('provider') or origin.get('source_provider') or '').upper()
+    if provider != 'IMF':
+        return None
+
+    payload = audit if audit is not None else audit_direct_query_shape(row)
+    reasons = {str(reason) for reason in payload.get('reasons') or []}
+    category = str(origin.get('category') or row.get('category') or '').strip().lower()
+    if 'imf_low_viability_family' in reasons and category and category != 'weo':
+        return 'imf_non_weo_public_surface_unsupported'
+    return None
+
+
+def preflight_audit_rows(
+    rows: list[dict[str, Any]],
+    *,
+    flagged_limit: int = 50,
+    classify_unsupported_direct: bool = False,
+) -> dict[str, Any]:
     risk_counts: Counter[str] = Counter()
     reason_counts: Counter[str] = Counter()
     type_counts: Counter[str] = Counter()
+    supportability_counts: Counter[str] = Counter()
     flagged_rows: list[dict[str, Any]] = []
     direct_count = 0
 
@@ -79,9 +111,12 @@ def preflight_audit_rows(rows: list[dict[str, Any]], *, flagged_limit: int = 50)
         audit = audit_direct_query_shape(row)
         risk_level = str(audit.get('risk_level') or 'low')
         reasons = [str(reason) for reason in audit.get('reasons') or []]
+        supportability_reason = unsupported_direct_surface_reason(row, audit)
         risk_counts[risk_level] += 1
         for reason in reasons:
             reason_counts[reason] += 1
+        if supportability_reason:
+            supportability_counts[supportability_reason] += 1
         if risk_level != 'low' and len(flagged_rows) < flagged_limit:
             flagged_rows.append({
                 'id': row.get('id'),
@@ -90,10 +125,23 @@ def preflight_audit_rows(rows: list[dict[str, Any]], *, flagged_limit: int = 50)
                 'query': row.get('query'),
                 'risk_level': risk_level,
                 'reasons': reasons,
+                'supportability_reason': supportability_reason,
+                'execution_mode': (
+                    'supportability_blocked'
+                    if classify_unsupported_direct and supportability_reason
+                    else 'ordinary_runtime'
+                ),
                 'query_length': audit.get('query_length'),
                 'punctuation_hits': audit.get('punctuation_hits'),
             })
 
+    supportability_blocked_rows = sum(supportability_counts.values())
+    high_risk_rows = risk_counts.get('high', 0)
+    execution_high_risk_rows = (
+        max(0, high_risk_rows - supportability_blocked_rows)
+        if classify_unsupported_direct
+        else high_risk_rows
+    )
     return {
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
         'summary': {
@@ -102,24 +150,36 @@ def preflight_audit_rows(rows: list[dict[str, Any]], *, flagged_limit: int = 50)
             'by_type': dict(type_counts),
             'risk_counts': dict(risk_counts),
             'reason_counts': dict(reason_counts),
-            'high_risk_rows': risk_counts.get('high', 0),
+            'supportability_blocked_rows': supportability_blocked_rows,
+            'supportability_blocked_reason_counts': dict(supportability_counts),
+            'high_risk_rows': high_risk_rows,
+            'execution_high_risk_rows': execution_high_risk_rows,
+            'classify_unsupported_direct': classify_unsupported_direct,
         },
         'flagged_rows_sample': flagged_rows,
     }
 
 
-def write_preflight_audit(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    payload = preflight_audit_rows(rows)
+def write_preflight_audit(path: Path, rows: list[dict[str, Any]], *, classify_unsupported_direct: bool = False) -> dict[str, Any]:
+    payload = preflight_audit_rows(rows, classify_unsupported_direct=classify_unsupported_direct)
     atomic_write_json(path, payload)
     return payload
 
 
-def enforce_preflight_audit(path: Path, rows: list[dict[str, Any]], *, allow_high_risk_direct: bool) -> dict[str, Any]:
-    payload = write_preflight_audit(path, rows)
-    high_risk_rows = int((payload.get('summary') or {}).get('high_risk_rows') or 0)
-    if high_risk_rows and not allow_high_risk_direct:
+def enforce_preflight_audit(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    allow_high_risk_direct: bool,
+    classify_unsupported_direct: bool = False,
+) -> dict[str, Any]:
+    payload = write_preflight_audit(path, rows, classify_unsupported_direct=classify_unsupported_direct)
+    summary = payload.get('summary') or {}
+    high_risk_key = 'execution_high_risk_rows' if 'execution_high_risk_rows' in summary else 'high_risk_rows'
+    blocking_high_risk_rows = int(summary.get(high_risk_key) or 0)
+    if blocking_high_risk_rows and not allow_high_risk_direct:
         raise RuntimeError(
-            f'preflight audit blocked certification run: {high_risk_rows} high-risk direct rows; '
+            f'preflight audit blocked certification run: {blocking_high_risk_rows} executable high-risk direct rows; '
             f'regenerate/audit the dataset or pass --allow-high-risk-direct explicitly. audit={path}'
         )
     return payload
@@ -346,6 +406,50 @@ def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, que
     }
 
 
+def record_supportability_blocked(
+    row: dict[str, Any],
+    dataset_type: str,
+    round_index: int,
+    query: str,
+    audit: dict[str, Any],
+    supportability_reason: str,
+) -> dict[str, Any]:
+    reasons = [str(reason) for reason in audit.get('reasons') or []]
+    return {
+        'session_id': row.get('id'),
+        'dataset_type': dataset_type,
+        'round_index': round_index,
+        'query': query,
+        'status_code': None,
+        'elapsed_seconds': 0.0,
+        'error': f'supportability_blocked: {supportability_reason}',
+        'supportability_blocked': True,
+        'supportability_reason': supportability_reason,
+        'query_quality_risk': audit.get('risk_level'),
+        'query_quality_reasons': reasons,
+        'series_count': 0,
+        'providers': [],
+        'countries': [],
+        'series_ids': [],
+        'clarification_detected': False,
+        'clarification_options_count': 0,
+        'clarification_questions_count': 0,
+        'response_text_present': False,
+    }
+
+
+def supportability_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
+    dataset_type = detect_dataset_type(row)
+    if dataset_type != 'direct':
+        return None
+    query = str(row.get('query') or '')
+    audit = audit_direct_query_shape(row)
+    supportability_reason = unsupported_direct_surface_reason(row, audit)
+    if not supportability_reason:
+        return None
+    return record_supportability_blocked(row, dataset_type, 1, query, audit, supportability_reason)
+
+
 def append_failure_checkpoint(
     *,
     row: dict[str, Any],
@@ -383,9 +487,13 @@ def append_failure_checkpoint(
         )
 
 
-def execute_session(row: dict[str, Any], base: str) -> list[dict[str, Any]]:
+def execute_session(row: dict[str, Any], base: str, *, classify_unsupported_direct: bool = False) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     dataset_type = detect_dataset_type(row)
+    if classify_unsupported_direct:
+        blocked_record = supportability_blocked_record(row)
+        if blocked_record is not None:
+            return [blocked_record]
     if dataset_type == 'multiround':
         conv = None
         for i, round_case in enumerate(row['rounds'], start=1):
@@ -428,6 +536,8 @@ def execute_rows_concurrent(
     skip_completed_session_ids: set[str] | None = None,
     existing_results: list[dict[str, Any]] | None = None,
     preserve_progress_output: bool = False,
+    classify_unsupported_direct: bool = False,
+    continue_on_error: bool = False,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -470,7 +580,7 @@ def execute_rows_concurrent(
     completed_runnable = 0
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(execute_session, row, base): (session_index, row)
+            executor.submit(execute_session, row, base, classify_unsupported_direct=classify_unsupported_direct): (session_index, row)
             for session_index, row in runnable
         }
         for future in as_completed(futures):
@@ -483,6 +593,7 @@ def execute_rows_concurrent(
                 results.append(exc.failure_record)
                 if progress_output is not None:
                     append_jsonl_row(progress_output, exc.failure_record)
+                completed_runnable += 1
                 if progress_meta is not None:
                     write_progress_summary(
                         progress_meta,
@@ -498,6 +609,8 @@ def execute_rows_concurrent(
                         last_error=str(exc.original),
                         concurrency=concurrency,
                     )
+                if continue_on_error:
+                    continue
                 for pending in futures:
                     pending.cancel()
                 raise exc.original
@@ -549,6 +662,8 @@ def execute_rows(
     existing_results: list[dict[str, Any]] | None = None,
     preserve_progress_output: bool = False,
     concurrency: int = 1,
+    classify_unsupported_direct: bool = False,
+    continue_on_error: bool = False,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -565,6 +680,8 @@ def execute_rows(
             skip_completed_session_ids=skip_completed_session_ids,
             existing_results=existing_results,
             preserve_progress_output=preserve_progress_output,
+            classify_unsupported_direct=classify_unsupported_direct,
+            continue_on_error=continue_on_error,
         )
     base = base_url.rstrip('/') + '/api/query'
     results = list(existing_results or [])
@@ -612,6 +729,26 @@ def execute_rows(
                     completed_session_ids_count=len(skipped_completed),
                 )
             continue
+        if classify_unsupported_direct:
+            blocked_record = supportability_blocked_record(row)
+            if blocked_record is not None:
+                results.append(blocked_record)
+                if progress_output is not None:
+                    append_jsonl_row(progress_output, blocked_record)
+                if progress_meta is not None:
+                    write_progress_summary(
+                        progress_meta,
+                        completed_sessions=session_index,
+                        total_sessions=total_sessions,
+                        results_written=len(results),
+                        done=False,
+                        last_session_id=str(row.get('id') or ''),
+                        last_dataset_type=dataset_type,
+                        start_index=start_index,
+                        skipped_sessions=skipped_sessions,
+                        completed_session_ids_count=len(skipped_completed),
+                    )
+                continue
         if dataset_type == 'multiround':
             conv = None
             for i, round_case in enumerate(row['rounds'], start=1):
@@ -642,6 +779,8 @@ def execute_rows(
                         skipped_sessions=skipped_sessions,
                         completed_session_ids_count=len(skipped_completed),
                     )
+                    if continue_on_error:
+                        break
                     raise
                 conv = data.get('conversationId') or data.get('conversation_id') or conv
                 record = record_response(row, dataset_type, i, query, resp, elapsed, data)
@@ -674,6 +813,8 @@ def execute_rows(
                     skipped_sessions=skipped_sessions,
                     completed_session_ids_count=len(skipped_completed),
                 )
+                if continue_on_error:
+                    continue
                 raise
             record = record_response(row, dataset_type, 1, query, resp, elapsed, data)
             results.append(record)
@@ -793,6 +934,20 @@ def main() -> int:
     parser.add_argument('--skip-completed', action='store_true', help='Skip sessions already complete in existing .inprogress or final output.')
     parser.add_argument('--preflight-audit-output', type=Path, default=None, help='Path for current direct-query audit gate output; defaults beside --output.')
     parser.add_argument('--allow-high-risk-direct', action='store_true', help='Allow execution even when current preflight audit finds high-risk direct rows.')
+    parser.add_argument(
+        '--classify-unsupported-direct',
+        action='store_true',
+        help=(
+            'Keep currently unsupported public-surface direct rows in the run as synthetic '
+            'supportability-blocked failures instead of sending them to runtime. This does '
+            'not count as success and still blocks claim readiness.'
+        ),
+    )
+    parser.add_argument(
+        '--continue-on-error',
+        action='store_true',
+        help='Record request exceptions as failed rows and continue the baseline instead of aborting at the first transport failure.',
+    )
     parser.add_argument('--skip-preflight-audit', action='store_true', help='Skip the current direct-query audit gate before execution.')
     args = parser.parse_args()
 
@@ -802,7 +957,10 @@ def main() -> int:
     selected_rows = select_rows(rows, start_index=args.start_index, max_sessions=args.max_sessions)
 
     if args.dry_run:
-        preflight = None if args.skip_preflight_audit else preflight_audit_rows(selected_rows)
+        preflight = None if args.skip_preflight_audit else preflight_audit_rows(
+            selected_rows,
+            classify_unsupported_direct=args.classify_unsupported_direct,
+        )
         summary = {
             'generated_at_utc': datetime.now(timezone.utc).isoformat(),
             'mode': 'dry_run',
@@ -814,6 +972,8 @@ def main() -> int:
             'concurrency': args.concurrency,
             'resume': args.resume,
             'skip_completed': args.skip_completed,
+            'classify_unsupported_direct': args.classify_unsupported_direct,
+            'continue_on_error': args.continue_on_error,
             'output': str(args.output.resolve()),
             'progress_output': str(progress_output_path(args.output.resolve())),
             'progress_meta': str(progress_meta_path(args.output.resolve())),
@@ -825,7 +985,12 @@ def main() -> int:
     if not args.skip_preflight_audit:
         audit_output = args.preflight_audit_output.resolve() if args.preflight_audit_output else preflight_audit_path(output_path)
         try:
-            enforce_preflight_audit(audit_output, selected_rows, allow_high_risk_direct=args.allow_high_risk_direct)
+            enforce_preflight_audit(
+                audit_output,
+                selected_rows,
+                allow_high_risk_direct=args.allow_high_risk_direct,
+                classify_unsupported_direct=args.classify_unsupported_direct,
+            )
         except RuntimeError as exc:
             print(json.dumps({
                 'generated_at_utc': datetime.now(timezone.utc).isoformat(),
@@ -853,6 +1018,8 @@ def main() -> int:
         existing_results=existing_records,
         preserve_progress_output=args.resume or args.skip_completed,
         concurrency=args.concurrency,
+        classify_unsupported_direct=args.classify_unsupported_direct,
+        continue_on_error=args.continue_on_error,
     )
     write_jsonl(output_path, results)
     print(json.dumps({
@@ -862,6 +1029,8 @@ def main() -> int:
         'selected_sessions': len(selected_rows),
         'start_index': args.start_index,
         'skipped_completed_sessions': len(completed_session_ids),
+        'classify_unsupported_direct': args.classify_unsupported_direct,
+        'continue_on_error': args.continue_on_error,
         'output': str(output_path),
     }, indent=2))
     return 0

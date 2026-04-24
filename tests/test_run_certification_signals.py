@@ -211,6 +211,146 @@ def test_execute_rows_concurrent_preserves_session_outputs(tmp_path: Path, monke
     assert progress["concurrency"] == 2
 
 
+def test_preflight_can_separate_unsupported_imf_from_executable_high_risk(tmp_path: Path):
+    module = load_module()
+    unsupported_imf = {
+        "id": "direct-imf-1",
+        "provider_stratum": "IMF",
+        "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "TXG_H5_60_EUR",
+            "category": "INDICATOR",
+            "name": "Merchandise Trade, Value of Exports. Chapter 60- Knitted goods, Euros",
+        },
+    }
+    executable_high_risk = {
+        "id": "direct-fred-1",
+        "provider_stratum": "FRED",
+        "query": "US AL Market Hotness: Page View Count per Property in Jefferson County from FRED",
+        "origin": {
+            "source_provider": "FRED",
+            "name": "AL Market Hotness: Page View Count per Property in Jefferson County",
+        },
+    }
+
+    unsupported_only = module.preflight_audit_rows(
+        [unsupported_imf],
+        classify_unsupported_direct=True,
+    )
+    assert unsupported_only["summary"]["high_risk_rows"] == 1
+    assert unsupported_only["summary"]["supportability_blocked_rows"] == 1
+    assert unsupported_only["summary"]["execution_high_risk_rows"] == 0
+    assert unsupported_only["flagged_rows_sample"][0]["execution_mode"] == "supportability_blocked"
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported.json",
+        [unsupported_imf],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+    mixed = module.preflight_audit_rows(
+        [unsupported_imf, executable_high_risk],
+        classify_unsupported_direct=True,
+    )
+    assert mixed["summary"]["high_risk_rows"] == 2
+    assert mixed["summary"]["supportability_blocked_rows"] == 1
+    assert mixed["summary"]["execution_high_risk_rows"] == 1
+    with pytest.raises(RuntimeError, match="executable high-risk direct rows"):
+        module.enforce_preflight_audit(
+            tmp_path / "mixed.json",
+            [unsupported_imf, executable_high_risk],
+            allow_high_risk_direct=False,
+            classify_unsupported_direct=True,
+        )
+
+
+def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        raise AssertionError("unsupported IMF row should not hit runtime")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    row = {
+        "id": "direct-imf-1",
+        "provider_stratum": "IMF",
+        "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "TXG_H5_60_EUR",
+            "category": "INDICATOR",
+            "name": "Merchandise Trade, Value of Exports. Chapter 60- Knitted goods, Euros",
+        },
+    }
+
+    results = module.execute_rows(
+        [row],
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        classify_unsupported_direct=True,
+    )
+
+    assert calls == []
+    assert len(results) == 1
+    record = results[0]
+    assert record["session_id"] == "direct-imf-1"
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "imf_non_weo_public_surface_unsupported"
+    assert record["status_code"] is None
+    assert record["series_count"] == 0
+    assert "imf_low_viability_family" in record["query_quality_reasons"]
+    assert module.completed_session_ids_from_results([row], results) == {"direct-imf-1"}
+
+
+def test_execute_rows_concurrent_skips_unsupported_direct_but_runs_supported(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        return FakeResponse()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    rows = [
+        {
+            "id": "direct-imf-1",
+            "provider_stratum": "IMF",
+            "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+            "origin": {
+                "source_provider": "IMF",
+                "source_indicator_code": "TXG_H5_60_EUR",
+                "category": "INDICATOR",
+                "name": "Merchandise Trade, Value of Exports. Chapter 60- Knitted goods, Euros",
+            },
+        },
+        {"id": "direct-fred-1", "provider_stratum": "FRED", "query": "US GDP"},
+    ]
+
+    results = module.execute_rows(
+        rows,
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        concurrency=2,
+        classify_unsupported_direct=True,
+    )
+
+    assert calls == [{"query": "US GDP"}]
+    by_session = {record["session_id"]: record for record in results}
+    assert by_session["direct-imf-1"]["supportability_blocked"] is True
+    assert by_session["direct-fred-1"]["series_count"] == 1
+
+
 def test_execute_rows_concurrent_keeps_multiround_session_order(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []
@@ -430,6 +570,47 @@ def test_execute_rows_concurrency_writes_failure_checkpoint_before_reraising(tmp
     assert "timed out" in payload["last_error"]
 
 
+def test_execute_rows_concurrency_can_continue_after_request_failure(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    def fake_post(url, json, timeout):
+        calls.append(json["query"])
+        if json["query"] == "bad":
+            raise module.requests.Timeout("timed out")
+        return FakeResponse()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    progress_path = tmp_path / "results.jsonl.inprogress"
+    meta_path = tmp_path / "results.jsonl.progress.json"
+
+    results = module.execute_rows(
+        [
+            {"id": "direct-bad", "query": "bad"},
+            {"id": "direct-good", "query": "good"},
+        ],
+        "http://localhost:3001",
+        progress_output=progress_path,
+        progress_meta=meta_path,
+        concurrency=2,
+        continue_on_error=True,
+    )
+
+    assert sorted(calls) == ["bad", "good"]
+    by_session = {record["session_id"]: record for record in results}
+    assert by_session["direct-bad"]["request_failed"] is True
+    assert by_session["direct-good"]["series_count"] == 1
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert payload["done"] is True
+    assert payload["completed_sessions"] == 2
+
+
 def test_load_resume_records_prefers_nonempty_inprogress(tmp_path: Path):
     module = load_module()
     output_path = tmp_path / "results.jsonl"
@@ -483,6 +664,46 @@ def test_execute_rows_writes_failure_checkpoint_before_reraising(tmp_path: Path,
     assert payload["completed_sessions"] == 0
     assert payload["last_session_id"] == "direct-1"
     assert "timed out" in payload["last_error"]
+
+
+def test_execute_rows_can_continue_after_request_failure(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    def fake_post(url, json, timeout):
+        calls.append(json["query"])
+        if json["query"] == "bad":
+            raise module.requests.Timeout("timed out")
+        return FakeResponse()
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    progress_path = tmp_path / "results.jsonl.inprogress"
+    meta_path = tmp_path / "results.jsonl.progress.json"
+
+    results = module.execute_rows(
+        [
+            {"id": "direct-bad", "query": "bad"},
+            {"id": "direct-good", "query": "good"},
+        ],
+        "http://localhost:3001",
+        progress_output=progress_path,
+        progress_meta=meta_path,
+        continue_on_error=True,
+    )
+
+    assert calls == ["bad", "good"]
+    assert [record["session_id"] for record in results] == ["direct-bad", "direct-good"]
+    assert results[0]["request_failed"] is True
+    assert results[1]["series_count"] == 1
+    payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert payload["done"] is True
+    assert payload["completed_sessions"] == 2
 
 
 def test_resume_retries_failed_request_records(tmp_path: Path, monkeypatch):

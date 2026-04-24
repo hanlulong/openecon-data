@@ -180,6 +180,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
             "--run-concurrency",
             "8",
             "--run-skip-completed",
+            "--run-classify-unsupported-direct",
+            "--run-continue-on-error",
             "--dry-run",
         ],
         capture_output=True,
@@ -196,6 +198,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
     assert "--concurrency" in run_cmd
     assert "8" in run_cmd
     assert "--skip-completed" in run_cmd
+    assert "--classify-unsupported-direct" in run_cmd
+    assert "--continue-on-error" in run_cmd
     assert "--start-index" in score_cmd
     assert "29" in score_cmd
 

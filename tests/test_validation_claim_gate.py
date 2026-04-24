@@ -88,6 +88,67 @@ def test_score_certification_emits_split_and_provider_strata(tmp_path: Path):
     assert "direct_provider:WorldBank (high_traffic)" in report["strata"]["missing_required_strata"]
 
 
+def test_score_certification_exposes_supportability_blockers(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-imf-unsupported",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "direct-imf-unsupported",
+                "round_index": 1,
+                "status_code": None,
+                "series_count": 0,
+                "error": "supportability_blocked: imf_non_weo_public_surface_unsupported",
+                "supportability_blocked": True,
+                "supportability_reason": "imf_non_weo_public_surface_unsupported",
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["metrics"]["supportability_blocked_sessions"] == 1
+    assert report["metrics"]["supportability_blocked_by_provider"] == {"IMF": 1}
+    assert report["metrics"]["supportability_blocked_reason_counts"] == {
+        "imf_non_weo_public_surface_unsupported": 1
+    }
+    assert report["session_results"][0]["supportability_blocked"] is True
+    assert report["session_results"][0]["provisional_structural_pass"] is False
+    assert any("supportability-blocked certification sessions" in item for item in report["claim_grade_blockers"])
+
+
 def test_certify_claim_blocks_floor_failures_even_when_topline_passes(tmp_path: Path):
     score_path = tmp_path / "score.json"
     adjudication_path = tmp_path / "adjudication.json"
