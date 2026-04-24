@@ -450,6 +450,53 @@ def supportability_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
     return record_supportability_blocked(row, dataset_type, 1, query, audit, supportability_reason)
 
 
+def record_runtime_unavailable(
+    row: dict[str, Any],
+    dataset_type: str,
+    round_index: int,
+    query: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        'session_id': row.get('id'),
+        'dataset_type': dataset_type,
+        'round_index': round_index,
+        'query': query,
+        'status_code': None,
+        'elapsed_seconds': 0.0,
+        'error': f'runtime_unavailable: {reason}',
+        'request_failed': True,
+        'runtime_unavailable': True,
+        'runtime_unavailable_reason': reason,
+        'series_count': 0,
+        'providers': [],
+        'countries': [],
+        'series_ids': [],
+        'clarification_detected': False,
+        'clarification_options_count': 0,
+        'clarification_questions_count': 0,
+        'response_text_present': False,
+    }
+
+
+def runtime_unavailable_records(row: dict[str, Any], reason: str) -> list[dict[str, Any]]:
+    dataset_type = detect_dataset_type(row)
+    if dataset_type == 'multiround':
+        records = []
+        for index, round_case in enumerate(row.get('rounds') or [], start=1):
+            records.append(
+                record_runtime_unavailable(
+                    row,
+                    dataset_type,
+                    index,
+                    str((round_case or {}).get('query') or ''),
+                    reason,
+                )
+            )
+        return records or [record_runtime_unavailable(row, dataset_type, 1, '', reason)]
+    return [record_runtime_unavailable(row, dataset_type, 1, str(row.get('query') or ''), reason)]
+
+
 def append_failure_checkpoint(
     *,
     row: dict[str, Any],
@@ -493,6 +540,7 @@ def execute_session(
     *,
     classify_unsupported_direct: bool = False,
     request_timeout: float = 120,
+    runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     dataset_type = detect_dataset_type(row)
@@ -500,6 +548,8 @@ def execute_session(
         blocked_record = supportability_blocked_record(row)
         if blocked_record is not None:
             return [blocked_record]
+    if runtime_unavailable_reason:
+        return runtime_unavailable_records(row, runtime_unavailable_reason)
     if dataset_type == 'multiround':
         conv = None
         for i, round_case in enumerate(row['rounds'], start=1):
@@ -545,6 +595,7 @@ def execute_rows_concurrent(
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
     request_timeout: float = 120,
+    runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -593,6 +644,7 @@ def execute_rows_concurrent(
                 base,
                 classify_unsupported_direct=classify_unsupported_direct,
                 request_timeout=request_timeout,
+                runtime_unavailable_reason=runtime_unavailable_reason,
             ): (session_index, row)
             for session_index, row in runnable
         }
@@ -678,6 +730,7 @@ def execute_rows(
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
     request_timeout: float = 120,
+    runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
         raise ValueError('start_index must be 0 or greater')
@@ -697,6 +750,7 @@ def execute_rows(
             classify_unsupported_direct=classify_unsupported_direct,
             continue_on_error=continue_on_error,
             request_timeout=request_timeout,
+            runtime_unavailable_reason=runtime_unavailable_reason,
         )
     base = base_url.rstrip('/') + '/api/query'
     results = list(existing_results or [])
@@ -764,6 +818,26 @@ def execute_rows(
                         completed_session_ids_count=len(skipped_completed),
                     )
                 continue
+        if runtime_unavailable_reason:
+            failure_records = runtime_unavailable_records(row, runtime_unavailable_reason)
+            results.extend(failure_records)
+            if progress_output is not None:
+                for record in failure_records:
+                    append_jsonl_row(progress_output, record)
+            if progress_meta is not None:
+                write_progress_summary(
+                    progress_meta,
+                    completed_sessions=session_index,
+                    total_sessions=total_sessions,
+                    results_written=len(results),
+                    done=False,
+                    last_session_id=str(row.get('id') or ''),
+                    last_dataset_type=dataset_type,
+                    start_index=start_index,
+                    skipped_sessions=skipped_sessions,
+                    completed_session_ids_count=len(skipped_completed),
+                )
+            continue
         if dataset_type == 'multiround':
             conv = None
             for i, round_case in enumerate(row['rounds'], start=1):
@@ -964,6 +1038,14 @@ def main() -> int:
         action='store_true',
         help='Record request exceptions as failed rows and continue the baseline instead of aborting at the first transport failure.',
     )
+    parser.add_argument(
+        '--runtime-unavailable-reason',
+        default=None,
+        help=(
+            'Fail closed without HTTP calls by writing runtime_unavailable failure rows for ordinary executable sessions. '
+            'Use only after an external health probe shows the runtime target is unavailable or too unhealthy for baseline execution.'
+        ),
+    )
     parser.add_argument('--skip-preflight-audit', action='store_true', help='Skip the current direct-query audit gate before execution.')
     args = parser.parse_args()
 
@@ -991,6 +1073,7 @@ def main() -> int:
             'skip_completed': args.skip_completed,
             'classify_unsupported_direct': args.classify_unsupported_direct,
             'continue_on_error': args.continue_on_error,
+            'runtime_unavailable_reason': args.runtime_unavailable_reason,
             'output': str(args.output.resolve()),
             'progress_output': str(progress_output_path(args.output.resolve())),
             'progress_meta': str(progress_meta_path(args.output.resolve())),
@@ -1038,6 +1121,7 @@ def main() -> int:
         classify_unsupported_direct=args.classify_unsupported_direct,
         continue_on_error=args.continue_on_error,
         request_timeout=args.request_timeout,
+        runtime_unavailable_reason=args.runtime_unavailable_reason,
     )
     write_jsonl(output_path, results)
     print(json.dumps({
@@ -1050,6 +1134,7 @@ def main() -> int:
         'classify_unsupported_direct': args.classify_unsupported_direct,
         'continue_on_error': args.continue_on_error,
         'request_timeout': args.request_timeout,
+        'runtime_unavailable_reason': args.runtime_unavailable_reason,
         'output': str(output_path),
     }, indent=2))
     return 0

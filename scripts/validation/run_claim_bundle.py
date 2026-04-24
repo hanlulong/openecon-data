@@ -81,6 +81,11 @@ def main() -> int:
         action="store_true",
         help="Pass --continue-on-error to run_certification.py so long baselines record transport failures and continue.",
     )
+    parser.add_argument(
+        "--run-runtime-unavailable-reason",
+        default=None,
+        help="Pass --runtime-unavailable-reason to run_certification.py for a fail-closed no-HTTP baseline.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -133,6 +138,8 @@ def main() -> int:
         run_cert_cmd += ["--classify-unsupported-direct"]
     if args.run_continue_on_error:
         run_cert_cmd += ["--continue-on-error"]
+    if args.run_runtime_unavailable_reason:
+        run_cert_cmd += ["--runtime-unavailable-reason", args.run_runtime_unavailable_reason]
 
     score_cmd = [
         sys.executable,

@@ -405,6 +405,9 @@ def main() -> int:
     supportability_blocked_total = 0
     supportability_blocked_by_provider = Counter()
     supportability_blocked_reason_counts = Counter()
+    runtime_unavailable_total = 0
+    runtime_unavailable_by_type = Counter()
+    runtime_unavailable_reason_counts = Counter()
 
     for sid, session in sessions.items():
         kind = dataset_type(session)
@@ -419,6 +422,12 @@ def main() -> int:
             str(row.get('supportability_reason'))
             for row in rows
             if row.get('supportability_reason')
+        })
+        runtime_unavailable = any(bool(row.get('runtime_unavailable')) for row in rows)
+        runtime_unavailable_reasons = sorted({
+            str(row.get('runtime_unavailable_reason'))
+            for row in rows
+            if row.get('runtime_unavailable_reason')
         })
         session_answer_present = any(
             (int(row.get('series_count') or 0) > 0 or bool(row.get('response_text_present')))
@@ -484,6 +493,8 @@ def main() -> int:
             'answer_present_without_clarification': session_answer_present,
             'supportability_blocked': supportability_blocked,
             'supportability_reasons': supportability_reasons,
+            'runtime_unavailable': runtime_unavailable,
+            'runtime_unavailable_reasons': runtime_unavailable_reasons,
             'adjudicated_replay_conflict': replay_conflict,
             'round_count_expected': len(session.get('rounds', [])) if kind == 'multiround' else 1,
             'round_count_observed': len(rows),
@@ -506,6 +517,11 @@ def main() -> int:
             supportability_blocked_by_provider[provider] += 1
             for reason in supportability_reasons:
                 supportability_blocked_reason_counts[reason] += 1
+        if runtime_unavailable:
+            runtime_unavailable_total += 1
+            runtime_unavailable_by_type[kind] += 1
+            for reason in runtime_unavailable_reasons:
+                runtime_unavailable_reason_counts[reason] += 1
 
         weight = float(((session.get('provenance') or {}).get('selection_weight')) or 0.0)
         if weight > 0:
@@ -754,6 +770,9 @@ def main() -> int:
         'supportability_blocked_sessions': supportability_blocked_total,
         'supportability_blocked_by_provider': dict(supportability_blocked_by_provider),
         'supportability_blocked_reason_counts': dict(supportability_blocked_reason_counts),
+        'runtime_unavailable_sessions': runtime_unavailable_total,
+        'runtime_unavailable_by_type': dict(runtime_unavailable_by_type),
+        'runtime_unavailable_reason_counts': dict(runtime_unavailable_reason_counts),
         'adjudicated_replay_conflict_count': len(adjudicated_replay_conflicts),
         'wrong_confident_answer_rate_proxy': ratio(wrong_confident_total, adjudicated_records_total),
         'unnecessary_clarification_rate_proxy': ratio(expected_no_clarification_with_unnecessary, expected_no_clarification_total),
@@ -787,6 +806,14 @@ def main() -> int:
         )
         claim_grade_blockers.append(
             f'supportability-blocked certification sessions remain unresolved ({supportability_blocked_total}: {rendered})'
+        )
+    if runtime_unavailable_total:
+        rendered = ', '.join(
+            f'{kind}={count}'
+            for kind, count in sorted(runtime_unavailable_by_type.items())
+        )
+        claim_grade_blockers.append(
+            f'runtime-unavailable certification sessions remain unresolved ({runtime_unavailable_total}: {rendered})'
         )
     if failing_strata:
         claim_grade_blockers.append(f'required strata failed: {", ".join(failing_strata)}')

@@ -184,6 +184,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
             "--run-skip-completed",
             "--run-classify-unsupported-direct",
             "--run-continue-on-error",
+            "--run-runtime-unavailable-reason",
+            "health probe timed out",
             "--dry-run",
         ],
         capture_output=True,
@@ -204,6 +206,8 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
     assert "--skip-completed" in run_cmd
     assert "--classify-unsupported-direct" in run_cmd
     assert "--continue-on-error" in run_cmd
+    assert "--runtime-unavailable-reason" in run_cmd
+    assert "health probe timed out" in run_cmd
     assert "--start-index" in score_cmd
     assert "29" in score_cmd
 

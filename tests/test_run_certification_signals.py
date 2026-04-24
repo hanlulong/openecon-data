@@ -357,6 +357,107 @@ def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_pat
     assert module.completed_session_ids_from_results([row], results) == {"direct-imf-1"}
 
 
+def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        raise AssertionError("runtime-unavailable mode should not hit HTTP")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    rows = [
+        {"id": "direct-1", "query": "US GDP"},
+        {
+            "id": "multi-1",
+            "rounds": [
+                {"query": "first"},
+                {"query": "second"},
+            ],
+        },
+    ]
+
+    results = module.execute_rows(
+        rows,
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        runtime_unavailable_reason="health probe timed out",
+    )
+
+    assert calls == []
+    assert [record["session_id"] for record in results] == ["direct-1", "multi-1", "multi-1"]
+    assert [record["round_index"] for record in results] == [1, 1, 2]
+    assert all(record["request_failed"] for record in results)
+    assert all(record["runtime_unavailable"] for record in results)
+    assert {record["runtime_unavailable_reason"] for record in results} == {"health probe timed out"}
+    progress = json.loads((tmp_path / "results.jsonl.progress.json").read_text(encoding="utf-8"))
+    assert progress["done"] is True
+    assert progress["completed_sessions"] == 2
+
+
+def test_runtime_unavailable_mode_preserves_supportability_classification_first(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        raise AssertionError("runtime-unavailable mode should not hit HTTP")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    row = {
+        "id": "direct-imf-1",
+        "provider_stratum": "IMF",
+        "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "TXG_H5_60_EUR",
+            "category": "INDICATOR",
+            "name": "Merchandise Trade, Value of Exports. Chapter 60- Knitted goods, Euros",
+        },
+    }
+
+    results = module.execute_rows(
+        [row],
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        classify_unsupported_direct=True,
+        runtime_unavailable_reason="health probe timed out",
+    )
+
+    assert calls == []
+    assert len(results) == 1
+    assert results[0]["supportability_blocked"] is True
+    assert "runtime_unavailable" not in results[0]
+
+
+def test_execute_rows_concurrent_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        raise AssertionError("runtime-unavailable mode should not hit HTTP")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    results = module.execute_rows(
+        [{"id": "direct-1", "query": "US GDP"}],
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        concurrency=2,
+        runtime_unavailable_reason="health probe timed out",
+    )
+
+    assert calls == []
+    assert len(results) == 1
+    assert results[0]["runtime_unavailable"] is True
+    progress = json.loads((tmp_path / "results.jsonl.progress.json").read_text(encoding="utf-8"))
+    assert progress["done"] is True
+    assert progress["concurrency"] == 2
+
+
 def test_execute_rows_concurrent_skips_unsupported_direct_but_runs_supported(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

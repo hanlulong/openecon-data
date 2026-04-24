@@ -149,6 +149,66 @@ def test_score_certification_exposes_supportability_blockers(tmp_path: Path):
     assert any("supportability-blocked certification sessions" in item for item in report["claim_grade_blockers"])
 
 
+def test_score_certification_exposes_runtime_unavailable_blockers(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-fred-runtime-down",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "direct-fred-runtime-down",
+                "round_index": 1,
+                "status_code": None,
+                "series_count": 0,
+                "error": "runtime_unavailable: health probe timed out",
+                "request_failed": True,
+                "runtime_unavailable": True,
+                "runtime_unavailable_reason": "health probe timed out",
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["metrics"]["runtime_unavailable_sessions"] == 1
+    assert report["metrics"]["runtime_unavailable_by_type"] == {"direct": 1}
+    assert report["metrics"]["runtime_unavailable_reason_counts"] == {"health probe timed out": 1}
+    assert report["session_results"][0]["runtime_unavailable"] is True
+    assert report["session_results"][0]["provisional_structural_pass"] is False
+    assert any("runtime-unavailable certification sessions" in item for item in report["claim_grade_blockers"])
+
+
 def test_certify_claim_blocks_floor_failures_even_when_topline_passes(tmp_path: Path):
     score_path = tmp_path / "score.json"
     adjudication_path = tmp_path / "adjudication.json"
