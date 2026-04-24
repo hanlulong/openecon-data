@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import httpx
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -561,6 +562,45 @@ class ProviderTests(unittest.TestCase):
 
         self.assertIn("276", captured_partner_codes)  # Germany
         self.assertIn("528", captured_partner_codes)  # Netherlands
+
+    def test_comtrade_uses_process_local_event_loop_request_semaphore(self) -> None:
+        provider_a = ComtradeProvider(api_key="demo")
+        provider_b = ComtradeProvider(api_key="demo")
+        active = 0
+        max_active = 0
+
+        async def _fake_fetch(
+            self, client, reporter_raw, partner_code, commodity_code, flow_code, period_param, freq_code
+        ):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return []
+
+        async def _run_two_fetches():
+            with patch.object(ComtradeProvider, "_fetch_single_reporter_data", new=_fake_fetch):
+                await asyncio.gather(
+                    provider_a.fetch_trade_data(
+                        reporter="United States",
+                        partner="China",
+                        flow="EXPORT",
+                        start_year=2020,
+                        end_year=2020,
+                    ),
+                    provider_b.fetch_trade_data(
+                        reporter="Germany",
+                        partner="China",
+                        flow="EXPORT",
+                        start_year=2020,
+                        end_year=2020,
+                    ),
+                )
+
+        run(_run_two_fetches())
+
+        self.assertEqual(max_active, 1)
 
     def test_worldbank_metadata_discovery(self) -> None:
         class StubMetadata:

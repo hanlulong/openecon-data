@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 import asyncio
 import re
+import weakref
 
 import httpx
 
@@ -31,6 +32,26 @@ MAX_RETRIES = 3
 RETRY_DELAY_BASE = 1.5
 REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1-10s when healthy)
 RATE_LIMIT_STATUS = 429
+GLOBAL_REQUEST_CONCURRENCY = 1
+
+_GLOBAL_REQUEST_SEMAPHORES: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+
+
+def _global_request_semaphore() -> asyncio.Semaphore:
+    """Return a process-local, per-event-loop Comtrade request semaphore.
+
+    UN Comtrade applies short-window rate limits at the subscription-key level,
+    so bounding concurrency inside each logical fetch is not enough when two
+    same-loop user/certification sessions hit Comtrade at the same time.
+    """
+    loop = asyncio.get_running_loop()
+    semaphore = _GLOBAL_REQUEST_SEMAPHORES.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(GLOBAL_REQUEST_CONCURRENCY)
+        _GLOBAL_REQUEST_SEMAPHORES[loop] = semaphore
+    return semaphore
 
 
 class ComtradeProvider(BaseProvider):
@@ -1000,15 +1021,16 @@ class ComtradeProvider(BaseProvider):
             period_param: str,
         ) -> List[NormalizedData]:
             async with semaphore:
-                return await self._fetch_single_reporter_data(
-                    client,
-                    reporter_raw,
-                    partner_code,
-                    commodity_code,
-                    flow_code,
-                    period_param,
-                    freq_code,
-                )
+                async with _global_request_semaphore():
+                    return await self._fetch_single_reporter_data(
+                        client,
+                        reporter_raw,
+                        partner_code,
+                        commodity_code,
+                        flow_code,
+                        period_param,
+                        freq_code,
+                    )
 
         tasks = [
             _guarded_fetch(reporter_raw, partner_code, period_param)
@@ -1020,7 +1042,10 @@ class ComtradeProvider(BaseProvider):
         # Overall time budget: cap total wall-clock time so a cascade of 429
         # retries across many tasks cannot stall the pipeline for minutes.
         # Budget = per-request timeout * 2 to allow one retry cycle.
-        overall_budget = REQUEST_TIMEOUT * 2  # 60s default
+        overall_budget = max(
+            REQUEST_TIMEOUT * 2,
+            min(REQUEST_TIMEOUT * 6, REQUEST_TIMEOUT * max(1, len(tasks))),
+        )
 
         try:
             results_list = await asyncio.wait_for(
