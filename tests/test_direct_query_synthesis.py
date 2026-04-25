@@ -449,6 +449,73 @@ def test_audit_direct_query_shape_flags_imf_central_government_revenue_family() 
     assert "imf_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_gfs_tax_detail_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": (
+                "Germany Revenue Central Government Taxes Government and Public Sector "
+                "Finance Taxes on goods and services from IMF"
+            ),
+            "origin": {
+                "name": (
+                    "Government and Public Sector Finance, Revenue, Central Government, "
+                    "Taxes, Taxes on goods and services, Excises [2014 Manual], National Currency"
+                ),
+                "source_indicator_code": "GRTGSE_G14_CG_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_activity_gdp_detail_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Production Approach Real Manufacturing Activity Gross Domestic Product from IMF",
+            "origin": {
+                "name": (
+                    "National Accounts, Activity, Gross Domestic Product, Production Approach, "
+                    "Real, By International Standard Industrial Classification of All Economic "
+                    "Activities (ISIC) Rev. 4, Manufacturing, National Currency"
+                ),
+                "source_indicator_code": "NGDP_PA_R_ISIC4_C_XDC",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_share_price_definition_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": (
+                "NACE2 Bosnia & Herzegovina Definition Share Price Index "
+                "Bosnian Investment Fund Index (AVG JUN-28-02=1000) from IMF"
+            ),
+            "origin": {
+                "name": (
+                    "Bosnia & Herzegovina Definition, Share Price Index, Bosnian Investment "
+                    "Fund Index, (AVG, JUN-28-02=1000), NACE2, Index"
+                ),
+                "source_indicator_code": "BIH_BIFIBPA_IX",
+                "category": "INDICATOR",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_keeps_datamapper_imf_debt_category_executable() -> None:
     audit = audit_direct_query_shape(
         {
@@ -639,6 +706,57 @@ def test_audit_direct_query_shape_flags_worldbank_ddh_prevalence_queries():
 
     assert audit["risk_level"] == "high"
     assert "worldbank_ddh_prevalence_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_ddh_mobile_phone_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Brazil Persons owing a mobility phone (% of persons with any degree of functional difficulty) from World Bank",
+            "origin": {
+                "name": "Persons owing a mobility phone (% of persons with any degree of functional difficulty)",
+                "category": "Disability Data Hub (DDH)",
+                "source_indicator_code": "ocel_any_dfcl_all",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_ddh_prevalence_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_tertiary_expenditure_ppp_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India Government expenditure on tertiary education PPP$ (millions) from World Bank",
+            "origin": {
+                "name": "Government expenditure on tertiary education, PPP$ (millions)",
+                "category": "Education Statistics",
+                "source_indicator_code": "UIS.X.PPP.5T8.FSGOV",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_age_band_population_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India ages 11-16 female Population from World Bank",
+            "origin": {
+                "name": "Population, ages 11-16, female",
+                "category": "Education Statistics",
+                "source_indicator_code": "SP.POP.1116.FE.UN",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_worldbank_ease_of_doing_business_queries() -> None:
@@ -835,6 +953,22 @@ def test_audit_direct_query_shape_flags_imf_household_expenditure_consumer_price
             "provider": "IMF",
             "query": "Germany All Items Glassware BY2015 Consumer Prices Expenditure of Households tableware and household utensils from IMF",
             "origin": {"name": "Germany All Items Glassware BY2015 Consumer Prices Expenditure of Households tableware and household utensils"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_price_or_memorandum_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_producer_price_activity_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Other Manufacturing Producer Price Index Commodities by Activity from IMF",
+            "origin": {
+                "name": "Prices, Producer Price Index, Commodities by Activity, Other Manufacturing, ISIC Rev 4, Index",
+                "source_indicator_code": "PPPI_ISIC4_C32_IX",
+            },
         }
     )
 

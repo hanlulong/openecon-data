@@ -1323,6 +1323,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GR_', 'GRG', 'GRK', 'GGRK')) and any(term in query_lower for term in ['government', 'public sector', 'revenue', 'grants', 'fiscal']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('GRT', 'GXRT')) and any(term in query_lower for term in ['government and public sector finance', 'central government', 'taxes', 'revenue']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'public enterprises' in query_lower and any(term in query_lower for term in ['operation balance', 'fiscal']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.match(r'^F(?:M|O)\d', origin_code_upper):
@@ -1353,6 +1355,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider_upper == 'IMF' and 'interest rates' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['isic', 'activities', 'activity']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'production approach' in query_lower and 'gross domestic product' in query_lower and any(term in query_lower for term in ['activity', 'isic', 'manufacturing']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['total outlays', 'revenue grants', 'central government consolidation', 'budgetary central government']):
         reasons.append('imf_low_viability_family')
@@ -1388,7 +1392,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_binary_policy_query')
     if any(term in worldbank_text for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
         reasons.append('worldbank_education_finance_query')
+    if provider_upper == 'WORLDBANK' and 'government expenditure' in worldbank_text and 'tertiary education' in worldbank_text and any(term in worldbank_text for term in ['ppp', 'millions']):
+        reasons.append('worldbank_education_expenditure_family')
     if any(term in worldbank_text for term in ['no functional difficulty', 'youth literacy rate', 'population 25-64 years']) and any(term in worldbank_text for term in ['rural', 'male', 'female', 'both sexes', 'literacy rate']):
+        reasons.append('worldbank_demographic_literacy_slice')
+    if provider_upper == 'WORLDBANK' and re.search(r'\bages?\s+\d{1,2}\s*(?:-|to)\s*\d{1,2}\b', worldbank_text) and 'population' in worldbank_text and any(term in worldbank_text for term in ['male', 'female']):
         reasons.append('worldbank_demographic_literacy_slice')
     if any(term in worldbank_text for term in ['seeing difficulty', 'hearing difficulty']) and 'literacy rate' in worldbank_text:
         reasons.append('worldbank_demographic_literacy_slice')
@@ -1447,6 +1455,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_macro_exposure_family')
     if any(term in worldbank_text for term in ['food insecure households', 'adjusted prevalence', 'selfcare difficulty', 'mobility difficulty']):
         reasons.append('worldbank_ddh_prevalence_family')
+    if provider_upper == 'WORLDBANK' and 'disability data hub' in category_lower and any(term in worldbank_text for term in ['mobile phone', 'mobility phone', 'persons owing', 'persons in households']):
+        reasons.append('worldbank_ddh_prevalence_family')
     if any(term in query_lower for term in ['international poverty line', 'household formality', 'inventory of energy subsidies', 'support measures', "africa's development dynamics", 'afdd', 'table 36', 'incidence of full-time and part-time employment', 'harmonized definition', 'analysis by armed group', 'west africa', 'real labour productivity', 'taking up work when claiming unemployment benefits', 'temporary employment by permanency of the job']):
         reasons.append('oecd_low_viability_family')
     if provider_upper == 'OECD' and _metadata_annotation_is_true(parsed_metadata, 'NonProductionDataflow'):
@@ -1479,6 +1489,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_price_or_memorandum_family')
     if 'all commodities producer price index' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and 'producer price index' in query_lower and any(term in query_lower for term in ['commodities by activity', 'other manufacturing', 'isic rev 4']):
+        reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and 'share price index' in query_lower and 'definition' in query_lower and any(term in query_lower for term in ['investment fund', 'nace2']):
+        reasons.append('imf_low_viability_family')
     if 'revenue other revenue' in query_lower:
         reasons.append('definition_financial_query')
     if 'taxes income profits government and public sector finance' in query_lower:
