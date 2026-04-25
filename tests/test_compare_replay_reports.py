@@ -182,3 +182,61 @@ def test_compare_replay_reports_detects_missing_rounds(tmp_path: Path):
     assert differing["severity"] == "material"
     assert "round_count_mismatch" in differing["difference_types"]
     assert any(round_report["status"] == "missing_production" for round_report in differing["round_reports"])
+
+
+def test_compare_replay_reports_ignores_equivalent_country_labels(tmp_path: Path):
+    local_raw = tmp_path / "local.jsonl"
+    production_raw = tmp_path / "production.jsonl"
+    output = tmp_path / "parity.json"
+
+    write_jsonl(
+        local_raw,
+        [
+            {
+                "session_id": "direct-comtrade-1",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 1,
+                "clarification_detected": False,
+                "providers": ["UN Comtrade"],
+                "countries": ["Japan"],
+                "series_ids": [],
+                "error": None,
+            },
+        ],
+    )
+    write_jsonl(
+        production_raw,
+        [
+            {
+                "session_id": "direct-comtrade-1",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 1,
+                "clarification_detected": False,
+                "providers": ["UN Comtrade"],
+                "countries": ["JP"],
+                "series_ids": [],
+                "error": None,
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(COMPARE_SCRIPT),
+            "--local-raw",
+            str(local_raw),
+            "--production-raw",
+            str(production_raw),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["summary"]["sessions_with_differences"] == 0
+    assert report["summary"]["severity_counts"]["match"] == 1
+    assert "country_mismatch" not in report["summary"]["difference_counts"]

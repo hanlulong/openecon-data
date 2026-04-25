@@ -29,6 +29,34 @@ def normalize_list(value: Any) -> list[str]:
     return sorted(str(item) for item in value if str(item).strip())
 
 
+COUNTRY_ALIASES = {
+    'canada': 'CA',
+    'ca': 'CA',
+    'china': 'CN',
+    'cn': 'CN',
+    'de': 'DE',
+    'germany': 'DE',
+    'jp': 'JP',
+    'japan': 'JP',
+    'united states': 'US',
+    'united states of america': 'US',
+    'us': 'US',
+    'usa': 'US',
+}
+
+
+def normalize_countries(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
+        text = str(item).strip()
+        if not text:
+            continue
+        normalized.append(COUNTRY_ALIASES.get(text.casefold(), text))
+    return sorted(normalized)
+
+
 def compare_round(local_row: dict[str, Any] | None, production_row: dict[str, Any] | None) -> dict[str, Any]:
     if local_row is None:
         return {
@@ -56,7 +84,7 @@ def compare_round(local_row: dict[str, Any] | None, production_row: dict[str, An
         differences.append('error_mismatch')
     if normalize_list(local_row.get('providers')) != normalize_list(production_row.get('providers')):
         differences.append('provider_mismatch')
-    if normalize_list(local_row.get('countries')) != normalize_list(production_row.get('countries')):
+    if normalize_countries(local_row.get('countries')) != normalize_countries(production_row.get('countries')):
         differences.append('country_mismatch')
     if normalize_list(local_row.get('series_ids')) != normalize_list(production_row.get('series_ids')):
         differences.append('series_id_mismatch')
