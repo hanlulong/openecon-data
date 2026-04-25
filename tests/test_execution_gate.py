@@ -202,6 +202,48 @@ def test_find_active_ralph_state_returns_none_when_only_terminal_active_files_ex
     assert module._find_active_ralph_state() is None  # pylint: disable=protected-access
 
 
+def test_find_active_ralph_state_prefers_plan_bearing_state_over_newer_planless_state(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    sessions_dir = tmp_path / "sessions"
+    plan_dir = sessions_dir / "with-plan"
+    plan_dir.mkdir(parents=True)
+    planless_dir = sessions_dir / "planless"
+    planless_dir.mkdir(parents=True)
+
+    (plan_dir / "ralph-state.json").write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "executing",
+                "driving_plan": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+            }
+        )
+    )
+    (planless_dir / "ralph-state.json").write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "executing",
+            }
+        )
+    )
+    older = 1000
+    newer = 2000
+    (plan_dir / "ralph-state.json").touch()
+    (planless_dir / "ralph-state.json").touch()
+    import os
+
+    os.utime(plan_dir / "ralph-state.json", (older, older))
+    os.utime(planless_dir / "ralph-state.json", (newer, newer))
+
+    monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
+
+    payload = module._find_active_ralph_state()  # pylint: disable=protected-access
+
+    assert payload is not None
+    assert payload.get("driving_plan") == ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md"
+
+
 def install_green_legacy_gate(monkeypatch, module, objective_status_path: Path) -> None:
     monkeypatch.setenv("EXECUTION_GATE_OBJECTIVE_STATUS_PATH", str(objective_status_path))
     monkeypatch.setattr(
@@ -279,6 +321,17 @@ def test_active_plan_allows_stop_when_objectives_and_legacy_gates_are_green(tmp_
                     {"id": "score-balanced-smoke", "status": "complete"},
                     {"id": "run-full-30k", "status": "complete"},
                 ],
+                "goal_gate": {
+                    "status": "claim_passed",
+                    "claim_allowed": True,
+                    "observed_success": 0.995,
+                    "lower95": 0.991,
+                    "provider_family_floors_green": True,
+                    "adjudication_complete": True,
+                    "production_replay_green": True,
+                    "production_parity_green": True,
+                    "blockers": [],
+                },
             }
         )
     )
@@ -289,6 +342,70 @@ def test_active_plan_allows_stop_when_objectives_and_legacy_gates_are_green(tmp_
     assert status.can_stop is True
     assert status.blockers == []
     assert status.objective_status_all_complete is True
+    assert status.goal_gate_required is True
+    assert status.goal_gate_claim_allowed is True
+
+
+def test_reach99_plan_blocks_stop_when_claim_goal_gate_is_missing(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": True,
+                "objectives": [
+                    {"id": "score-balanced-smoke", "status": "complete"},
+                    {"id": "run-full-30k", "status": "complete"},
+                ],
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert status.goal_gate_required is True
+    assert status.goal_gate_exists is False
+    assert any("claim-pass goal gate is missing" in blocker for blocker in status.blockers)
+
+
+def test_reach99_plan_blocks_stop_on_denied_claim_goal_gate(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    status_path = tmp_path / "objectives.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "plan_path": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+                "all_objectives_complete": True,
+                "objectives": [
+                    {"id": "score-balanced-smoke", "status": "complete"},
+                    {"id": "run-full-30k", "status": "complete"},
+                ],
+                "goal_gate": {
+                    "status": "denied",
+                    "claim_allowed": False,
+                    "observed_success": 0.923,
+                    "lower95": 0.493,
+                    "provider_family_floors_green": False,
+                    "adjudication_complete": True,
+                    "production_replay_green": False,
+                    "production_parity_green": False,
+                    "blockers": ["production parity has material drift"],
+                },
+            }
+        )
+    )
+    install_green_legacy_gate(monkeypatch, module, status_path)
+
+    status = module.build_gate_status()
+
+    assert status.can_stop is False
+    assert status.goal_gate_exists is True
+    assert status.goal_gate_claim_allowed is False
+    assert "claim_allowed is not true" in status.blockers
+    assert any("production parity" in blocker for blocker in status.blockers)
 
 
 def test_active_plan_complete_objectives_still_require_legacy_gates_green(tmp_path, monkeypatch):

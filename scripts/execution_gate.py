@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ STATE_DIR = ROOT / ".omx" / "state" / "sessions"
 GATE_PATH = REPORTS_DIR / "execution-gate.json"
 RED_FAMILIES_PATH = REPORTS_DIR / "red-families.json"
 PLAN_OBJECTIVE_STATUS_PATH = REPORTS_DIR / "plan-objective-status.json"
+REACH_99_PLAN_PATH = ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md"
 
 MANUAL_REPORT_CANDIDATES = [
     REPORTS_DIR / "phase1-manual-10-chain-inprocess-real-keys.json",
@@ -63,6 +64,11 @@ class GateStatus:
     tracked_worktree_dirty: bool
     can_stop: bool
     blockers: list[str]
+    goal_gate_required: bool = False
+    goal_gate_exists: bool = False
+    goal_gate_status: str | None = None
+    goal_gate_claim_allowed: bool | None = None
+    goal_gate_blockers: list[str] = field(default_factory=list)
 
 
 def _utc_now() -> str:
@@ -73,7 +79,7 @@ def _find_active_ralph_state() -> dict[str, Any] | None:
     if not STATE_DIR.exists():
         return None
 
-    latest: tuple[float, dict[str, Any]] | None = None
+    latest: tuple[int, float, dict[str, Any]] | None = None
     for state_file in STATE_DIR.glob("*/ralph-state.json"):
         try:
             payload = json.loads(state_file.read_text())
@@ -82,9 +88,10 @@ def _find_active_ralph_state() -> dict[str, Any] | None:
         if not _is_live_ralph_state(payload):
             continue
         mtime = state_file.stat().st_mtime
-        if latest is None or mtime > latest[0]:
-            latest = (mtime, payload)
-    return latest[1] if latest else None
+        has_plan = 1 if _active_plan_path(payload) else 0
+        if latest is None or (has_plan, mtime) > (latest[0], latest[1]):
+            latest = (has_plan, mtime, payload)
+    return latest[2] if latest else None
 
 
 def _active_plan_path(active_state: dict[str, Any] | None) -> str | None:
@@ -195,6 +202,7 @@ def _read_objective_status(path: Path = PLAN_OBJECTIVE_STATUS_PATH) -> dict[str,
             "completed": None,
             "total": None,
             "open": [],
+            "goal_gate": None,
         }
 
     objectives = payload.get("objectives") or []
@@ -219,6 +227,95 @@ def _read_objective_status(path: Path = PLAN_OBJECTIVE_STATUS_PATH) -> dict[str,
         "completed": completed,
         "total": len(objectives),
         "open": open_objectives,
+        "goal_gate": payload.get("goal_gate") or payload.get("claim_goal_gate") or payload.get("final_goal_gate"),
+    }
+
+
+def _plan_requires_claim_pass(active_plan_path: str | None) -> bool:
+    return _repo_relative_or_absolute(active_plan_path) == REACH_99_PLAN_PATH
+
+
+def _goal_gate_bool(goal_gate: dict[str, Any], *keys: str) -> bool | None:
+    for key in keys:
+        if key in goal_gate:
+            value = goal_gate.get(key)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "yes", "green", "passed", "pass"}:
+                    return True
+                if normalized in {"false", "no", "red", "failed", "fail", "denied", "blocked"}:
+                    return False
+    return None
+
+
+def _goal_gate_numeric(goal_gate: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key not in goal_gate:
+            continue
+        try:
+            return float(goal_gate.get(key))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _read_goal_gate_status(objective_status: dict[str, Any]) -> dict[str, Any]:
+    goal_gate = objective_status.get("goal_gate")
+    if not isinstance(goal_gate, dict):
+        return {
+            "exists": False,
+            "status": None,
+            "claim_allowed": None,
+            "blockers": [
+                "claim-pass goal gate is missing; denied evidence packages are checkpoints, not terminal success"
+            ],
+        }
+
+    status_text = str(goal_gate.get("status") or goal_gate.get("state") or "").strip().lower() or None
+    claim_allowed = _goal_gate_bool(goal_gate, "claim_allowed", "claimAllowed")
+    required_observed = _goal_gate_numeric(goal_gate, "required_observed_success") or 0.992
+    required_lower95 = _goal_gate_numeric(goal_gate, "required_lower95") or 0.99
+    observed = _goal_gate_numeric(goal_gate, "observed_success", "claim_observed_success")
+    lower95 = _goal_gate_numeric(goal_gate, "lower95", "claim_lower95")
+
+    blockers: list[str] = []
+    if status_text not in {"passed", "pass", "claim_passed", "certified", "green"}:
+        blockers.append(f"claim-pass goal gate status is {status_text or '<missing>'}, not passed")
+    if claim_allowed is not True:
+        blockers.append("claim_allowed is not true")
+    if observed is None:
+        blockers.append("observed_success is missing from claim-pass goal gate")
+    elif observed < required_observed:
+        blockers.append(f"observed_success {observed:.6f} is below required {required_observed:.6f}")
+    if lower95 is None:
+        blockers.append("lower95 is missing from claim-pass goal gate")
+    elif lower95 < required_lower95:
+        blockers.append(f"lower95 {lower95:.6f} is below required {required_lower95:.6f}")
+
+    required_flags = [
+        ("provider/family floors", ("provider_family_floors_green", "floors_green")),
+        ("adjudication", ("adjudication_complete",)),
+        ("production replay", ("production_replay_green", "production_score_green")),
+        ("production parity", ("production_parity_green", "parity_green")),
+    ]
+    for label, keys in required_flags:
+        if _goal_gate_bool(goal_gate, *keys) is not True:
+            blockers.append(f"{label} gate is not green")
+
+    explicit_blockers = goal_gate.get("blockers") or goal_gate.get("claim_blockers") or []
+    if isinstance(explicit_blockers, list) and explicit_blockers:
+        blockers.append(
+            "claim-pass goal gate still reports blocker(s): "
+            + ", ".join(str(item) for item in explicit_blockers[:8])
+        )
+
+    return {
+        "exists": True,
+        "status": status_text,
+        "claim_allowed": claim_allowed,
+        "blockers": blockers,
     }
 
 
@@ -343,6 +440,15 @@ def build_gate_status() -> GateStatus:
                     "plan objective status is not explicitly all_objectives_complete=true "
                     f"({completed}/{total} complete)"
                 )
+    goal_gate_required = bool(active_ralph and _plan_requires_claim_pass(active_plan_path))
+    goal_gate_status = _read_goal_gate_status(objective_status) if goal_gate_required else {
+        "exists": False,
+        "status": None,
+        "claim_allowed": None,
+        "blockers": [],
+    }
+    if goal_gate_required and goal_gate_status["blockers"]:
+        blockers.extend(goal_gate_status["blockers"])
     if active_ralph:
         for label, rate in oracle_rates.items():
             if rate is None:
@@ -382,6 +488,11 @@ def build_gate_status() -> GateStatus:
         tracked_worktree_dirty=dirty,
         can_stop=can_stop,
         blockers=blockers,
+        goal_gate_required=goal_gate_required,
+        goal_gate_exists=bool(goal_gate_status["exists"]),
+        goal_gate_status=goal_gate_status["status"],
+        goal_gate_claim_allowed=goal_gate_status["claim_allowed"],
+        goal_gate_blockers=list(goal_gate_status["blockers"]),
     )
 
 
