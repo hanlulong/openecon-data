@@ -385,6 +385,7 @@ def test_audit_direct_query_shape_flags_oecd_instruction_time_and_childcare_data
         ("Japan domestic concept Quarterly employment by institutional sector from OECD", "OECD.SDD.NAD,DSD_NASEC10@DF_QNA_EXPENDITURE_INST"),
         ("Japan National and regional house price indices from OECD", "OECD.SDD.TPS,DSD_RHPI@DF_RHPI"),
         ("Canada Number of national tertiary students enrolled abroad from OECD", "OECD_DSD_EAG_UOE_MOB@DF_MOB"),
+        ("Australia non-consolidated Annual Financial Accounts (flows) from OECD", "OECD.SDD.NAD,DSD_NAFIN@DF_FINACCOUNT_FLOWS"),
     ]:
         audit = audit_direct_query_shape(
             {
@@ -483,6 +484,11 @@ def test_audit_direct_query_shape_flags_eurostat_rejected_next200_dataflows() ->
         (
             "Italy Early leavers from education and training by sex and NUTS 1 region from Eurostat",
             "EDAT_LFSE_16",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Germany sex occupation Mean annual earnings by size of the enterprise from Eurostat",
+            "EARN_SES_SIZE",
             "eurostat_cross_tab_query",
         ),
     ]
@@ -1499,6 +1505,451 @@ def test_audit_direct_query_shape_flags_next200_imf_probe_reject_families() -> N
         (
             "Germany Central Government Principle payments (incl. Tbills) from IMF",
             "SUR_GCDSP_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Mid-Market Rate Exchange Rates Real Effective Exchange Rate based on Consumer Price Index from IMF",
+            "EREER_IX",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Alcoholic Beverages Tobacco and Narcotics Tobacco Base Year Previous Period Consumer Prices from IMF",
+            "PCPI_TOB_PP_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Real Reference Chained Expenditure Gross Domestic Product External Balance of Goods and Services from IMF",
+            "NGDP_E_R_EBGS_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Savings and Investment Memorandum Items Nominal Oil Income Gross National Disposable Income Per Capita from IMF",
+            "NGNDI_OIL_PC_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany All Items Special Indexes Capital City Consumer Prices Clothing & Footwear from IMF",
+            "PCPI_CC_CLOTH_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Expenditure Economic affairs Fiscal By Functions of Government Fuel and energy from IMF",
+            "COFOG_FUEL_ENERGY_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Manufacturing NACE2 Percentage Change Previous Period Percent Producer Price Index from IMF",
+            "PPPI_NACE2_MAN_PCH",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Monetary Microfinance Deposit Taking Institutions' Balance Sheet Other Items (Net) Share and Alternate from IMF",
+            "MFI_DTI_OIN_SA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Activity Real Manufacturing San Marino Definition mining and quarrying and other industrial activities from IMF",
+            "SMR_MANUFACTURING_ACTIVITY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Central Government LT Loans by Commercial Banks from IMF",
+            "CG_LT_LOANS_CB_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Miscellaneous Products: Other manufacturing n.e.c. from IMF",
+            "MISC_OTHER_MANUFACTURING_NEC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Oil Nominal Taxes less Subsidies on Products from IMF",
+            "NGDP_TAX_SUBSIDIES_PRODUCTS_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany NACE2 Producer Price Index Extraction of coal and lignite from IMF",
+            "PPPI_NACE2_COAL_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Water Collection NACE2 Producer Price Index treatment and supply from IMF",
+            "PPPI_NACE2_WATER_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Industrial Production Angola Definition Business Confidence in Retail Trade from IMF",
+            "AGO_BUSINESS_CONF_RETAIL",
+            "imf_low_viability_family",
+        ),
+        (
+            "Equities Financial Market Prices Primary Market Instruments UK FTSE 100 from IMF",
+            "FMP_EQUITIES_FTSE100",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Assets Nominal Sectoral Accounts money market funds Monetary gold and SDRs from IMF",
+            "SA_MMF_MONETARY_GOLD_SDRS_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Other Community Real Reference Chained Services Social and Personal Service Activities from IMF",
+            "NGDP_R_SERVICES_SOCIAL_PERSONAL",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Fiscal Expenditure Defense Fiscal Year-March Central Government By Functions of Government from IMF",
+            "COFOG_DEFENSE_MARCH_CG",
+            "imf_low_viability_family",
+        ),
+        (
+            "Economic Activity Other Indicators Average Days Fiji Definition Tourism: Length of Stay Cruise Ship Passengers from IMF",
+            "FJI_TOURISM_CRUISE_STAY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Nominal roots GDP by Activity Cultivation of tubers vegetables and legumes from IMF",
+            "NGDP_ACTIVITY_TUBERS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany defence education GVA Public administration human health and social work activities from IMF",
+            "GVA_PUBLIC_ADMIN_HEALTH_SOCIAL_WORK",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Water Electricity Harmonized Overlap Housing Gas and Other Fuels from IMF",
+            "HICP_OVERLAP_HOUSING_GAS",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Kosovo Definition Other Depository Corporations Balance Sheet: Gross loans and lease financing from IMF",
+            "ODC_BALANCE_SHEET_GROSS_LOANS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany National Accounts, NFC, FC, HH, NPISH, Tertiary Sector from IMF",
+            "NATIONAL_ACCOUNTS_SECTORS_TERTIARY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Central bank Assets Insurance Sectoral pension and standardized guarantee schemes from IMF",
+            "CB_ASSETS_INSURANCE_PENSION_SCHEMES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Revenue Social contributions Employee contributions Fiscal Other social contributions from IMF",
+            "FISCAL_SOCIAL_CONTRIBUTIONS_EMPLOYEE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Government Fiscal Year Nominal Gross Domestic Product Regional Government Enterprises from IMF",
+            "FSM_NAG_NGDPNU_FY_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Vehicles aircraft External Trade Value of Re-Exports vessels and associated  equipment from IMF",
+            "TXGBRE_HS86T89_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Percent Panama Definition Poverty And Income Distribution Indicators Multidimensional poverty index from IMF",
+            "PAN_PIDI_SPP_MPI_PT",
+            "imf_low_viability_family",
+        ),
+        (
+            "Natural Gas Cubic Meters Oman Definition Other Real Sector Statistics imports + local production (Mil.Cubic.M) from IMF",
+            "OMN_OIL_NGILP_MCB",
+            "imf_low_viability_family",
+        ),
+        (
+            "Monetary Aggregates Serbia Republic of Definition Foreign exchange reserves of NBS (EUR m) from IMF",
+            "SRB_FMERNBS_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany General Government Fiscal Total Changes in Net Worth from IMF",
+            "GFS_CHANGES_NET_WORTH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Fiscal Year Total Non-Monetary Gross Domestic Product from IMF",
+            "NAGDP_NON_MONETARY_FY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Total Economy Assets Sectoral Equity and investment fund shares from IMF",
+            "SA_TOTAL_ECONOMY_EQUITY_FUNDS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Genenral Government Expense Other Fiscal Non-interest Property Expense from IMF",
+            "GFS_NON_INTEREST_PROPERTY_EXPENSE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Monetary Commercial Banks' Balance Sheet Deposits Included in Broad Money from IMF",
+            "CB_BALANCE_SHEET_BROAD_MONEY_DEPOSITS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Memorandum Items Structures Real Expenditure Gross Fixed Capital Formation from IMF",
+            "NINV_R_STRUCTURES_GFCF",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Construction NACE2 Cumulative Percent Gross value added Previous year prices from IMF",
+            "GVA_CONSTRUCTION_NACE2_PYP",
+            "imf_low_viability_family",
+        ),
+        (
+            "Cambodia Definition Foreign Direct Investment Approval - from other countries in US dollars from IMF",
+            "KHM_FDI_APPROVAL_OTHER_COUNTRIES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Exchange Rates period average Rate Cambodia Definition Official buying rate riels /US dollar from IMF",
+            "KHM_OFFICIAL_BUYING_RATE_PA",
+            "imf_low_viability_family",
+        ),
+        (
+            "SPAIN.STATE FINANCIAL TRANSACTIONS.ESA 2010. Net acquisition of financial assets. EUR millions from IMF",
+            "ESP_FINANCIAL_TRANSACTIONS_NET_ACQ_ASSETS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Central Government Fiscal: Total Expenditures -  Number of public workers from IMF",
+            "BRA_CG_PUBLIC_WORKERS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Population By Sex Male Persons Number of Socio-Demographic Indicators Other changes in volume from IMF",
+            "BRA_SOCIO_DEM_OTHER_CHANGES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Uganda Definition Credit Institutions' Balance Sheet: NDA Other Items(Net) Other Items(Net) from IMF",
+            "UGA_CI_BS_NDA_OTHER_ITEMS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Genenral Government Fiscal Net financial wealth position from IMF",
+            "BRA_GG_NET_FINANCIAL_WEALTH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Real Agriculture NACE2 Gross value added forestry and fishing from IMF",
+            "BRA_GVA_AGRI_NACE2_FORESTRY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Other Services except Government Nominal Services Hotels and Restaurants from IMF",
+            "BRA_SERVICES_HOTELS_RESTAURANTS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Financial intermediation Tajikistan Definition Loans of Banks by Sectors from IMF",
+            "TJK_LOANS_BANKS_BY_SECTOR",
+            "imf_low_viability_family",
+        ),
+        (
+            "Monetary Aggregates MONEY SUPPLY Togo Definition in Francs CFA from IMF",
+            "TGO_MONEY_SUPPLY_CFA",
+            "imf_low_viability_family",
+        ),
+        (
+            "Consumption By Product Oil Refinery Products Gasoline Motor Gasoline Ton Economic Activity from IMF",
+            "OIL_REFINERY_GASOLINE_CONSUMPTION",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Fiscal Rule Indicator from IMF",
+            "BRA_FISCAL_RULE_INDICATOR",
+            "imf_low_viability_family",
+        ),
+        (
+            "Construction Dominican Republic Definition Type of good from IMF",
+            "DOM_CONSTRUCTION_TYPE_GOOD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Genenral Government Expense Social Benefits Fiscal from IMF",
+            "BRA_GG_SOCIAL_BENEFITS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Analytical Measures General Government Government and Public Sector Finance Wealth and Debt from IMF",
+            "BRA_GG_WEALTH_DEBT",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Catering Tajikistan Definition Loans of Banks by Sectors from IMF",
+            "TJK_LOANS_BANKS_CATERING",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Transport Tajikistan Definition Loans of Banks by Sectors from IMF",
+            "TJK_LOANS_BANKS_TRANSPORT",
+            "imf_low_viability_family",
+        ),
+        (
+            "Nominal Education Non-market Education Dominican Republic definition from IMF",
+            "DOM_NON_MARKET_EDUCATION",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Construction Real Reference chained Seasonally adjusted Industry from IMF",
+            "BRA_CONSTRUCTION_SA_INDUSTRY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Central Government Fiscal: Total Expenditures -  Wages and Salaries(mn SUR) from IMF",
+            "BRA_CG_EXP_WAGES_SUR",
+            "imf_low_viability_family",
+        ),
+        (
+            "The Definition Tourist Arrivals Persons Number of Gambia Traditional Countries: Norwegian from IMF",
+            "GMB_TOURIST_ARRIVALS_NORWEGIAN",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Financial Derivatives Monetary Central Bank Survey Financial Derivatives Other Financial Corporations from IMF",
+            "BRA_CB_FIN_DERIVATIVES_OFC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Fiscal Year Real Gross Value Added from IMF",
+            "BRA_FY_REAL_GVA",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Real Services Wholesale and Retail Trade from IMF",
+            "BRA_REAL_SERVICES_WHOLESALE_RETAIL",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Real Seasonally Adjusted Gross Value Added from IMF",
+            "BRA_REAL_SA_GVA",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Assets Loans Sectoral Households and NPISHs from IMF",
+            "BRA_SECTORAL_LOANS_HH_NPISH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Genenral Government Fiscal burden Cash Fiscal from IMF",
+            "BRA_GG_FISCAL_BURDEN_CASH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Total Brunei Darussalam Definition Foreign Direct Investment from IMF",
+            "BRN_FDI_TOTAL",
+            "imf_low_viability_family",
+        ),
+        (
+            "Monetary Monetary Aggregates Fiji Definition Broad Money (M3) from IMF",
+            "FJI_BROAD_MONEY_M3",
+            "imf_low_viability_family",
+        ),
+        (
+            "Average Rate Exchange Rates National Currency Per Norway Kroner from IMF",
+            "NOK_EXCHANGE_RATE_AVERAGE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Nominal Education Market Education Dominican Republic definition from IMF",
+            "DOM_MARKET_EDUCATION",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Central Government Undisbursed balance in mil. SRD on guarantees from IMF",
+            "BRA_CG_UNDISBURSED_GUARANTEES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Financial Corporations Financial Institutions Nominal Bahrain Definition from IMF",
+            "BHR_FINANCIAL_CORPORATIONS_INSTITUTIONS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Fed.Sts. Definition National Income Disposable Income Gross Deflator Micronesia from IMF",
+            "FSM_GNDI_GROSS_DEFLATOR",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Imports Burundi Definition PRODUCTION GOODS:17. Leather from IMF",
+            "BDI_IMPORTS_PRODUCTION_GOODS_LEATHER",
+            "imf_low_viability_family",
+        ),
+        (
+            "Remittances US Dollar Guatemala Definition Currency Income for Family Remittances from IMF",
+            "GTM_FAMILY_REMITTANCES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Percent Change Previous Period percent Exchange Rates Nominal Effective Exchange Rate from IMF",
+            "BRA_NEER_PCH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Fertility Rural Percent Bangladesh Definition Socio Demographic Indicators Total Fertility Rate from IMF",
+            "BGD_RURAL_TOTAL_FERTILITY",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Local Government Accrual Fiscal Net operating balance Adjustment to Net operating balance from IMF",
+            "BRA_LG_NET_OPERATING_BALANCE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Population By Age Youth Persons Number of Socio-Demographic Indicators from IMF",
+            "BRA_POP_AGE_YOUTH",
+            "imf_low_viability_family",
+        ),
+        (
+            "Koror Socio-Demographic Indicator Population Persons Number of Palau Definition from IMF",
+            "PLW_KOROR_POPULATION",
+            "imf_low_viability_family",
+        ),
+        (
+            "Real Services Dominican Republic definition from IMF",
+            "DOM_REAL_SERVICES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Total Exports Merchandise Trade Textiles & Fabrics from IMF",
+            "BRA_MERCH_TRADE_TEXTILES_FABRICS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Exports Burundi Definition MANUFACTURED PRODUCTS: others (1) from IMF",
+            "BDI_MET_TXG_OTH_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Transport from IMF",
+            "NGDPVA_ISIC3_I61T64_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "China Financial Derivatives from IMF",
+            "CHN_FINANCIAL_DERIVATIVES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Real Gross Capital Formation Change in Inventories from IMF",
+            "BRA_GCF_INVENTORIES",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil General Government Accrual Fiscal Net operating balance from IMF",
+            "BRA_GG_ACCRUAL_NET_OPERATING_BALANCE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Brazil Real Seasonally adjusted National Income Consumption of Fixed Capital from IMF",
+            "BRA_NI_CONSUMPTION_FIXED_CAPITAL",
             "imf_low_viability_family",
         ),
         (

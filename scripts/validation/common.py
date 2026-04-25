@@ -222,42 +222,89 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
 
 
+def _jsonl_rows_by_id(path: Path) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if line.strip():
+            row = json.loads(line)
+            rows[str(row.get('id') or '')] = row
+    return rows
+
+
+def _empirical_probe_dataset_paths(report_path: Path, report: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    explicit_dataset = str(report.get('dataset_path') or '').strip()
+    if explicit_dataset:
+        paths.append(Path(explicit_dataset))
+
+    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
+    if report_path.name.endswith('_weak_provider_viability_fast20.json'):
+        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
+        paths.append(datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl')
+
+    version_match = re.search(r'next200_20260425_(v\d+)_direct_full_probe_incremental$', report_path.stem)
+    if version_match:
+        paths.append(datasets_dir / f"next200_20260425_{version_match.group(1)}" / 'next_batch_direct.jsonl')
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        resolved_key = str(path.expanduser())
+        if resolved_key not in seen:
+            seen.add(resolved_key)
+            unique.append(path)
+    return unique
+
+
+def _iter_empirical_direct_probe_rows() -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
+    reports_dir = VALIDATION_PRIVATE / 'reports'
+    report_paths = [
+        *reports_dir.glob('next200_v*_weak_provider_viability_fast20.json'),
+        *reports_dir.glob('cert_30k_v37_next200_*_direct_full_probe_incremental.json'),
+    ]
+    for report_path in sorted(set(report_paths)):
+        try:
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        if report_path.name.endswith('_direct_full_probe_incremental.json') and report.get('complete') is False:
+            continue
+
+        dataset_rows: dict[str, dict[str, Any]] = {}
+        for dataset_path in _empirical_probe_dataset_paths(report_path, report):
+            if not dataset_path.exists():
+                continue
+            try:
+                dataset_rows = _jsonl_rows_by_id(dataset_path)
+            except Exception:
+                continue
+            if dataset_rows:
+                break
+        if not dataset_rows:
+            continue
+
+        for result in report.get('results', []):
+            row = dataset_rows.get(str(result.get('session_id') or ''))
+            if row:
+                yield result, row
+
+
 def _load_empirical_category_priors() -> dict[tuple[str, str], tuple[int, int]]:
     global _EMPIRICAL_CATEGORY_PRIORS
     if _EMPIRICAL_CATEGORY_PRIORS is not None:
         return _EMPIRICAL_CATEGORY_PRIORS
 
     priors: dict[tuple[str, str], list[int]] = {}
-    reports_dir = VALIDATION_PRIVATE / 'reports'
-    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
-    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
-        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
-        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
-        if not dataset_path.exists():
+    for result, row in _iter_empirical_direct_probe_rows():
+        provider = str(result.get('provider_stratum') or '').upper()
+        category = str((row.get('origin') or {}).get('category') or '').strip()
+        if not provider or not category:
             continue
-        try:
-            dataset_rows = {}
-            for line in dataset_path.read_text(encoding='utf-8').splitlines():
-                if line.strip():
-                    row = json.loads(line)
-                    dataset_rows[str(row.get('id') or '')] = row
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-
-        for result in report.get('results', []):
-            row = dataset_rows.get(str(result.get('session_id') or ''))
-            if not row:
-                continue
-            provider = str(result.get('provider_stratum') or '').upper()
-            category = str((row.get('origin') or {}).get('category') or '').strip()
-            if not provider or not category:
-                continue
-            bucket = priors.setdefault((provider, category), [0, 0])
-            if result.get('viability_pass'):
-                bucket[0] += 1
-            else:
-                bucket[1] += 1
+        bucket = priors.setdefault((provider, category), [0, 0])
+        if result.get('viability_pass'):
+            bucket[0] += 1
+        else:
+            bucket[1] += 1
 
     _EMPIRICAL_CATEGORY_PRIORS = {
         key: (counts[0], counts[1]) for key, counts in priors.items()
@@ -330,37 +377,17 @@ def _load_empirical_family_priors() -> dict[tuple[str, str], tuple[int, int]]:
         return _EMPIRICAL_FAMILY_PRIORS
 
     priors: dict[tuple[str, str], list[int]] = {}
-    reports_dir = VALIDATION_PRIVATE / 'reports'
-    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
-    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
-        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
-        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
-        if not dataset_path.exists():
+    for result, row in _iter_empirical_direct_probe_rows():
+        provider = str(result.get('provider_stratum') or '').upper()
+        name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
+        family = provider_family_key(provider, name)
+        if not provider or not family:
             continue
-        try:
-            dataset_rows = {}
-            for line in dataset_path.read_text(encoding='utf-8').splitlines():
-                if line.strip():
-                    row = json.loads(line)
-                    dataset_rows[str(row.get('id') or '')] = row
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-
-        for result in report.get('results', []):
-            row = dataset_rows.get(str(result.get('session_id') or ''))
-            if not row:
-                continue
-            provider = str(result.get('provider_stratum') or '').upper()
-            name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
-            family = provider_family_key(provider, name)
-            if not provider or not family:
-                continue
-            bucket = priors.setdefault((provider, family), [0, 0])
-            if result.get('viability_pass'):
-                bucket[0] += 1
-            else:
-                bucket[1] += 1
+        bucket = priors.setdefault((provider, family), [0, 0])
+        if result.get('viability_pass'):
+            bucket[0] += 1
+        else:
+            bucket[1] += 1
 
     _EMPIRICAL_FAMILY_PRIORS = {
         key: (counts[0], counts[1]) for key, counts in priors.items()
@@ -398,37 +425,17 @@ def _load_empirical_subfamily_priors() -> dict[tuple[str, str], tuple[int, int]]
         return _EMPIRICAL_SUBFAMILY_PRIORS
 
     priors: dict[tuple[str, str], list[int]] = {}
-    reports_dir = VALIDATION_PRIVATE / 'reports'
-    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
-    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
-        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
-        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
-        if not dataset_path.exists():
+    for result, row in _iter_empirical_direct_probe_rows():
+        provider = str(result.get('provider_stratum') or '').upper()
+        name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
+        subfamily = provider_subfamily_key(provider, name)
+        if not provider or not subfamily:
             continue
-        try:
-            dataset_rows = {}
-            for line in dataset_path.read_text(encoding='utf-8').splitlines():
-                if line.strip():
-                    row = json.loads(line)
-                    dataset_rows[str(row.get('id') or '')] = row
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-
-        for result in report.get('results', []):
-            row = dataset_rows.get(str(result.get('session_id') or ''))
-            if not row:
-                continue
-            provider = str(result.get('provider_stratum') or '').upper()
-            name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
-            subfamily = provider_subfamily_key(provider, name)
-            if not provider or not subfamily:
-                continue
-            bucket = priors.setdefault((provider, subfamily), [0, 0])
-            if result.get('viability_pass'):
-                bucket[0] += 1
-            else:
-                bucket[1] += 1
+        bucket = priors.setdefault((provider, subfamily), [0, 0])
+        if result.get('viability_pass'):
+            bucket[0] += 1
+        else:
+            bucket[1] += 1
 
     _EMPIRICAL_SUBFAMILY_PRIORS = {
         key: (counts[0], counts[1]) for key, counts in priors.items()
@@ -482,38 +489,18 @@ def _load_empirical_country_subfamily_priors() -> dict[tuple[str, str, str], tup
         return _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS
 
     priors: dict[tuple[str, str, str], list[int]] = {}
-    reports_dir = VALIDATION_PRIVATE / 'reports'
-    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
-    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
-        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
-        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
-        if not dataset_path.exists():
+    for result, row in _iter_empirical_direct_probe_rows():
+        provider = str(result.get('provider_stratum') or '').upper()
+        name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
+        subfamily = provider_subfamily_key(provider, name)
+        country = _leading_default_country(str(row.get('query') or ''), provider)
+        if not provider or not subfamily or not country:
             continue
-        try:
-            dataset_rows = {}
-            for line in dataset_path.read_text(encoding='utf-8').splitlines():
-                if line.strip():
-                    row = json.loads(line)
-                    dataset_rows[str(row.get('id') or '')] = row
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-
-        for result in report.get('results', []):
-            row = dataset_rows.get(str(result.get('session_id') or ''))
-            if not row:
-                continue
-            provider = str(result.get('provider_stratum') or '').upper()
-            name = str((row.get('origin') or {}).get('name') or row.get('name') or '').strip()
-            subfamily = provider_subfamily_key(provider, name)
-            country = _leading_default_country(str(row.get('query') or ''), provider)
-            if not provider or not subfamily or not country:
-                continue
-            bucket = priors.setdefault((provider, subfamily, country), [0, 0])
-            if result.get('viability_pass'):
-                bucket[0] += 1
-            else:
-                bucket[1] += 1
+        bucket = priors.setdefault((provider, subfamily, country), [0, 0])
+        if result.get('viability_pass'):
+            bucket[0] += 1
+        else:
+            bucket[1] += 1
 
     _EMPIRICAL_COUNTRY_SUBFAMILY_PRIORS = {
         key: (counts[0], counts[1]) for key, counts in priors.items()
@@ -527,37 +514,17 @@ def _load_empirical_country_category_priors() -> dict[tuple[str, str, str], tupl
         return _EMPIRICAL_COUNTRY_CATEGORY_PRIORS
 
     priors: dict[tuple[str, str, str], list[int]] = {}
-    reports_dir = VALIDATION_PRIVATE / 'reports'
-    datasets_dir = VALIDATION_PRIVATE / 'datasets' / 'batch_review'
-    for report_path in sorted(reports_dir.glob('next200_v*_weak_provider_viability_fast20.json')):
-        stem = report_path.stem.replace('_weak_provider_viability_fast20', '')
-        dataset_path = datasets_dir / stem / 'next_batch_direct_weak_providers.jsonl'
-        if not dataset_path.exists():
+    for result, row in _iter_empirical_direct_probe_rows():
+        provider = str(result.get('provider_stratum') or '').upper()
+        category = str((row.get('origin') or {}).get('category') or '').strip()
+        country = _leading_default_country(str(row.get('query') or ''), provider)
+        if not provider or not category or not country:
             continue
-        try:
-            dataset_rows = {}
-            for line in dataset_path.read_text(encoding='utf-8').splitlines():
-                if line.strip():
-                    row = json.loads(line)
-                    dataset_rows[str(row.get('id') or '')] = row
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-
-        for result in report.get('results', []):
-            row = dataset_rows.get(str(result.get('session_id') or ''))
-            if not row:
-                continue
-            provider = str(result.get('provider_stratum') or '').upper()
-            category = str((row.get('origin') or {}).get('category') or '').strip()
-            country = _leading_default_country(str(row.get('query') or ''), provider)
-            if not provider or not category or not country:
-                continue
-            bucket = priors.setdefault((provider, category, country), [0, 0])
-            if result.get('viability_pass'):
-                bucket[0] += 1
-            else:
-                bucket[1] += 1
+        bucket = priors.setdefault((provider, category, country), [0, 0])
+        if result.get('viability_pass'):
+            bucket[0] += 1
+        else:
+            bucket[1] += 1
 
     _EMPIRICAL_COUNTRY_CATEGORY_PRIORS = {
         key: (counts[0], counts[1]) for key, counts in priors.items()
@@ -1324,6 +1291,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'socio demographic indicators' in query_lower and any(term in query_lower for term in ['crude death rate', 'mortality']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'socio demographic indicators' in query_lower and any(term in query_lower for term in ['fertility', 'total fertility rate']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['socio demographic indicators', 'socio-demographic indicator']) and any(term in query_lower for term in ['population by age', 'population persons', 'youth persons']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'socio-demographic indicators' in query_lower and 'other changes in volume' in query_lower:
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'GCR', 'BGR', 'GCGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GR_', 'GRG', 'GRK', 'GGRK')) and any(term in query_lower for term in ['government', 'public sector', 'revenue', 'grants', 'fiscal']):
@@ -1334,9 +1307,31 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['central government', 'social security central government', 'local government', 'regional government', 'general government']) and any(term in query_lower for term in ['expense', 'revenue', 'tax', 'subsidies', 'social contributions', 'property expense', 'cash inflow', 'financing activities']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'local government' in query_lower and 'net operating balance' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'general government' in query_lower and 'net operating balance' in query_lower:
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'government and public sector finance' in query_lower and any(term in query_lower for term in ['budgetary central government', 'central government']) and any(term in query_lower for term in ['revenue', 'social contributions', 'total financing', 'debt holder']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'central government' in query_lower and any(term in query_lower for term in ['principle payments', 'tbills']):
+    if provider_upper == 'IMF' and 'government and public sector finance' in query_lower and 'wealth and debt' in query_lower and 'general government' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and 'social contributions' in query_lower and any(term in query_lower for term in ['revenue', 'employee contributions', 'other social contributions']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['changes in net worth', 'non-interest property expense']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and 'net financial wealth position' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['number of public workers', 'total expenditures -  number']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and 'total expenditures' in query_lower and any(term in query_lower for term in ['wages and salaries', 'mn sur']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['fiscal rule indicator', 'social benefits fiscal']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal burden cash fiscal' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'central government' in query_lower and any(term in query_lower for term in ['principle payments', 'tbills', 'lt loans by commercial banks']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'central government' in query_lower and 'undisbursed balance' in query_lower and 'guarantees' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['customs rev', 'excise & fees', 'import duty']) and any(term in query_lower for term in ['final summary', 'revenue']):
         reasons.append('imf_low_viability_family')
@@ -1358,19 +1353,43 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'external trade' in query_lower and 'goods' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'external trade' in query_lower and any(term in query_lower for term in ['value of re-exports', 're-exports']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'industrial production' in query_lower and any(term in query_lower for term in ['manufacturing', 'manufacture']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'industrial production' in query_lower and any(term in query_lower for term in ['construction', 'economic activity', 'base year']):
+    if provider_upper == 'IMF' and 'industrial production' in query_lower and any(term in query_lower for term in ['construction', 'economic activity', 'base year', 'business confidence']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'construction' in query_lower and 'type of good' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'construction' in query_lower and any(term in query_lower for term in ['real reference chained', 'seasonally adjusted industry']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and ('memorandum items' in query_lower and 'isic' in origin_code_upper.lower()):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'government and public sector finance' in query_lower and any(term in query_lower for term in ['expenditure', 'expense', 'subsidies']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal by functions of government' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'by functions of government' in query_lower and any(term in query_lower for term in ['fiscal', 'central government', 'expenditure']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'external sector' in query_lower and 'imports of goods and services' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'monetary and financial accounts' in query_lower:
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and any(term in query_lower for term in ['central bank balance sheet', 'monetary gold as sdrs']):
+    if provider_upper == 'IMF' and 'monetary aggregates' in query_lower and any(term in query_lower for term in ['foreign exchange reserves', ' nbs']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'monetary aggregates' in query_lower and 'money supply' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'monetary aggregates' in query_lower and 'broad money' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ["commercial banks' balance sheet", 'commercial banks balance sheet', 'deposits included in broad money']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['monetary microfinance', 'deposit taking institutions', 'balance sheet other items']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['other depository corporations balance sheet', 'gross loans and lease financing']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ["credit institutions' balance sheet", 'credit institutions balance sheet', 'nda other items']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['central bank balance sheet', 'monetary gold as sdrs', 'monetary gold and sdrs']):
         reasons.append('imf_complex_finance_family')
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['monetary other depository corporations survey', 'other depository corporations survey']):
@@ -1379,27 +1398,81 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['certificates of deposits', 'percent per annum']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'exchange rate' in query_lower and any(term in query_lower for term in ['other foreign currency per national currency', 'end of period', 'pound sterling rate']):
+    if provider_upper == 'IMF' and 'exchange rate' in query_lower and any(term in query_lower for term in ['other foreign currency per national currency', 'end of period', 'pound sterling rate', 'real effective exchange rate']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'exchange rate' in query_lower and 'nominal effective exchange rate' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'exchange rate' in query_lower and any(term in query_lower for term in ['period average', 'official buying rate', 'average rate']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'us dollars per ounce of gold' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['isic', 'activities', 'activity']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'economic activity' in query_lower and any(term in query_lower for term in ['oil production', 'foreign direct investment financial and insurance activities', 'tourism arrivals', 'tourist arrivals', 'number of visitors']):
+    if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['previous year prices', 'construction nace2']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['agriculture nace2', 'forestry and fishing']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross value added' in query_lower and 'fiscal year real' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross value added' in query_lower and 'seasonally adjusted' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'economic activity' in query_lower and any(term in query_lower for term in ['oil production', 'foreign direct investment financial and insurance activities', 'tourism arrivals', 'tourist arrivals', 'number of visitors', 'tourism:', 'cruise ship passengers', 'length of stay']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['tourist arrivals', 'tourism arrivals']) and 'traditional countries' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'economic activity' in query_lower and any(term in query_lower for term in ['oil refinery products', 'motor gasoline', 'consumption by product']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'foreign direct investment approval' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'foreign direct investment' in query_lower and 'approval' not in query_lower and 'financial and insurance activities' not in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'remittances' in query_lower and 'income for family remittances' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'economic activity' in query_lower and 'production' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['activity real manufacturing', 'mining and quarrying and other industrial activities']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'other real sector statistics' in query_lower:
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross value added' in query_lower and '_ISIC' in origin_code_upper:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'ISIC' in origin_code_upper and any(term in query_lower for term in ['transport', 'construction', 'services', 'manufacturing', 'agriculture']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'production approach' in query_lower and 'gross domestic product' in query_lower and any(term in query_lower for term in ['activity', 'isic', 'manufacturing']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross fixed capital formation' in query_lower and any(term in query_lower for term in ['of which', 'construction', 'previous year prices', 'oil expenditure', 'gross capital formation']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross capital formation' in query_lower and 'change in inventories' in query_lower:
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross domestic product' in query_lower and 'gross capital formation' in query_lower and 'real expenditure' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'gross domestic product' in query_lower and any(term in query_lower for term in ['real reference chained expenditure', 'external balance of goods and services']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['national income disposable income gross deflator', 'gross deflator']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'national income' in query_lower and 'consumption of fixed capital' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['gdp by activity', 'real reference chained services', 'social and personal service activities', 'public administration human health and social work activities', 'cultivation of tubers']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['other services except government', 'services hotels and restaurants']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'real services' in query_lower and 'wholesale and retail trade' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'real services' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['regional government enterprises', 'government fiscal year nominal gross domestic product']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['total non-monetary gross domestic product', 'real fiscal year total non-monetary']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'national accounts' in query_lower and any(term in query_lower for term in ['nfc', 'fc', 'hh', 'npish', 'tertiary sector']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'government consumption expenditure' in query_lower and any(term in query_lower for term in ['donor', 'wages']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and any(term in query_lower for term in ['gdp-gnp relation', 'net primary income from abroad', 'taxes on products', 'statistical discrepancy in gdp']):
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['gdp-gnp relation', 'net primary income from abroad', 'taxes on products', 'taxes less subsidies on products', 'statistical discrepancy in gdp']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'savings and investment memorandum items' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'memorandum items' in query_lower and any(term in query_lower for term in ['gross fixed capital formation', 'real expenditure', 'structures']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['total outlays', 'revenue grants', 'central government consolidation', 'budgetary central government', 'memo item']):
         reasons.append('imf_low_viability_family')
@@ -1423,6 +1496,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'external trade by harmonized commodity description and coding systems' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['production goods:', 'production goods ']) and any(term in query_lower for term in ['imports', 'exports']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'external trade' in query_lower and re.search(r'\bhs\b', query_lower):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'by standard international trade classification' in query_lower:
@@ -1437,11 +1512,17 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'merchandise trade' in query_lower and any(term in query_lower for term in ['vanilla', 'definition', ' fob ']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'merchandise trade' in query_lower and any(term in query_lower for term in ['textiles & fabrics', 'textiles and fabrics']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['manufactured products:', 'manufactured products ']) and any(term in query_lower for term in ['imports', 'exports']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'dataset:' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'goods total trade external trade' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'manufacture of' in query_lower and 'from imf' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'other manufacturing n.e.c' in query_lower:
         reasons.append('imf_low_viability_family')
     if 'definition central government operations' in query_lower and 'funds for redundant labor' in query_lower:
         reasons.append('definition_financial_query')
@@ -1560,6 +1641,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'quarterly employment by institutional sector',
         'national and regional house price indices',
         'number of national tertiary students enrolled abroad',
+        'annual financial accounts (flows)',
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
@@ -1570,20 +1652,54 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_price_or_memorandum_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['consumer price index excluding', 'harmonized consumer prices']):
         reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and 'consumer prices' in query_lower and any(term in query_lower for term in ['base year previous period', 'all items special indexes', 'capital city']):
+        reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['harmonized overlap', 'housing gas and other fuels']):
+        reasons.append('imf_price_or_memorandum_family')
     if 'consumer prices expenditure of households' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and 'poverty and income distribution indicators' in query_lower:
+        reasons.append('imf_low_viability_family')
     if 'all commodities producer price index' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
-    if provider_upper == 'IMF' and 'producer price index' in query_lower and any(term in query_lower for term in ['commodities by activity', 'other manufacturing', 'isic rev 4', 'goods', 'mining of coal', 'extraction of peat', 'all commodities', 'production of']):
+    if provider_upper == 'IMF' and 'producer price index' in query_lower and any(term in query_lower for term in ['commodities by activity', 'other manufacturing', 'isic rev 4', 'goods', 'mining of coal', 'extraction of peat', 'all commodities', 'production of', 'manufacturing nace2', 'nace2 producer price index', 'extraction of coal and lignite', 'water collection']):
         reasons.append('imf_price_or_memorandum_family')
     if provider_upper == 'IMF' and 'share price index' in query_lower and 'definition' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'stock market' in query_lower and 'definition' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'financial market prices' in query_lower and any(term in query_lower for term in ['primary market instruments', 'equities']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['pension funds assets', 'financial derivatives and employee stock options', 'sectoral financial', 'banking system indicators', 'sectoral distribution of credit', 'sectoral accounts rest of the world', 'currency and deposits', 'liquid assets to total assets']):
         reasons.append('imf_complex_finance_family')
+    if provider_upper == 'IMF' and 'assets loans sectoral' in query_lower and any(term in query_lower for term in ['households', 'npish']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'financial derivatives' in query_lower and any(term in query_lower for term in ['central bank survey', 'other financial corporations']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and query_lower.strip().endswith('financial derivatives from imf'):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'sectoral equity and investment fund shares' in query_lower:
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['insurance sectoral pension and standardized guarantee schemes', 'central bank assets insurance sectoral']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['portfolio investment', 'debt securities', ' iip ', 'international investment position']):
         reasons.append('imf_complex_finance_family')
+    if provider_upper == 'IMF' and 'loans of banks by sectors' in query_lower:
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'financial corporations financial institutions' in query_lower:
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['non-market education', 'market education']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['financial transactions.esa', 'financial transactions esa', 'net acquisition of financial assets']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'definition' in query_lower and any(term in query_lower for term in ['gdp by branches', 'branches of origin', 'crop production by region', 'other real sector indicators']):
         reasons.append('imf_low_viability_family')
     if 'revenue other revenue' in query_lower:
@@ -1633,6 +1749,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider == 'Eurostat' and 'deaths by week' in query_lower and any(term in query_lower for term in ['nuts2', '5-year age group', 'sex']):
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'mean hourly earnings by sex age and economic activity' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'mean annual earnings' in query_lower and any(term in query_lower for term in ['size of the enterprise', 'sex occupation']):
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'early leavers from education and training by sex and nuts' in query_lower:
         reasons.append('eurostat_cross_tab_query')
