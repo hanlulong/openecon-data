@@ -32,6 +32,15 @@ def main() -> int:
     parser.add_argument('--floor-policy', type=Path, default=DEFAULT_FLOOR_POLICY)
     parser.add_argument('--adjudication-records', type=Path, default=None)
     parser.add_argument('--max-sessions', type=int, default=None)
+    parser.add_argument('--concurrency', type=int, default=1)
+    parser.add_argument('--request-timeout', type=float, default=120)
+    parser.add_argument('--request-spacing', type=float, default=0)
+    parser.add_argument('--rate-limit-retries', type=int, default=0)
+    parser.add_argument('--rate-limit-backoff', type=float, default=10.0)
+    parser.add_argument('--classify-unsupported-direct', action='store_true')
+    parser.add_argument('--continue-on-error', action='store_true')
+    parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--skip-completed', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
 
@@ -42,6 +51,21 @@ def main() -> int:
     run_cmd = [sys.executable, str(ROOT / 'scripts' / 'validation' / 'run_certification.py'), '--dataset', str(dataset), '--output', str(args.raw_output.resolve()), '--base-url', args.base_url]
     if args.max_sessions is not None:
         run_cmd += ['--max-sessions', str(args.max_sessions)]
+    run_cmd += [
+        '--concurrency', str(args.concurrency),
+        '--request-timeout', str(args.request_timeout),
+        '--request-spacing', str(args.request_spacing),
+        '--rate-limit-retries', str(args.rate_limit_retries),
+        '--rate-limit-backoff', str(args.rate_limit_backoff),
+    ]
+    if args.classify_unsupported_direct:
+        run_cmd.append('--classify-unsupported-direct')
+    if args.continue_on_error:
+        run_cmd.append('--continue-on-error')
+    if args.resume:
+        run_cmd.append('--resume')
+    if args.skip_completed:
+        run_cmd.append('--skip-completed')
     if args.dry_run:
         run_cmd.append('--dry-run')
         run_preview = run(run_cmd, capture_output=True)
@@ -59,6 +83,16 @@ def main() -> int:
             'score_output': str(args.score_output.resolve()),
             'floor_policy': str(args.floor_policy.resolve()),
             'adjudication_records': str(args.adjudication_records.resolve()) if args.adjudication_records else None,
+            'concurrency': args.concurrency,
+            'request_timeout': args.request_timeout,
+            'request_spacing': args.request_spacing,
+            'rate_limit_retries': args.rate_limit_retries,
+            'rate_limit_backoff': args.rate_limit_backoff,
+            'classify_unsupported_direct': args.classify_unsupported_direct,
+            'continue_on_error': args.continue_on_error,
+            'resume': args.resume,
+            'skip_completed': args.skip_completed,
+            'run_certification_command': run_cmd,
             'run_certification_preview': json.loads(run_preview) if run_preview else None,
         }
         print(json.dumps(payload, indent=2))
@@ -87,6 +121,15 @@ def main() -> int:
         'score_output': str(args.score_output.resolve()),
         'floor_policy': str(args.floor_policy.resolve()),
         'adjudication_records': str(args.adjudication_records.resolve()) if args.adjudication_records else None,
+        'concurrency': args.concurrency,
+        'request_timeout': args.request_timeout,
+        'request_spacing': args.request_spacing,
+        'rate_limit_retries': args.rate_limit_retries,
+        'rate_limit_backoff': args.rate_limit_backoff,
+        'classify_unsupported_direct': args.classify_unsupported_direct,
+        'continue_on_error': args.continue_on_error,
+        'resume': args.resume,
+        'skip_completed': args.skip_completed,
     }
     print(json.dumps(payload, indent=2))
     return 0

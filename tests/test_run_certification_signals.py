@@ -157,6 +157,42 @@ def test_execute_rows_passes_custom_request_timeout(monkeypatch):
     assert timeouts == [12.5]
 
 
+def test_execute_rows_retries_429_and_applies_request_spacing(monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+            self.headers = {"Retry-After": "0.25"} if status_code == 429 else {}
+
+        def json(self):
+            return {"data": [{"metadata": {"source": "FRED"}, "observations": [{"date": "2024", "value": 1}]}]}
+
+    responses = [FakeResponse(429), FakeResponse(200)]
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        return responses.pop(0)
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    results = module.execute_rows(
+        [{"id": "direct-1", "query": "US GDP"}],
+        "http://localhost:3001",
+        request_spacing=0.5,
+        rate_limit_retries=1,
+        rate_limit_backoff=10,
+    )
+
+    assert calls == [{"query": "US GDP"}, {"query": "US GDP"}]
+    assert sleeps == [0.25, 0.5]
+    assert results[0]["status_code"] == 200
+    assert results[0]["series_count"] == 1
+
+
 def test_execute_rows_concurrent_passes_custom_request_timeout(monkeypatch):
     module = load_module()
     timeouts: list[float] = []

@@ -398,6 +398,38 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
     }
 
 
+def _retry_after_seconds(resp, fallback: float) -> float:
+    retry_after = getattr(resp, "headers", {}).get("Retry-After") if getattr(resp, "headers", None) else None
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    return max(0.0, fallback)
+
+
+def post_query_with_rate_limit_retry(
+    base: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    rate_limit_retries: int = 0,
+    rate_limit_backoff: float = 10.0,
+):
+    attempts = 0
+    while True:
+        resp = requests.post(base, json=payload, timeout=timeout)
+        if getattr(resp, "status_code", None) != 429 or attempts >= rate_limit_retries:
+            return resp
+        attempts += 1
+        time.sleep(_retry_after_seconds(resp, rate_limit_backoff * attempts))
+
+
+def apply_request_spacing(request_spacing: float) -> None:
+    if request_spacing > 0:
+        time.sleep(request_spacing)
+
+
 def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, query: str, elapsed: float, exc: Exception) -> dict[str, Any]:
     return {
         'session_id': row.get('id'),
@@ -553,6 +585,9 @@ def execute_session(
     *,
     classify_unsupported_direct: bool = False,
     request_timeout: float = 120,
+    request_spacing: float = 0,
+    rate_limit_retries: int = 0,
+    rate_limit_backoff: float = 10.0,
     runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
@@ -572,7 +607,14 @@ def execute_session(
                 payload['conversationId'] = conv
             t0 = time.time()
             try:
-                resp = requests.post(base, json=payload, timeout=request_timeout)
+                resp = post_query_with_rate_limit_retry(
+                    base,
+                    payload,
+                    timeout=request_timeout,
+                    rate_limit_retries=rate_limit_retries,
+                    rate_limit_backoff=rate_limit_backoff,
+                )
+                apply_request_spacing(request_spacing)
                 elapsed = time.time() - t0
                 data = resp.json()
             except Exception as exc:
@@ -584,7 +626,14 @@ def execute_session(
         query = row['query']
         t0 = time.time()
         try:
-            resp = requests.post(base, json={'query': query}, timeout=request_timeout)
+            resp = post_query_with_rate_limit_retry(
+                base,
+                {'query': query},
+                timeout=request_timeout,
+                rate_limit_retries=rate_limit_retries,
+                rate_limit_backoff=rate_limit_backoff,
+            )
+            apply_request_spacing(request_spacing)
             elapsed = time.time() - t0
             data = resp.json()
         except Exception as exc:
@@ -608,6 +657,9 @@ def execute_rows_concurrent(
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
     request_timeout: float = 120,
+    request_spacing: float = 0,
+    rate_limit_retries: int = 0,
+    rate_limit_backoff: float = 10.0,
     runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
@@ -657,6 +709,9 @@ def execute_rows_concurrent(
                 base,
                 classify_unsupported_direct=classify_unsupported_direct,
                 request_timeout=request_timeout,
+                request_spacing=request_spacing,
+                rate_limit_retries=rate_limit_retries,
+                rate_limit_backoff=rate_limit_backoff,
                 runtime_unavailable_reason=runtime_unavailable_reason,
             ): (session_index, row)
             for session_index, row in runnable
@@ -813,6 +868,9 @@ def execute_rows(
     classify_unsupported_direct: bool = False,
     continue_on_error: bool = False,
     request_timeout: float = 120,
+    request_spacing: float = 0,
+    rate_limit_retries: int = 0,
+    rate_limit_backoff: float = 10.0,
     runtime_unavailable_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     if start_index < 0:
@@ -846,6 +904,9 @@ def execute_rows(
             classify_unsupported_direct=classify_unsupported_direct,
             continue_on_error=continue_on_error,
             request_timeout=request_timeout,
+            request_spacing=request_spacing,
+            rate_limit_retries=rate_limit_retries,
+            rate_limit_backoff=rate_limit_backoff,
             runtime_unavailable_reason=runtime_unavailable_reason,
         )
     base = base_url.rstrip('/') + '/api/query'
@@ -943,7 +1004,14 @@ def execute_rows(
                     payload['conversationId'] = conv
                 t0 = time.time()
                 try:
-                    resp = requests.post(base, json=payload, timeout=request_timeout)
+                    resp = post_query_with_rate_limit_retry(
+                        base,
+                        payload,
+                        timeout=request_timeout,
+                        rate_limit_retries=rate_limit_retries,
+                        rate_limit_backoff=rate_limit_backoff,
+                    )
+                    apply_request_spacing(request_spacing)
                     elapsed = time.time() - t0
                     data = resp.json()
                 except Exception as exc:
@@ -977,7 +1045,14 @@ def execute_rows(
             payload = {'query': query}
             t0 = time.time()
             try:
-                resp = requests.post(base, json=payload, timeout=request_timeout)
+                resp = post_query_with_rate_limit_retry(
+                    base,
+                    payload,
+                    timeout=request_timeout,
+                    rate_limit_retries=rate_limit_retries,
+                    rate_limit_backoff=rate_limit_backoff,
+                )
+                apply_request_spacing(request_spacing)
                 elapsed = time.time() - t0
                 data = resp.json()
             except Exception as exc:
@@ -1116,6 +1191,9 @@ def main() -> int:
     parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
     parser.add_argument('--concurrency', type=int, default=1, help='Number of certification sessions to execute concurrently; multiround sessions remain ordered internally.')
     parser.add_argument('--request-timeout', type=float, default=120, help='Per-round HTTP request timeout in seconds.')
+    parser.add_argument('--request-spacing', type=float, default=0, help='Seconds to sleep after each HTTP request; useful for production replay rate limits.')
+    parser.add_argument('--rate-limit-retries', type=int, default=0, help='Number of HTTP 429 retries per request.')
+    parser.add_argument('--rate-limit-backoff', type=float, default=10.0, help='Fallback seconds for HTTP 429 retry backoff when Retry-After is absent.')
     parser.add_argument('--resume', action='store_true', help='Load existing .inprogress or final output and skip completed sessions.')
     parser.add_argument('--skip-completed', action='store_true', help='Skip sessions already complete in existing .inprogress or final output.')
     parser.add_argument('--preflight-audit-output', type=Path, default=None, help='Path for current direct-query audit gate output; defaults beside --output.')
@@ -1165,6 +1243,9 @@ def main() -> int:
             'max_sessions': args.max_sessions,
             'concurrency': args.concurrency,
             'request_timeout': args.request_timeout,
+            'request_spacing': args.request_spacing,
+            'rate_limit_retries': args.rate_limit_retries,
+            'rate_limit_backoff': args.rate_limit_backoff,
             'resume': args.resume,
             'skip_completed': args.skip_completed,
             'classify_unsupported_direct': args.classify_unsupported_direct,
@@ -1217,6 +1298,9 @@ def main() -> int:
         classify_unsupported_direct=args.classify_unsupported_direct,
         continue_on_error=args.continue_on_error,
         request_timeout=args.request_timeout,
+        request_spacing=args.request_spacing,
+        rate_limit_retries=args.rate_limit_retries,
+        rate_limit_backoff=args.rate_limit_backoff,
         runtime_unavailable_reason=args.runtime_unavailable_reason,
     )
     write_jsonl(output_path, results)
@@ -1230,6 +1314,9 @@ def main() -> int:
         'classify_unsupported_direct': args.classify_unsupported_direct,
         'continue_on_error': args.continue_on_error,
         'request_timeout': args.request_timeout,
+        'request_spacing': args.request_spacing,
+        'rate_limit_retries': args.rate_limit_retries,
+        'rate_limit_backoff': args.rate_limit_backoff,
         'runtime_unavailable_reason': args.runtime_unavailable_reason,
         'output': str(output_path),
     }, indent=2))

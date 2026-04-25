@@ -40,6 +40,14 @@ def test_replay_production_holdout_dry_run_includes_floor_policy_and_adjudicatio
             str(score_output),
             "--max-sessions",
             "3",
+            "--concurrency",
+            "1",
+            "--request-spacing",
+            "2.5",
+            "--rate-limit-retries",
+            "2",
+            "--classify-unsupported-direct",
+            "--continue-on-error",
             "--dry-run",
         ],
         capture_output=True,
@@ -51,3 +59,14 @@ def test_replay_production_holdout_dry_run_includes_floor_policy_and_adjudicatio
     assert payload["mode"] == "dry_run"
     assert payload["floor_policy"] == str(floor_policy_path.resolve())
     assert payload["adjudication_records"] == str(adjudication_path.resolve())
+    assert payload["request_spacing"] == 2.5
+    assert payload["rate_limit_retries"] == 2
+    assert payload["classify_unsupported_direct"] is True
+    assert payload["continue_on_error"] is True
+    run_cmd = payload["run_certification_command"]
+    assert "--request-spacing" in run_cmd
+    assert "2.5" in run_cmd
+    assert "--rate-limit-retries" in run_cmd
+    assert "2" in run_cmd
+    assert "--classify-unsupported-direct" in run_cmd
+    assert "--continue-on-error" in run_cmd
