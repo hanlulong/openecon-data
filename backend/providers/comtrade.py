@@ -557,17 +557,43 @@ class ComtradeProvider(BaseProvider):
         # Use correct URL path based on frequency
         url_path = f"{self.base_url}/C/{freq_code}/HS"
 
+        records: list[dict[str, Any]] = []
+
         # Implement exponential backoff retry for rate limiting and transient
         # upstream outages. UN Comtrade occasionally returns HTTP 500 during
         # otherwise valid bilateral lookups under load; treat that like a
         # retryable provider transient rather than immediately falling into
         # cross-provider fallback for a locked Comtrade conversation.
+        #
+        # The same endpoint can also transiently return an empty successful
+        # payload for broad TOTAL bilateral flows that normally have data.  Do
+        # a bounded retry for those broad trade-chain calls, but do not retry
+        # narrow HS subheading empties because those are often genuine
+        # commodity/data-availability gaps and must remain claim blockers.
         for attempt in range(MAX_RETRIES):
             try:
                 response = await client.get(url_path, params=params, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 payload = response.json()
-                break  # Success, exit retry loop
+                records = payload.get("data") or []
+                if (
+                    records
+                    or commodity_code != "TOTAL"
+                    or attempt >= MAX_RETRIES - 1
+                ):
+                    break
+                delay = RETRY_DELAY_BASE * (2 ** attempt)
+                logger.warning(
+                    "Empty Comtrade TOTAL response for %s/%s, attempt %d/%d. "
+                    "Retrying in %ss...",
+                    reporter_raw,
+                    partner_code,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
             except (httpx.ReadTimeout, httpx.TimeoutException, httpx.RequestError) as e:
                 if attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAY_BASE * (2 ** attempt)
@@ -631,7 +657,6 @@ class ComtradeProvider(BaseProvider):
                     f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
                 ) from e
 
-        records = payload.get("data") or []
         if not records:
             return []  # Return empty if no data
 

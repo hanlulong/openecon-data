@@ -552,6 +552,68 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result[0].metadata.country, "Germany")
         self.assertEqual(result[0].data[0].value, 300)
 
+    def test_comtrade_fetch_single_reporter_retries_empty_total_response(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+        responses = [
+            MockAsyncResponse({"data": []}),
+            MockAsyncResponse(
+                {
+                    "data": [
+                        {
+                            "period": 2020,
+                            "periodDesc": "2020",
+                            "reporterDesc": "Germany",
+                            "partnerDesc": "France",
+                            "flowDesc": "Exports",
+                            "primaryValue": 300,
+                            "cmdDesc": "All Commodities",
+                        }
+                    ]
+                }
+            ),
+        ]
+        client = MockAsyncClient(responses)
+
+        with patch("backend.providers.comtrade.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = run(
+                provider._fetch_single_reporter_data(  # pylint: disable=protected-access
+                    client,
+                    "Germany",
+                    "251",
+                    "TOTAL",
+                    "X",
+                    "2020",
+                    "A",
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "Germany")
+        self.assertEqual(result[0].data[0].value, 300)
+        self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
+        sleep_mock.assert_awaited_once()
+
+    def test_comtrade_fetch_single_reporter_does_not_retry_empty_hs_subheading(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+        client = MockAsyncClient([MockAsyncResponse({"data": []})])
+
+        with patch("backend.providers.comtrade.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = run(
+                provider._fetch_single_reporter_data(  # pylint: disable=protected-access
+                    client,
+                    "China",
+                    "0",
+                    "030448",
+                    "X",
+                    "2020",
+                    "A",
+                )
+            )
+
+        self.assertEqual(result, [])
+        self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
+        sleep_mock.assert_not_awaited()
+
     def test_comtrade_fetch_trade_balance(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 
