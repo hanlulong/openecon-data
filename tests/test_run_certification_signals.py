@@ -392,6 +392,40 @@ def test_preflight_classifies_oecd_non_production_dataflow_as_supportability_blo
     )
 
 
+def test_preflight_classifies_imf_price_or_memorandum_family_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    unsupported_imf = {
+        "id": "direct-imf-price",
+        "provider_stratum": "IMF",
+        "query": "Germany Other Manufacturing Producer Price Index Commodities by Activity from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "PPI_OMFG_IX",
+            "name": "Producer Price Index, Commodities by Activity, Other Manufacturing",
+            "category": "INDICATOR",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [unsupported_imf],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "imf_non_weo_public_surface_unsupported": 1
+    }
+    assert audit["flagged_rows_sample"][0]["execution_mode"] == "supportability_blocked"
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-imf-price.json",
+        [unsupported_imf],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
 def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
     module = load_module()
     runnable_oecd = {
@@ -468,6 +502,74 @@ def test_preflight_classifies_worldbank_niche_and_specialized_sources_as_support
         allow_high_risk_direct=False,
         classify_unsupported_direct=True,
     )
+
+
+def test_preflight_classifies_worldbank_low_viability_families_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    ddh_worldbank = {
+        "id": "direct-worldbank-ddh",
+        "provider_stratum": "WorldBank",
+        "query": "Brazil Persons owing a mobility phone (% of persons with any degree of functional difficulty) from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "ocel_any_dfcl_all",
+            "name": "Persons owing a mobility phone (% of persons with any degree of functional difficulty)",
+            "category": "Disability Data Hub (DDH)",
+        },
+    }
+    education_worldbank = {
+        "id": "direct-worldbank-education",
+        "provider_stratum": "WorldBank",
+        "query": "India Government expenditure on tertiary education PPP$ (millions) from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "UIS.X.PPP.5T8.FSGOV",
+            "name": "Government expenditure on tertiary education, PPP$ (millions)",
+            "category": "Education Statistics",
+        },
+    }
+    demographic_worldbank = {
+        "id": "direct-worldbank-demographic",
+        "provider_stratum": "WorldBank",
+        "query": "India ages 11-16 female Population from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "SP.POP.1116.FE.UN",
+            "name": "Population, ages 11-16, female",
+            "category": "Education Statistics",
+        },
+    }
+    policy_worldbank = {
+        "id": "direct-worldbank-policy",
+        "provider_stratum": "WorldBank",
+        "query": "033_Are commercial banks permitted to distribute insurance?_#VGDA_07 from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "FB.INC.INST.PA.CB.IN",
+            "name": "033_Are commercial banks permitted to distribute insurance?_#VGDA_07",
+            "category": "Global Financial Inclusion and Consumer Protection Survey",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [ddh_worldbank, education_worldbank, demographic_worldbank, policy_worldbank],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 4
+    assert audit["summary"]["supportability_blocked_rows"] == 4
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "worldbank_niche_catalog_unsupported": 4,
+    }
+    assert {row["execution_mode"] for row in audit["flagged_rows_sample"]} == {"supportability_blocked"}
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-worldbank-low-viability.json",
+        [ddh_worldbank, education_worldbank, demographic_worldbank, policy_worldbank],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
 
 def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
     module = load_module()

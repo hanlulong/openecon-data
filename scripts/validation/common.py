@@ -96,6 +96,7 @@ else:
     }
 _AMBIGUOUS_COUNTRY_TERMS = {
     'america',
+    'are',
     'can',
     'per',
     'world',
@@ -1293,6 +1294,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in query_lower for term in ['positions', 'resident financial intermediaries', 'openness index', 'reserve money', 'claims', 'liabilities', 'gross external debt position', 'not publicly guranteed', 'not publicly guaranteed']):
         reasons.append('imf_complex_finance_family')
+    if provider_upper == 'IMF' and 'sectoral financial' in query_lower and any(term in query_lower for term in ['assets', 'financial derivatives', 'employee stock options']):
+        reasons.append('imf_complex_finance_family')
     category_lower = str(origin.get('category') or '').lower()
     # Do not treat every non-WEO IMF catalog category as unsupported. Several
     # IMF DataMapper-backed families in the catalog (for example GDD and
@@ -1368,7 +1371,13 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'external trade by harmonized commodity description and coding systems' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'external trade' in query_lower and re.search(r'\bhs\b', query_lower):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'by standard international trade classification' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'merchandise trade' in query_lower and 'central product classification' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('TM_HS_', 'TX_HS_', 'TRX_HS_', 'TRM_HS_', 'TXG_CPC', 'TMG_CPC', 'TX_CPC', 'TM_CPC')):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'dataset:' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_low_viability_family')
@@ -1382,13 +1391,13 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
-    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'fpn datahub archive', 'lac equity lab']):
+    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'fpn datahub archive', 'lac equity lab', 'country partnership strategy']):
         reasons.append('worldbank_niche_catalog_family')
     if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement', 'pefa', 'doing business']):
         reasons.append('worldbank_specialized_source_family')
     if any(term in category_lower for term in ['quarterly public sector debt', 'exporter dynamics database', 'gender statistics']):
         reasons.append('worldbank_specialized_source_family')
-    if any(term in worldbank_text for term in ['rights to inherit assets', 'are other banks permitted']):
+    if any(term in worldbank_text for term in ['rights to inherit assets', 'are other banks permitted', 'commercial banks permitted']):
         reasons.append('worldbank_binary_policy_query')
     if any(term in worldbank_text for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
         reasons.append('worldbank_education_finance_query')
@@ -1493,6 +1502,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_price_or_memorandum_family')
     if provider_upper == 'IMF' and 'share price index' in query_lower and 'definition' in query_lower and any(term in query_lower for term in ['investment fund', 'nace2']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['pension funds assets', 'financial derivatives and employee stock options', 'sectoral financial']):
+        reasons.append('imf_complex_finance_family')
     if 'revenue other revenue' in query_lower:
         reasons.append('definition_financial_query')
     if 'taxes income profits government and public sector finance' in query_lower:

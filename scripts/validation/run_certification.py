@@ -88,7 +88,13 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     ):
         return 'oecd_non_production_dataflow_unsupported'
 
-    if provider == 'WORLDBANK' and 'worldbank_niche_catalog_family' in reasons:
+    if provider == 'WORLDBANK' and (
+        'worldbank_niche_catalog_family' in reasons
+        or 'worldbank_ddh_prevalence_family' in reasons
+        or 'worldbank_education_expenditure_family' in reasons
+        or 'worldbank_demographic_literacy_slice' in reasons
+        or 'worldbank_binary_policy_query' in reasons
+    ):
         return 'worldbank_niche_catalog_unsupported'
     if provider == 'WORLDBANK' and 'worldbank_specialized_source_family' in reasons:
         return 'worldbank_specialized_source_unsupported'
@@ -97,7 +103,11 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
         return None
 
     category = str(origin.get('category') or row.get('category') or '').strip().lower()
-    if 'imf_low_viability_family' in reasons and category and category != 'weo':
+    if (
+        ('imf_low_viability_family' in reasons or 'imf_price_or_memorandum_family' in reasons)
+        and category
+        and category != 'weo'
+    ):
         return 'imf_non_weo_public_surface_unsupported'
     return None
 

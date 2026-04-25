@@ -32,6 +32,21 @@ def test_default_query_for_row_naturalizes_imf_indicator_names():
     assert "isic rev" not in query.lower()
 
 
+def test_default_query_for_row_does_not_treat_are_verb_as_country() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "UIS.MS.56.F",
+        "name": "Total inbound internationally mobile students, female (number)",
+        "description": (
+            "Total number of female students who have crossed a national or territorial border "
+            "for the purpose of education and are now enrolled outside their country of origin."
+        ),
+    }
+
+    assert detect_single_country_from_text("Are Total inbound internationally mobile students") is None
+    assert not default_query_for_row(row).startswith("Are ")
+
+
 def test_default_query_for_row_uses_slug_for_short_coingecko_symbols():
     row = {
         "provider": "CoinGecko",
@@ -273,6 +288,38 @@ def test_audit_direct_query_shape_flags_worldbank_binary_policy_queries():
 
     assert audit["risk_level"] == "high"
     assert "worldbank_binary_policy_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_commercial_bank_policy_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "033_Are commercial banks permitted to distribute insurance?_#VGDA_07 from World Bank",
+            "origin": {
+                "name": "033_Are commercial banks permitted to distribute insurance?_#VGDA_07",
+                "category": "Global Financial Inclusion and Consumer Protection Survey",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_binary_policy_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_country_partnership_strategy_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India LFPR per 1000 for ages 15+ Rural & Urban: Level Secondary from World Bank",
+            "origin": {
+                "name": "LFPR per 1000 for ages 15+ Rural & Urban: Level Secondary",
+                "category": "Country Partnership Strategy for India (FY2013 - 17)",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_niche_catalog_family" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_oecd_publication_table_queries():
@@ -976,6 +1023,22 @@ def test_audit_direct_query_shape_flags_imf_producer_price_activity_titles() -> 
     assert "imf_price_or_memorandum_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_imf_sectoral_financial_asset_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Pension Funds Assets Sectoral Financial derivatives and employee stock options from IMF",
+            "origin": {
+                "name": "Sectoral Financial, Pension Funds, Assets, Financial derivatives and employee stock options",
+                "source_indicator_code": "NS_PF_AF_XDC",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_complex_finance_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_other_revenue_titles() -> None:
     audit = audit_direct_query_shape(
         {
@@ -1024,6 +1087,22 @@ def test_audit_direct_query_shape_flags_imf_hs_external_trade_titles() -> None:
             "provider": "IMF",
             "query": "Germany Exports Value Railway tramway locomotives External Trade By Harmonized Commodity Description and Coding Systems (HS 2017) Rev. 5 from IMF",
             "origin": {"name": "Germany Exports Value Railway tramway locomotives External Trade By Harmonized Commodity Description and Coding Systems (HS 2017) Rev. 5"},
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "imf_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_imf_cpc_external_trade_titles() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "IMF",
+            "query": "Germany Total Exports Merchandise Trade By Central Product Classification (CPC) Version 2.1 Wood and Cork from IMF",
+            "origin": {
+                "name": "Merchandise Trade, Total Exports, By Central Product Classification (CPC) Version 2.1, Wood and Cork",
+                "source_indicator_code": "TXG_CPC21_31_XDC",
+            },
         }
     )
 
