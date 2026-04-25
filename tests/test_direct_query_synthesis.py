@@ -357,6 +357,51 @@ def test_audit_direct_query_shape_flags_oecd_informality_nonproduction_family():
     assert "oecd_non_production_dataflow" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_sdg_goal_dataflows() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Global Sustainable Development Goal 03 - Good health and well-being from OECD",
+            "origin": {
+                "name": "Sustainable Development Goal 03 - Good health and well-being",
+                "source_indicator_code": "OECD_DSD_SDG@DF_SDG_G_3",
+                "category": "OECD Dataflow",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_oecd_instruction_time_and_childcare_dataflows() -> None:
+    for query, code in [
+        ("Germany Instruction time in compulsory general education by age from OECD", "OECD_DSD_EAG_IT@DF_EAG_IT_AGE"),
+        ("Japan Net childcare cost for parents using centre-based childcare from OECD", "OECD_DSD_TAXBEN_NCC@DF_NCC"),
+        ("Germany Number of students and repeaters by grade and level of education from OECD", "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_RAW_RPTR"),
+        ("Japan Number of mobile students enrolled and graduated by country of origin from OECD", "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_RAW_MOB"),
+        ("Korea Revenue Statistics in Asia and Pacific - Reference series from OECD", "OECD_DSD_REF_ASAP@DF_REFSERIES_ASAP"),
+        ("Canada Teachers' actual salaries relative to workers' earnings from OECD", "OECD_DSD_EAG_EARNINGS@DF_EAG_EARNINGS"),
+        ("Japan domestic concept Quarterly employment by institutional sector from OECD", "OECD.SDD.NAD,DSD_NASEC10@DF_QNA_EXPENDITURE_INST"),
+        ("Japan National and regional house price indices from OECD", "OECD.SDD.TPS,DSD_RHPI@DF_RHPI"),
+        ("Canada Number of national tertiary students enrolled abroad from OECD", "OECD_DSD_EAG_UOE_MOB@DF_MOB"),
+    ]:
+        audit = audit_direct_query_shape(
+            {
+                "provider": "OECD",
+                "query": query,
+                "origin": {
+                    "name": query.removesuffix(" from OECD"),
+                    "source_indicator_code": code,
+                    "category": "OECD Dataflow",
+                },
+            }
+        )
+
+        assert audit["risk_level"] == "high"
+        assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_keeps_oecd_nonproduction_alone_below_high_risk():
     audit = audit_direct_query_shape(
         {
@@ -386,6 +431,77 @@ def test_audit_direct_query_shape_flags_eurostat_vine_breakdown_queries():
 
     assert audit["risk_level"] == "high"
     assert "eurostat_agri_breakdown_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_eurostat_rejected_next200_dataflows() -> None:
+    cases = [
+        (
+            "Spain Time spent in the main activity by sex and household composition from Eurostat",
+            "TUS_20HHSTATUS",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "France by direction EU level - gross weight of goods handled in main ports from Eurostat",
+            "MAR_QG_QM_EWHD",
+            "eurostat_transport_port_query",
+        ),
+        (
+            "Italy Physical supply and use of wood in the rough over bark from Eurostat",
+            "FOR_EPSUW",
+            "eurostat_forestry_material_flow_query",
+        ),
+        (
+            "Germany Former daily tobacco smokers by sex from Eurostat",
+            "HLTH_EHIS_SK2I",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Spain Infant deaths occurring in EU by cause and age from Eurostat",
+            "HLTH_CD_INFOEU",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Germany Deaths by week, sex, 5-year age group and NUTS2 region from Eurostat",
+            "DEMO_R_MWK2_05",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Italy Infant deaths occurring in the EU by cause and age from Eurostat",
+            "HLTH_CD_INFOEU",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Gross weight of goods transported to/from main ports - Portugal from Eurostat",
+            "MAR_GO_AM_PT",
+            "eurostat_transport_port_query",
+        ),
+        (
+            "Italy Mean hourly earnings by sex age and economic activity (2022) from Eurostat",
+            "EARN_SES22_13",
+            "eurostat_cross_tab_query",
+        ),
+        (
+            "Italy Early leavers from education and training by sex and NUTS 1 region from Eurostat",
+            "EDAT_LFSE_16",
+            "eurostat_cross_tab_query",
+        ),
+    ]
+
+    for query, code, reason in cases:
+        audit = audit_direct_query_shape(
+            {
+                "provider": "Eurostat",
+                "query": query,
+                "origin": {
+                    "name": query.removesuffix(" from Eurostat"),
+                    "source_indicator_code": code,
+                    "category": "Eurostat Dataset",
+                },
+            }
+        )
+
+        assert audit["risk_level"] == "high"
+        assert reason in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_debt_schedule_queries():
@@ -642,6 +758,24 @@ def test_audit_direct_query_shape_flags_fred_naics_revenue_queries():
 
     assert audit["risk_level"] == "high"
     assert "fred_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_fred_regional_acs_and_fiscal_situation_families() -> None:
+    cases = [
+        "US LA High School Graduate or Higher (5-year estimate) in St. Bernard Parish from FRED",
+        "Fiscal Situation of General Government: Net Lending/borrowing for Indonesia from FRED",
+    ]
+    for query in cases:
+        audit = audit_direct_query_shape(
+            {
+                "provider": "FRED",
+                "query": query,
+                "origin": {"name": query.removesuffix(" from FRED"), "source_provider": "FRED"},
+            }
+        )
+
+        assert audit["risk_level"] == "high"
+        assert "fred_low_viability_family" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_fred_hicp_by_origin_code():
@@ -1177,6 +1311,221 @@ def test_audit_direct_query_shape_flags_next200_imf_probe_reject_families() -> N
             "GR_CASH_INFLOW_XDC",
             "imf_low_viability_family",
         ),
+        (
+            "Germany General Government Fiscal Overall primary balance from IMF",
+            "GG_GXOPB_G01_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Japan Consolidated Income and Distribution Transfer of funds from special account Monetization from IMF",
+            "NI_CID_F_008",
+            "imf_low_viability_family",
+        ),
+        (
+            "Vanuatu Definition Vanilla Merchandise Trade Value of Exports FOB from IMF",
+            "TXGBDVA_FOB_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Uzbekistan Services Other Weight Definition Consumer Price Weight from IMF",
+            "UZB_PCPIS_O_WT",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Goods Producer Price Index from IMF",
+            "PPPIG_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Jamaica Fiscal Revenue details Environmental Levy from IMF",
+            "JM_CGO_DR_013",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Central Government Cash surplus/deficit Cash Fiscal from IMF",
+            "GCXCCB_G01_CA_EUR",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Fiscal Gross Operating Balance from IMF",
+            "GXCBG_G14_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Revenue Social contributions Government and Public Sector Finance Budgetary Central Government from IMF",
+            "GCBRSC_G14_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Japan Final Summary Excise & Fees import duty & other Customs Rev from IMF",
+            "JPN_CUSTOMS_REV",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Producer Price Index Mining of coal and lignite; extraction of peat from IMF",
+            "PPPI_MINING_COAL_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Stock Market Zimbabwe Definition Victoria Falls-All Share Index from IMF",
+            "ZWE_STOCK_VF_IX",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Nominal Seasonally Adjusted GDP-GNP Relation Net Primary Income from Abroad from IMF",
+            "NGDP_GNP_NPI_SA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Oil Production Economic Activity Barrels per Day from IMF",
+            "OIL_PROD_BPD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Economic Activity Brunei Darussalam Definition Foreign Direct Investment Financial and Insurance Activities from IMF",
+            "BRN_FDI_FIN_INS_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Seasonally Adjusted Taxes on Products from IMF",
+            "TAX_PRODUCTS_SA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Assets Nominal Sectoral Accounts Rest of the World Currency and deposits from IMF",
+            "NSA_ROW_CURRDEP_XDC",
+            "imf_complex_finance_family",
+        ),
+        (
+            "Germany Real Oil Expenditure Gross Domestic Product Gross Capital Formation Gross Fixed Capital Formation from IMF",
+            "NFI_OIL_R_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Banks Financial Certificates Of Deposits 180 To 360 Days Percent per Annum from IMF",
+            "FCD_180_360_PA",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Pound Sterling Rate Exchange Rate Other Foreign Currency per National Currency End of Period from IMF",
+            "ENDE_XDC_GBP_RATE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Japan Deductions Federation Income and Distribution from IMF",
+            "NI_D_FED_008",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Production Approach Real Statistical Discrepancy in GDP from IMF",
+            "NGDP_R_STATDISC_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Mortality National Percent Bangladesh Definition Socio Demographic Indicators Crude Death Rate from IMF",
+            "BGD_CRUDE_DEATH_RATE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Government Consumption Expenditure Donor (wages) from IMF",
+            "NGOV_CONS_DONOR_WAGES",
+            "imf_low_viability_family",
+        ),
+        (
+            "MAC Ghana Definition Share Price Index from IMF",
+            "GHA_MAC_SHARE_PRICE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Tourism Arrivals New Zealand Persons Number of Economic Activity Number of Visitors from IMF",
+            "NZL_TOUR_ARRIVALS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Singapore Persons Number of Indicators of Economic Activity Number of Tourist Arrivals by Origin from IMF",
+            "SGP_TOURIST_ARRIVALS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany General Government Cash Fiscal Memo Item: Expenditure from IMF",
+            "GG_MEMO_EXP_CA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Central Government International reserves Official Reserve Assets Other Reserve Assets (Specify) from IMF",
+            "RES_ORA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany non durable Consumer Price Index Excluding Fish and seafood from IMF",
+            "PCPI_EX_FISH_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Transport Harmonized Consumer Prices from IMF",
+            "HICP_TRANSPORT_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Fiscal Revenue details Jamaica GCT (Imports) from IMF",
+            "JM_CGO_DR_GCT_IMPORTS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Kosovo Definition Central Bank Balance Sheet: Monetary gold as SDRs from IMF",
+            "XKX_CBB_MGAS_EUR",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Rate US Dollars per ounce of gold End of period from IMF",
+            "PZPIGOLD_USD_EOP_RATE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Production Education Economic Activity from IMF",
+            "A_ISIC4_P_IX",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany NACE2 Producer Price Index Production of motor vehicles (transport) trailers and semi-trailers from IMF",
+            "PPPI_NACE2_C30_IX",
+            "imf_price_or_memorandum_family",
+        ),
+        (
+            "Germany Liquid assets to total assets o/w large banks 1/ from IMF",
+            "SUR_FSLT_LB_PT",
+            "imf_complex_finance_family",
+        ),
+        (
+            "Germany Central Government Principle payments (incl. Tbills) from IMF",
+            "SUR_GCDSP_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Mortality National Percent Bangladesh Definition Socio Demographic Indicators Crude Death Rate from IMF",
+            "BGD_CRUDE_DEATH_RATE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Government Consumption Expenditure Donor (wages) from IMF",
+            "NGOV_CONS_DONOR_WAGES",
+            "imf_low_viability_family",
+        ),
+        (
+            "MAC Ghana Definition Share Price Index from IMF",
+            "GHA_MAC_SHARE_PRICE",
+            "imf_low_viability_family",
+        ),
+        (
+            "Tourism Arrivals New Zealand Persons Number of Economic Activity Number of Visitors from IMF",
+            "NZL_TOUR_ARRIVALS",
+            "imf_low_viability_family",
+        ),
+        (
+            "Singapore Persons Number of Indicators of Economic Activity Number of Tourist Arrivals by Origin from IMF",
+            "SGP_TOURIST_ARRIVALS",
+            "imf_low_viability_family",
+        ),
     ]
 
     for query, code, reason in cases:
@@ -1644,6 +1993,23 @@ def test_audit_direct_query_shape_flags_coingecko_old_asset_queries() -> None:
 
     assert audit["risk_level"] == "high"
     assert "coin_slug_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_low_viability_obscure_coin_names() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "CoinGecko",
+            "query": "Dagknight Dog cryptocurrency price from CoinGecko",
+            "origin": {
+                "name": "Dagknight Dog",
+                "source_indicator_code": "dogk",
+                "category": "Cryptocurrency",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "coin_low_viability_family" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_imf_public_sector_revenue_indicator_family() -> None:

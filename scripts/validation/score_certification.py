@@ -450,6 +450,16 @@ def main() -> int:
         final_label = adjudication_row.get('final_label') if adjudication_row else None
         adjudicated_pass = label_is_success(final_label)
         final_failure_class = canonical_failure_class(adjudication_row.get('failure_class')) if adjudication_row else None
+        supportability_overrode_adjudication = False
+        if supportability_blocked and adjudicated_pass is True:
+            # A stale/manual adjudicated pass cannot certify a row that the
+            # current public-provider supportability guard refuses to execute.
+            # Keep the row reviewed for coverage, but score it as an unresolved
+            # supportability failure rather than adding a misleading replay
+            # conflict for a surface we intentionally did not call.
+            adjudicated_pass = False
+            final_failure_class = final_failure_class or 'supportability_blocked'
+            supportability_overrode_adjudication = True
         if adjudicated_pass is not None:
             adjudicated_records_total += 1
         if expected_clarification is False:
@@ -493,6 +503,7 @@ def main() -> int:
             'answer_present_without_clarification': session_answer_present,
             'supportability_blocked': supportability_blocked,
             'supportability_reasons': supportability_reasons,
+            'supportability_overrode_adjudication': supportability_overrode_adjudication,
             'runtime_unavailable': runtime_unavailable,
             'runtime_unavailable_reasons': runtime_unavailable_reasons,
             'adjudicated_replay_conflict': replay_conflict,

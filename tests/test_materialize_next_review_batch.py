@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts.validation.materialize_next_review_batch import (
+    direct_oversample_count,
     materialize_ambiguity,
     materialize_multiround,
     select_quality_screened_direct_records,
@@ -22,6 +23,15 @@ def write_json(path: Path, payload: dict) -> None:
 
 def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+
+
+def test_direct_oversample_count_deepens_imf_candidate_pool() -> None:
+    assert direct_oversample_count("IMF", 9, 115_381) == 5_000
+    assert direct_oversample_count("IMF", 1, 115_381) == 201
+    assert direct_oversample_count("FRED", 9, 138_774) == 450
+    assert direct_oversample_count("IMF", 9, 100) == 100
 
 
 def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):

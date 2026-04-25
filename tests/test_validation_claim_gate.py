@@ -149,6 +149,81 @@ def test_score_certification_exposes_supportability_blockers(tmp_path: Path):
     assert any("supportability-blocked certification sessions" in item for item in report["claim_grade_blockers"])
 
 
+def test_score_certification_supportability_block_overrides_stale_adjudicated_pass(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    adjudication_path = tmp_path / "adjudication.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-imf-unsupported",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Germany Merchandise Trade Value of Exports Chapter 60 from IMF",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "direct-imf-unsupported",
+                "round_index": 1,
+                "status_code": None,
+                "series_count": 0,
+                "error": "supportability_blocked: imf_non_weo_public_surface_unsupported",
+                "supportability_blocked": True,
+                "supportability_reason": "imf_non_weo_public_surface_unsupported",
+            }
+        ],
+    )
+    write_jsonl(
+        adjudication_path,
+        [
+            {
+                "session_id": "direct-imf-unsupported",
+                "final_label": "pass",
+                "failure_class": None,
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    session = report["session_results"][0]
+    assert session["final_label"] == "pass"
+    assert session["supportability_blocked"] is True
+    assert session["supportability_overrode_adjudication"] is True
+    assert session["adjudicated_pass"] is False
+    assert session["final_failure_class"] == "supportability_blocked"
+    assert session["adjudicated_replay_conflict"] is None
+    assert report["strata"]["adjudicated_replay_conflicts"] == []
+    assert any("supportability-blocked certification sessions" in item for item in report["claim_grade_blockers"])
+
+
 def test_score_certification_exposes_runtime_unavailable_blockers(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"

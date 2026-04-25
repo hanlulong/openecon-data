@@ -52,6 +52,21 @@ def normalize_provider_name(value: str) -> str:
     return str(value or '').strip()
 
 
+def direct_oversample_count(provider: str, count: int, provider_population: int) -> int:
+    """Return the deterministic catalog sample size for direct-batch candidates.
+
+    IMF has a very dense catalog surface where unsupported public surfaces can
+    dominate a small random slice.  Oversample it more deeply so the review
+    batch can still find provider-level executable rows without query-specific
+    allowlisting.
+    """
+    provider_upper = str(provider or '').upper()
+    base_count = max(count * 50, count + 200)
+    if provider_upper == 'IMF' and count >= 5:
+        base_count = max(base_count, count * 500, 5_000)
+    return min(provider_population, base_count)
+
+
 def select_quality_screened_direct_records(records: list[dict], count: int) -> list[dict]:
     def sort_key(record: dict) -> tuple[int, int, int, str]:
         provenance = dict(record.get('provenance') or {})
@@ -141,7 +156,7 @@ def materialize_direct(
         if count <= 0:
             continue
         provider_population = int(provider_counts.get(provider, count))
-        oversample_count = min(provider_population, max(count * 50, count + 200))
+        oversample_count = direct_oversample_count(provider, count, provider_population)
         samples = sample_indicator_rows(provider, oversample_count, db_path=db_path.resolve(), seed=seed)
         candidate_records = []
         for row in samples:

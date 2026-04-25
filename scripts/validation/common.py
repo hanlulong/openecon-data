@@ -1322,6 +1322,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.match(r'^(?:[A-Z]{3}_)?L(?:E|ER|EW|UR|UE|FE|MI|LF|LFPR|PR)(?:_|[A-Z0-9])', origin_code_upper):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'socio demographic indicators' in query_lower and any(term in query_lower for term in ['crude death rate', 'mortality']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GLR', 'GGR', 'CGR', 'GCR', 'BGR', 'GCGR')) and any(term in query_lower for term in ['fiscal', 'government', 'revenue', 'tax']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('GR_', 'GRG', 'GRK', 'GGRK')) and any(term in query_lower for term in ['government', 'public sector', 'revenue', 'grants', 'fiscal']):
@@ -1332,6 +1334,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['central government', 'social security central government', 'local government', 'regional government', 'general government']) and any(term in query_lower for term in ['expense', 'revenue', 'tax', 'subsidies', 'social contributions', 'property expense', 'cash inflow', 'financing activities']):
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'government and public sector finance' in query_lower and any(term in query_lower for term in ['budgetary central government', 'central government']) and any(term in query_lower for term in ['revenue', 'social contributions', 'total financing', 'debt holder']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'central government' in query_lower and any(term in query_lower for term in ['principle payments', 'tbills']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['customs rev', 'excise & fees', 'import duty']) and any(term in query_lower for term in ['final summary', 'revenue']):
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.match(r'^F(?:M|O)\d', origin_code_upper):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and ('merchanting' in query_lower or origin_code_upper.startswith(('BXMGT_', 'BMG_', 'BXS_'))):
@@ -1341,6 +1349,9 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_complex_finance_family')
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['balance of payments', 'external debt', 'international investment position']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['international reserves', 'official reserve assets', 'other reserve assets']):
         reasons.append('imf_complex_finance_family')
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'definition' in query_lower and any(term in query_lower for term in ['interest rates', 'fiscal', 'government', 'balance of payments']):
@@ -1359,21 +1370,50 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'monetary and financial accounts' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['central bank balance sheet', 'monetary gold as sdrs']):
+        reasons.append('imf_complex_finance_family')
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['monetary other depository corporations survey', 'other depository corporations survey']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'interest rates' in query_lower:
         reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['certificates of deposits', 'percent per annum']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'exchange rate' in query_lower and any(term in query_lower for term in ['other foreign currency per national currency', 'end of period', 'pound sterling rate']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'us dollars per ounce of gold' in query_lower:
+        reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross value added' in query_lower and any(term in query_lower for term in ['isic', 'activities', 'activity']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'economic activity' in query_lower and any(term in query_lower for term in ['oil production', 'foreign direct investment financial and insurance activities', 'tourism arrivals', 'tourist arrivals', 'number of visitors']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'economic activity' in query_lower and 'production' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross value added' in query_lower and '_ISIC' in origin_code_upper:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'production approach' in query_lower and 'gross domestic product' in query_lower and any(term in query_lower for term in ['activity', 'isic', 'manufacturing']):
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'gross fixed capital formation' in query_lower and any(term in query_lower for term in ['of which', 'construction', 'previous year prices']):
+    if provider_upper == 'IMF' and 'gross fixed capital formation' in query_lower and any(term in query_lower for term in ['of which', 'construction', 'previous year prices', 'oil expenditure', 'gross capital formation']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'gross domestic product' in query_lower and 'gross capital formation' in query_lower and 'real expenditure' in query_lower:
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['total outlays', 'revenue grants', 'central government consolidation', 'budgetary central government']):
+    if provider_upper == 'IMF' and 'government consumption expenditure' in query_lower and any(term in query_lower for term in ['donor', 'wages']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['gdp-gnp relation', 'net primary income from abroad', 'taxes on products', 'statistical discrepancy in gdp']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'fiscal' in query_lower and any(term in query_lower for term in ['total outlays', 'revenue grants', 'central government consolidation', 'budgetary central government', 'memo item']):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in [
+        'overall primary balance',
+        'gross operating balance',
+        'cash surplus/deficit',
+        'environmental levy',
+        'gct (imports)',
+        'revenue details',
+        'consolidated income and distribution',
+        'transfer of funds from special account',
+        'deductions federation income and distribution',
+    ]):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and re.search(r'\b(?:labou?r markets?|labor force|labour force)\b', worldbank_text):
         reasons.append('imf_low_viability_family')
@@ -1392,6 +1432,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider_upper == 'IMF' and 'merchandise trade' in query_lower and 'central product classification' in query_lower:
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and origin_code_upper.startswith(('TM_HS_', 'TX_HS_', 'TXG_HS', 'TMG_HS', 'TRX_HS_', 'TRM_HS_', 'TXG_CPC', 'TMG_CPC', 'TX_CPC', 'TM_CPC')):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and origin_code_upper.startswith(('TXGBD', 'TMGBD')):
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and 'merchandise trade' in query_lower and any(term in query_lower for term in ['vanilla', 'definition', ' fob ']):
         reasons.append('imf_low_viability_family')
     if provider_upper == 'IMF' and 'dataset:' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_low_viability_family')
@@ -1505,21 +1549,38 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         "adults' gender distribution by educational attainment level and age group",
         'minimum relative to average wages of full-time workers',
         'tax and non-tax revenues',
+        'sustainable development goal',
+        'instruction time in compulsory general education',
+        'net childcare cost for parents',
+        'number of students and repeaters',
+        'number of mobile students enrolled and graduated',
+        'revenue statistics in asia and pacific',
+        'reference series',
+        "teachers' actual salaries relative to workers' earnings",
+        'quarterly employment by institutional sector',
+        'national and regional house price indices',
+        'number of national tertiary students enrolled abroad',
     ]):
         reasons.append('oecd_low_viability_family')
     if any(term in query_lower for term in ['memorandum items', 'producer price index', 'consumer price index']) and any(term in query_lower for term in ['definition', 'organic acids', 'food and non-alcoholic beverages', 'cash government and public sector finance', 'cash, national currency', 'gross value added', 'previous year prices', 'base year']):
         reasons.append('imf_price_or_memorandum_family')
     if 'weight' in query_lower and 'consumer prices' in query_lower and 'from imf' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and 'weight' in query_lower and 'consumer price' in query_lower:
+        reasons.append('imf_price_or_memorandum_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['consumer price index excluding', 'harmonized consumer prices']):
+        reasons.append('imf_price_or_memorandum_family')
     if 'consumer prices expenditure of households' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
     if 'all commodities producer price index' in query_lower:
         reasons.append('imf_price_or_memorandum_family')
-    if provider_upper == 'IMF' and 'producer price index' in query_lower and any(term in query_lower for term in ['commodities by activity', 'other manufacturing', 'isic rev 4']):
+    if provider_upper == 'IMF' and 'producer price index' in query_lower and any(term in query_lower for term in ['commodities by activity', 'other manufacturing', 'isic rev 4', 'goods', 'mining of coal', 'extraction of peat', 'all commodities', 'production of']):
         reasons.append('imf_price_or_memorandum_family')
-    if provider_upper == 'IMF' and 'share price index' in query_lower and 'definition' in query_lower and any(term in query_lower for term in ['investment fund', 'nace2']):
+    if provider_upper == 'IMF' and 'share price index' in query_lower and 'definition' in query_lower:
         reasons.append('imf_low_viability_family')
-    if provider_upper == 'IMF' and any(term in query_lower for term in ['pension funds assets', 'financial derivatives and employee stock options', 'sectoral financial', 'banking system indicators', 'sectoral distribution of credit']):
+    if provider_upper == 'IMF' and 'stock market' in query_lower and 'definition' in query_lower:
+        reasons.append('imf_low_viability_family')
+    if provider_upper == 'IMF' and any(term in query_lower for term in ['pension funds assets', 'financial derivatives and employee stock options', 'sectoral financial', 'banking system indicators', 'sectoral distribution of credit', 'sectoral accounts rest of the world', 'currency and deposits', 'liquid assets to total assets']):
         reasons.append('imf_complex_finance_family')
     if provider_upper == 'IMF' and any(term in query_lower for term in ['portfolio investment', 'debt securities', ' iip ', 'international investment position']):
         reasons.append('imf_complex_finance_family')
@@ -1563,6 +1624,22 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('eurostat_cross_tab_query')
     if provider == 'Eurostat' and 'performing health-enhancing physical activity by sex' in query_lower:
         reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'time spent in the main activity by sex and household composition' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'former daily tobacco smokers by sex' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and any(term in query_lower for term in ['infant deaths occurring in eu by cause and age', 'infant deaths occurring in the eu by cause and age']):
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'deaths by week' in query_lower and any(term in query_lower for term in ['nuts2', '5-year age group', 'sex']):
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'mean hourly earnings by sex age and economic activity' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and 'early leavers from education and training by sex and nuts' in query_lower:
+        reasons.append('eurostat_cross_tab_query')
+    if provider == 'Eurostat' and any(term in query_lower for term in ['gross weight of goods handled in main ports', 'gross weight of goods transported to/from main ports']):
+        reasons.append('eurostat_transport_port_query')
+    if provider == 'Eurostat' and 'wood in the rough over bark' in query_lower:
+        reasons.append('eurostat_forestry_material_flow_query')
     if re.search(r'^US\s+[A-Z]{2}\b', query) and re.search(r'\b(county|cbsa|msa|metro)\b', query_lower):
         reasons.append('subnational_abbrev_ambiguous')
     if any(marker in query_lower or marker in origin_name_lower for marker in ['sub total', 'exchange difference']):
@@ -1570,6 +1647,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if re.search(r'\b(scenario|scenarios|projection|projections|forecast|forecasts|fua|fuas)\b', query_lower):
         reasons.append('scenario_projection_query')
     if re.search(r'total revenue for\s+\d{4}', query_lower) or any(term in query_lower for term in ['net equity in life insurance and pension funds', 'asset (ima)', 'employer firms total revenue', 'total expense for', 'establishments subject to federal income tax', 'defined benefit retirement funds', 'commercial paper; asset']):
+        reasons.append('fred_low_viability_family')
+    if provider_upper == 'FRED' and any(term in query_lower for term in ['fiscal situation of general government', 'high school graduate or higher (5-year estimate)']):
         reasons.append('fred_low_viability_family')
     fred_catalog_text = f"{query_lower} {origin_name_lower} {origin_code_upper.lower()}"
     if provider_upper == 'FRED' and (
@@ -1583,10 +1662,8 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('coin_slug_query')
     if provider == 'CoinGecko' and '[old]' in query_lower:
         reasons.append('coin_slug_query')
-    if provider == 'CoinGecko' and '[old]' in query_lower:
-        reasons.append('coin_slug_query')
-    if provider == 'CoinGecko' and '[old]' in query_lower:
-        reasons.append('coin_slug_query')
+    if provider == 'CoinGecko' and any(term in query_lower for term in ['dagknight dog']):
+        reasons.append('coin_low_viability_family')
     methodology_markers = [
         'ppp',
         'ppps',
@@ -1651,12 +1728,15 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'eurostat_agri_breakdown_query',
         'eurostat_cross_tab_query',
         'eurostat_dimension_fragment_query',
+        'eurostat_transport_port_query',
+        'eurostat_forestry_material_flow_query',
         'subnational_abbrev_ambiguous',
         'accounting_artifact_query',
         'scenario_projection_query',
         'fred_low_viability_family',
         'fred_hicp_catalog_family',
         'coin_slug_query',
+        'coin_low_viability_family',
         'methodology_dense',
     ]):
         risk_level = 'high'
