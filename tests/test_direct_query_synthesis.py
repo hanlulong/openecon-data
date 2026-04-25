@@ -789,6 +789,40 @@ def test_audit_direct_query_shape_flags_worldbank_tertiary_expenditure_ppp_queri
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_double_shift_school_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India World Bank: Share of schools with double shifts (%) from World Bank",
+            "origin": {
+                "name": "World Bank: Share of schools with double shifts (%)",
+                "category": "Education Statistics",
+                "source_indicator_code": "PER.ALL.SFT.D",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_subnational_salary_share_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India World Bank: Subnational government share of salaries (%) from World Bank",
+            "origin": {
+                "name": "World Bank: Subnational government share of salaries (%)",
+                "category": "Education Statistics",
+                "source_indicator_code": "PER.ALL.SAL.SUBNAT",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_age_band_population_queries() -> None:
     audit = audit_direct_query_shape(
         {
@@ -798,6 +832,23 @@ def test_audit_direct_query_shape_flags_worldbank_age_band_population_queries() 
                 "name": "Population, ages 11-16, female",
                 "category": "Education Statistics",
                 "source_indicator_code": "SP.POP.1116.FE.UN",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_total_age_band_population_queries() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India ages 7-10 total Population from World Bank",
+            "origin": {
+                "name": "Population, ages 7-10, total",
+                "category": "Education Statistics",
+                "source_indicator_code": "SP.POP.0710.TO.UN",
             },
         }
     )
@@ -1037,6 +1088,108 @@ def test_audit_direct_query_shape_flags_imf_sectoral_financial_asset_titles() ->
 
     assert audit["risk_level"] == "high"
     assert "imf_complex_finance_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_next200_imf_probe_reject_families() -> None:
+    cases = [
+        (
+            "Germany Real Primary Sector Agriculture livestock Gross Value Added forestry and agriculture services from IMF",
+            "NGDPVA_R_ISIC31_A01T02_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Central Government Revenue Tax Trade Other Fiscal from IMF",
+            "CG01_GRTTO_G01_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Gross Fixed Capital Formation of which Construction Previous Year Prices from IMF",
+            "NFIC_R_CH_PYP_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Fisheries All Currencies Bahamas Definition Banking System Indicators Sectoral Distribution of Credit from IMF",
+            "BHS_SDC_AFI_XDC",
+            "imf_complex_finance_family",
+        ),
+        (
+            "Germany Production Industrial Production Construction Base Year Economic Activity By Economic Activity from IMF",
+            "AIPCO_BY1990_IX",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Revenue Interest Cash Fiscal Social Security Central Government from IMF",
+            "GXRI_G01_CA_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Pulp paper External Trade Value of Exports paperboard and art. thereof from IMF",
+            "TXG_HS47T49_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Monetary Other Depository Corporations Survey Other Items (Net) Share and Alternate from IMF",
+            "ODC_SA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Expense Subsidies Accrual Fiscal Social Security Central Government To Public Corporations from IMF",
+            "GXESUB_G01_AC_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Regional Government Revenue Tax Trade Exports Accrual Fiscal from IMF",
+            "GRRTTX_G01_AC_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Real Expenditure Gross Domestic Product Gross Capital Formation from IMF",
+            "NGDP_E_R_GCF_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Branch Trade Tajikistan Definition Nominal Gdp By Branches of Origin from IMF",
+            "TJK_NAG_NGDPSW_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Expense Other Miscellaneous Cash Fiscal General Government Consolidation Non-interest Property Expense from IMF",
+            "GGXOM_G01_CA_XDC",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Crude Materials Inedible except Fuels SITC External Trade Value of Exports from IMF",
+            "TXG_SITC2_USD",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Portfolio Investment Debt Securities Long-term IIP Assets denominated in Japanese Yen from IMF",
+            "IAD_PI_DS_L_JPY",
+            "imf_complex_finance_family",
+        ),
+        (
+            "SNNP Gamo_Gofa Kilogram Ethiopia Definition Crop Production By Region from IMF",
+            "ETH_CROP_REGION_KG",
+            "imf_low_viability_family",
+        ),
+        (
+            "Germany Regional Government Cash Fiscal Cash Infow from Financing Activities from IMF",
+            "GR_CASH_INFLOW_XDC",
+            "imf_low_viability_family",
+        ),
+    ]
+
+    for query, code, reason in cases:
+        audit = audit_direct_query_shape(
+            {
+                "provider": "IMF",
+                "query": query,
+                "origin": {"name": query.removesuffix(" from IMF"), "source_indicator_code": code},
+            }
+        )
+
+        assert audit["risk_level"] == "high", query
+        assert reason in audit["reasons"], query
 
 
 def test_audit_direct_query_shape_flags_imf_other_revenue_titles() -> None:
