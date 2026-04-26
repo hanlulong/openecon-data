@@ -128,6 +128,80 @@ def test_track_review_coverage_progress_handles_zero_targets(tmp_path: Path):
     assert report["dataset_type_progress"]["direct"]["remaining_n"] == 0
 
 
+def test_track_review_coverage_progress_accepts_batch_plan_list_targets(tmp_path: Path):
+    score_path = tmp_path / "score.json"
+    expansion_path = tmp_path / "expansion.json"
+    output_path = tmp_path / "progress.json"
+
+    write_json(
+        score_path,
+        {
+            "snapshot_id": "snap-1",
+            "session_results": [
+                {
+                    "session_id": "direct-fred-1",
+                    "dataset_type": "direct",
+                    "provider_stratum": "FRED",
+                    "family_stratum": None,
+                    "provenance": {"selection_weight": 1.0},
+                }
+            ],
+        },
+    )
+    write_json(
+        expansion_path,
+        {
+            "snapshot_id": "snap-1",
+            "effective_n_progress": {
+                "current_effective_n": 1.0,
+                "target_effective_n": 10.0,
+                "remaining_effective_n": 9.0,
+                "progress_ratio": 0.1,
+            },
+            "dataset_type_batch_allocation": {"direct": 10},
+            "allocation": {
+                "direct": {
+                    "targets": [
+                        {
+                            "name": "FRED",
+                            "class": "high_traffic",
+                            "floor": 0.98,
+                            "current_n": 1,
+                            "target_n": 11,
+                            "remaining_n": 10,
+                            "planned_batch_sessions": 10,
+                        }
+                    ]
+                },
+                "multiround": {"targets": []},
+                "ambiguity": {"targets": []},
+            },
+        },
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--score-report",
+            str(score_path),
+            "--expansion-plan",
+            str(expansion_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["effective_n_progress"]["target_effective_n"] == 10.0
+    assert report["dataset_type_progress"]["direct"]["current_n"] == 1
+    assert report["dataset_type_progress"]["direct"]["target_n"] == 11
+    assert report["strata_progress"]["direct"]["FRED"]["current_n"] == 1
+    assert report["strata_progress"]["direct"]["FRED"]["target_n"] == 11
+    assert report["strata_progress"]["direct"]["FRED"]["additional_target_sessions"] == 10
+
+
 def test_track_review_coverage_progress_aggregates_unique_sessions_across_multiple_scores(tmp_path: Path):
     score_a = tmp_path / "score-a.json"
     score_b = tmp_path / "score-b.json"

@@ -132,6 +132,16 @@ def aggregate_effective_n(score_reports: list[dict[str, Any]]) -> float | None:
 
 
 def compare_targets(current_stats: dict[str, int], target_stats: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(target_stats, list):
+        target_stats = {
+            str(row.get('name') or ''): {
+                **row,
+                'recommended_total_n': row.get('recommended_total_n', row.get('target_n')),
+                'additional_target_sessions': row.get('additional_target_sessions', row.get('planned_batch_sessions')),
+            }
+            for row in target_stats
+            if str(row.get('name') or '').strip()
+        }
     rows = {}
     for name, target in target_stats.items():
         current_n = int(current_stats.get(name, 0))
@@ -171,14 +181,23 @@ def main() -> int:
     score_reports = [load_json(path.resolve()) for path in args.score_report]
     expansion_plan = load_json(args.expansion_plan.resolve())
 
-    base_effective_n = float(((expansion_plan.get('current') or {}).get('effective_n')) or 0.0)
-    additional_needed = float(((expansion_plan.get('current') or {}).get('additional_effective_n_needed')) or 0.0)
-    target_effective_n = base_effective_n + additional_needed
+    plan_effective_progress = dict(expansion_plan.get('effective_n_progress') or {})
+    if plan_effective_progress:
+        base_effective_n = float(plan_effective_progress.get('current_effective_n') or 0.0)
+        target_effective_n = float(plan_effective_progress.get('target_effective_n') or 0.0)
+    else:
+        base_effective_n = float(((expansion_plan.get('current') or {}).get('effective_n')) or 0.0)
+        additional_needed = float(((expansion_plan.get('current') or {}).get('additional_effective_n_needed')) or 0.0)
+        target_effective_n = base_effective_n + additional_needed
     current_effective_n = aggregate_effective_n(score_reports)
     if current_effective_n is None:
         current_effective_n = base_effective_n
     remaining_effective_n = max(0.0, target_effective_n - current_effective_n)
-    type_targets = dict(((expansion_plan.get('allocation') or {}).get('by_dataset_type')) or {})
+    type_targets = dict(
+        ((expansion_plan.get('allocation') or {}).get('by_dataset_type'))
+        or expansion_plan.get('dataset_type_batch_allocation')
+        or {}
+    )
     type_current = aggregate_type_counts(score_reports)
 
     dataset_type_progress = {}
@@ -189,15 +208,15 @@ def main() -> int:
 
     direct_rows = compare_targets(
         aggregate_strata_n(score_reports, 'direct'),
-        dict((((expansion_plan.get('allocation') or {}).get('direct') or {}).get('targets')) or {}),
+        (((expansion_plan.get('allocation') or {}).get('direct') or {}).get('targets')) or {},
     )
     multiround_rows = compare_targets(
         aggregate_strata_n(score_reports, 'multiround'),
-        dict((((expansion_plan.get('allocation') or {}).get('multiround') or {}).get('targets')) or {}),
+        (((expansion_plan.get('allocation') or {}).get('multiround') or {}).get('targets')) or {},
     )
     ambiguity_rows = compare_targets(
         aggregate_strata_n(score_reports, 'ambiguity'),
-        dict((((expansion_plan.get('allocation') or {}).get('ambiguity') or {}).get('targets')) or {}),
+        (((expansion_plan.get('allocation') or {}).get('ambiguity') or {}).get('targets')) or {},
     )
 
     payload = {
