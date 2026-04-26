@@ -819,6 +819,10 @@ async def fetch_from_provider_dispatch(
                 **params,
                 "indicator": fred_request.get("series_id") or params.get("indicator"),
             }
+            if fred_params.get("seriesId") and fred_params.get("seriesId") != fred_params.get("indicator"):
+                fred_params.pop("seriesId", None)
+            if fred_params.get("series_id") and fred_params.get("series_id") != fred_params.get("indicator"):
+                fred_params.pop("series_id", None)
             series = await svc.fred_provider.fetch_series(fred_params)
             return [series]
 
