@@ -495,6 +495,13 @@ class WorldBankProvider(BaseProvider):
 
         country_upper = country.upper()
 
+        # WorldBank's "all countries" endpoint is case-sensitive in practice:
+        # /country/all works while /country/ALL can hang or return no body.
+        # Keep the provider's no-country default on the intended all-country
+        # surface instead of accidentally uppercasing it into a broken code.
+        if country_upper == "ALL":
+            return "all"
+
         # Check if it's a valid WorldBank region/aggregate code
         if country_upper in self.VALID_REGIONS:
             logger.debug(f"Using WorldBank region/aggregate code: {country_upper}")
@@ -653,7 +660,7 @@ class WorldBankProvider(BaseProvider):
         # Scale per_page based on number of countries to avoid pagination
         # cutting off countries (e.g., G20 × 65 years = 1,235 records > 1,000).
         # WorldBank allows up to 32,500 per page.
-        per_page = max(1000, len(country_list) * 100)
+        per_page = 10000 if "all" in resolved_codes else max(1000, len(country_list) * 100)
         params = {"format": "json", "per_page": min(per_page, 10000)}
         if date_param:
             params["date"] = date_param
@@ -701,18 +708,55 @@ class WorldBankProvider(BaseProvider):
                     logger.debug(f"No data for {batch_codes} indicator {indic}")
                     payload = None
 
-                # Detect pagination truncation: if API says there are more pages,
-                # the batch response is incomplete — fall back to sequential fetch.
+                # Detect pagination truncation.  Multi-country and all-country
+                # WorldBank responses can exceed a single page.  Pull the
+                # remaining pages when bounded; otherwise fall back to
+                # per-country fetches for explicit country groups.
                 if payload and isinstance(payload[0], dict):
-                    total_pages = payload[0].get("pages", 1)
+                    total_pages = int(payload[0].get("pages", 1) or 1)
                     if total_pages > 1:
-                        total_records = payload[0].get("total", 0)
+                        total_records = int(payload[0].get("total", 0) or 0)
                         returned = len(payload[1]) if len(payload) > 1 and payload[1] else 0
-                        logger.warning(
-                            f"WorldBank pagination truncation: got {returned}/{total_records} records "
-                            f"(page 1/{total_pages}). Falling back to sequential fetch."
-                        )
-                        payload = None  # Force fallback to per-country sequential fetch
+                        if total_pages <= 10:
+                            logger.info(
+                                "WorldBank paginated response: got %d/%d records "
+                                "(page 1/%d). Fetching remaining pages.",
+                                returned,
+                                total_records,
+                                total_pages,
+                            )
+                            all_records = list(payload[1] or [])
+                            for page_num in range(2, total_pages + 1):
+                                page_params = {**params, "page": page_num}
+                                page_response = await client.get(
+                                    url,
+                                    params=page_params,
+                                    headers=headers,
+                                    timeout=effective_timeout(25.0),
+                                )
+                                page_response.raise_for_status()
+                                page_payload = page_response.json()
+                                if (
+                                    isinstance(page_payload, list)
+                                    and len(page_payload) >= 2
+                                    and page_payload[1]
+                                ):
+                                    all_records.extend(page_payload[1])
+                            if total_records and len(all_records) < int(total_records):
+                                logger.warning(
+                                    "WorldBank pagination incomplete: got %d/%d records",
+                                    len(all_records),
+                                    total_records,
+                                )
+                                payload = None
+                            else:
+                                payload = [payload[0], all_records]
+                        else:
+                            logger.warning(
+                                f"WorldBank pagination truncation: got {returned}/{total_records} records "
+                                f"(page 1/{total_pages}). Falling back to sequential fetch."
+                            )
+                            payload = None  # Force fallback to per-country sequential fetch
             except httpx.HTTPError as e:
                 logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
                 payload = None

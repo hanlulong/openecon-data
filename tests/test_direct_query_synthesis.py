@@ -170,9 +170,9 @@ def test_default_query_for_row_does_not_treat_current_us_dollar_unit_as_country_
 
     query = default_query_for_row(row)
 
-    assert query != "Industry (including construction) value added (current US$) from World Bank"
+    assert query == "Industry (including construction) value added (current US$) from World Bank"
     assert query.lower().endswith("from world bank")
-    assert query.startswith(("Germany ", "Brazil ", "India ", "Nigeria ", "China "))
+    assert not query.startswith(("United States ", "Germany ", "Brazil ", "India ", "Nigeria ", "China "))
 
 
 def test_default_query_for_row_does_not_treat_metric_ton_as_tonga_scope() -> None:
@@ -207,7 +207,21 @@ def test_default_query_for_row_does_not_treat_worldwide_source_family_as_country
 
     assert query != "Worldwide Control of Corruption: Estimate from World Bank"
     assert query.lower().endswith("control of corruption: estimate from world bank")
-    assert query.startswith(("Germany ", "Brazil ", "India ", "Nigeria ", "China "))
+    assert query == "Control of Corruption: Estimate from World Bank"
+
+
+def test_default_query_for_row_keeps_intrinsic_worldbank_country_scope() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "SP.POP.TOTL",
+        "name": "Population, total",
+        "coverage": "Japan",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "Japan total Population from World Bank"
 
 
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():

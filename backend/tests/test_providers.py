@@ -323,6 +323,94 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(data.data[0].date, "2020-01-01")
         self.assertEqual(data.data[0].value, 21000000000000)
 
+    def test_worldbank_no_country_uses_lowercase_all_endpoint(self) -> None:
+        provider = WorldBankProvider()
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.urls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.urls.append(str(url))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        batch_response = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP (current US$)"},
+                        "country": {"id": "USA", "value": "United States"},
+                        "countryiso3code": "USA",
+                        "date": "2020",
+                        "value": 21000000000000,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 0,
+                    }
+                ],
+            ]
+        )
+        client = RecordingClient(batch_response)
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client):
+            results = run(provider.fetch_indicator(indicator="NY.GDP.MKTP.CD"))
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(client.urls)
+        self.assertIn("/country/all/indicator/NY.GDP.MKTP.CD", client.urls[0])
+        self.assertNotIn("/country/ALL/", client.urls[0])
+
+    def test_worldbank_all_country_fetches_remaining_pages(self) -> None:
+        provider = WorldBankProvider()
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append({"url": str(url), "params": dict(params or {})})
+                if not self.responses:
+                    raise AssertionError("No more mock responses available")
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        def _payload(country_id: str, country_name: str, page: int):
+            return [
+                {"page": page, "pages": 2, "per_page": 1, "total": 2},
+                [
+                    {
+                        "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP (current US$)"},
+                        "country": {"id": country_id, "value": country_name},
+                        "countryiso3code": country_id,
+                        "date": "2020",
+                        "value": 100 + page,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 0,
+                    }
+                ],
+            ]
+
+        client = RecordingClient(
+            [
+                MockAsyncResponse(_payload("USA", "United States", 1)),
+                MockAsyncResponse(_payload("CAN", "Canada", 2)),
+            ]
+        )
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client):
+            results = run(provider.fetch_indicator(indicator="NY.GDP.MKTP.CD"))
+
+        self.assertEqual({result.metadata.country for result in results}, {"United States", "Canada"})
+        self.assertEqual(len(client.calls), 2)
+        self.assertNotIn("page", client.calls[0]["params"])
+        self.assertEqual(client.calls[1]["params"].get("page"), 2)
+
     def test_worldbank_resolve_indicator_prefers_exact_provider_title_match(self) -> None:
         provider = WorldBankProvider(metadata_search_service=None)
 

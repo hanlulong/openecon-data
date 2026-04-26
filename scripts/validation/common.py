@@ -1073,6 +1073,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider, ['United States'])
     choice = defaults[stable_seed(provider, name) % len(defaults)]
     choice = preferred_default_country_for_record(provider_upper, str(row.get('category') or ''), name, defaults, choice)
+    inferred_country = None
     if provider_upper not in {'EXCHANGERATE', 'COINGECKO'}:
         inferred_country = (
             detect_single_country_from_text(name)
@@ -1102,7 +1103,15 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from IMF".strip()
     if provider_upper == 'WORLDBANK':
-        prefix = '' if query_mentions_country(phrase) else f"{choice} "
+        # WorldBank has a native all-country surface.  Injecting an arbitrary
+        # default country into broad catalog-title certification rows turns
+        # real provider coverage into false "data not available" failures
+        # whenever that indicator is not populated for the sampled default
+        # country.  Keep explicit/intrinsic geography, but otherwise certify
+        # the provider title against the provider's all-country execution path.
+        prefix = ''
+        if not query_mentions_country(phrase) and inferred_country:
+            prefix = f"{choice} "
         return f"{prefix}{phrase} from World Bank".strip()
     if provider_upper == 'OECD':
         if re.fullmatch(r'[A-Z0-9]{1,6}', phrase):

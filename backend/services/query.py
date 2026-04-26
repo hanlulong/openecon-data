@@ -414,19 +414,18 @@ class QueryService:
         if not explicit_provider:
             return None
 
-        lowered = str(query or "").strip().lower()
-        stripped = re.sub(
-            rf"\bfrom\s+{re.escape(explicit_provider.lower())}\b",
-            " ",
-            lowered,
-            flags=re.IGNORECASE,
-        )
-        stripped = re.sub(
-            rf"\buse\s+{re.escape(explicit_provider.lower())}\b",
-            " ",
-            stripped,
-            flags=re.IGNORECASE,
-        )
+        stripped = str(query or "").strip().lower()
+        provider_suffixes = [explicit_provider]
+        if explicit_provider.upper() == "WORLDBANK":
+            provider_suffixes.extend(["world bank", "worldbank"])
+        for provider_suffix in dict.fromkeys(provider_suffixes):
+            for verb in ("from", "use", "using", "via"):
+                stripped = re.sub(
+                    rf"\b{verb}\s+{re.escape(provider_suffix.lower())}\b",
+                    " ",
+                    stripped,
+                    flags=re.IGNORECASE,
+                )
         stripped = re.sub(r"\s+", " ", stripped).strip(" ,;:")
         if not stripped:
             return None
