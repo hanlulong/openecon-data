@@ -7572,17 +7572,17 @@ class QueryServiceTests(unittest.TestCase):
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
              patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.imf_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        indicator_arg = fetch_mock.call_args.kwargs.get("indicator")
+        indicator_arg = fetch_mock.await_args.kwargs.get("indicator")
         self.assertNotEqual(indicator_arg, "BCA_NGDPD")
         self.assertTrue(
             indicator_arg == "BXIPIR_BP6_EUR" or "primary income" in str(indicator_arg).lower(),
             indicator_arg,
         )
 
-    def test_fetch_data_rejects_implausible_explicit_imf_code_and_does_not_keep_it(self) -> None:
+    def test_fetch_data_fails_closed_for_unsupported_imf_fiscal_public_surface(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["revenue", "general government taxes", "social contributions"],
@@ -7612,11 +7612,16 @@ class QueryServiceTests(unittest.TestCase):
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
              patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.imf_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
-            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+             patch.object(
+                 self.service,
+                 "_resolve_indicator_for_fetch",
+                 side_effect=AssertionError("unsupported IMF fiscal detail row should fail before dynamic resolution"),
+             ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        indicator_arg = fetch_mock.call_args.kwargs.get("indicator")
-        self.assertNotEqual(indicator_arg, "rev")
+        self.assertIn("fail-closed supportability block", str(raised.exception))
+        self.assertIn("imf_non_weo_public_surface_unsupported", str(raised.exception))
 
     def test_code_semantic_hint_infers_worldbank_import_ratio_cues(self) -> None:
         hint = self.service._code_semantic_hint(  # pylint: disable=protected-access
@@ -7699,11 +7704,11 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.bis_provider, "fetch_indicator", side_effect=AssertionError("should stay on IMF")), \
-             patch.object(self.service.imf_provider, "fetch_indicator", return_value=sample_series()) as imf_fetch:
+             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as imf_fetch:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertTrue(imf_fetch.called)
-        self.assertEqual(imf_fetch.call_args.kwargs.get("indicator"), "EREER")
+        self.assertGreater(imf_fetch.await_count, 0)
+        self.assertEqual(imf_fetch.await_args.kwargs.get("indicator"), "EREER")
 
     def test_fetch_data_routes_statscan_dimension_decomposition_to_multi_dimension_fetch(self) -> None:
         intent = ParsedIntent(

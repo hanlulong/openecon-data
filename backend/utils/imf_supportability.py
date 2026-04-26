@@ -58,6 +58,7 @@ _DETAIL_MARKERS = {
     "nace",
     "non-alcoholic beverages",
     "oil production",
+    "publishing",
     "quarry",
     "regional government",
     "sector",
@@ -84,6 +85,7 @@ _CONSUMER_PRICE_DETAIL_MARKERS = {
     "fruits and vegetables",
     "harmonized consumer prices",
     "housing gas and other fuels",
+    "services housing",
     "kathmandu valley",
     "non-alcoholic beverages",
 }
@@ -102,8 +104,59 @@ _FISCAL_DETAIL_MARKERS = {
     "social contributions",
     "tax",
     "taxes",
+    "total expenditure",
+    "domestic public debt",
+    "public debt",
+    "bridge loans",
     "total debt",
     "wages and salaries",
+}
+
+_NATIONAL_ACCOUNTS_DETAIL_MARKERS = {
+    "collective consumption expenditure",
+    "domestic output",
+    "external balance of goods and services",
+    "financial intermediation nominal services",
+    "gross domestic expenditure",
+    "gross real national income",
+    "gross real saving",
+    "gross value added",
+    "memorandum items",
+    "nace2",
+    "net exports crude oil",
+    "public final consumption expenditure",
+    "real chained",
+    "subsidies on products",
+}
+
+_NATIONAL_ACCOUNTS_DEFLATOR_RE = re.compile(
+    r"\bdeflator\b.*\b(?:gross value added|subsidies on products)\b"
+    r"|\b(?:gross value added|subsidies on products)\b.*\bdeflator\b",
+    flags=re.IGNORECASE,
+)
+
+_SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS = {
+    "mortality rate",
+    "poverty",
+    "social indicators",
+    "socio demographic",
+    "socio-demographic",
+}
+
+_COMPLEX_FINANCE_DETAIL_MARKERS = {
+    "assets loans sectoral",
+    "financial auxiliaries",
+    "financial corporations",
+    "financial soudness",
+    "financial soundness",
+    "monetary net foreign assets",
+    "sectoral accounts",
+}
+
+_SPECIAL_PUBLIC_ENTITY_MARKERS = {
+    "federation income and distribution",
+    "panama canal authority",
+    "state oil fund",
 }
 
 
@@ -149,10 +202,43 @@ def imf_query_only_public_surface_reason(
     if "terms of trade" in text:
         return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
 
+    if _has_any(text, _SPECIAL_PUBLIC_ENTITY_MARKERS):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if _has_any(text, {"mineral production", "quarried stone"}):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if _has_any(text, _SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if "population" in text and _has_any(
+        text,
+        {
+            "by sex",
+            "definition",
+            "north west",
+            "of which foreign resident",
+            "socio demographic",
+            "socio-demographic",
+        },
+    ):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if _has_any(text, _COMPLEX_FINANCE_DETAIL_MARKERS):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if _has_any(text, _NATIONAL_ACCOUNTS_DETAIL_MARKERS) or _NATIONAL_ACCOUNTS_DEFLATOR_RE.search(text):
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
+    if "external sector" in text and "external balance" in text:
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+
     if re.search(r"\b(?:import|export) price index\b", text) and detailed:
         return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
 
     if "producer price index" in text and detailed:
+        if "publishing" in text:
+            return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
         # Do not block the broad aggregate PPI query; only detailed PPI slices.
         broad_only = re.fullmatch(
             r"(?:[a-z .'-]+ )?producer price index(?: from imf)?",
@@ -160,10 +246,15 @@ def imf_query_only_public_surface_reason(
         )
         if not broad_only:
             return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+    elif "producer price index" in text and "publishing" in text:
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
 
     if (
         ("consumer price" in text or "consumer prices" in text or "price index" in text)
-        and _has_any(text, _CONSUMER_PRICE_DETAIL_MARKERS)
+        and (
+            _has_any(text, _CONSUMER_PRICE_DETAIL_MARKERS)
+            or re.search(r"\ball items\s+by\d{4}\b", text)
+        )
     ):
         return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
 

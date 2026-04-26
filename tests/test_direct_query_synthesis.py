@@ -849,6 +849,18 @@ def test_audit_direct_query_shape_flags_query_only_imf_public_surface_blockers()
         "Brazil Food Consumer Prices Food and Non-alcoholic Beverages Food at Home Fruits and Vegetables from IMF",
         "United States Terms of Trade (Index 2010 = 100) from IMF",
         "Industrial Production Current activity Angola Definition BC: Mining and Quarrying from IMF",
+        "Brazil Real NACE2 Gross value added Public administration and defence; compulsory social security from IMF",
+        "Quarried Stone Metric Ton Mineral Production from IMF",
+        "Brazil Publishing Producer Price Index from IMF",
+        "Brazil Percent Social Indicators Poverty (% of Population) from IMF",
+        "Brazil Population By Sex Female Pervious Period Persons Number of Socio-Demographic Indicators from IMF",
+        "Expenses: Panama Definition Panama Canal Authority Operations Materials and supplies from IMF",
+        "Brazil General Government Total expenditure Fiscal from IMF",
+        "Brazil Memorandum Items Domestic Output Real Activity from IMF",
+        "Brazil Financial auxiliaries Assets Loans Sectoral from IMF",
+        "SF027.T LIQUIDITY in percent Percent Togo Definition Financial Soudness Indicators from IMF",
+        "Brazil All Items BY2008 Consumer Prices from IMF",
+        "United States Government Fiscal Total Domestic Public Debt BoZ Bridge Loans from IMF",
     ]
 
     for query in queries:
@@ -862,6 +874,14 @@ def test_audit_direct_query_shape_flags_query_only_imf_public_surface_blockers()
 
 def test_audit_direct_query_shape_keeps_broad_imf_ppi_query_executable() -> None:
     row = {"provider": "IMF", "query": "Brazil Producer Price Index from IMF", "type": "direct"}
+
+    audit = audit_direct_query_shape(row)
+
+    assert "imf_query_only_public_surface_family" not in audit["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_broad_imf_trade_balance_query_executable() -> None:
+    row = {"provider": "IMF", "query": "Japan Trade Balance (% of GDP) from IMF", "type": "direct"}
 
     audit = audit_direct_query_shape(row)
 
