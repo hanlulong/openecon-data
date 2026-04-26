@@ -3856,6 +3856,58 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(calls, [("trng_cvt_20s", "IT", 2021, 2024)])
 
+    def test_fetch_data_retries_exact_provider_no_data_without_default_window(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["DF_TEST"],
+            parameters={
+                "country": "US",
+                "indicator": "DF_TEST",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+                "startDate": "2021-01-01",
+                "endDate": "2026-12-31",
+            },
+            clarificationNeeded=False,
+            originalQuery="United States Annual test data (1998-2001) from OECD",
+        )
+
+        dispatch_params = []
+
+        async def _fake_dispatch(_svc, _intent, execution_plan):
+            clean_params = dict(execution_plan.params)
+            clean_params.pop("__execution_plan_identity", None)
+            dispatch_params.append(clean_params)
+            if len(dispatch_params) == 1:
+                raise DataNotAvailableError("No OECD data for recent default window")
+            return [
+                sample_series_with(
+                    source="OECD",
+                    indicator="Annual test data",
+                    country="United States",
+                    series_id="DF_TEST",
+                )
+            ]
+
+        async def _return_params(_provider, _intent, params):
+            return params
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new=AsyncMock(side_effect=_return_params)), \
+             patch.object(self.service, "_apply_concept_provider_override", side_effect=lambda provider, _intent, params: (provider, params)), \
+             patch.object(self.service, "_apply_catalog_availability_override", side_effect=lambda provider, _intent, params, _excluded: (provider, params)), \
+             patch("backend.services.data_fetcher.fetch_from_provider_dispatch", new=AsyncMock(side_effect=_fake_dispatch)):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(len(dispatch_params), 2)
+        self.assertEqual(dispatch_params[0]["startDate"], "2021-01-01")
+        self.assertEqual(dispatch_params[0]["endDate"], "2026-12-31")
+        for key in ("startDate", "endDate", "start_year", "end_year"):
+            self.assertNotIn(key, dispatch_params[1])
+            self.assertNotIn(key, intent.parameters)
+
     def test_fetch_data_retries_eurostat_sparse_history_for_multi_country_queries(self) -> None:
         intent = ParsedIntent(
             apiProvider="EUROSTAT",

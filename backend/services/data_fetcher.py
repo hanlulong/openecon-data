@@ -54,8 +54,14 @@ _CURRENCY_VS_RE = re.compile(r"\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b")
 _CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
 _TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
-_TIME_SCOPE_RELATIVE_RE = re.compile(
-    r"\b(?:last|past|since|between|from|through|until|before|after|during)\b",
+_TIME_SCOPE_SINGLE_YEAR_RE = re.compile(
+    r"\b(?:since|between|from|through|until|before|after|during|in|for)\s+"
+    r"(?:19\d{2}|20\d{2})\b",
+    flags=re.IGNORECASE,
+)
+_TIME_SCOPE_YEAR_RANGE_RE = re.compile(
+    r"\b(?:19\d{2}|20\d{2})\s*(?:-|–|—|to|through|until)\s*"
+    r"(?:19\d{2}|20\d{2})\b",
     flags=re.IGNORECASE,
 )
 _RECENCY_CUE_RE = re.compile(
@@ -121,8 +127,21 @@ def _query_has_explicit_time_scope(query: str) -> bool:
     recency_query_text = _CURRENT_MEASUREMENT_CUE_RE.sub(" ", query_text)
     if _RECENCY_CUE_RE.search(recency_query_text):
         return True
-    if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
+    if _TIME_SCOPE_SINGLE_YEAR_RE.search(query_text):
         return True
+    for match in _TIME_SCOPE_YEAR_RANGE_RE.finditer(query_text):
+        # Exact catalog titles sometimes contain coverage years, e.g.
+        # "(1998-2001) from Eurostat"; those title years should not make a
+        # framework-applied recent default window strict.  Treat non-title
+        # ranges such as "from OECD 2021-2024" or "2015 to 2019" as explicit.
+        parenthesized_title_range = (
+            match.start() > 0
+            and query_text[match.start() - 1] == "("
+            and match.end() < len(query_text)
+            and query_text[match.end()] == ")"
+        )
+        if not parenthesized_title_range:
+            return True
     duration_query_text = _DURATION_MEASUREMENT_CUE_RE.sub(" ", recency_query_text)
     if re.search(
         r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
@@ -2178,6 +2197,42 @@ async def fetch_data(
 
     logger.info("Cache miss for %s, fetching from API", execution_plan.provider)
 
+    exact_query_without_time_scope = bool(
+        is_exact_match_locked(params)
+        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+    )
+
+    async def _dispatch_with_exact_window_retry() -> List[NormalizedData]:
+        nonlocal execution_plan, params
+        try:
+            return await fetch_from_provider_dispatch(svc, intent, execution_plan)
+        except DataNotAvailableError:
+            if not (
+                exact_query_without_time_scope
+                and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+            ):
+                raise
+            broadened_params = dict(params)
+            for key in ("startDate", "endDate", "start_year", "end_year"):
+                broadened_params.pop(key, None)
+            retry_plan = materialize_execution_plan(
+                execution_plan=None,
+                provider=provider,
+                intent=intent,
+                params=broadened_params,
+            )
+            logger.info(
+                "Retrying exact %s query without default time window after provider no-data: indicator=%s query=%s",
+                provider,
+                broadened_params.get("indicator"),
+                intent.originalQuery,
+            )
+            retry_result = await fetch_from_provider_dispatch(svc, intent, retry_plan)
+            params = broadened_params
+            execution_plan = retry_plan
+            intent.parameters = broadened_params
+            return retry_result
+
     if tracker:
         provider_names = {
             "FRED": "Federal Reserve",
@@ -2201,7 +2256,7 @@ async def fetch_data(
             },
         ) as update_fetch_metadata:
             provider_start = time.perf_counter()
-            result = await fetch_from_provider_dispatch(svc, intent, execution_plan)
+            result = await _dispatch_with_exact_window_retry()
             provider_elapsed = time.perf_counter() - provider_start
             logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
             update_fetch_metadata({
@@ -2211,14 +2266,9 @@ async def fetch_data(
             })
     else:
         provider_start = time.perf_counter()
-        result = await fetch_from_provider_dispatch(svc, intent, execution_plan)
+        result = await _dispatch_with_exact_window_retry()
         provider_elapsed = time.perf_counter() - provider_start
         logger.info(f"Provider {execution_plan.provider} fetch: {provider_elapsed:.2f}s")
-
-    exact_query_without_time_scope = bool(
-        is_exact_match_locked(params)
-        and not _query_has_explicit_time_scope(intent.originalQuery or "")
-    )
     if (
         exact_query_without_time_scope
         and (not result or (len(result) == 1 and not result[0].data))
