@@ -159,6 +159,54 @@ def _coingecko_contract_vs_currency(params: dict[str, Any]) -> str:
     return raw_vs if raw_vs not in invalid_tokens and re.fullmatch(r"[a-z]{3,10}", raw_vs) else "usd"
 
 
+def _coingecko_has_historical_time_scope(query: str) -> bool:
+    """Return True only when a CoinGecko query asks for a time series/window.
+
+    CoinGecko current-price catalog rows are short-lived assets where the
+    simple-price endpoint can succeed even when the historical market-chart
+    endpoint has no data.  Treat snapshot cues such as "current", "latest",
+    "today", or "right now" as current requests, not historical windows.
+    """
+    query_text = str(query or "").strip()
+    if not query_text:
+        return False
+
+    snapshot_neutral_text = re.sub(
+        r"\b(?:latest|most recent|current|currently|today|now)\b|\bright now\b",
+        " ",
+        query_text,
+        flags=re.IGNORECASE,
+    )
+
+    if re.search(r"\byesterday\b", query_text, flags=re.IGNORECASE):
+        return True
+    if re.search(
+        r"\b(?:last|past|previous|recent|since|between|through|until|before|after|during|over)\b",
+        snapshot_neutral_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\bfrom\s+(?:19\d{2}|20\d{2}|[A-Z][a-z]+\s+\d{1,2}(?:,\s*)?\s*(?:19\d{2}|20\d{2}))\b",
+        snapshot_neutral_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:historical|history|chart|trend|performance|time\s+series)\b",
+        snapshot_neutral_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
+        snapshot_neutral_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return bool(_TIME_SCOPE_YEAR_RE.search(snapshot_neutral_text))
+
+
 def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
     provider_norm = _normalize_provider_name(provider) or "UNKNOWN"
     code = _execution_plan_candidate_code(intent, params)
@@ -313,6 +361,7 @@ async def fetch_from_coingecko(
     logger.info("CoinGecko Query Parameters:")
     logger.info(f"   - Indicators: {intent.indicators}")
     coingecko_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    default_time_range_applied = str(params.pop("__default_time_range_applied", "") or "").strip()
     if coingecko_request.get("start_date") and not params.get("startDate"):
         params["startDate"] = coingecko_request["start_date"]
     if coingecko_request.get("end_date") and not params.get("endDate"):
@@ -321,11 +370,13 @@ async def fetch_from_coingecko(
         params["days"] = coingecko_request["days"]
 
     query_lower = intent.originalQuery.lower() if intent.originalQuery else ""
+    has_historical_time_scope = _coingecko_has_historical_time_scope(query_lower)
+    if default_time_range_applied == "coingecko_30d" and not has_historical_time_scope:
+        params.pop("startDate", None)
+        params.pop("endDate", None)
 
     # Extract time periods from query text
-    time_patterns = ["last", "past", "previous", "recent", "historical",
-                     "days", "weeks", "months", "year", "history"]
-    mentions_time = any(p in query_lower for p in time_patterns)
+    mentions_time = has_historical_time_scope
 
     days_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+days?', query_lower)
     weeks_match = re.search(r'(?:last|past|previous)\s+(\d+)\s+weeks?', query_lower)
@@ -342,7 +393,7 @@ async def fetch_from_coingecko(
             extracted_days = int(months_match.group(1)) * 30
         elif year_match:
             extracted_days = int(year_match.group(1)) * 365
-        elif mentions_time:
+        elif mentions_time and not default_time_range_applied:
             extracted_days = 30
         if extracted_days:
             params["days"] = extracted_days
@@ -2034,6 +2085,12 @@ async def fetch_data(
     logger.info(f"Before defaults - provider={provider}, startDate={params.get('startDate')}, endDate={params.get('endDate')}")
     params = apply_default_time_range(provider, params)
     logger.info(f"After defaults - startDate={params.get('startDate')}, start_year={params.get('start_year')}")
+    if provider == "COINGECKO" and params.get("__default_time_range_applied") == "coingecko_30d":
+        params = dict(params)
+        if not _coingecko_has_historical_time_scope(intent.originalQuery or ""):
+            params.pop("startDate", None)
+            params.pop("endDate", None)
+        params.pop("__default_time_range_applied", None)
     intent.parameters = params
 
     # For ExchangeRate queries, extract currency pairs BEFORE cache lookup

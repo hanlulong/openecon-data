@@ -66,6 +66,7 @@ def apply_default_time_range(provider: str, routing: Dict[str, Any]) -> Dict[str
         start = today - timedelta(days=30)
         routing["startDate"] = start.strftime("%Y-%m-%d")
         routing["endDate"] = today.strftime("%Y-%m-%d")
+        routing["__default_time_range_applied"] = "coingecko_30d"
         logger.info(
             "Applied default 30-day range for CoinGecko: %s to %s",
             routing["startDate"],
@@ -74,4 +75,3 @@ def apply_default_time_range(provider: str, routing: Dict[str, Any]) -> Dict[str
 
     # ExchangeRate intentionally has no default date range.
     return routing
-

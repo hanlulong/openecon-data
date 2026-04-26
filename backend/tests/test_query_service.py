@@ -8770,11 +8770,13 @@ class QueryServiceTests(unittest.TestCase):
         )
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.coingecko_provider, "get_simple_price", return_value=[sample_series()]) as simple_mock, \
              patch.object(self.service.coingecko_provider, "get_historical_data_range", return_value=[sample_series()]) as range_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertTrue(range_mock.called)
-        self.assertEqual(range_mock.call_args.kwargs.get("vs_currency"), "usd")
+        self.assertTrue(simple_mock.called)
+        self.assertEqual(simple_mock.call_args.kwargs.get("vs_currency"), "usd")
+        self.assertFalse(range_mock.called)
 
     def test_fetch_data_coingecko_uses_query_text_for_coin_and_metric_when_indicator_is_dynamic(self) -> None:
         intent = ParsedIntent(
