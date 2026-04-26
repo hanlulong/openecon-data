@@ -24,10 +24,13 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-# Retry configuration for rate limiting
+# Retry configuration for rate limiting.
 # Worst-case latency = MAX_RETRIES * REQUEST_TIMEOUT + sum(backoff delays).
 # With MAX_RETRIES=3, TIMEOUT=30s, BASE=1.5:  3*30 + (1.5+3) = ~94.5s upper bound
-# for a single reporter (vs. old 5*60 + 30 = 330s).
+# for a single reporter (vs. old 5*60 + 30 = 330s).  The fetch-level wall-clock
+# budget below must be at least this large, or a valid Comtrade query can be
+# cancelled before the retry policy has a chance to recover from a transient
+# ReadTimeout/502.
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 1.5
 REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1-10s when healthy)
@@ -35,6 +38,17 @@ RATE_LIMIT_STATUS = 429
 GLOBAL_REQUEST_CONCURRENCY = 1
 GLOBAL_REQUEST_MIN_INTERVAL_SECONDS = 1.25
 TRANSIENT_HTTP_STATUSES = {RATE_LIMIT_STATUS, 500, 502, 503, 504}
+RETRY_BACKOFF_BUDGET = sum(RETRY_DELAY_BASE * (2 ** attempt) for attempt in range(MAX_RETRIES - 1))
+SINGLE_REPORTER_RETRY_TIME_BUDGET = (
+    (MAX_RETRIES * REQUEST_TIMEOUT)
+    + RETRY_BACKOFF_BUDGET
+    + GLOBAL_REQUEST_MIN_INTERVAL_SECONDS
+    + 5.0
+)
+COMTRADE_OVERALL_TIME_BUDGET_CAP = max(
+    REQUEST_TIMEOUT * 6,
+    SINGLE_REPORTER_RETRY_TIME_BUDGET * 2,
+)
 
 _GLOBAL_REQUEST_SEMAPHORES: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Semaphore
@@ -42,6 +56,23 @@ _GLOBAL_REQUEST_SEMAPHORES: weakref.WeakKeyDictionary[
 _GLOBAL_REQUEST_LAST_STARTED: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, float
 ] = weakref.WeakKeyDictionary()
+
+
+def _comtrade_overall_time_budget(task_count: int) -> float:
+    """Return the fetch-level budget without cutting off a single retry cycle.
+
+    Comtrade fetches can fan out over reporter/partner/period chunks, but every
+    outbound request is serialized by the provider-level subscription-key gate.
+    The budget therefore needs to scale for the common one- and two-task cases
+    while still capping broader fan-out so production requests do not stall for
+    unbounded minutes during an upstream outage.
+    """
+    normalized_task_count = max(1, task_count)
+    scaled_budget = SINGLE_REPORTER_RETRY_TIME_BUDGET * normalized_task_count
+    return max(
+        SINGLE_REPORTER_RETRY_TIME_BUDGET,
+        min(COMTRADE_OVERALL_TIME_BUDGET_CAP, scaled_budget),
+    )
 
 
 def _global_request_semaphore() -> asyncio.Semaphore:
@@ -1108,11 +1139,10 @@ class ComtradeProvider(BaseProvider):
 
         # Overall time budget: cap total wall-clock time so a cascade of 429
         # retries across many tasks cannot stall the pipeline for minutes.
-        # Budget = per-request timeout * 2 to allow one retry cycle.
-        overall_budget = max(
-            REQUEST_TIMEOUT * 2,
-            min(REQUEST_TIMEOUT * 6, REQUEST_TIMEOUT * max(1, len(tasks))),
-        )
+        # The lower bound must still cover one full single-reporter retry
+        # envelope, otherwise transient Comtrade timeouts are surfaced as false
+        # data-not-available results before the provider retry policy completes.
+        overall_budget = _comtrade_overall_time_budget(len(tasks))
 
         try:
             results_list = await asyncio.wait_for(

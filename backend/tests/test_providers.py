@@ -5,6 +5,7 @@ import httpx
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from backend.providers import comtrade as comtrade_module
 from backend.models import NormalizedData
 from backend.providers.comtrade import ComtradeProvider
 from backend.providers.fred import FREDProvider
@@ -500,6 +501,24 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].metadata.country, "France")
         self.assertEqual(result[0].data[0].value, 200)
+
+    def test_comtrade_overall_budget_covers_single_reporter_retry_envelope(self) -> None:
+        retry_envelope = (
+            (comtrade_module.MAX_RETRIES * comtrade_module.REQUEST_TIMEOUT)
+            + sum(
+                comtrade_module.RETRY_DELAY_BASE * (2 ** attempt)
+                for attempt in range(comtrade_module.MAX_RETRIES - 1)
+            )
+            + comtrade_module.GLOBAL_REQUEST_MIN_INTERVAL_SECONDS
+        )
+
+        single_task_budget = comtrade_module._comtrade_overall_time_budget(1)  # pylint: disable=protected-access
+        two_task_budget = comtrade_module._comtrade_overall_time_budget(2)  # pylint: disable=protected-access
+        wide_fanout_budget = comtrade_module._comtrade_overall_time_budget(10)  # pylint: disable=protected-access
+
+        self.assertGreaterEqual(single_task_budget, retry_envelope)
+        self.assertGreater(two_task_budget, single_task_budget)
+        self.assertLessEqual(wide_fanout_budget, comtrade_module.COMTRADE_OVERALL_TIME_BUDGET_CAP)
 
     def test_comtrade_fetch_single_reporter_retries_transient_http_500_then_succeeds(self) -> None:
         provider = ComtradeProvider(api_key="demo")
