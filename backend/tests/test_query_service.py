@@ -617,6 +617,34 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIn("fail-closed supportability block", str(raised.exception))
 
+    def test_process_query_fails_closed_for_explicit_imf_supportability_blocker_before_parse(self) -> None:
+        query = (
+            "Brazil Real NACE2 Gross value added Public administration and defence; "
+            "compulsory social security from IMF"
+        )
+
+        with patch.object(
+            self.service.pipeline,
+            "parse_and_route",
+            new=AsyncMock(side_effect=AssertionError("supportability blocker should not invoke parser")),
+        ):
+            response = run(self.service.process_query(query))
+
+        self.assertEqual(response.error, "data_not_available")
+        self.assertIn("fail-closed supportability block", response.message or "")
+        self.assertEqual(response.intent.apiProvider, "IMF")
+
+    def test_explicit_provider_code_intent_extracts_imf_code_with_country_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "United States PCPI_CP_01_BY2010_IX from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "PCPI_CP_01_BY2010_IX")
+        self.assertEqual(intent.parameters.get("country"), "US")
+
     def test_direct_query_shape_treats_imf_cpi_base_year_as_public_sdmx(self) -> None:
         from scripts.validation.common import imf_public_sdmx_runtime_family
 
@@ -8474,7 +8502,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(response.clarificationQuestions)
         self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
 
-    def test_process_query_provider_locked_imf_implausible_single_series_fails_closed(self) -> None:
+    def test_process_query_provider_locked_imf_public_surface_fails_closed_before_fetch(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["Consumer Prices Miscellaneous Goods and Services"],
@@ -8495,13 +8523,13 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="IMF", routed_provider="IMF", validation_warning=None))), \
              patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
              patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
-             patch.object(self.service, "_fetch_data", new=AsyncMock(return_value=[sample_series_with(source="IMF", indicator="Inflation rate, average consumer prices", series_id="PCPIPCH", country="Germany")])), \
+             patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=AssertionError("supportability blocker should not fetch"))), \
              patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
             response = run(self.service.process_query(intent.originalQuery))
 
-        self.assertTrue(response.clarificationNeeded)
-        self.assertIsNotNone(response.clarificationQuestions)
-        self.assertIn("reliable indicator", " ".join(response.clarificationQuestions).lower())
+        self.assertEqual(response.error, "data_not_available")
+        self.assertFalse(response.clarificationNeeded)
+        self.assertIn("fail-closed supportability block", response.message or "")
 
     def test_process_query_provider_locked_worldbank_implausible_single_series_fails_closed(self) -> None:
         intent = ParsedIntent(

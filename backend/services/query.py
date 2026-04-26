@@ -60,6 +60,7 @@ from ..providers.eurostat import EurostatProvider
 from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
+from ..utils.imf_supportability import imf_query_only_public_surface_reason
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.http_pool import extended_timeout
@@ -431,21 +432,41 @@ class QueryService:
             return None
 
         candidate = str(stripped).upper()
+        if (
+            not self._looks_like_provider_indicator_code(explicit_provider, candidate)
+            and explicit_provider == "IMF"
+        ):
+            code_candidates = [
+                token.upper()
+                for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_.]{2,}\b", str(query or ""))
+                if ("_" in token or "." in token)
+                and self._looks_like_provider_indicator_code(explicit_provider, token.upper())
+            ]
+            if len(dict.fromkeys(code_candidates)) == 1:
+                candidate = code_candidates[0]
+
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             return None
 
         if not re.fullmatch(r"[A-Z0-9_@.\-]{3,}", candidate):
             return None
 
+        countries = self._extract_countries_from_query(query)
+        params = {
+            "indicator": candidate,
+            "__semantic_indicator_label": candidate,
+            "__semantic_provider_locked": True,
+            "__exact_provider_code_match": True,
+        }
+        if len(countries) == 1:
+            params["country"] = countries[0]
+        elif len(countries) > 1:
+            params["countries"] = countries
+
         return ParsedIntent(
             apiProvider=explicit_provider,
             indicators=[candidate],
-            parameters={
-                "indicator": candidate,
-                "__semantic_indicator_label": candidate,
-                "__semantic_provider_locked": True,
-                "__exact_provider_code_match": True,
-            },
+            parameters=params,
             clarificationNeeded=False,
             confidence=0.99,
             recommendedChartType="line",
@@ -3642,6 +3663,62 @@ class QueryService:
             conv_id = conversation_manager.get_or_create(conversation_id)
             conversation_manager.refresh_from_redis(conv_id)
             history = conversation_manager.get_history(conv_id)
+
+            if normalize_provider_name(self._detect_explicit_provider(query) or "") == "IMF":
+                early_supportability_reason = imf_query_only_public_surface_reason(query)
+                if early_supportability_reason:
+                    with tracker.track(
+                        "provider_supportability",
+                        "Checking provider supportability...",
+                    ) as update_supportability_metadata:
+                        update_supportability_metadata({
+                            "provider": "IMF",
+                            "supportability_reason": early_supportability_reason,
+                        })
+                    early_intent = ParsedIntent(
+                        apiProvider="IMF",
+                        indicators=[query],
+                        parameters={"__semantic_provider_locked": True},
+                        clarificationNeeded=False,
+                        confidence=1.0,
+                        recommendedChartType="line",
+                        queryType="data_fetch",
+                        originalQuery=query,
+                        isFollowUp=False,
+                        followUpType=None,
+                        resolvedQuery=None,
+                        needsDecomposition=False,
+                        decompositionType=None,
+                        decompositionEntities=None,
+                        useProMode=False,
+                    )
+                    error_message = (
+                        "IMF query targets a detailed IMF public-data surface that is "
+                        "not yet executable by OpenEcon's production IMF dataset-family "
+                        "routing. This is a fail-closed supportability block, not a "
+                        "broad-proxy substitution. "
+                        f"reason={early_supportability_reason}"
+                    )
+                    formatted_message = QueryComplexityAnalyzer.format_error_message(
+                        error_message,
+                        query,
+                        early_intent,
+                    )
+                    conv_id = conversation_manager.add_message_safe(
+                        conv_id,
+                        "user",
+                        query,
+                        intent=early_intent,
+                    )
+                    conversation_manager.add_message_safe(conv_id, "assistant", formatted_message)
+                    return QueryResponse(
+                        conversationId=conv_id,
+                        intent=early_intent,
+                        clarificationNeeded=False,
+                        error="data_not_available",
+                        message=formatted_message,
+                        processingSteps=tracker.to_list(),
+                    )
 
             # ── Pending indicator choice (numeric "1", "2" responses) ───
             # Keep this for structural resolution — no LLM needed for "pick option 2".
