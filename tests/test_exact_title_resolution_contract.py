@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+from backend.services.indicator_database import Indicator, IndicatorDatabase, IndicatorLookup
 from backend.services.indicator_resolution import (
     build_exact_indicator_title_intent,
     find_exact_provider_title_match,
@@ -178,6 +179,28 @@ def test_exact_title_match_prefers_base_worldbank_series_over_unrequested_quinti
 
     assert match is not None
     assert match["code"] == "SH.DYN.MORT"
+
+
+def test_exact_title_match_uses_normalized_title_lookup_for_comma_variants(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="WorldBank",
+            code="SL.UEM.TOTL.MA.NE.ZS",
+            name="Unemployment, male (% of male labor force) (national estimate)",
+            popularity=10,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "Japan Unemployment male (% of male labor force) (national estimate) from World Bank"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "WorldBank")
+        looks_exact = looks_like_exact_provider_title_match(query, "WorldBank")
+
+    assert match is not None
+    assert match["code"] == "SL.UEM.TOTL.MA.NE.ZS"
+    assert looks_exact is True
 
 
 def test_exact_and_provider_lock_helpers_read_shared_flags() -> None:

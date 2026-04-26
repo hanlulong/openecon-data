@@ -175,6 +175,23 @@ def test_default_query_for_row_does_not_treat_current_us_dollar_unit_as_country_
     assert query.startswith(("Germany ", "Brazil ", "India ", "Nigeria ", "China "))
 
 
+def test_default_query_for_row_does_not_treat_metric_ton_as_tonga_scope() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "NY.ADJ.DCO2.GN.ZS",
+        "name": "Adjusted savings: carbon dioxide damage (% of GNI)",
+        "description": (
+            "Cost of damage due to carbon dioxide emissions from fossil fuel use "
+            "estimated at a dollar value per ton of CO2 emitted."
+        ),
+    }
+
+    query = default_query_for_row(row)
+
+    assert not query.startswith("Ton ")
+    assert query.lower().endswith("from world bank")
+
+
 def test_default_query_for_row_does_not_treat_worldwide_source_family_as_country_scope() -> None:
     row = {
         "provider": "WorldBank",
@@ -262,6 +279,70 @@ def test_audit_direct_query_shape_flags_country_scope_conflict():
 
     assert audit["risk_level"] == "high"
     assert "country_scope_conflict" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_non_api_source_families() -> None:
+    gdld = audit_direct_query_shape(
+        {
+            "provider_stratum": "WorldBank",
+            "query": "China Annual wage for skilled female workers in US$ from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "w_F_skl",
+                "name": "Annual wage for skilled female workers in US$",
+                "category": "Gender Disaggregated Labor Database (GDLD)",
+            },
+        }
+    )
+    g20 = audit_direct_query_shape(
+        {
+            "provider_stratum": "WorldBank",
+            "query": "Germany SME loan accounts from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "i_loan_acc_A1_sme_perNFC",
+                "name": "SME loan accounts",
+                "category": "G20 Financial Inclusion Indicators",
+            },
+        }
+    )
+
+    assert gdld["risk_level"] == "high"
+    assert g20["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in gdld["reasons"]
+    assert "worldbank_specialized_source_family" in g20["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_country_role_availability() -> None:
+    cpia = audit_direct_query_shape(
+        {
+            "provider_stratum": "WorldBank",
+            "query": "Japan CPIA structural policies cluster average from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "IQ.CPA.STRC.XQ",
+                "name": "CPIA structural policies cluster average (1=low to 6=high)",
+                "category": "World Development Indicators",
+            },
+        }
+    )
+    oda = audit_direct_query_shape(
+        {
+            "provider_stratum": "WorldBank",
+            "query": "India Net ODA provided to the least developed countries from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "DC.ODA.TLDC.CD",
+                "name": "Net ODA provided, to the least developed countries (current US$)",
+                "category": "World Development Indicators",
+            },
+        }
+    )
+
+    assert cpia["risk_level"] == "high"
+    assert oda["risk_level"] == "high"
+    assert "worldbank_country_availability_surface" in cpia["reasons"]
+    assert "worldbank_country_availability_surface" in oda["reasons"]
 
 
 def test_audit_direct_query_shape_flags_micro_demographic_slices():

@@ -545,6 +545,40 @@ def test_preflight_classifies_worldbank_niche_and_specialized_sources_as_support
     )
 
 
+def test_preflight_classifies_worldbank_country_availability_surface_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    cpia_unavailable = {
+        "id": "direct-worldbank-cpia",
+        "provider_stratum": "WorldBank",
+        "query": "Japan CPIA structural policies cluster average from World Bank",
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "IQ.CPA.STRC.XQ",
+            "name": "CPIA structural policies cluster average (1=low to 6=high)",
+            "category": "World Development Indicators",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [cpia_unavailable],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "worldbank_country_availability_surface": 1,
+    }
+    assert audit["flagged_rows_sample"][0]["execution_mode"] == "supportability_blocked"
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-worldbank-country-availability.json",
+        [cpia_unavailable],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
 def test_preflight_classifies_worldbank_low_viability_families_as_supportability_blocked(tmp_path: Path):
     module = load_module()
     ddh_worldbank = {

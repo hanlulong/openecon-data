@@ -106,6 +106,8 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
         return 'worldbank_niche_catalog_unsupported'
     if provider == 'WORLDBANK' and 'worldbank_specialized_source_family' in reasons:
         return 'worldbank_specialized_source_unsupported'
+    if provider == 'WORLDBANK' and 'worldbank_country_availability_surface' in reasons:
+        return 'worldbank_country_availability_surface'
 
     if provider != 'IMF':
         return None

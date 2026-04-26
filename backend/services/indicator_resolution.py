@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from ..models import NormalizedData, ParsedIntent
@@ -335,13 +336,14 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
             continue
         if any(
             _is_close_exact_title_match(normalized_query, normalized_name)
+            or _is_permutation_exact_title_match(normalized_query, normalized_name)
             for normalized_query in (
                 re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
                 for candidate_query in search_inputs
             )
             if normalized_query
         ):
-                return True
+            return True
     return False
 
 
@@ -489,6 +491,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             continue
         if any(
             _is_close_exact_title_match(normalized_query, normalized_name)
+            or _is_permutation_exact_title_match(normalized_query, normalized_name)
             for normalized_query in (
                 re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
                 for candidate_query in search_inputs
@@ -789,6 +792,47 @@ def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> 
         return True
 
     return False
+
+
+def _is_permutation_exact_title_match(normalized_query: str, normalized_name: str) -> bool:
+    """Return True when punctuation-only word reordering hides an exact title.
+
+    Provider titles often use commas to separate the head noun from qualifiers
+    ("Unemployment, male ...").  User/direct-cert queries commonly drop that
+    punctuation ("Unemployment male ...").  FTS can miss the literal title in
+    those cases, and the stricter ordered matcher above may reject it even
+    though the token sets are effectively identical.  This helper is deliberately
+    narrow: it only accepts near-equal token bags with almost no unmatched words,
+    so generic suffix matches still stay rejected.
+    """
+    if not normalized_query or not normalized_name:
+        return False
+    query_tokens = normalized_query.split()
+    name_tokens = normalized_name.split()
+    if len(query_tokens) > 1 and query_tokens[0] in {
+        "export",
+        "exports",
+        "import",
+        "imports",
+        "reexport",
+        "reexports",
+        "reimport",
+        "reimports",
+    }:
+        query_tokens = query_tokens[1:]
+    if len(query_tokens) > 1 and query_tokens[0] == "of":
+        query_tokens = query_tokens[1:]
+    if min(len(query_tokens), len(name_tokens)) < 5:
+        return False
+    token_delta = abs(len(query_tokens) - len(name_tokens))
+    if token_delta > 1:
+        return False
+    query_counts = Counter(query_tokens)
+    name_counts = Counter(name_tokens)
+    unmatched = sum((query_counts - name_counts).values()) + sum((name_counts - query_counts).values())
+    shared = sum((query_counts & name_counts).values())
+    overlap = shared / max(1, min(len(query_tokens), len(name_tokens)))
+    return unmatched <= 1 and overlap >= 0.92
 
 
 # ---------------------------------------------------------------------------

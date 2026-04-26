@@ -645,6 +645,9 @@ class IndicatorLookup:
         normalization injects extra terms ("money supply", "monetary").  Exact
         title matching must stay literal, provider-scoped, and side-effect free.
         """
+        def _normalize_exact_title(value: str) -> str:
+            return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
         cleaned = [
             str(name or "").strip().lower()
             for name in names
@@ -669,7 +672,55 @@ class IndicatorLookup:
         params.append(max(1, limit))
 
         cursor.execute(sql, params)
-        return [dict(row) for row in cursor.fetchall()]
+        exact_rows = [dict(row) for row in cursor.fetchall()]
+        if len(exact_rows) >= limit:
+            return exact_rows[:limit]
+
+        normalized_inputs = {
+            normalized: order
+            for order, normalized in enumerate(_normalize_exact_title(name) for name in deduped)
+            if normalized
+        }
+        first_tokens = sorted({normalized.split()[0] for normalized in normalized_inputs if normalized.split()})
+        if not normalized_inputs or not first_tokens:
+            return exact_rows[:limit]
+
+        fallback_sql = "SELECT * FROM indicators WHERE "
+        fallback_params: list[Any] = []
+        conditions: list[str] = []
+        if normalized_provider:
+            conditions.append("provider = ?")
+            fallback_params.append(normalized_provider)
+        token_clauses = ["lower(name) LIKE ?" for _ in first_tokens]
+        conditions.append("(" + " OR ".join(token_clauses) + ")")
+        fallback_params.extend(f"{token}%" for token in first_tokens)
+        fallback_sql += " AND ".join(conditions)
+        fallback_sql += " ORDER BY COALESCE(popularity, 0) DESC, code"
+
+        if not normalized_provider:
+            # Provider-scoped exact-title lookups are the normal runtime path.
+            # Keep unscoped fallback bounded so a generic title probe cannot scan
+            # every catalog family on a hot request.
+            fallback_sql += " LIMIT 5000"
+
+        cursor.execute(fallback_sql, fallback_params)
+        seen_codes = {str(row.get("code") or "") for row in exact_rows}
+        normalized_rows: list[tuple[int, int, str, Dict[str, Any]]] = []
+        for row in cursor.fetchall():
+            candidate = dict(row)
+            code = str(candidate.get("code") or "")
+            if code in seen_codes:
+                continue
+            normalized_name = _normalize_exact_title(str(candidate.get("name") or ""))
+            order = normalized_inputs.get(normalized_name)
+            if order is None:
+                continue
+            seen_codes.add(code)
+            popularity = int(candidate.get("popularity") or 0)
+            normalized_rows.append((order, -popularity, code, candidate))
+
+        normalized_rows.sort()
+        return (exact_rows + [candidate for _, _, _, candidate in normalized_rows])[:limit]
 
     def get(self, provider: str, code: str) -> Optional[Dict[str, Any]]:
         """

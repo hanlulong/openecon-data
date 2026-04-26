@@ -99,6 +99,11 @@ _AMBIGUOUS_COUNTRY_TERMS = {
     'are',
     'can',
     'per',
+    # ISO alpha-3 for Tonga is TON, but lower-case "ton" is overwhelmingly a
+    # unit in economic indicator titles/descriptions.  Treating it as country
+    # scope generated invalid direct-cert queries such as "Ton Adjusted
+    # savings..." from WorldBank carbon-damage descriptions.
+    'ton',
     'world',
 }
 _COUNTRY_QUERY_TERMS -= _AMBIGUOUS_COUNTRY_TERMS
@@ -1539,6 +1544,34 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_specialized_source_family')
     if any(term in category_lower for term in ['quarterly public sector debt', 'exporter dynamics database', 'gender statistics']):
         reasons.append('worldbank_specialized_source_family')
+    if any(term in category_lower for term in ['gender disaggregated labor database', 'g20 financial inclusion indicators']):
+        reasons.append('worldbank_specialized_source_family')
+    worldbank_country_availability_unavailable = False
+    if provider_upper == 'WORLDBANK':
+        default_query_country_codes = query_country_codes
+        # CPIA/WDI policy-assessment indicators are real World Bank catalog rows
+        # but are only populated for a constrained country universe.  Default
+        # direct-cert countries such as Japan/Germany/US repeatedly produce
+        # zero-row API results; keep these as explicit country-availability
+        # blockers instead of treating them as runtime framework bugs.
+        if origin_code_upper.startswith('IQ.CPA.') and default_query_country_codes.intersection({'US', 'CN', 'BR', 'JP', 'DE'}):
+            worldbank_country_availability_unavailable = True
+        # Donor-provided ODA indicators are country-role constrained.  Random
+        # recipient/emerging-market defaults such as India/China/Brazil are not
+        # valid donor-country executions for "provided to" series.
+        if (
+            origin_code_upper.startswith('DC.ODA.')
+            and 'provided' in worldbank_text
+            and default_query_country_codes
+            and not default_query_country_codes.intersection({
+                'AU', 'AT', 'BE', 'CA', 'CZ', 'DK', 'FI', 'FR', 'DE', 'GR',
+                'HU', 'IS', 'IE', 'IT', 'JP', 'KR', 'LU', 'NL', 'NZ', 'NO',
+                'PL', 'PT', 'SK', 'SI', 'ES', 'SE', 'CH', 'GB', 'US',
+            })
+        ):
+            worldbank_country_availability_unavailable = True
+    if worldbank_country_availability_unavailable:
+        reasons.append('worldbank_country_availability_surface')
     if any(term in worldbank_text for term in ['rights to inherit assets', 'are other banks permitted', 'commercial banks permitted']):
         reasons.append('worldbank_binary_policy_query')
     if provider_upper == 'WORLDBANK' and (origin_code_upper in {'CC.EST', 'GE.EST', 'PV.EST', 'RQ.EST', 'RL.EST', 'VA.EST'} or 'worldwide governance indicators' in worldbank_text):
@@ -1857,6 +1890,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_assessment_family',
         'worldbank_macro_exposure_family',
         'worldbank_ddh_prevalence_family',
+        'worldbank_country_availability_surface',
         'oecd_low_viability_family',
         'oecd_education_programme_share_query',
         'imf_price_or_memorandum_family',
