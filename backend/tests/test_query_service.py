@@ -685,6 +685,69 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("start_year", fred_params)
         self.assertNotIn("end_year", fred_params)
 
+    def test_fetch_data_strips_default_window_for_exact_fred_month_treasury_title(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["6-Month Treasury Bill Auction High Discount Basis (DISCONTINUED)"],
+            parameters={
+                "indicator": "H0RIFSGFPAM06NB",
+                "__exact_indicator_title_match": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery="US 6-Month Treasury Bill Auction High Discount Basis (DISCONTINUED) from FRED",
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        fred_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fred_params.get("indicator"), "H0RIFSGFPAM06NB")
+        self.assertNotIn("startDate", fred_params)
+        self.assertNotIn("endDate", fred_params)
+        self.assertNotIn("start_year", fred_params)
+        self.assertNotIn("end_year", fred_params)
+
+    def test_fetch_data_drops_conflicting_series_id_for_exact_fred_title(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["Real Gross Domestic Product: Mining, Quarrying, and Oil and Gas Extraction (21) in Virginia"],
+            parameters={
+                "country": "US",
+                "seriesId": "21",
+                "indicator": "VAMINRGSP",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="US Quarrying Real Gross Domestic Product: Mining and Oil and Gas Extraction (21) in Virginia from FRED",
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        fred_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fred_params.get("indicator"), "VAMINRGSP")
+        self.assertNotIn("seriesId", fred_params)
+        self.assertNotIn("series_id", fred_params)
+
     def test_fetch_data_preserves_explicit_time_for_exact_fred_dispatch(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",

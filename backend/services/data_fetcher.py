@@ -2051,6 +2051,19 @@ async def fetch_data(
             params.pop(key, None)
         intent.parameters = params
 
+    if provider == "FRED" and is_exact_match_locked(params):
+        exact_indicator = str(params.get("indicator") or "").strip()
+        if exact_indicator:
+            params = dict(params)
+            changed = False
+            for key in ("seriesId", "series_id"):
+                raw_series_id = str(params.get(key) or "").strip()
+                if raw_series_id and raw_series_id != exact_indicator:
+                    params.pop(key, None)
+                    changed = True
+            if changed:
+                intent.parameters = params
+
     execution_plan = materialize_execution_plan(
         execution_plan,
         provider=provider,
