@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import asyncio
+import csv
 import hashlib
+import io
 import json
 import logging
 import re
@@ -1422,6 +1424,47 @@ class IMFProvider(BaseProvider):
                 parsed.append((series_attrs, observations))
         return parsed
 
+    def _parse_sdmx_csv(
+        self,
+        response_text: str,
+    ) -> List[tuple[Dict[str, str], List[Dict[str, str]]]]:
+        """Parse IMF SDMX CSV into the same series/observation shape as XML."""
+        rows = [
+            {str(key): str(value) for key, value in row.items() if key is not None and value is not None}
+            for row in csv.DictReader(io.StringIO(str(response_text or "")))
+        ]
+        grouped: Dict[tuple[tuple[str, str], ...], List[Dict[str, str]]] = {}
+        series_dimensions_by_key: Dict[tuple[tuple[str, str], ...], Dict[str, str]] = {}
+        observation_columns = {
+            "TIME_PERIOD",
+            "OBS_VALUE",
+            "OBS_STATUS",
+            "OBS_CONF",
+            "UNIT_MULT",
+            "DECIMALS",
+        }
+
+        for row in rows:
+            if not row.get("TIME_PERIOD") or "OBS_VALUE" not in row:
+                continue
+            dimensions = {
+                key: value
+                for key, value in row.items()
+                if key not in observation_columns
+                and not key.startswith("OBS_")
+                and key
+                and value != ""
+            }
+            key = tuple(sorted(dimensions.items()))
+            series_dimensions_by_key.setdefault(key, dimensions)
+            grouped.setdefault(key, []).append(row)
+
+        return [
+            (series_dimensions_by_key[key], observations)
+            for key, observations in grouped.items()
+            if observations
+        ]
+
     async def _fetch_sdmx_exact_indicator_family(
         self,
         *,
@@ -1450,7 +1493,7 @@ class IMFProvider(BaseProvider):
             try:
                 response = await client.get(
                     url,
-                    headers={"Accept": "application/vnd.sdmx.structurespecificdata+xml, application/xml, text/xml"},
+                    headers={"Accept": "text/csv, application/vnd.sdmx.data+csv;version=2.0.0"},
                     timeout=effective_timeout(30.0),
                 )
                 if response.status_code >= 500:
@@ -1459,7 +1502,12 @@ class IMFProvider(BaseProvider):
                 if response.status_code >= 400:
                     last_error = DataNotAvailableError(f"HTTP {response.status_code}")
                     continue
-                series_payloads = self._parse_sdmx_structure_specific_xml(getattr(response, "text", ""))
+                response_text = getattr(response, "text", "")
+                content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()
+                if "csv" in content_type or str(response_text).lstrip().startswith("DATAFLOW,"):
+                    series_payloads = self._parse_sdmx_csv(response_text)
+                else:
+                    series_payloads = self._parse_sdmx_structure_specific_xml(response_text)
             except Exception as exc:
                 last_error = exc
                 continue
@@ -1473,7 +1521,10 @@ class IMFProvider(BaseProvider):
                     }
                     for obs in observations
                 ]
-                data_points = [point for point in data_points if point["date"]]
+                data_points = [
+                    point for point in data_points
+                    if point["date"] and point["value"] is not None
+                ]
                 data_points.sort(key=lambda point: point["date"])
                 if not data_points:
                     continue

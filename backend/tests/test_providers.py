@@ -1063,6 +1063,48 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result[0].data[0].date, "2020-01-01")
         self.assertEqual(result[0].data[0].value, 100.5)
 
+    def test_imf_public_sdmx_csv_response_returns_observations(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _TextResponse(MockAsyncResponse):
+            def __init__(self, text: str) -> None:
+                super().__init__({})
+                self.text = text
+                self.content = text.encode("utf-8")
+                self.headers = {"content-type": "text/csv"}
+
+        csv_text = (
+            "DATAFLOW,COUNTRY,INDICATOR,TYPE_OF_TRANSFORMATION,FREQUENCY,TIME_PERIOD,OBS_VALUE,UNIT\n"
+            "IMF.STA:ITG(5.0.0),BRA,MG,CIF_USD,A,2020,166338000000,\n"
+            "IMF.STA:ITG(5.0.0),BRA,MG,CIF_USD,A,2021,219408000000,\n"
+        )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=("TMG_CIF_USD", "External Trade, Imports, Goods, Value, CIF, US Dollars"),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ), patch(
+            "backend.providers.imf.get_http_client",
+            return_value=MockAsyncClient([_TextResponse(csv_text)]),
+        ):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="TMG_CIF_USD",
+                    countries=["Brazil"],
+                    start_year=2020,
+                    end_year=2021,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "Brazil")
+        self.assertIn("/IMF.STA,ITG/BRA.MG.CIF_USD.A", result[0].metadata.apiUrl or "")
+        self.assertEqual([point.value for point in result[0].data], [166338000000.0, 219408000000.0])
+
     def test_imf_non_datamapper_cpi_code_infers_iso3_prefix_for_public_sdmx_v21(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
