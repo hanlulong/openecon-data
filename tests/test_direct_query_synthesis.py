@@ -840,6 +840,34 @@ def test_audit_direct_query_shape_flags_imf_debt_schedule_queries():
     assert "imf_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_query_only_imf_public_surface_blockers() -> None:
+    from scripts.validation.run_certification import unsupported_direct_surface_reason
+
+    queries = [
+        "Brazil Import Price Index Mining and quarrying from IMF",
+        "Brazil General Government Total debt Fiscal Year US Dollar Government and Public Sector Finance from IMF",
+        "Brazil Food Consumer Prices Food and Non-alcoholic Beverages Food at Home Fruits and Vegetables from IMF",
+        "United States Terms of Trade (Index 2010 = 100) from IMF",
+        "Industrial Production Current activity Angola Definition BC: Mining and Quarrying from IMF",
+    ]
+
+    for query in queries:
+        row = {"provider": "IMF", "query": query, "type": "direct"}
+        audit = audit_direct_query_shape(row)
+
+        assert audit["risk_level"] == "high"
+        assert "imf_query_only_public_surface_family" in audit["reasons"]
+        assert unsupported_direct_surface_reason(row, audit) == "imf_non_weo_public_surface_unsupported"
+
+
+def test_audit_direct_query_shape_keeps_broad_imf_ppi_query_executable() -> None:
+    row = {"provider": "IMF", "query": "Brazil Producer Price Index from IMF", "type": "direct"}
+
+    audit = audit_direct_query_shape(row)
+
+    assert "imf_query_only_public_surface_family" not in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_imf_code_only_unsupported_trade_prefixes() -> None:
     for code in ["TMG_H5_80_EUR", "TX_H5_60_USD", "TM_H5_18_USD", "TXG_SI3_USD", "TMG_SI5_USD"]:
         audit = audit_direct_query_shape(

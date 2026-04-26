@@ -24,6 +24,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
+from ..utils.imf_supportability import imf_query_only_public_surface_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
@@ -1964,6 +1965,21 @@ async def fetch_data(
     params = svc._maybe_expand_ranking_country_scope(ranking_scope_query, provider, params)
     intent.parameters = params
 
+    if provider == "IMF":
+        supportability_reason = imf_query_only_public_surface_reason(
+            intent.originalQuery or ranking_scope_query,
+            intent.indicators or [],
+            params,
+        )
+        if supportability_reason:
+            raise DataNotAvailableError(
+                "IMF query targets a detailed IMF public-data surface that is "
+                "not yet executable by OpenEcon's production IMF dataset-family "
+                "routing. This is a fail-closed supportability block, not a "
+                "broad-proxy substitution. "
+                f"reason={supportability_reason}"
+            )
+
     # When __dimensions is present (from delta/merge path for dimension changes),
     # the indicator and provider are fully resolved. Skip all overrides.
     # When __delta_resolved is present (time/country/indicator follow-ups),
@@ -2339,6 +2355,21 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
     explicit_provider = svc._normalize_provider_alias(
         svc._detect_explicit_provider(intent.originalQuery or "")
     )
+
+    if _normalize_provider_name(explicit_provider or intent.apiProvider) == "IMF":
+        supportability_reason = imf_query_only_public_surface_reason(
+            intent.originalQuery or "",
+            intent.indicators or [],
+            intent.parameters or {},
+        )
+        if supportability_reason:
+            raise DataNotAvailableError(
+                "IMF query targets a detailed IMF public-data surface that is "
+                "not yet executable by OpenEcon's production IMF dataset-family "
+                "routing. This is a fail-closed supportability block, not a "
+                "broad-proxy substitution. "
+                f"reason={supportability_reason}"
+            )
 
     # Ensure default time periods are applied to base intent first
     if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):

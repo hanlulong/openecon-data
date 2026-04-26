@@ -16,6 +16,12 @@ try:
 except Exception:  # pragma: no cover - fallback for lightweight script usage
     CountryResolver = None
 
+try:
+    from backend.utils.imf_supportability import imf_query_only_public_surface_reason
+except Exception:  # pragma: no cover - fallback for lightweight script usage
+    def imf_query_only_public_surface_reason(*_args: Any, **_kwargs: Any) -> str | None:
+        return None
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
 VALIDATION_PRIVATE = ROOT / 'validation_private'
@@ -1268,6 +1274,12 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     provider_upper = provider.upper()
     reasons: list[str] = []
     query_lower = query.lower()
+    imf_query_only_supportability_reason = None
+    if provider_upper == 'IMF':
+        imf_query_only_supportability_reason = imf_query_only_public_surface_reason(query)
+        if imf_query_only_supportability_reason:
+            reasons.append('imf_query_only_public_surface_family')
+            reasons.append('imf_low_viability_family')
     parsed_metadata: dict[str, Any] = {}
     metadata_text = ''
     if provider_upper in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:
@@ -1974,6 +1986,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_country_availability_surface',
         'oecd_low_viability_family',
         'oecd_education_programme_share_query',
+        'imf_query_only_public_surface_family',
         'imf_price_or_memorandum_family',
         'eurostat_agri_breakdown_query',
         'eurostat_cross_tab_query',

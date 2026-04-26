@@ -568,6 +568,55 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_fetch_data_fails_fast_for_query_only_imf_public_surface_blocker(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["Food Consumer Prices"],
+            parameters={"country": "BR"},
+            clarificationNeeded=False,
+            originalQuery=(
+                "Brazil Food Consumer Prices Food and Non-alcoholic Beverages "
+                "Food at Home Fruits and Vegetables from IMF"
+            ),
+        )
+
+        with patch.object(
+            self.service,
+            "_resolve_indicator_for_fetch",
+            side_effect=AssertionError("unsupported IMF detail row should fail before dynamic resolution"),
+        ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertIn("fail-closed supportability block", str(raised.exception))
+
+    def test_fetch_multi_indicator_data_fails_fast_for_query_only_imf_public_surface_blocker(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=[
+                "Food Consumer Prices",
+                "Food and Non-alcoholic Beverages",
+                "Food at Home",
+                "Fruits and Vegetables",
+            ],
+            parameters={"country": "BR"},
+            clarificationNeeded=False,
+            originalQuery=(
+                "Brazil Food Consumer Prices Food and Non-alcoholic Beverages "
+                "Food at Home Fruits and Vegetables from IMF"
+            ),
+        )
+
+        with patch.object(
+            self.service,
+            "_resolve_indicator_for_fetch",
+            side_effect=AssertionError("unsupported IMF multi-detail row should fail before child resolution"),
+        ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_multi_indicator_data(intent))  # pylint: disable=protected-access
+
+        self.assertIn("fail-closed supportability block", str(raised.exception))
+
     def test_direct_query_shape_treats_imf_cpi_base_year_as_public_sdmx(self) -> None:
         from scripts.validation.common import imf_public_sdmx_runtime_family
 

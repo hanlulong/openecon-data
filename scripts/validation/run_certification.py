@@ -18,7 +18,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validation.common import audit_direct_query_shape, imf_public_sdmx_runtime_family  # noqa: E402
+from scripts.validation.common import (  # noqa: E402
+    audit_direct_query_shape,
+    imf_public_sdmx_runtime_family,
+    imf_query_only_public_surface_reason,
+)
 
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-raw-results.jsonl'
 DEFAULT_BASE_URL = 'http://localhost:3001'
@@ -118,6 +122,10 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
         str(origin.get('category') or row.get('category') or ''),
     ):
         return None
+
+    query_only_reason = imf_query_only_public_surface_reason(str(row.get('query') or ''))
+    if query_only_reason:
+        return query_only_reason
 
     if (
         ('imf_low_viability_family' in reasons or 'imf_price_or_memorandum_family' in reasons)
