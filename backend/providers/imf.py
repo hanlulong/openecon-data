@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import get_settings
-from ..services.http_pool import get_http_client, effective_timeout
+from ..services.http_pool import get_http_client, get_http1_client, effective_timeout
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
 from ..services.indicator_translator import get_indicator_translator
@@ -1475,7 +1475,7 @@ class IMFProvider(BaseProvider):
         end_year: Optional[int],
     ) -> List[NormalizedData]:
         """Fetch a non-DataMapper IMF exact code through public IMF.STA SDMX 2.1."""
-        client = get_http_client()
+        client = get_http1_client()
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         indicator_name = indicator_label or indicator_code

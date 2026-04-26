@@ -1044,7 +1044,7 @@ class ProviderTests(unittest.TestCase):
             "_indicator_catalog_entry",
             return_value={"category": "INDICATOR"},
         ), patch(
-            "backend.providers.imf.get_http_client",
+            "backend.providers.imf.get_http1_client",
             return_value=MockAsyncClient([_TextResponse(xml)]),
         ):
             result = run(
@@ -1088,7 +1088,7 @@ class ProviderTests(unittest.TestCase):
             "_indicator_catalog_entry",
             return_value={"category": "INDICATOR"},
         ), patch(
-            "backend.providers.imf.get_http_client",
+            "backend.providers.imf.get_http1_client",
             return_value=MockAsyncClient([_TextResponse(csv_text)]),
         ):
             result = run(
@@ -1133,7 +1133,7 @@ class ProviderTests(unittest.TestCase):
             "_indicator_catalog_entry",
             return_value={"category": "INDICATOR"},
         ), patch(
-            "backend.providers.imf.get_http_client",
+            "backend.providers.imf.get_http1_client",
             return_value=MockAsyncClient([_TextResponse(xml)]),
         ):
             result = run(
