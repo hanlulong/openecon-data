@@ -517,6 +517,89 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(params.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
 
+    def test_resolve_indicator_for_fetch_uses_imf_public_ppi_fast_path(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["Producer Price Index"],
+            parameters={"country": "BR"},
+            clarificationNeeded=False,
+            originalQuery="Brazil Producer Price Index from IMF",
+        )
+
+        def _resolver_should_not_run():
+            raise AssertionError("legacy IMF resolver should not run for simple aggregate PPI")
+
+        params = run(
+            self.service._resolve_indicator_for_fetch(  # pylint: disable=protected-access
+                "IMF",
+                intent,
+                dict(intent.parameters or {}),
+            )
+        )
+        params_without_wrapper = run(
+            __import__(
+                "backend.services.indicator_resolution",
+                fromlist=["resolve_indicator_for_fetch"],
+            ).resolve_indicator_for_fetch(
+                self.service,
+                "IMF",
+                intent.model_copy(deep=True),
+                {"country": "BR"},
+                _get_indicator_resolver=_resolver_should_not_run,
+            )
+        )
+
+        self.assertEqual(params.get("indicator"), "PPPI_IX")
+        self.assertEqual(params_without_wrapper.get("indicator"), "PPPI_IX")
+        self.assertEqual(
+            params_without_wrapper.get("__imf_public_sdmx_fast_path"),
+            "Producer Price Index",
+        )
+
+    def test_resolve_indicator_for_fetch_does_not_map_detailed_imf_ppi_to_aggregate(self) -> None:
+        from backend.services.indicator_resolution import (
+            _resolve_imf_aggregate_indicator_fast_path,
+        )
+
+        self.assertIsNone(
+            _resolve_imf_aggregate_indicator_fast_path(
+                indicator_query="Producer Price Index",
+                original_query="Brazil Producer Price Index Mining and quarrying from IMF",
+            )
+        )
+
+    def test_fetch_data_dispatches_simple_imf_ppi_code(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["Producer Price Index"],
+            parameters={"country": "BR"},
+            clarificationNeeded=False,
+            originalQuery="Brazil Producer Price Index from IMF",
+        )
+        imf_series = sample_series_with(
+            source="IMF",
+            indicator="Producer Price Index",
+            series_id="PPPI_IX",
+            country="Brazil",
+        )
+
+        async def _fake_fetch_indicator(indicator, country="USA", start_year=None, end_year=None):
+            self.assertEqual(indicator, "PPPI_IX")
+            self.assertIn(country, {"BR", "BRA"})
+            return imf_series
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(
+            self.service.imf_provider,
+            "fetch_indicator",
+            side_effect=_fake_fetch_indicator,
+        ):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0].metadata.seriesId, "PPPI_IX")
+
     def test_fetch_data_dispatches_exact_worldbank_title_without_default_window(self) -> None:
         exact_series = sample_series_with(
             source="World Bank",

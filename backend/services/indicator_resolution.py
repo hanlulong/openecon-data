@@ -148,6 +148,114 @@ _EUROSTAT_GENERIC_DETAIL_MARKERS = {
     },
 }
 
+_IMF_AGGREGATE_PPI_CODE = "PPPI_IX"
+_IMF_AGGREGATE_PPI_LABEL = "Producer Price Index"
+_IMF_AGGREGATE_PPI_DETAIL_MARKERS = {
+    "activity",
+    "activities",
+    "agricultural",
+    "agriculture",
+    "animal",
+    "beverage",
+    "capital city",
+    "chapter",
+    "commodity by activity",
+    "commodities by activity",
+    "construction",
+    "food",
+    "fruit",
+    "health",
+    "industry",
+    "manufactur",
+    "mining",
+    "nace",
+    "quarry",
+    "sector",
+    "service",
+    "social work",
+    "vegetable",
+    "veterinary",
+}
+
+
+def _resolve_imf_aggregate_indicator_fast_path(
+    *,
+    indicator_query: str,
+    original_query: str,
+) -> Optional[tuple[str, str]]:
+    """Return a verified IMF aggregate code for simple public SDMX concepts.
+
+    IMF long-tail exact catalog rows often contain detailed sector/activity
+    qualifiers that are not served by the public SDMX surfaces we can execute.
+    This helper is deliberately narrow: it only maps the broad, aggregate
+    Producer Price Index wording to the verified public PPI SDMX code and
+    fails closed when the original user wording contains detail markers.
+    """
+    resolution_text = str(indicator_query or "").strip().lower()
+    original_text = str(original_query or "").strip().lower()
+    if not resolution_text and not original_text:
+        return None
+
+    signal_text = resolution_text or original_text
+    if not re.search(
+        r"\b(?:ppi|producer prices?|producer price index|producer price inflation)\b",
+        signal_text,
+    ):
+        return None
+
+    detail_text = original_text or resolution_text
+    if any(marker in detail_text for marker in _IMF_AGGREGATE_PPI_DETAIL_MARKERS):
+        return None
+
+    return _IMF_AGGREGATE_PPI_CODE, _IMF_AGGREGATE_PPI_LABEL
+
+
+def _looks_like_provider_indicator_code_local(provider: str, indicator: str) -> bool:
+    """Small local code-shape guard that avoids importing heavier query helpers."""
+    if not indicator:
+        return False
+    indicator_text = str(indicator).strip()
+    if not indicator_text or " " in indicator_text:
+        return False
+    _lower = indicator_text.lower()
+    if any(
+        _lower.endswith(suffix)
+        for suffix in (
+            "tion",
+            "ment",
+            "ness",
+            "ity",
+            "ing",
+            "ism",
+            "ance",
+            "ence",
+            "ory",
+            "ies",
+            "ous",
+            "ble",
+            "ive",
+            "age",
+            "ure",
+            "dom",
+        )
+    ):
+        return False
+    provider_upper = _normalize_provider_name(provider)
+    code_upper = indicator_text.upper()
+    if provider_upper in {"WORLDBANK", "WORLD BANK"}:
+        return bool(re.fullmatch(r"[A-Z]{2,}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
+    if provider_upper == "BIS":
+        return bool(code_upper.startswith("WS_") or re.fullmatch(r"BIS\.[A-Z0-9_]{3,}", code_upper))
+    if provider_upper == "IMF":
+        return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{2,}", code_upper))
+    if provider_upper == "FRED":
+        return bool(re.fullmatch(r"[A-Z0-9]{3,}", code_upper))
+    if provider_upper in {"EUROSTAT", "OECD"}:
+        return bool(re.fullmatch(r"[A-Z0-9_@\.]{3,}", code_upper))
+    if provider_upper in {"STATSCAN", "STATISTICS CANADA"}:
+        return bool(re.fullmatch(r"[A-Z0-9_]{3,}", code_upper))
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
@@ -1449,6 +1557,43 @@ def apply_concept_provider_override(
     if is_provider_locked(params):
         explicit_provider_locked = True
 
+    existing_indicator = str(params.get("indicator") or "").strip()
+    if (
+        provider == "IMF"
+        and not (
+            existing_indicator
+            and _looks_like_provider_indicator_code_local(provider, existing_indicator)
+            and is_exact_match_locked(params)
+        )
+    ):
+        indicator_hint = str(
+            intent.indicators[0] if intent.indicators else existing_indicator
+        ).strip()
+        if not indicator_hint:
+            indicator_hint = str(params.get("__semantic_indicator_label") or "").strip()
+        fast_path = _resolve_imf_aggregate_indicator_fast_path(
+            indicator_query=indicator_hint or existing_indicator,
+            original_query=original_query,
+        )
+        if fast_path:
+            code, label = fast_path
+            logger.info(
+                "📋 IMF aggregate concept shortcut: '%s' -> %s",
+                indicator_hint or existing_indicator,
+                code,
+            )
+            params = {
+                **params,
+                "indicator": code,
+                "__semantic_indicator_label": label,
+                "__catalog_resolved": True,
+                "__imf_public_sdmx_fast_path": label,
+            }
+            intent.parameters = params
+            if not intent.indicators or len(intent.indicators) <= 1:
+                intent.indicators = [code]
+            return provider, params
+
     blocked_override_providers = {
         _normalize_provider_name(str(candidate))
         for candidate in (params.get("__fallback_excluded_providers") or [])
@@ -1481,7 +1626,11 @@ def apply_concept_provider_override(
         return provider, params
 
     def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
-        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        semantic_label = str(
+            params.get("__semantic_indicator_label")
+            or extra.get("__semantic_indicator_label")
+            or ""
+        ).strip()
         if not semantic_label:
             semantic_label = (
                 select_indicator_query_for_resolution(svc, intent)
@@ -1490,7 +1639,7 @@ def apply_concept_provider_override(
             ).strip()
 
         merged = {**params, "indicator": indicator_value, **extra}
-        if semantic_label and not svc._looks_like_provider_indicator_code(provider, semantic_label):
+        if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
         return merged
 
@@ -2047,13 +2196,24 @@ async def resolve_indicator_for_fetch(
     """
     if _get_indicator_resolver is None:
         from ..services.indicator_resolver import get_indicator_resolver as _get_indicator_resolver
-    resolver = _get_indicator_resolver()
 
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
 
+    resolver = None
+
+    def _resolver() -> Any:
+        nonlocal resolver
+        if resolver is None:
+            resolver = _get_indicator_resolver()
+        return resolver
+
     def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
-        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+        semantic_label = str(
+            params.get("__semantic_indicator_label")
+            or extra.get("__semantic_indicator_label")
+            or ""
+        ).strip()
         if not semantic_label:
             semantic_label = (
                 select_indicator_query_for_resolution(svc, intent)
@@ -2062,7 +2222,7 @@ async def resolve_indicator_for_fetch(
             ).strip()
 
         merged = {**params, "indicator": indicator_value, **extra}
-        if semantic_label and not svc._looks_like_provider_indicator_code(provider, semantic_label):
+        if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
         return merged
 
@@ -2091,6 +2251,32 @@ async def resolve_indicator_for_fetch(
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)
     )
     exact_match_locked = is_exact_match_locked(params)
+
+    if provider == "IMF" and not (has_explicit_code and exact_match_locked):
+        fast_indicator_query = str(
+            intent.indicators[0] if intent.indicators else existing_indicator
+        ).strip()
+        if not fast_indicator_query:
+            fast_indicator_query = str(params.get("__semantic_indicator_label") or "").strip()
+        fast_path = _resolve_imf_aggregate_indicator_fast_path(
+            indicator_query=fast_indicator_query or existing_indicator,
+            original_query=_effective_original_query(intent),
+        )
+        if fast_path:
+            code, label = fast_path
+            logger.info(
+                "⚡ IMF aggregate fast-path: '%s' -> %s",
+                fast_indicator_query or existing_indicator,
+                code,
+            )
+            params = _apply_indicator_with_semantic_label(
+                code,
+                __semantic_indicator_label=label,
+                __catalog_resolved=True,
+                __imf_public_sdmx_fast_path=label,
+            )
+            intent.parameters = params
+            return params
 
     # Qualifier-aware indicator recovery: when the LLM strips qualifiers
     # ("GDP growth G7" -> indicators=["GDP"]), recover the full indicator
@@ -2160,7 +2346,7 @@ async def resolve_indicator_for_fetch(
         if matched_qualifiers:
             resolved_name_lower = ""
             try:
-                _lookup = _get_indicator_resolver().lookup
+                _lookup = _resolver().lookup
                 _meta = _lookup.get(provider, existing_indicator)
                 if _meta:
                     resolved_name_lower = (_meta.get("name") or "").lower()
@@ -2372,7 +2558,7 @@ async def resolve_indicator_for_fetch(
         return params
 
     # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
-    resolved = resolver.resolve(
+    resolved = _resolver().resolve(
         indicator_query,
         provider=provider,
         country=country_context,
@@ -2437,7 +2623,7 @@ async def resolve_indicator_for_fetch(
             indicator_query=indicator_query,
         )
         if direct_translation and svc._looks_like_provider_indicator_code(provider, direct_translation):
-            _resolver_inst = _get_indicator_resolver()
+            _resolver_inst = _resolver()
             _lookup = getattr(_resolver_inst, 'lookup', None)
             _meta = _lookup.get(provider, direct_translation) if _lookup else None
             _name = (_meta.get("name", "") if _meta else "")
