@@ -32,6 +32,9 @@ def test_direct_oversample_count_deepens_imf_candidate_pool() -> None:
     assert direct_oversample_count("IMF", 1, 115_381) == 201
     assert direct_oversample_count("FRED", 9, 138_774) == 450
     assert direct_oversample_count("IMF", 9, 100) == 100
+    assert direct_oversample_count("IMF", 544, 115_381) == 3_000
+    assert direct_oversample_count("FRED", 597, 138_774) == 1_194
+    assert direct_oversample_count("WorldBank", 268, 29_269) == 2_680
 
 
 def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):

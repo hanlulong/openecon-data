@@ -61,9 +61,21 @@ def direct_oversample_count(provider: str, count: int, provider_population: int)
     allowlisting.
     """
     provider_upper = str(provider or '').upper()
-    base_count = max(count * 50, count + 200)
-    if provider_upper == 'IMF' and count >= 5:
-        base_count = max(base_count, count * 500, 5_000)
+    if count >= 100:
+        base_count = max(count * 2, count + 250)
+    elif count >= 25:
+        base_count = max(count * 20, count + 500)
+    else:
+        base_count = max(count * 50, count + 200)
+    if provider_upper == 'IMF':
+        if count >= 100:
+            base_count = max(base_count, count * 5, 3_000)
+        elif count >= 20:
+            base_count = max(base_count, count * 100, 5_000)
+        elif count >= 5:
+            base_count = max(base_count, count * 500, 5_000)
+    elif provider_upper == 'WORLDBANK' and count >= 100:
+        base_count = max(base_count, count * 10, count + 1_000)
     return min(provider_population, base_count)
 
 

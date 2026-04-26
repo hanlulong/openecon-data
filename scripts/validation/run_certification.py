@@ -80,6 +80,7 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     provider = str(row.get('provider_stratum') or row.get('provider') or origin.get('source_provider') or '').upper()
     payload = audit if audit is not None else audit_direct_query_shape(row)
     reasons = {str(reason) for reason in payload.get('reasons') or []}
+    risk_level = str(payload.get('risk_level') or '').strip().lower()
 
     if (
         provider == 'OECD'
@@ -88,12 +89,19 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     ):
         return 'oecd_non_production_dataflow_unsupported'
 
+    category = str(origin.get('category') or row.get('category') or '').strip().lower()
+
     if provider == 'WORLDBANK' and (
         'worldbank_niche_catalog_family' in reasons
         or 'worldbank_ddh_prevalence_family' in reasons
         or 'worldbank_education_expenditure_family' in reasons
         or 'worldbank_demographic_literacy_slice' in reasons
         or 'worldbank_binary_policy_query' in reasons
+        or (risk_level == 'high' and category == 'disability data hub (ddh)')
+        or (
+            risk_level == 'high'
+            and category == 'global financial inclusion and consumer protection survey'
+        )
     ):
         return 'worldbank_niche_catalog_unsupported'
     if provider == 'WORLDBANK' and 'worldbank_specialized_source_family' in reasons:
@@ -102,11 +110,28 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     if provider != 'IMF':
         return None
 
-    category = str(origin.get('category') or row.get('category') or '').strip().lower()
     if (
         ('imf_low_viability_family' in reasons or 'imf_price_or_memorandum_family' in reasons)
         and category
         and category != 'weo'
+    ):
+        return 'imf_non_weo_public_surface_unsupported'
+    if (
+        category
+        and category != 'weo'
+        and risk_level == 'high'
+        and reasons.intersection(
+            {
+                'very_long_query',
+                'imf_complex_finance_family',
+                'definition_financial_query',
+                'definition_survey_query',
+                'catalog_jargon',
+                'methodology_dense',
+                'classification_gva_query',
+                'country_scope_conflict',
+            }
+        )
     ):
         return 'imf_non_weo_public_surface_unsupported'
     return None

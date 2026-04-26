@@ -426,6 +426,47 @@ def test_preflight_classifies_imf_price_or_memorandum_family_as_supportability_b
     )
 
 
+def test_preflight_classifies_high_risk_non_weo_imf_surface_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    unsupported_imf = {
+        "id": "direct-imf-gfs",
+        "provider_stratum": "IMF",
+        "query": (
+            "Brazil General Government Memorandum items Debt items Domestic creditors Government and Public Sector "
+            "Finance Stocks in Assets and Liabilities Gross debt Maastricht debt liabilities Long-term by original "
+            "maturity with payment due in more than one year from IMF"
+        ),
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "GALDDEU_L_1YP_G14_GG_XDC",
+            "name": (
+                "General Government Memorandum items Debt items Domestic creditors Government and Public Sector "
+                "Finance Stocks in Assets and Liabilities Gross debt Maastricht debt liabilities Long-term by original "
+                "maturity with payment due in more than one year"
+            ),
+            "category": "INDICATOR",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [unsupported_imf],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "imf_non_weo_public_surface_unsupported": 1
+    }
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-imf-gfs.json",
+        [unsupported_imf],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
 def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
     module = load_module()
     runnable_oecd = {
@@ -566,6 +607,45 @@ def test_preflight_classifies_worldbank_low_viability_families_as_supportability
     module.enforce_preflight_audit(
         tmp_path / "unsupported-worldbank-low-viability.json",
         [ddh_worldbank, education_worldbank, demographic_worldbank, policy_worldbank],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
+def test_preflight_classifies_high_risk_worldbank_ddh_category_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    ddh_worldbank = {
+        "id": "direct-worldbank-ddh-shock",
+        "provider_stratum": "WorldBank",
+        "query": (
+            "Brazil Persons aged 15 to 29 years in households that experienced a shock recently "
+            "(% of persons aged 15 to 29 years with none or some degree of functional difficulty) from World Bank"
+        ),
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "shck_nosome_dfcl_1529",
+            "name": (
+                "Persons aged 15 to 29 years in households that experienced a shock recently "
+                "(% of persons aged 15 to 29 years with none or some degree of functional difficulty)"
+            ),
+            "category": "Disability Data Hub (DDH)",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [ddh_worldbank],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "worldbank_niche_catalog_unsupported": 1,
+    }
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-worldbank-ddh-category.json",
+        [ddh_worldbank],
         allow_high_risk_direct=False,
         classify_unsupported_direct=True,
     )

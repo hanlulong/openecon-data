@@ -138,3 +138,102 @@ def test_build_review_expansion_plan_handles_zero_gap(tmp_path: Path):
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["current"]["additional_effective_n_needed"] == 0
     assert report["allocation"]["by_dataset_type"]["direct"] == 0
+
+
+def test_build_review_expansion_plan_uses_design_lower95_when_available(tmp_path: Path):
+    score_path = tmp_path / "score.json"
+    gap_path = tmp_path / "gap.json"
+    policy_path = tmp_path / "policy.json"
+    output_path = tmp_path / "plan.json"
+
+    write_json(
+        policy_path,
+        {
+            "claim_thresholds": {
+                "weighted_session_success_min": 0.992,
+                "lower95_min": 0.99,
+            },
+            "required_direct_provider_floors": {
+                "FRED": {"class": "high_traffic", "floor": 0.98},
+                "CoinGecko": {"class": "critical", "floor": 0.97},
+            },
+            "required_multiround_family_floors": {},
+            "required_ambiguity_family_floors": {},
+        },
+    )
+    write_json(
+        score_path,
+        {
+            "snapshot_id": "snap-1",
+            "floor_policy_path": str(policy_path),
+            "metrics": {
+                "weighted_session_counts_by_type": {"direct": 12},
+                "overall_weighted_adjudicated_design_confidence": {
+                    "observed_success": 1.0,
+                    "lower95": 0.65,
+                    "strata": {
+                        "direct_provider:FRED": {
+                            "n": 8,
+                            "population_weight_share": 0.9,
+                            "weighted_success": 1.0,
+                            "effective_n": 8.0,
+                            "rounded_effective_n": 8,
+                            "effective_successes": 8,
+                            "lower95": 0.6755843804891231,
+                        },
+                        "direct_provider:CoinGecko": {
+                            "n": 4,
+                            "population_weight_share": 0.1,
+                            "weighted_success": 1.0,
+                            "effective_n": 4.0,
+                            "rounded_effective_n": 4,
+                            "effective_successes": 4,
+                            "lower95": 0.5100999795960008,
+                        },
+                    },
+                },
+            },
+            "strata": {
+                "evaluated_provider_floors": {
+                    "FRED": {"n": 8},
+                    "CoinGecko": {"n": 4},
+                }
+            },
+        },
+    )
+    write_json(
+        gap_path,
+        {
+            "required_lower95": 0.99,
+            "gap_estimate": {
+                "additional_effective_n_needed_at_perfect_success": 1
+            },
+            "current": {
+                "overall_weighted_effective_n": 12,
+                "claim_lower95": 0.65,
+            },
+        },
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--score-report",
+            str(score_path),
+            "--gap-report",
+            str(gap_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    design_plan = report["design_lower95_expansion"]
+    assert design_plan["enabled"] is True
+    assert design_plan["projected_lower95_after_plan"] >= 0.99
+    assert report["current"]["additional_effective_n_needed"] > 1
+    direct_targets = report["allocation"]["direct"]["targets"]
+    assert direct_targets["FRED"]["additional_target_sessions"] > direct_targets["CoinGecko"]["additional_target_sessions"]
+    assert report["allocation"]["by_dataset_type"]["direct"] == report["current"]["additional_effective_n_needed"]
