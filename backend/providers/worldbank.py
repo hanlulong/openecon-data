@@ -9,7 +9,7 @@ import httpx
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
-from ..services.http_pool import get_http_client, effective_timeout
+from ..services.http_pool import get_http1_client, effective_timeout
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -628,8 +628,11 @@ class WorldBankProvider(BaseProvider):
             "Accept": "application/json",
         }
 
-        # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        # Use a shared HTTP/1.1 client. WorldBank's API has repeatedly hung on
+        # otherwise-fast indicator endpoints over httpx HTTP/2 while the same
+        # endpoints return quickly with HTTP/1.1 (curl --http1.1 and httpx
+        # http2=False). Keep this provider off the shared HTTP/2 pool.
+        client = get_http1_client()
 
         # Batch multi-country requests using WorldBank's semicolon-separated
         # country codes: /country/USA;GBR;FRA/indicator/X — single API call

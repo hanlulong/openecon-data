@@ -753,7 +753,7 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(provider, "_resolve_indicator_code", new=AsyncMock(return_value="PER.SR.PPC")), \
              patch.object(provider, "_country_code", side_effect=lambda value: value), \
-             patch("backend.providers.worldbank.get_http_client", return_value=client):
+             patch("backend.providers.worldbank.get_http1_client", return_value=client):
             result = run(provider.fetch_indicator("PER.SR.PPC", country=None, countries=None))
 
         self.assertEqual(len(result), 1)

@@ -306,7 +306,7 @@ class ProviderTests(unittest.TestCase):
         # Provide enough responses for batch + potential fallback
         responses = [batch_response, batch_response]
 
-        with patch("backend.providers.worldbank.get_http_client", return_value=MockAsyncClient(responses)):
+        with patch("backend.providers.worldbank.get_http1_client", return_value=MockAsyncClient(responses)):
             results = run(
                 provider.fetch_indicator(
                     indicator="NY.GDP.MKTP.CD",
@@ -382,7 +382,7 @@ class ProviderTests(unittest.TestCase):
         )
         client = RecordingClient([usa_response, can_response])
 
-        with patch("backend.providers.worldbank.get_http_client", return_value=client):
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client):
             results = run(
                 provider.fetch_indicator(
                     indicator="FP.CPI.TOTL.ZG",
@@ -785,7 +785,7 @@ class ProviderTests(unittest.TestCase):
             )
         responses = [wb_resp, wb_resp]  # Enough for batch + potential fallback
 
-        with patch("backend.providers.worldbank.get_http_client", return_value=MockAsyncClient(responses)):
+        with patch("backend.providers.worldbank.get_http1_client", return_value=MockAsyncClient(responses)):
             results = run(provider.fetch_indicator(indicator="custom indicator", country="US"))
 
         self.assertEqual(len(results), 1)

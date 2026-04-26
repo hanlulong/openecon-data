@@ -101,7 +101,9 @@ class HTTPClientPool:
 
     _instance: Optional[HTTPClientPool] = None
     _loop_clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = weakref.WeakKeyDictionary()
+    _loop_http1_clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = weakref.WeakKeyDictionary()
     _sync_client: Optional[httpx.AsyncClient] = None
+    _sync_http1_client: Optional[httpx.AsyncClient] = None
     _MAX_CONNECTIONS = 100
     _MAX_KEEPALIVE_CONNECTIONS = 50
     _KEEPALIVE_EXPIRY = 5.0
@@ -132,6 +134,16 @@ class HTTPClientPool:
     @classmethod
     def _initialize_client(cls) -> httpx.AsyncClient:
         """Create an AsyncClient with optimized connection pooling."""
+        return cls._initialize_client_with_protocol(http2=True)
+
+    @classmethod
+    def _initialize_http1_client(cls) -> httpx.AsyncClient:
+        """Create an HTTP/1.1-only AsyncClient with optimized connection pooling."""
+        return cls._initialize_client_with_protocol(http2=False)
+
+    @classmethod
+    def _initialize_client_with_protocol(cls, *, http2: bool) -> httpx.AsyncClient:
+        """Create an AsyncClient with optimized connection pooling."""
         # Configure connection pool limits
         limits = httpx.Limits(
             max_connections=cls._MAX_CONNECTIONS,  # Total concurrent connections
@@ -152,14 +164,15 @@ class HTTPClientPool:
         client = httpx.AsyncClient(
             limits=limits,
             timeout=timeout,
-            http2=True,  # Enable HTTP/2
+            http2=http2,  # Enable HTTP/2 when provider-compatible
             verify=True,  # SSL verification
             follow_redirects=True,  # Follow HTTP redirects
         )
 
         logger.info(
             "HTTP Client Pool initialized: "
-            "max_connections=100, max_keepalive=50, timeout=30s"
+            "max_connections=100, max_keepalive=50, timeout=30s, http2=%s",
+            http2,
         )
         return client
 
@@ -180,21 +193,44 @@ class HTTPClientPool:
         return client
 
     @classmethod
+    def get_http1_client(cls) -> httpx.AsyncClient:
+        """Get a shared HTTP/1.1-only client scoped to the current event loop."""
+        cls()
+        loop = cls._current_loop()
+        if loop is None:
+            if cls._sync_http1_client is None or cls._sync_http1_client.is_closed:
+                cls._sync_http1_client = cls._initialize_http1_client()
+            return cls._sync_http1_client
+
+        client = cls._loop_http1_clients.get(loop)
+        if client is None or client.is_closed:
+            client = cls._initialize_http1_client()
+            cls._loop_http1_clients[loop] = client
+        return client
+
+    @classmethod
     async def close(cls) -> None:
         """Close all shared HTTP clients across event loops."""
         loop_clients = list(cls._loop_clients.values())
+        loop_http1_clients = list(cls._loop_http1_clients.values())
         sync_client = cls._sync_client
-        if not loop_clients and sync_client is None:
+        sync_http1_client = cls._sync_http1_client
+        if not loop_clients and not loop_http1_clients and sync_client is None and sync_http1_client is None:
             return
 
         cls._loop_clients = weakref.WeakKeyDictionary()
+        cls._loop_http1_clients = weakref.WeakKeyDictionary()
         cls._sync_client = None
+        cls._sync_http1_client = None
 
         closed_ids = set()
         all_clients = []
         if sync_client is not None:
             all_clients.append(sync_client)
+        if sync_http1_client is not None:
+            all_clients.append(sync_http1_client)
         all_clients.extend(loop_clients)
+        all_clients.extend(loop_http1_clients)
 
         for client in all_clients:
             if id(client) in closed_ids:
@@ -215,13 +251,20 @@ class HTTPClientPool:
             client = cls._sync_client
         if client is None:
             client = next((c for c in cls._loop_clients.values() if c and not c.is_closed), None)
+        if client is None and cls._sync_http1_client and not cls._sync_http1_client.is_closed:
+            client = cls._sync_http1_client
+        if client is None:
+            client = next((c for c in cls._loop_http1_clients.values() if c and not c.is_closed), None)
         if not client:
             return {"status": "not_initialized", "active_clients": 0}
 
         active_clients = 0
         if cls._sync_client and not cls._sync_client.is_closed:
             active_clients += 1
+        if cls._sync_http1_client and not cls._sync_http1_client.is_closed:
+            active_clients += 1
         active_clients += sum(1 for c in cls._loop_clients.values() if not c.is_closed)
+        active_clients += sum(1 for c in cls._loop_http1_clients.values() if not c.is_closed)
 
         return {
             "status": "active",
@@ -260,6 +303,17 @@ def get_http_client() -> httpx.AsyncClient:
             response = await client.get('https://api.example.com/data')
     """
     return HTTPClientPool.get_client()
+
+
+def get_http1_client() -> httpx.AsyncClient:
+    """
+    Get a shared HTTP/1.1-only client pool.
+
+    Some public data APIs have unreliable HTTP/2 behavior while responding
+    quickly over HTTP/1.1. Providers should use this only when they have
+    provider-specific evidence that HTTP/2 is harmful.
+    """
+    return HTTPClientPool.get_http1_client()
 
 
 async def close_http_pool() -> None:

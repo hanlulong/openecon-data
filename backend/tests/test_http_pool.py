@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from backend.services.http_pool import HTTPClientPool, close_http_pool, get_http_client
+from backend.services.http_pool import HTTPClientPool, close_http_pool, get_http1_client, get_http_client
 
 
 def _run_in_new_loop(coro):
@@ -38,6 +38,22 @@ def test_http_pool_reuses_client_within_single_loop() -> None:
 
     first_id, second_id = _run_in_new_loop(_within_loop())
     assert first_id == second_id
+
+
+def test_http_pool_reuses_http1_client_within_single_loop() -> None:
+    async def _within_loop() -> tuple[int, int]:
+        return id(get_http1_client()), id(get_http1_client())
+
+    first_id, second_id = _run_in_new_loop(_within_loop())
+    assert first_id == second_id
+
+
+def test_http_pool_keeps_http1_client_separate_from_default_client() -> None:
+    async def _within_loop() -> tuple[int, int]:
+        return id(get_http_client()), id(get_http1_client())
+
+    default_id, http1_id = _run_in_new_loop(_within_loop())
+    assert default_id != http1_id
 
 
 def test_http_pool_uses_separate_clients_across_event_loops() -> None:
