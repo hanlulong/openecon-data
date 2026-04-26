@@ -11,6 +11,7 @@ from scripts.validation.common import (
     heuristic_subfamily_adjustment,
     preferred_default_country_for_record,
     preferred_default_country,
+    imf_public_sdmx_runtime_family,
     provider_family_key,
     provider_subfamily_key,
     subfamily_success_adjustment,
@@ -30,6 +31,53 @@ def test_default_query_for_row_naturalizes_imf_indicator_names():
     assert "producer price index" in query.lower()
     assert "from imf" in query.lower()
     assert "isic rev" not in query.lower()
+
+
+def test_default_query_for_row_uses_imf_exact_code_for_public_sdmx_aggregate_trade():
+    row = {
+        "provider": "IMF",
+        "code": "TXG_FOB_USD",
+        "name": "External Trade, Exports, Goods, Value, Free on Board, US Dollars",
+        "description": "",
+        "category": "INDICATOR",
+    }
+
+    assert default_query_for_row(row) == "TXG_FOB_USD from IMF"
+    assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) == "itg_aggregate"
+
+
+def test_default_query_for_row_keeps_detailed_imf_trade_family_outside_public_sdmx_surface():
+    row = {
+        "provider": "IMF",
+        "code": "TMG_H5_84T86_CIF_USD",
+        "name": (
+            "External Trade, Goods, Value of Imports, By Harmonized Commodity Description "
+            "and Coding Systems (HS 2017) Rev. 5, machinery, US Dollars"
+        ),
+        "description": "",
+        "category": "INDICATOR",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query != "TMG_H5_84T86_CIF_USD from IMF"
+    assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) is None
+
+
+def test_default_query_for_row_keeps_detailed_imf_cpi_family_outside_public_sdmx_surface():
+    row = {
+        "provider": "IMF",
+        "code": "PCPI_ECP_01123_IX",
+        "name": "Consumer Price Index Lamb and goat",
+        "description": "",
+        "category": "INDICATOR",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query != "PCPI_ECP_01123_IX from IMF"
+    assert "lamb and goat" in query.lower()
+    assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) is None
 
 
 def test_default_query_for_row_does_not_treat_are_verb_as_country() -> None:

@@ -1063,6 +1063,75 @@ def count_distinct_country_mentions(text: str) -> int:
     return len(detect_country_codes_in_text(text))
 
 
+def _strip_imf_iso3_country_prefix(code: str) -> str:
+    value = str(code or '').strip().upper()
+    match = re.match(r'^([A-Z]{3})_', value)
+    if not match:
+        return value
+    prefix = match.group(1)
+    if CountryResolver is not None:
+        try:
+            if CountryResolver.to_iso2(prefix):
+                return value[len(prefix) + 1:]
+        except Exception:
+            pass
+    return value
+
+
+def _is_imf_aggregate_trade_code(code: str) -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    if any(fragment in bare_code for fragment in ('_H5_', '_HS', '_SITC', '_CPC', '_BEC')):
+        return False
+    return bool(
+        re.fullmatch(r'(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)', bare_code)
+        or re.fullmatch(r'(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)_IX', bare_code)
+    )
+
+
+def _is_imf_aggregate_cpi_code(code: str, name: str = '') -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    text = str(name or '').lower()
+    if 'weight' in text:
+        return False
+    if bare_code == 'PCPI_IX':
+        return True
+    if re.fullmatch(r'PCPI_CP_?\d{2}_IX', bare_code):
+        return True
+    if 'consumer price' in text and bare_code == 'PCPI_IX':
+        return True
+    return False
+
+
+def _is_imf_aggregate_ppi_code(code: str, name: str = '') -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    text = str(name or '').lower()
+    if any(fragment in bare_code for fragment in ('ISIC', 'NACE')):
+        return False
+    if any(term in text for term in ['by activity', 'commodities by activity', 'manufacture of', 'mining of']):
+        return False
+    return bare_code in {'PPPI_IX', 'PPI_IX', 'WPI_IX'} or bare_code == 'PPPIA_IX'
+
+
+def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = '') -> str | None:
+    """Return the narrow public IMF.STA SDMX family now executable by runtime.
+
+    This helper is deliberately conservative.  It only marks rows as supported
+    when the provider code maps to a documented country-level SDMX 2.1 key.
+    Detailed HS/SITC/CPC trade, city CPI, ISIC/NACE PPI, BOP, fiscal, monetary,
+    and other non-WEO families remain explicit supportability blockers until
+    their exact public dimensions are implemented.
+    """
+    if str(category or '').strip().lower() == 'weo':
+        return None
+    if _is_imf_aggregate_trade_code(code):
+        return 'itg_aggregate'
+    if _is_imf_aggregate_cpi_code(code, name):
+        return 'cpi_aggregate'
+    if _is_imf_aggregate_ppi_code(code, name):
+        return 'ppi_aggregate'
+    return None
+
+
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     provider = str(row.get('provider') or '')
     provider_upper = provider.upper()
@@ -1100,6 +1169,9 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     if provider_upper == 'STATSCAN':
         return f"Canada {phrase} from Statistics Canada"
     if provider_upper == 'IMF':
+        sdmx_family = imf_public_sdmx_runtime_family(code, name, str(row.get('category') or ''))
+        if sdmx_family:
+            return f"{code.upper()} from IMF"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from IMF".strip()
     if provider_upper == 'WORLDBANK':

@@ -6,6 +6,8 @@ import hashlib
 import json
 import logging
 import re
+import xml.etree.ElementTree as ET
+from urllib.parse import urlencode
 
 import httpx
 
@@ -35,6 +37,8 @@ class IMFProvider(BaseProvider):
 
     API Documentation: https://www.imf.org/external/datamapper/api/help
     """
+
+    SDMX_DATA_BASE_URL = "https://api.imf.org/external/sdmx/2.1/data/IMF.STA"
 
     # Indicators NOT available in DataMapper API
     # These will trigger clarification responses
@@ -631,7 +635,20 @@ class IMFProvider(BaseProvider):
 
     def _country_name(self, code: str) -> str:
         """Get display-friendly country name from ISO 3166-1 alpha-3 code."""
-        return self.CODE_TO_COUNTRY_NAME.get(code, code)
+        value = str(code or "").strip().upper()
+        if value in self.CODE_TO_COUNTRY_NAME:
+            return self.CODE_TO_COUNTRY_NAME[value]
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            iso2 = CountryResolver.to_iso2(value)
+            if iso2:
+                for name, candidate_iso2 in CountryResolver.COUNTRY_ALIASES.items():
+                    if candidate_iso2 == iso2 and not re.fullmatch(r"[a-z]{2,3}", name):
+                        return name.title()
+        except Exception:
+            pass
+        return code
 
     async def fetch_indicator(
         self,
@@ -688,6 +705,19 @@ class IMFProvider(BaseProvider):
         indicator_code, indicator_label = await self._resolve_indicator_code(indicator)
         execution_family = self._classify_execution_family(indicator_code)
         if execution_family == "NON_DATAMAPPER_INDICATOR":
+            sdmx_candidates = self._build_sdmx_series_candidates(
+                indicator_code=indicator_code,
+                indicator_label=indicator_label,
+                countries=countries,
+            )
+            if sdmx_candidates:
+                return await self._fetch_sdmx_exact_indicator_family(
+                    indicator_code=indicator_code,
+                    indicator_label=indicator_label,
+                    candidates=sdmx_candidates,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
             dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
             if dataset_hint == "IMF.STA:BOP":
                 return await self._fetch_bop_family(
@@ -1126,6 +1156,370 @@ class IMFProvider(BaseProvider):
 
         return None
 
+    @staticmethod
+    def _local_xml_name(tag: str) -> str:
+        """Return the namespace-stripped XML tag name."""
+        return str(tag or "").rsplit("}", 1)[-1]
+
+    @staticmethod
+    def _period_to_date(period: str) -> str:
+        """Normalize SDMX period strings to the API's date shape."""
+        value = str(period or "").strip()
+        if re.fullmatch(r"\d{4}", value):
+            return f"{value}-01-01"
+        match = re.fullmatch(r"(\d{4})-Q([1-4])", value)
+        if match:
+            month = {"1": "01", "2": "04", "3": "07", "4": "10"}[match.group(2)]
+            return f"{match.group(1)}-{month}-01"
+        match = re.fullmatch(r"(\d{4})-M(\d{1,2})", value)
+        if match:
+            return f"{match.group(1)}-{int(match.group(2)):02d}-01"
+        if re.fullmatch(r"\d{4}-\d{2}", value):
+            return f"{value}-01"
+        return value
+
+    @staticmethod
+    def _frequency_label(code: str) -> str:
+        return {
+            "A": "annual",
+            "Q": "quarterly",
+            "M": "monthly",
+            "D": "daily",
+        }.get(str(code or "").strip().upper(), str(code or "").strip() or "annual")
+
+    @staticmethod
+    def _float_or_none(value: Any) -> Optional[float]:
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def _country_prefix_from_indicator_code(self, indicator_code: str) -> Optional[str]:
+        """Return a leading ISO3 country prefix when the IMF catalog code encodes one."""
+        code = str(indicator_code or "").strip().upper()
+        match = re.match(r"^([A-Z]{3})_", code)
+        if not match:
+            return None
+        candidate = match.group(1)
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            if CountryResolver.to_iso2(candidate):
+                return candidate
+        except Exception:
+            if candidate in self.CODE_TO_COUNTRY_NAME:
+                return candidate
+        return None
+
+    def _strip_country_prefix(self, indicator_code: str) -> str:
+        code = str(indicator_code or "").strip().upper()
+        prefix = self._country_prefix_from_indicator_code(code)
+        if prefix and code.startswith(f"{prefix}_"):
+            return code[len(prefix) + 1 :]
+        return code
+
+    def _sdmx_country_codes(self, indicator_code: str, countries: List[str]) -> List[str]:
+        prefix = self._country_prefix_from_indicator_code(indicator_code)
+        if prefix:
+            return [prefix]
+
+        country_codes: List[str] = []
+        for country in countries or ["USA"]:
+            code = self._country_code(country)
+            if code and code not in country_codes:
+                country_codes.append(code)
+        return country_codes or ["USA"]
+
+    @staticmethod
+    def _is_aggregate_trade_code(bare_code: str) -> bool:
+        code = str(bare_code or "").strip().upper()
+        if any(fragment in code for fragment in ("_H5_", "_HS", "_SITC", "_CPC", "_BEC")):
+            return False
+        return bool(
+            re.fullmatch(r"(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)", code)
+            or re.fullmatch(r"(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)_IX", code)
+        )
+
+    @staticmethod
+    def _trade_indicator_from_code(bare_code: str, label: str) -> Optional[str]:
+        text = f"{bare_code} {label}".upper()
+        if re.match(r"^(?:T?XG?|XG)_", text) or "EXPORT" in text:
+            return "XG"
+        if re.match(r"^(?:T?MG?|MG)_", text) or "IMPORT" in text:
+            return "MG"
+        return None
+
+    @staticmethod
+    def _trade_transformation_from_code(bare_code: str, label: str) -> Optional[str]:
+        text = f"{bare_code} {label}".upper()
+        basis = "FOB" if "FOB" in text or "FREE ON BOARD" in text else "CIF" if "CIF" in text else None
+        currency = "XDC" if "XDC" in text or "NATIONAL CURRENCY" in text else "USD" if "USD" in text or "US DOLLAR" in text else None
+        if basis and currency:
+            return f"{basis}_{currency}"
+        return None
+
+    @staticmethod
+    def _coicop_from_cpi_code_or_label(bare_code: str, label: str) -> str:
+        code = str(bare_code or "").upper()
+        text = str(label or "").lower()
+        match = re.search(r"(?:^|_)CP_?(\d{2})(?:\d{0,3})?(?:_|$)", code)
+        if match:
+            return f"CP{match.group(1)}"
+        if any(term in text for term in ["food", "beverage"]):
+            return "CP01"
+        if any(term in text for term in ["clothing", "footwear"]):
+            return "CP03"
+        if any(term in text for term in ["housing", "water", "electricity", "gas", "fuel"]):
+            return "CP04"
+        if "health" in text:
+            return "CP06"
+        if "transport" in text:
+            return "CP07"
+        if "communication" in text:
+            return "CP08"
+        if any(term in text for term in ["recreation", "culture"]):
+            return "CP09"
+        if "education" in text:
+            return "CP10"
+        if any(term in text for term in ["restaurant", "hotel"]):
+            return "CP11"
+        return "_T"
+
+    @staticmethod
+    def _is_cpi_candidate(bare_code: str, label: str) -> bool:
+        code = str(bare_code or "").upper()
+        text = str(label or "").lower()
+        if "weight" in text:
+            return False
+        if code == "PCPI_IX":
+            return True
+        if re.fullmatch(r"PCPI_CP_?\d{2}_IX", code):
+            return True
+        return bool("consumer price" in text and code == "PCPI_IX")
+
+    @staticmethod
+    def _is_ppi_candidate(bare_code: str, label: str) -> bool:
+        code = str(bare_code or "").upper()
+        text = str(label or "").lower()
+        if any(fragment in code for fragment in ("ISIC", "NACE")):
+            return False
+        if any(term in text for term in ["by activity", "manufacture of", "mining of", "commodities by activity"]):
+            return False
+        return "PPPI" in code or "producer price index" in text
+
+    def _build_sdmx_series_candidates(
+        self,
+        *,
+        indicator_code: str,
+        indicator_label: Optional[str],
+        countries: List[str],
+    ) -> List[Dict[str, str]]:
+        """Build exact-code SDMX 2.1 candidates for public IMF.STA families.
+
+        The legacy DataMapper API does not serve many catalog-native IMF
+        ``INDICATOR`` rows.  This mapper is intentionally narrow: it only
+        emits candidates when the provider code can be mapped mechanically to
+        a documented public IMF.STA SDMX 2.1 flow/key.
+        """
+        code = str(indicator_code or "").strip().upper()
+        label = str(indicator_label or "").strip()
+        bare_code = self._strip_country_prefix(code)
+        countries_to_try = self._sdmx_country_codes(code, countries)
+        candidates: List[Dict[str, str]] = []
+
+        if self._is_aggregate_trade_code(bare_code):
+            indicator = self._trade_indicator_from_code(bare_code, label)
+            transformation = self._trade_transformation_from_code(bare_code, label)
+            if indicator and transformation:
+                for country in countries_to_try:
+                    candidates.append(
+                        {
+                            "flow": "ITG",
+                            "key": f"{country}.{indicator}.{transformation}.A",
+                            "country": country,
+                            "frequency": "A",
+                            "unit": transformation,
+                            "data_type": "Level",
+                        }
+                    )
+            return candidates
+
+        if self._is_cpi_candidate(bare_code, label):
+            coicop = self._coicop_from_cpi_code_or_label(bare_code, label)
+            transformation = "IX"
+            for country in countries_to_try:
+                candidates.append(
+                    {
+                        "flow": "CPI",
+                        "key": f"{country}.CPI.{coicop}.{transformation}.A",
+                        "country": country,
+                        "frequency": "A",
+                        "unit": "index",
+                        "data_type": "Index",
+                    }
+                )
+            return candidates
+
+        if self._is_ppi_candidate(bare_code, label):
+            for country in countries_to_try:
+                for indicator in ("PPI", "WPI", ""):
+                    candidates.append(
+                        {
+                            "flow": "PPI",
+                            "key": f"{country}.{indicator}.IX.A",
+                            "country": country,
+                            "frequency": "A",
+                            "unit": "index",
+                            "data_type": "Index",
+                        }
+                    )
+            return candidates
+
+        return []
+
+    def _sdmx_data_url(
+        self,
+        *,
+        flow: str,
+        key: str,
+        start_year: Optional[int],
+        end_year: Optional[int],
+    ) -> str:
+        url = f"{self.SDMX_DATA_BASE_URL},{flow}/{key}"
+        params: Dict[str, str] = {}
+        if start_year is not None:
+            params["startPeriod"] = str(start_year)
+        if end_year is not None:
+            params["endPeriod"] = str(end_year)
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        return url
+
+    def _parse_sdmx_structure_specific_xml(
+        self,
+        response_text: str,
+    ) -> List[tuple[Dict[str, str], List[Dict[str, str]]]]:
+        """Parse IMF SDMX 2.1 structure-specific XML into series/observation rows."""
+        try:
+            root = ET.fromstring(str(response_text or "").strip())
+        except ET.ParseError as exc:
+            raise DataNotAvailableError(f"IMF SDMX response was not parseable XML: {exc}") from exc
+
+        parsed: List[tuple[Dict[str, str], List[Dict[str, str]]]] = []
+        for element in root.iter():
+            if self._local_xml_name(element.tag) != "Series":
+                continue
+            series_attrs = {str(key): str(value) for key, value in element.attrib.items()}
+            observations: List[Dict[str, str]] = []
+            for child in element:
+                if self._local_xml_name(child.tag) != "Obs":
+                    continue
+                attrs = {str(key): str(value) for key, value in child.attrib.items()}
+                if not attrs.get("TIME_PERIOD") or "OBS_VALUE" not in attrs:
+                    continue
+                observations.append(attrs)
+            if observations:
+                parsed.append((series_attrs, observations))
+        return parsed
+
+    async def _fetch_sdmx_exact_indicator_family(
+        self,
+        *,
+        indicator_code: str,
+        indicator_label: Optional[str],
+        candidates: List[Dict[str, str]],
+        start_year: Optional[int],
+        end_year: Optional[int],
+    ) -> List[NormalizedData]:
+        """Fetch a non-DataMapper IMF exact code through public IMF.STA SDMX 2.1."""
+        client = get_http_client()
+        attempted: List[str] = []
+        last_error: Optional[Exception] = None
+        indicator_name = indicator_label or indicator_code
+
+        for candidate in candidates:
+            flow = candidate["flow"]
+            key = candidate["key"]
+            url = self._sdmx_data_url(
+                flow=flow,
+                key=key,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            attempted.append(f"{flow}/{key}")
+            try:
+                response = await client.get(
+                    url,
+                    headers={"Accept": "application/vnd.sdmx.structurespecificdata+xml, application/xml, text/xml"},
+                    timeout=effective_timeout(30.0),
+                )
+                if response.status_code >= 500:
+                    last_error = DataNotAvailableError(f"HTTP {response.status_code}")
+                    continue
+                if response.status_code >= 400:
+                    last_error = DataNotAvailableError(f"HTTP {response.status_code}")
+                    continue
+                series_payloads = self._parse_sdmx_structure_specific_xml(getattr(response, "text", ""))
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            results: List[NormalizedData] = []
+            for series_attrs, observations in series_payloads:
+                data_points = [
+                    {
+                        "date": self._period_to_date(obs.get("TIME_PERIOD", "")),
+                        "value": self._float_or_none(obs.get("OBS_VALUE")),
+                    }
+                    for obs in observations
+                ]
+                data_points = [point for point in data_points if point["date"]]
+                data_points.sort(key=lambda point: point["date"])
+                if not data_points:
+                    continue
+
+                country_code = (
+                    series_attrs.get("COUNTRY")
+                    or candidate.get("country")
+                    or key.split(".", 1)[0]
+                )
+                frequency_code = (
+                    series_attrs.get("FREQUENCY")
+                    or series_attrs.get("FREQ")
+                    or candidate.get("frequency")
+                    or "A"
+                )
+                metadata = Metadata(
+                    source="IMF",
+                    indicator=indicator_name,
+                    country=self._country_name(country_code),
+                    frequency=self._frequency_label(frequency_code),
+                    unit=candidate.get("unit", ""),
+                    lastUpdated="",
+                    seriesId=indicator_code,
+                    apiUrl=url,
+                    sourceUrl=f"https://data.imf.org/en/datasets/IMF.STA:{flow}",
+                    seasonalAdjustment=None,
+                    dataType=candidate.get("data_type", "Level"),
+                    priceType=None,
+                    description=f"{indicator_name} (IMF.STA {flow} key {key})",
+                    notes=[
+                        "Fetched from the official IMF SDMX 2.1 public API because this catalog code is not served by legacy DataMapper v1."
+                    ],
+                    startDate=data_points[0]["date"],
+                    endDate=data_points[-1]["date"],
+                )
+                results.append(NormalizedData(metadata=metadata, data=data_points))
+
+            if results:
+                return results
+
+        diagnostic = f" Attempted SDMX keys: {', '.join(attempted)}." if attempted else ""
+        error_suffix = f" Last error: {last_error}." if last_error else ""
+        raise DataNotAvailableError(
+            f"IMF SDMX 2.1 returned no observations for {indicator_code}.{diagnostic}{error_suffix}"
+        )
+
     def _split_bop_series_code(self, indicator_code: str) -> Dict[str, str]:
         """Split a BOP-style IMF code into dimension components."""
         code = str(indicator_code or "").strip().upper()
@@ -1533,25 +1927,21 @@ class IMFProvider(BaseProvider):
         if mapped:
             return mapped, self._friendly_indicator_label(indicator, mapped)
 
-        # Step 1.5: Try cross-provider indicator translator before trusting
-        # exact-looking local catalog codes.  Some common user phrases are also
-        # valid catalog tokens (for example "GDP"), but as natural-language
-        # indicator requests they should resolve to the canonical DataMapper
-        # series (NGDPD) rather than to a broad local catalog placeholder.
-        translator = get_indicator_translator()
-        translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
-        if translated_code:
-            logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
-            label_hint = concept_name or indicator
-            return translated_code, self._friendly_indicator_label(label_hint, translated_code)
-
-        # Step 2: If the caller already supplied an exact IMF code that exists
+        # Step 1.5: If the caller already supplied an exact IMF code that exists
         # in the local indicator catalog, trust it directly. This preserves
         # explicit provider-code queries without re-running metadata discovery,
         # while still failing closed for fake codes because they will miss the
         # local exact lookup and continue down the normal validation path.
         exact_code_candidate = str(indicator or "").upper().strip()
-        if re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_candidate):
+        exact_code_like = bool(
+            re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_candidate)
+            and (
+                "_" in exact_code_candidate
+                or "." in exact_code_candidate
+                or any(ch.isdigit() for ch in exact_code_candidate)
+            )
+        )
+        if exact_code_like:
             try:
                 from ..services.indicator_database import get_indicator_lookup
 
@@ -1565,6 +1955,17 @@ class IMFProvider(BaseProvider):
                 label_hint = str(exact_meta.get("name") or indicator)
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
+
+        # Step 2: Try cross-provider indicator translator after exact-code
+        # catalog lookup.  Translator fuzzy matching is useful for user phrases,
+        # but it must not collapse explicit long-tail provider codes such as
+        # HKG_CPI_* to broad DataMapper proxies like PCPIPCH.
+        translator = get_indicator_translator()
+        translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
+        if translated_code:
+            logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
+            label_hint = concept_name or indicator
+            return translated_code, self._friendly_indicator_label(label_hint, translated_code)
 
         # Step 3: Prefer local catalog recovery only for specific long-tail
         # titles.  Short fuzzy phrases can produce misleading FTS matches

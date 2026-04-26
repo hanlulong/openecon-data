@@ -1542,6 +1542,10 @@ async def _fetch_from_imf(
     ).strip()
     request_start_year = imf_request.get("start_year")
     request_end_year = imf_request.get("end_year")
+    if request_start_year is None and params.get("startDate"):
+        request_start_year = int(str(params["startDate"])[:4])
+    if request_end_year is None and params.get("endDate"):
+        request_end_year = int(str(params["endDate"])[:4])
 
     # Resolve countries/regions to list of country codes
     resolved_countries: List[str] = []

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validation.common import audit_direct_query_shape  # noqa: E402
+from scripts.validation.common import audit_direct_query_shape, imf_public_sdmx_runtime_family  # noqa: E402
 
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-raw-results.jsonl'
 DEFAULT_BASE_URL = 'http://localhost:3001'
@@ -110,6 +110,13 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
         return 'worldbank_country_availability_surface'
 
     if provider != 'IMF':
+        return None
+
+    if imf_public_sdmx_runtime_family(
+        str(origin.get('source_indicator_code') or row.get('code') or ''),
+        str(origin.get('name') or row.get('name') or ''),
+        str(origin.get('category') or row.get('category') or ''),
+    ):
         return None
 
     if (

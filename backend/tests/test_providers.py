@@ -946,6 +946,134 @@ class ProviderTests(unittest.TestCase):
         assert label is not None
         self.assertIn("reserve", label.lower())
 
+    def test_imf_exact_long_tail_code_bypasses_translator_fuzzy_proxy(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _Lookup:
+            def get(self, provider_name: str, code: str):
+                if provider_name == "IMF" and code == "HKG_CPI_PCPI_HEG_L_PCH_YOY_PT":
+                    return {
+                        "code": "HKG_CPI_PCPI_HEG_L_PCH_YOY_PT",
+                        "name": "Hong Kong Definition Consumer Price Index Household Expenditure Group Lower Percent change Year-on-year Percent",
+                    }
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()), \
+             patch("backend.providers.imf.get_indicator_translator") as translator_factory:
+            code, label = run(provider._resolve_indicator_code("HKG_CPI_PCPI_HEG_L_PCH_YOY_PT"))
+
+        self.assertEqual(code, "HKG_CPI_PCPI_HEG_L_PCH_YOY_PT")
+        self.assertIsNotNone(label)
+        translator_factory.assert_not_called()
+
+    def test_imf_non_datamapper_trade_code_uses_public_sdmx_v21(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _TextResponse(MockAsyncResponse):
+            def __init__(self, text: str) -> None:
+                super().__init__({})
+                self.text = text
+                self.content = text.encode("utf-8")
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
+          <message:DataSet>
+            <Series COUNTRY="USA" INDICATOR="XG" TYPE_OF_TRANSFORMATION="FOB_USD" FREQUENCY="A">
+              <Obs TIME_PERIOD="2020" OBS_VALUE="100.5" />
+              <Obs TIME_PERIOD="2021" OBS_VALUE="110.0" />
+            </Series>
+          </message:DataSet>
+        </message:StructureSpecificData>
+        """
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=("TXG_FOB_USD", "External Trade, Exports, Goods, Value, Free on Board, US Dollars"),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ), patch(
+            "backend.providers.imf.get_http_client",
+            return_value=MockAsyncClient([_TextResponse(xml)]),
+        ):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="TXG_FOB_USD",
+                    countries=["USA"],
+                    start_year=2020,
+                    end_year=2021,
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "TXG_FOB_USD")
+        self.assertIn("/IMF.STA,ITG/USA.XG.FOB_USD.A", result[0].metadata.apiUrl or "")
+        self.assertEqual(result[0].metadata.sourceUrl, "https://data.imf.org/en/datasets/IMF.STA:ITG")
+        self.assertEqual(result[0].data[0].date, "2020-01-01")
+        self.assertEqual(result[0].data[0].value, 100.5)
+
+    def test_imf_non_datamapper_cpi_code_infers_iso3_prefix_for_public_sdmx_v21(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _TextResponse(MockAsyncResponse):
+            def __init__(self, text: str) -> None:
+                super().__init__({})
+                self.text = text
+                self.content = text.encode("utf-8")
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
+          <message:DataSet>
+            <Series COUNTRY="NPL" INDEX_TYPE="CPI" COICOP_1999="CP01" TYPE_OF_TRANSFORMATION="IX" FREQUENCY="A">
+              <Obs TIME_PERIOD="2020" OBS_VALUE="145.2" />
+            </Series>
+          </message:DataSet>
+        </message:StructureSpecificData>
+        """
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=("NPL_PCPI_CP_01_IX", "Nepal Consumer Price Index Food, Index"),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ), patch(
+            "backend.providers.imf.get_http_client",
+            return_value=MockAsyncClient([_TextResponse(xml)]),
+        ):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="NPL_PCPI_CP_01_IX",
+                    countries=["USA"],
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "Nepal")
+        self.assertIn("/IMF.STA,CPI/NPL.CPI.CP01.IX.A", result[0].metadata.apiUrl or "")
+        self.assertEqual(result[0].data[0].value, 145.2)
+
+    def test_imf_detailed_trade_code_still_fails_closed_without_public_sdmx_mapping(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=("TMG_H5_84T86_CIF_USD", "Detailed HS imports"),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ):
+            with self.assertRaises(DataNotAvailableError) as ctx:
+                run(provider.fetch_batch_indicator(indicator="TMG_H5_84T86_CIF_USD", countries=["USA"]))
+
+        self.assertIn("requires IMF dataset-family routing", str(ctx.exception))
+
     def test_imf_gdp_resolves_to_level_code_not_growth(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
