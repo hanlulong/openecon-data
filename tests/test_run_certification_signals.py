@@ -651,6 +651,43 @@ def test_preflight_classifies_high_risk_worldbank_ddh_category_as_supportability
     )
 
 
+def test_preflight_classifies_worldbank_ddh_any_difficulty_family_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    ddh_worldbank = {
+        "id": "direct-worldbank-ddh-informal-work",
+        "provider_stratum": "WorldBank",
+        "query": (
+            "Brazil Persons in informal work (% of persons with any degree of functional difficulty) "
+            "from World Bank"
+        ),
+        "origin": {
+            "source_provider": "WorldBank",
+            "source_indicator_code": "ifrm_any_dfcl_all",
+            "name": "Persons in informal work (% of persons with any degree of functional difficulty)",
+            "category": "Disability Data Hub (DDH)",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [ddh_worldbank],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "worldbank_niche_catalog_unsupported": 1,
+    }
+    assert audit["flagged_rows_sample"][0]["execution_mode"] == "supportability_blocked"
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-worldbank-ddh-any-difficulty.json",
+        [ddh_worldbank],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
 def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

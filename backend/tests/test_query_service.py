@@ -504,7 +504,7 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(params.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
 
-    def test_fetch_data_retries_exact_worldbank_title_without_default_window(self) -> None:
+    def test_fetch_data_dispatches_exact_worldbank_title_without_default_window(self) -> None:
         exact_series = sample_series_with(
             source="World Bank",
             indicator="Pupil-qualified teacher ratio in secondary (headcount basis)",
@@ -536,20 +536,51 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(
                  self.service.world_bank_provider,
                  "fetch_indicator",
-                 new=AsyncMock(side_effect=[[], [exact_series]]),
+                 new=AsyncMock(return_value=[exact_series]),
              ) as fetch_mock:
             result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].metadata.seriesId, "UIS.PTRHC.2T3.QUALIFIED")
-        self.assertEqual(fetch_mock.await_count, 2)
+        self.assertEqual(fetch_mock.await_count, 1)
         first_kwargs = fetch_mock.await_args_list[0].kwargs
-        second_kwargs = fetch_mock.await_args_list[1].kwargs
         self.assertEqual(first_kwargs.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
-        self.assertEqual(first_kwargs.get("start_date"), "2021-04-20")
-        self.assertEqual(first_kwargs.get("end_date"), "2026-04-19")
-        self.assertIsNone(second_kwargs.get("start_date"))
-        self.assertIsNone(second_kwargs.get("end_date"))
+        self.assertIsNone(first_kwargs.get("start_date"))
+        self.assertIsNone(first_kwargs.get("end_date"))
+
+    def test_fetch_data_strips_default_window_before_exact_worldbank_dispatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["Net trade in goods (BoP, current US$)"],
+            parameters={
+                "country": "DE",
+                "indicator": "BN.GSR.MRCH.CD",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery="Germany Net trade in goods (BoP current US$) from World Bank",
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("WORLDBANK", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("WORLDBANK", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        wb_kwargs = fetch_mock.call_args.kwargs
+        self.assertEqual(wb_kwargs.get("indicator"), "BN.GSR.MRCH.CD")
+        self.assertEqual(wb_kwargs.get("country"), "DE")
+        self.assertIsNone(wb_kwargs.get("start_date"))
+        self.assertIsNone(wb_kwargs.get("end_date"))
 
     def test_fetch_data_strips_default_window_before_exact_fred_dispatch(self) -> None:
         intent = ParsedIntent(
