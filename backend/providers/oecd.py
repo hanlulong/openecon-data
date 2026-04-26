@@ -1169,6 +1169,15 @@ class OECDProvider(BaseProvider):
             user_params={"country": country_code},
             custom_defaults=None,
         )
+        if filter_key:
+            country_dim_key = filter_key
+            filter_key = "all"
+            logger.info(
+                "Using all-dimension OECD request for dataflow=%s; parsed results remain filtered to country=%s (country key would be %s)",
+                dataflow,
+                country_code,
+                country_dim_key,
+            )
 
         # Fallback with smart defaults if dimension key building fails
         if not filter_key:

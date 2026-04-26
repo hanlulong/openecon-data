@@ -1434,6 +1434,68 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("DEU", call_countries)
         self.assertNotIn("OECD", call_countries)
 
+    def test_oecd_fetch_indicator_uses_all_dimension_key_then_filters_country(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        class _KeyBuilder:
+            async def build_key(self, **kwargs):
+                self.kwargs = kwargs
+                return "USA........"
+
+        key_builder = _KeyBuilder()
+        captured = {}
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                captured["url"] = url
+                captured["params"] = params
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0": [1.0], "1:0": [2.0]}}],
+                            "structures": [
+                                {
+                                    "dimensions": {
+                                        "observation": [
+                                            {
+                                                "id": "REF_AREA",
+                                                "values": [
+                                                    {"id": "USA", "name": "United States"},
+                                                    {"id": "DEU", "name": "Germany"},
+                                                ],
+                                            },
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2023"}]},
+                                        ]
+                                    }
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2024-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.TPS", "DSD_TEST@DF_TEST", "1.0")),
+        ), patch("backend.providers.oecd.get_dimension_key_builder", return_value=key_builder), \
+             patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="USA", start_year=2023, end_year=2023))
+
+        self.assertIn("/data/OECD.SDD.TPS,DSD_TEST@DF_TEST,1.0/all", captured["url"])
+        self.assertEqual(captured["params"], {
+            "dimensionAtObservation": "AllDimensions",
+            "startPeriod": "2023",
+            "endPeriod": "2023",
+        })
+        self.assertEqual(series.metadata.country, "United States Of America")
+        self.assertEqual(len(series.data), 1)
+        self.assertEqual(series.data[0].value, 1.0)
+
     def test_oecd_fetch_indicator_fails_fast_when_rate_limit_wait_is_too_long(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
 
