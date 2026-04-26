@@ -649,6 +649,39 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(fred_params.get("indicator"), "OPENCPESA156NUPN")
         self.assertNotIn("startDate", fred_params)
         self.assertNotIn("endDate", fred_params)
+
+    def test_fetch_data_strips_default_window_for_exact_fred_within_quarters_title(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["Business Formations Within 4 Quarters for New Mexico (DISCONTINUED)"],
+            parameters={
+                "country": "US",
+                "indicator": "BF4QSANM",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery="Business Formations Within 4 Quarters for New Mexico (DISCONTINUED) from FRED",
+        )
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        fred_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fred_params.get("indicator"), "BF4QSANM")
+        self.assertNotIn("startDate", fred_params)
+        self.assertNotIn("endDate", fred_params)
         self.assertNotIn("start_year", fred_params)
         self.assertNotIn("end_year", fred_params)
 

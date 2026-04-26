@@ -72,6 +72,11 @@ _CURRENT_MEASUREMENT_CUE_RE = re.compile(
     r")(?=\W|$)",
     flags=re.IGNORECASE,
 )
+_DURATION_MEASUREMENT_CUE_RE = re.compile(
+    r"\bwithin\s+\d{1,3}\s+quarters?\b|"
+    r"\b\d{1,3}[-\s]+month\s+treasury\s+bill\b",
+    flags=re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +123,10 @@ def _query_has_explicit_time_scope(query: str) -> bool:
         return True
     if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
         return True
+    duration_query_text = _DURATION_MEASUREMENT_CUE_RE.sub(" ", recency_query_text)
     if re.search(
         r"\b\d+\s+(?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b",
-        query_text,
+        duration_query_text,
         flags=re.IGNORECASE,
     ):
         return True
