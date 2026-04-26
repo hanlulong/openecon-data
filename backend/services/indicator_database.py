@@ -118,6 +118,10 @@ class IndicatorDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_code ON indicators(code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON indicators(category)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_popularity ON indicators(popularity DESC)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_provider_lower_name "
+            "ON indicators(provider, lower(trim(name)))"
+        )
 
         # FTS5 virtual table for full-text search
         cursor.execute("""
@@ -626,6 +630,46 @@ class IndicatorLookup:
         ranked = self._rank_results(results, query)
 
         return ranked[:limit]
+
+    def exact_name_matches(
+        self,
+        names: List[str],
+        provider: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Return provider rows whose title exactly matches any supplied name.
+
+        This supplements FTS lookup for provider-native pasted titles.  FTS is
+        intentionally synonym-expanded for broad user search, but that can miss
+        short exact titles such as "M1 for Republic of Korea" after query
+        normalization injects extra terms ("money supply", "monetary").  Exact
+        title matching must stay literal, provider-scoped, and side-effect free.
+        """
+        cleaned = [
+            str(name or "").strip().lower()
+            for name in names
+            if str(name or "").strip()
+        ]
+        if not cleaned:
+            return []
+
+        # Preserve caller order while deduplicating case-insensitively.
+        deduped = list(dict.fromkeys(cleaned))
+        normalized_provider = self._normalize_provider(provider)
+        conn = self.db._get_connection()  # pylint: disable=protected-access
+        cursor = conn.cursor()
+
+        placeholders = ",".join("?" for _ in deduped)
+        sql = f"SELECT * FROM indicators WHERE lower(trim(name)) IN ({placeholders})"
+        params: list[Any] = list(deduped)
+        if normalized_provider:
+            sql += " AND provider = ?"
+            params.append(normalized_provider)
+        sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
+        params.append(max(1, limit))
+
+        cursor.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
 
     def get(self, provider: str, code: str) -> Optional[Dict[str, Any]]:
         """

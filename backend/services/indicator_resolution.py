@@ -301,16 +301,29 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
 
     candidates = []
     seen_codes = set()
-    for search_text in search_inputs:
-        try:
-            for candidate in lookup.search(search_text, provider=provider_name, limit=5):
+    exact_candidates_found = False
+    try:
+        exact_name_matches = getattr(lookup, "exact_name_matches", None)
+        if callable(exact_name_matches):
+            for candidate in exact_name_matches(search_inputs, provider=provider_name, limit=20):
                 code = str(candidate.get("code") or "")
-                if code in seen_codes:
-                    continue
-                seen_codes.add(code)
-                candidates.append(candidate)
-        except Exception:
-            continue
+                if code and code not in seen_codes:
+                    seen_codes.add(code)
+                    candidates.append(candidate)
+                    exact_candidates_found = True
+    except Exception:
+        pass
+    if not exact_candidates_found:
+        for search_text in search_inputs:
+            try:
+                for candidate in lookup.search(search_text, provider=provider_name, limit=20):
+                    code = str(candidate.get("code") or "")
+                    if code in seen_codes:
+                        continue
+                    seen_codes.add(code)
+                    candidates.append(candidate)
+            except Exception:
+                continue
 
     for candidate in candidates:
         candidate_name = str(candidate.get("name") or "").strip().lower()
@@ -390,47 +403,61 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             return -2
         return 0
 
-    for search_text in search_inputs:
-        try:
-            results = lookup.search(search_text, provider=provider_name, limit=5)
-        except Exception:
+    candidates_by_input: list[tuple[str, dict[str, Any]]] = []
+    exact_candidates_found = False
+    try:
+        exact_name_matches = getattr(lookup, "exact_name_matches", None)
+        if callable(exact_name_matches):
+            for candidate in exact_name_matches(search_inputs, provider=provider_name, limit=20):
+                candidates_by_input.append((str(candidate.get("name") or ""), candidate))
+                exact_candidates_found = True
+    except Exception:
+        pass
+
+    if not exact_candidates_found:
+        for search_text in search_inputs:
+            try:
+                results = lookup.search(search_text, provider=provider_name, limit=20)
+            except Exception:
+                results = []
+            candidates_by_input.extend((search_text, candidate) for candidate in results)
+
+    for search_text, candidate in candidates_by_input:
+        code = str(candidate.get("code") or "")
+        if code in seen_codes:
             continue
-        for candidate in results:
-            code = str(candidate.get("code") or "")
-            if code in seen_codes:
-                continue
-            seen_codes.add(code)
-            candidate_name = str(candidate.get("name") or "").strip().lower()
-            normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
-            if not normalized_name or len(normalized_name) < min_name_len:
-                continue
-            if any(
-                _is_close_exact_title_match(normalized_query, normalized_name)
+        seen_codes.add(code)
+        candidate_name = str(candidate.get("name") or "").strip().lower()
+        normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
+        if not normalized_name or len(normalized_name) < min_name_len:
+            continue
+        if any(
+            _is_close_exact_title_match(normalized_query, normalized_name)
+            for normalized_query in (
+                re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
+                for candidate_query in search_inputs
+            )
+            if normalized_query
+        ):
+            candidate_country_codes = _extract_country_codes_from_text(candidate_name)
+            country_rank = len(query_country_codes & candidate_country_codes)
+            query_token_lengths = [
+                len(normalized_query.split())
                 for normalized_query in (
                     re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
                     for candidate_query in search_inputs
                 )
                 if normalized_query
-            ):
-                candidate_country_codes = _extract_country_codes_from_text(candidate_name)
-                country_rank = len(query_country_codes & candidate_country_codes)
-                query_token_lengths = [
-                    len(normalized_query.split())
-                    for normalized_query in (
-                        re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
-                        for candidate_query in search_inputs
-                    )
-                    if normalized_query
-                ]
-                query_token_len = min(query_token_lengths) if query_token_lengths else len(normalized_text.split())
-                name_token_len = len(normalized_name.split())
-                token_delta = abs(name_token_len - query_token_len)
-                unit_rank = _unit_compatibility_rank(normalized_text, normalized_name)
-                shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
-                rank = (unit_rank, country_rank, -token_delta, shared_tokens, -name_token_len)
-                if rank > best_rank:
-                    best_candidate = candidate
-                    best_rank = rank
+            ]
+            query_token_len = min(query_token_lengths) if query_token_lengths else len(normalized_text.split())
+            name_token_len = len(normalized_name.split())
+            token_delta = abs(name_token_len - query_token_len)
+            unit_rank = _unit_compatibility_rank(normalized_text, normalized_name)
+            shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
+            rank = (unit_rank, country_rank, -token_delta, shared_tokens, -name_token_len)
+            if rank > best_rank:
+                best_candidate = candidate
+                best_rank = rank
     return best_candidate
 
 

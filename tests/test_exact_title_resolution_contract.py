@@ -7,6 +7,7 @@ from backend.services.indicator_resolution import (
     find_exact_provider_title_match,
     is_exact_match_locked,
     is_provider_locked,
+    looks_like_exact_provider_title_match,
 )
 
 
@@ -112,6 +113,71 @@ def test_exact_title_match_prefers_count_variant_over_percentage_variant() -> No
 
     assert match is not None
     assert match["code"] == "UIS.T.4.F"
+
+
+def test_exact_title_match_uses_exact_name_lookup_when_fts_misses_short_titles() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            assert "M1 for Republic of Korea" in search_inputs
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "MYAGM1KRM189S",
+                    "name": "M1 for Republic of Korea",
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "M1 for Republic of Korea from FRED",
+            "FRED",
+        )
+        looks_exact = looks_like_exact_provider_title_match(
+            "M1 for Republic of Korea from FRED",
+            "FRED",
+        )
+
+    assert match is not None
+    assert match["code"] == "MYAGM1KRM189S"
+    assert looks_exact is True
+
+
+def test_exact_title_match_prefers_base_worldbank_series_over_unrequested_quintile_variant() -> None:
+    class _Lookup:
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            return []
+
+        def search(self, text, provider=None, limit=5):
+            if provider != "WorldBank":
+                return []
+            assert limit >= 20
+            return [
+                {
+                    "provider": "WorldBank",
+                    "code": "SH.DYN.MORT.Q2",
+                    "name": "Under-5 mortality rate (per 1,000 live births): Q2",
+                    "category": "Health Nutrition and Population Statistics by Wealth Quintile",
+                },
+                {
+                    "provider": "WorldBank",
+                    "code": "SH.DYN.MORT",
+                    "name": "Mortality rate, under-5 (per 1,000 live births)",
+                    "category": "World Development Indicators",
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "India Mortality rate under-5 (per 1 000 live births) from World Bank",
+            "WorldBank",
+        )
+
+    assert match is not None
+    assert match["code"] == "SH.DYN.MORT"
 
 
 def test_exact_and_provider_lock_helpers_read_shared_flags() -> None:
