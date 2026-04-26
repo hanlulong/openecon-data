@@ -1174,8 +1174,9 @@ class ComtradeProvider(BaseProvider):
         if not all_results and flow_code in {"X", "M"}:
             # UN Comtrade's v1 endpoint can return an empty payload for a
             # narrow flow-specific world-total request while the equivalent
-            # both-flow request returns the requested flow records. Retry once
-            # with the provider-native both-flow code and keep only the
+            # both-flow request returns the requested flow records.  This also
+            # occurs for sparse long-tail HS subheadings, so retry once with
+            # the provider-native both-flow envelope and keep only the
             # originally requested direction.
             logger.info(
                 "Comtrade %s request returned no rows for %s; retrying with M,X flow envelope",

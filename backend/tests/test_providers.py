@@ -730,6 +730,55 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
         sleep_mock.assert_not_awaited()
 
+    def test_comtrade_fetch_trade_data_retries_sparse_hs_with_both_flow_envelope(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+        responses = [
+            MockAsyncResponse({"data": []}),
+            MockAsyncResponse(
+                {
+                    "data": [
+                        {
+                            "period": 2020,
+                            "periodDesc": "2020",
+                            "reporterDesc": "China",
+                            "partnerDesc": "World",
+                            "flowDesc": "Exports",
+                            "primaryValue": 123,
+                            "cmdCode": "300110",
+                            "cmdDesc": "Glands and other organs",
+                        },
+                        {
+                            "period": 2020,
+                            "periodDesc": "2020",
+                            "reporterDesc": "China",
+                            "partnerDesc": "World",
+                            "flowDesc": "Imports",
+                            "primaryValue": 50,
+                            "cmdCode": "300110",
+                            "cmdDesc": "Glands and other organs",
+                        },
+                    ]
+                }
+            ),
+        ]
+        client = MockAsyncClient(responses)
+
+        with patch("backend.providers.comtrade.get_http_client", return_value=client):
+            result = run(
+                provider.fetch_trade_data(
+                    reporter="China",
+                    commodity="300110",
+                    start_year=2020,
+                    end_year=2020,
+                    flow="EXPORT",
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.indicator, "Exports - Glands and other organs")
+        self.assertEqual(result[0].data[0].value, 123)
+        self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
+
     def test_comtrade_fetch_trade_balance(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 
