@@ -246,6 +246,9 @@ def build_exact_indicator_title_intent(
         "__semantic_provider_locked": True,
         "__exact_indicator_title_match": True,
     }
+    candidate_params = candidate.get("params")
+    if isinstance(candidate_params, dict):
+        params.update(candidate_params)
     if provider == "COINGECKO":
         params["coinIds"] = [code]
     if broad_concept:
@@ -422,6 +425,59 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 results = []
             candidates_by_input.extend((search_text, candidate) for candidate in results)
 
+        if provider_key == "FRED" and not candidates_by_input:
+            # FTS5 can miss hyphenated duration titles because "6-Month" is
+            # tokenized differently from "6 Month".  Drop only provider/country
+            # wrappers and search the literal title substring before falling
+            # back to LLM parsing.
+            for search_text in search_inputs:
+                cleaned_search = re.sub(
+                    r"\b(?:from|via|use)\s+fred\b",
+                    " ",
+                    search_text,
+                    flags=re.IGNORECASE,
+                )
+                for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
+                    cleaned_search = re.sub(
+                        rf"^(?:{re.escape(str(alias).strip())})\s+",
+                        " ",
+                        cleaned_search,
+                        flags=re.IGNORECASE,
+                    )
+                cleaned_search = re.sub(r"\s+", " ", cleaned_search).strip(" ,;:-")
+                if not cleaned_search:
+                    continue
+                cleaned_variants = [cleaned_search]
+                comma_variant = re.sub(
+                    r"\bauction\s+high\s+discount\b",
+                    "auction high, discount",
+                    cleaned_search,
+                    flags=re.IGNORECASE,
+                )
+                if comma_variant != cleaned_search:
+                    cleaned_variants.append(comma_variant)
+                try:
+                    from .indicator_database import get_indicator_lookup
+
+                    raw_lookup = get_indicator_lookup()
+                    conn = raw_lookup.db._get_connection()  # pylint: disable=protected-access
+                    cursor = conn.cursor()
+                    for cleaned_variant in cleaned_variants:
+                        cursor.execute(
+                            """
+                            SELECT *
+                            FROM indicators
+                            WHERE provider = ?
+                              AND lower(name) LIKE ?
+                            ORDER BY COALESCE(popularity, 0) DESC, code
+                            LIMIT 20
+                            """,
+                            (raw_lookup._normalize_provider(provider_name), f"%{cleaned_variant.lower()}%"),
+                        )
+                        candidates_by_input.extend((search_text, dict(row)) for row in cursor.fetchall())
+                except Exception:
+                    continue
+
     for search_text, candidate in candidates_by_input:
         code = str(candidate.get("code") or "")
         if code in seen_codes:
@@ -439,6 +495,18 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             )
             if normalized_query
         ):
+            candidate = dict(candidate)
+            if provider_key == "COMTRADE":
+                original_query_lower = query_text.lower()
+                candidate_params: dict[str, Any] = {}
+                if re.search(r"\b(?:exports?|exported|re-exports?)\b", original_query_lower):
+                    candidate_params["flow"] = "X"
+                elif re.search(r"\b(?:imports?|imported|re-imports?)\b", original_query_lower):
+                    candidate_params["flow"] = "M"
+                if code and code.isdigit():
+                    candidate_params["commodity"] = code
+                if candidate_params:
+                    candidate["params"] = {**dict(candidate.get("params") or {}), **candidate_params}
             candidate_country_codes = _extract_country_codes_from_text(candidate_name)
             country_rank = len(query_country_codes & candidate_country_codes)
             query_token_lengths = [
@@ -492,7 +560,7 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         seen.add(candidate)
         search_inputs.append(candidate)
 
-        normalized_punctuation = re.sub(r"[,:()\[\]%/]+", " ", candidate)
+        normalized_punctuation = re.sub(r"[,:;()\[\]%/]+", " ", candidate)
         normalized_punctuation = re.sub(r"\s+", " ", normalized_punctuation).strip(" ,;:-")
         if (
             normalized_punctuation
@@ -572,6 +640,20 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             ).strip(" ,;:")
             if stripped_price_suffix and stripped_price_suffix not in seen:
                 queue.append(stripped_price_suffix)
+
+        if provider_key == "COMTRADE":
+            without_trade_flow = re.sub(
+                r"^(?:exports?|imports?|re-exports?|re-imports?)\s+of\s+",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip(" ,;:-")
+            if (
+                without_trade_flow
+                and without_trade_flow != candidate
+                and without_trade_flow not in seen
+            ):
+                queue.append(without_trade_flow)
 
         if ":" in candidate:
             suffix = candidate.split(":", 1)[1].strip()
@@ -666,6 +748,34 @@ def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> 
 
     query_tokens = normalized_query.split()
     name_tokens = normalized_name.split()
+
+    def _without_country_prefix(tokens: list[str]) -> list[str]:
+        if len(tokens) <= 1:
+            return tokens
+        prefix_text = " ".join(tokens[: min(4, len(tokens))])
+        prefix_codes = _extract_country_codes_from_text(prefix_text)
+        if not prefix_codes:
+            return tokens
+        for length in range(min(4, len(tokens) - 1), 0, -1):
+            candidate_prefix = " ".join(tokens[:length])
+            if _extract_country_codes_from_text(candidate_prefix):
+                return tokens[length:]
+        return tokens
+
+    query_tokens = _without_country_prefix(query_tokens)
+    if len(query_tokens) > 1 and query_tokens[0] in {
+        "export",
+        "exports",
+        "import",
+        "imports",
+        "reexport",
+        "reexports",
+        "reimport",
+        "reimports",
+    }:
+        query_tokens = query_tokens[1:]
+    if len(query_tokens) > 1 and query_tokens[0] == "of":
+        query_tokens = query_tokens[1:]
     token_delta = abs(len(query_tokens) - len(name_tokens))
     shared_tokens = len(set(query_tokens) & set(name_tokens))
     overlap_ratio = shared_tokens / max(1, min(len(query_tokens), len(name_tokens)))

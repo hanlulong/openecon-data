@@ -282,6 +282,151 @@ async def test_fetch_dynamic_data_uses_exact_product_id_without_search(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_fetch_dynamic_data_exact_product_uses_metadata_geography_default(monkeypatch, statscan_provider):
+    metadata = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Geography",
+                "member": [
+                    {"memberId": 2, "memberNameEn": "Canada"},
+                    {"memberId": 3, "memberNameEn": "Ontario", "parentMemberId": 2},
+                ],
+            },
+            {
+                "dimensionNameEn": "Commodities and commodity groups",
+                "member": [
+                    {"memberId": 2, "memberNameEn": "All-items"},
+                    {"memberId": 3, "memberNameEn": "Food", "parentMemberId": 2},
+                ],
+            },
+        ]
+    }
+    captured_requests = []
+
+    async def fake_get_cube_metadata(product_id):
+        assert product_id == "18100009"
+        return metadata
+
+    class _MockResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{
+                "status": "SUCCESS",
+                "object": {
+                    "coordinate": "2.2.0.0.0.0.0.0.0.0",
+                    "vectorDataPoint": [
+                        {
+                            "refPer": "2006-01-01",
+                            "value": 129.9,
+                            "frequencyCode": 12,
+                            "scalarFactorCode": 0,
+                            "releaseTime": "2006-02-01",
+                        }
+                    ],
+                },
+            }]
+
+    class _MockClient:
+        async def post(self, url, json=None, **kwargs):
+            captured_requests.append(json)
+            return _MockResponse()
+
+    monkeypatch.setattr(statscan_provider, "_get_cube_metadata", fake_get_cube_metadata)
+    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+
+    result = await statscan_provider.fetch_dynamic_data(
+        {
+            "indicator": "18100009",
+            "indicatorLabel": "Consumer Price Index (CPI), 2001 basket content, annual",
+            "periods": 240,
+        }
+    )
+
+    assert captured_requests[0][0]["coordinate"] == "2.2.0.0.0.0.0.0.0.0"
+    assert result.data
+    assert result.metadata.seriesId == "18100009:2.2.0.0.0.0.0.0.0.0"
+
+
+@pytest.mark.asyncio
+async def test_fetch_dynamic_data_exact_product_falls_back_to_valid_coordinate(monkeypatch, statscan_provider):
+    metadata = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Geography",
+                "member": [
+                    {"memberId": 1, "memberNameEn": "Montreal"},
+                    {"memberId": 2, "memberNameEn": "Toronto"},
+                ],
+            },
+            {
+                "dimensionNameEn": "Type of livestock",
+                "member": [
+                    {"memberId": 1, "memberNameEn": "Slaughter steers, good"},
+                    {"memberId": 2, "memberNameEn": "Slaughter cows, good"},
+                ],
+            },
+        ]
+    }
+    captured_requests = []
+
+    async def fake_get_cube_metadata(product_id):
+        assert product_id == "32100322"
+        return metadata
+
+    class _FallbackClient:
+        async def post(self, url, json=None, **kwargs):
+            captured_requests.append(json)
+            if len(json) == 1:
+                return _MockResponse([
+                    {
+                        "status": "FAILED",
+                        "object": {
+                            "responseStatusCode": 2,
+                            "coordinate": "1.1.0.0.0.0.0.0.0.0",
+                            "vectorDataPoint": [],
+                        },
+                    }
+                ])
+            assert any(item["coordinate"] == "2.1.0.0.0.0.0.0.0.0" for item in json)
+            return _MockResponse([
+                {
+                    "status": "SUCCESS",
+                    "object": {
+                        "coordinate": "2.1.0.0.0.0.0.0.0.0",
+                        "vectorDataPoint": [
+                            {
+                                "refPer": "1990-12-01",
+                                "value": 93.58,
+                                "frequencyCode": 6,
+                                "scalarFactorCode": 0,
+                                "releaseTime": "2000-02-18T19:41",
+                            }
+                        ],
+                    },
+                }
+            ])
+
+    monkeypatch.setattr(statscan_provider, "_get_cube_metadata", fake_get_cube_metadata)
+    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _FallbackClient())
+
+    result = await statscan_provider.fetch_dynamic_data(
+        {
+            "indicator": "32100322",
+            "indicatorLabel": "Average prices for selected classes and grades of cattle, monthly",
+            "periods": 240,
+        }
+    )
+
+    assert captured_requests[0][0]["coordinate"] == "1.1.0.0.0.0.0.0.0.0"
+    assert result.data
+    assert result.metadata.seriesId == "32100322:2.1.0.0.0.0.0.0.0.0"
+
+
+@pytest.mark.asyncio
 async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch, statscan_provider):
     monkeypatch.setattr(
         "backend.providers.statscan.get_http_client",

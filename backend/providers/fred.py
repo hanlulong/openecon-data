@@ -555,6 +555,38 @@ class FREDProvider(BaseProvider):
         )
         observations = obs_response.json().get("observations", [])
 
+        if (
+            (
+                params.get("__exact_indicator_title_match")
+                or params.get("__exact_provider_code_match")
+            )
+            and not _query_has_explicit_time_scope(str(params.get("__original_query") or ""))
+            and not observations
+            and (obs_params.get("observation_start") or obs_params.get("observation_end"))
+        ):
+            logger.info(
+                "FRED exact historical series returned no rows in default window; "
+                "retrying without default window: series=%s",
+                target_series,
+            )
+            effective_params = dict(params)
+            for key in ("startDate", "endDate", "start_year", "end_year"):
+                effective_params.pop(key, None)
+            obs_params = {
+                "series_id": target_series,
+                "api_key": self.api_key,
+                "file_type": "json",
+            }
+            if transformation:
+                obs_params["units"] = transformation
+            obs_response = await self._get_with_retry(
+                client,
+                f"{self.base_url}/series/observations",
+                params=obs_params,
+                timeout=15.0,
+            )
+            observations = obs_response.json().get("observations", [])
+
         # Build API URL for metadata (without exposing actual API key)
         api_url_params = {
             "series_id": target_series,

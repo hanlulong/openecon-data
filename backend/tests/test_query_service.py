@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from backend.models import ClarificationOption, GeneratedFile, NormalizedData, ParsedIntent, QueryResponse
+from backend.providers.comtrade import ComtradeProvider
 from backend.routing.country_resolver import CountryResolver
 from backend.routing.unified_router import RoutingDecision
 from backend.services.cache import cache_service
@@ -16,6 +17,7 @@ from backend.services.conversation import conversation_manager
 from backend.services.conversation_state_v2 import AnswerSetMember, ConversationState, FollowUpDelta
 from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
+from backend.providers.fred import FREDProvider
 from backend.services.semantic_match_judge import ExecutionResultJudgment
 from backend.tests.utils import run
 from backend.utils.geographies import CANADIAN_PROVINCES
@@ -519,7 +521,7 @@ class QueryServiceTests(unittest.TestCase):
                 "indicator": "UIS.PTRHC.2T3.QUALIFIED",
                 "__exact_indicator_title_match": True,
                 "__semantic_provider_locked": True,
-                "startDate": "2021-04-20",
+                "startDate": "1998-11-15",
                 "endDate": "2026-04-19",
             },
             clarificationNeeded=False,
@@ -717,6 +719,158 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("endDate", fred_params)
         self.assertNotIn("start_year", fred_params)
         self.assertNotIn("end_year", fred_params)
+
+    def test_fred_exact_historical_series_retries_when_default_window_has_no_rows(self) -> None:
+        provider = FREDProvider(api_key="test-key")
+        calls = []
+
+        class _Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self._payload
+
+        class _Client:
+            pass
+
+        async def _fake_get_with_retry(client, url, params=None, timeout=None):
+            calls.append((url, dict(params or {})))
+            if url.endswith("/series"):
+                return _Response({
+                    "seriess": [
+                        {
+                            "id": "H0RIFSGFPAM06NB",
+                            "title": "6-Month Treasury Bill Auction High, Discount Basis (DISCONTINUED)",
+                            "frequency": "Monthly",
+                            "units": "Percent",
+                            "last_updated": "1998-12-31",
+                            "observation_start": "1958-12-01",
+                            "observation_end": "1998-12-01",
+                            "seasonal_adjustment": "Not Seasonally Adjusted",
+                        }
+                    ]
+                })
+            if params and params.get("observation_start"):
+                return _Response({"observations": []})
+            return _Response({
+                "observations": [
+                    {"date": "1998-11-01", "value": "4.40"},
+                    {"date": "1998-12-01", "value": "4.37"},
+                ]
+            })
+
+        with patch("backend.providers.fred.get_http_client", return_value=_Client()), \
+             patch.object(provider, "_get_with_retry", new=AsyncMock(side_effect=_fake_get_with_retry)):
+            result = run(provider.fetch_series({
+                "indicator": "H0RIFSGFPAM06NB",
+                "__exact_indicator_title_match": True,
+                "__original_query": "US 6-Month Treasury Bill Auction High Discount Basis (DISCONTINUED) from FRED",
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+            }))
+
+        obs_calls = [params for url, params in calls if url.endswith("/series/observations")]
+        self.assertEqual(len(obs_calls), 1)
+        self.assertNotIn("observation_start", obs_calls[0])
+        self.assertEqual(result.metadata.seriesId, "H0RIFSGFPAM06NB")
+        self.assertEqual(len(result.data), 2)
+
+    def test_fetch_data_strips_default_window_before_exact_statscan_dispatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["Consumer Price Index (CPI), 2001 basket content, annual"],
+            parameters={
+                "country": "CA",
+                "indicator": "18100009",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada annual Consumer Price Index (CPI) 2001 basket content from Statistics Canada",
+        )
+        returned = sample_series_with(
+            source="Statistics Canada",
+            indicator="Consumer Price Index (CPI), 2001 basket content, annual",
+            series_id="18100009:2.2.0.0.0.0.0.0.0.0",
+            country="Canada",
+        )
+
+        async def _fake_fetch_dynamic(params):
+            self.assertNotIn("startDate", params)
+            self.assertNotIn("endDate", params)
+            self.assertEqual(params.get("indicator"), "18100009")
+            return returned
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.statscan_provider, "fetch_dynamic_data", new_callable=AsyncMock, side_effect=_fake_fetch_dynamic):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "18100009:2.2.0.0.0.0.0.0.0.0")
+
+    def test_fetch_data_strips_default_window_before_exact_comtrade_dispatch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["071340 - Vegetables, leguminous; lentils, shelled, whether or not skinned or split, dried"],
+            parameters={
+                "country": "JP",
+                "indicator": "071340",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "startDate": "2021-04-20",
+                "endDate": "2026-04-19",
+                "start_year": 2021,
+                "end_year": 2026,
+            },
+            clarificationNeeded=False,
+            originalQuery=(
+                "Japan exports of Vegetables, leguminous; lentils, shelled, "
+                "whether or not skinned or split, dried from Comtrade"
+            ),
+        )
+        returned = sample_series_with(
+            source="UN Comtrade",
+            indicator="071340 - Vegetables, leguminous; lentils, shelled, whether or not skinned or split, dried",
+            series_id="COMTRADE:JP:071340:exports",
+            country="Japan",
+        )
+
+        async def _fake_fetch_trade_data(**kwargs):
+            self.assertIsNone(kwargs.get("start_year"))
+            self.assertIsNone(kwargs.get("end_year"))
+            self.assertEqual(kwargs.get("commodity"), "071340")
+            return [returned]
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, side_effect=_fake_fetch_trade_data):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "COMTRADE:JP:071340:exports")
+
+    def test_comtrade_flow_code_accepts_native_api_codes(self) -> None:
+        self.assertEqual(ComtradeProvider._flow_code("X"), "X")
+        self.assertEqual(ComtradeProvider._flow_code("M"), "M")
+        self.assertEqual(ComtradeProvider._flow_code("M,X"), "M,X")
+        self.assertEqual(ComtradeProvider._flow_code("EXPORT"), "X")
 
     def test_fetch_data_drops_conflicting_series_id_for_exact_fred_title(self) -> None:
         intent = ParsedIntent(
@@ -1111,6 +1265,32 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "MELIPRVSUSCOUNTY24005")
         self.assertEqual(intent.indicators, ["Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD"])
 
+    def test_build_exact_indicator_title_intent_handles_country_prefixed_fred_stale_title(self) -> None:
+        lookup_results = [
+            {
+                "code": "H0RIFSGFPAM06NB",
+                "provider": "FRED",
+                "name": "6-Month Treasury Bill Auction High, Discount Basis (DISCONTINUED)",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(
+                exact_name_matches=Mock(return_value=[]),
+                search=Mock(return_value=lookup_results),
+            ),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "US 6-Month Treasury Bill Auction High Discount Basis (DISCONTINUED) from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "H0RIFSGFPAM06NB")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+
     def test_build_exact_indicator_title_intent_handles_country_prefix_and_provider_suffix(self) -> None:
         lookup_results = [
             {
@@ -1133,6 +1313,32 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.apiProvider, "OECD")
         self.assertEqual(intent.parameters.get("indicator"), "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET")
         self.assertEqual(intent.indicators, ["Share of students enrolled in school and work-based programmes"])
+
+    def test_build_exact_indicator_title_intent_handles_comtrade_punctuation_title(self) -> None:
+        lookup_results = [
+            {
+                "code": "071340",
+                "provider": "Comtrade",
+                "name": "071340 - Vegetables, leguminous; lentils, shelled, whether or not skinned or split, dried",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(
+                exact_name_matches=Mock(return_value=[]),
+                search=Mock(return_value=lookup_results),
+            ),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Japan exports of Vegetables, leguminous; lentils, shelled, whether or not skinned or split, dried from Comtrade"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertEqual(intent.parameters.get("indicator"), "071340")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
 
     def test_build_exact_indicator_title_intent_handles_coingecko_asset_name_with_suffix(self) -> None:
         lookup_results = [

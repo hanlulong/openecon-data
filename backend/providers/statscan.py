@@ -754,6 +754,54 @@ class StatsCanProvider(BaseProvider):
         )
 
     @staticmethod
+    def _build_wds_coordinate(parts: List[int]) -> str:
+        """Build a 10-position WDS coordinate string from discovered member IDs."""
+        coordinate = ".".join(str(p) for p in parts[:10])
+        while coordinate.count(".") < 9:
+            coordinate += ".0"
+        return coordinate
+
+    def _coordinate_member_candidates(
+        self,
+        dimension_name: str,
+        members: List[Dict[str, Any]],
+        indicator_lower: str,
+        selected_member_id: int,
+        *,
+        limit: int = 6,
+    ) -> List[int]:
+        """Return bounded alternate member IDs for fallback coordinate probing.
+
+        Some StatsCan tables have no explicit national/total aggregate and WDS
+        can reject the all-first-member coordinate even when nearby coordinates
+        in the same product are valid.  Keep the chosen member first, then add
+        aggregate-like and early product members so direct table-title queries
+        can recover a valid provider-native series without hardcoding tables.
+        """
+        candidates: List[int] = []
+
+        def add(value: Any) -> None:
+            try:
+                member_id = int(value)
+            except (TypeError, ValueError):
+                return
+            if member_id not in candidates:
+                candidates.append(member_id)
+
+        add(selected_member_id)
+        add(self._select_default_member_id(dimension_name, members, indicator_lower))
+        aggregate_id = self._find_member_id_by_keywords(
+            members,
+            ["total", "all", "canada", "estimate", "all-items"],
+        )
+        add(aggregate_id)
+        for member in members:
+            add(member.get("memberId"))
+            if len(candidates) >= limit:
+                break
+        return candidates[:limit] or [1]
+
+    @staticmethod
     def _title_specialization_penalty(query_text: str, candidate_text: str) -> float:
         """Penalize specialized subgroup series when the query asked for a generic metric."""
         query_lower = str(query_text or "").lower()
@@ -2088,7 +2136,9 @@ class StatsCanProvider(BaseProvider):
                 if geography:
                     mid = await self.resolve_member_id(normalized_pid, "geogr", geography)
                 else:
-                    mid = 1  # Canada / Total
+                    mid = self._select_default_member_id(
+                        dim.get("dimensionNameEn", ""), members, indicator_lower
+                    )
                 coordinate_parts.append(mid)
 
             elif any(kw in dim_name_lower for kw in ["gender", "sex"]):
@@ -2437,10 +2487,22 @@ class StatsCanProvider(BaseProvider):
         # Build coordinate by finding member IDs for each dimension
         # Use intelligent dimension matching based on indicator context
         coordinate_parts = []
+        coordinate_candidate_parts: List[List[int]] = []
         for dim_info in dimensions:
             dim_name = dim_info.get("dimensionNameEn", "").upper()
             dim_name_lower = dim_name.lower()
             members = dim_info.get("member", [])
+
+            def append_coordinate_part(member_id: int) -> None:
+                coordinate_parts.append(member_id)
+                coordinate_candidate_parts.append(
+                    self._coordinate_member_candidates(
+                        dim_name,
+                        members,
+                        indicator_lower,
+                        member_id,
+                    )
+                )
 
             # Helper: Find best member by matching keywords
             def find_member_by_keywords(keywords: list) -> int | None:
@@ -2470,9 +2532,15 @@ class StatsCanProvider(BaseProvider):
                                 if canonical.upper() in member.get("memberNameEn", "").upper():
                                     found_id = member.get("memberId")
                                     break
-                    coordinate_parts.append(found_id if found_id else 1)
+                    append_coordinate_part(
+                        found_id
+                        if found_id
+                        else self._select_default_member_id(dim_name, members, indicator_lower)
+                    )
                 else:
-                    coordinate_parts.append(1)  # Default to Canada
+                    append_coordinate_part(
+                        self._select_default_member_id(dim_name, members, indicator_lower)
+                    )
 
             # 2. Trade dimension - match based on indicator (balance, export, import)
             elif "trade" in dim_name_lower:
@@ -2484,7 +2552,7 @@ class StatsCanProvider(BaseProvider):
                     found = find_member_by_keywords(["import", "imports"])
                 else:
                     found = None
-                coordinate_parts.append(found if found else 1)
+                append_coordinate_part(found if found else 1)
 
             # 3. Component dimension (immigration, migration) - match based on indicator
             elif "component" in dim_name_lower:
@@ -2494,30 +2562,25 @@ class StatsCanProvider(BaseProvider):
                     found = find_member_by_keywords(["emigrants", "emigration"])
                 else:
                     found = None
-                coordinate_parts.append(found if found else 1)
+                append_coordinate_part(found if found else 1)
 
             # 4. Adjustment dimension - prefer seasonally adjusted
             elif any(x in dim_name_lower for x in ["seasonal", "adjustment"]):
                 found = find_member_by_keywords(["seasonally adjusted", "adjusted"])
-                coordinate_parts.append(found if found else 1)
+                append_coordinate_part(found if found else 1)
 
             # 5. Basis dimension - prefer balance of payments for trade data
             elif "basis" in dim_name_lower:
                 found = find_member_by_keywords(["balance of payments", "bop"])
-                coordinate_parts.append(found if found else 1)
+                append_coordinate_part(found if found else 1)
 
             # 6. Default to the best semantic aggregate rather than blindly taking member 1
             else:
-                coordinate_parts.append(
+                append_coordinate_part(
                     self._select_default_member_id(dim_name, members, indicator_lower)
                 )
 
-        # Build coordinate string
-        # WDS coordinates have 10 dimensions separated by dots, e.g., "1.2.3.0.0.0.0.0.0.0"
-        coordinate = ".".join(str(p) for p in coordinate_parts[:10])
-        # Pad with zeros if fewer than 10 dimensions
-        while coordinate.count(".") < 9:
-            coordinate += ".0"
+        coordinate = self._build_wds_coordinate(coordinate_parts)
 
         logger.info(f"📊 Fetching {product_id} with coordinate: {coordinate}")
 
@@ -2543,13 +2606,81 @@ class StatsCanProvider(BaseProvider):
         )
         payload = response.json()
 
-        if not payload or payload[0].get("status") != "SUCCESS":
-            error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
-            raise DataNotAvailableError(
-                f"StatsCan query failed for {indicator}: {error_msg}"
-            )
+        def successful_data_object(items: Any) -> Optional[Dict[str, Any]]:
+            for item in items or []:
+                if item.get("status") != "SUCCESS":
+                    continue
+                item_object = item.get("object", {})
+                if not isinstance(item_object, dict):
+                    continue
+                if item_object.get("vectorDataPoint"):
+                    return item_object
+            return None
 
-        data_object = payload[0]["object"]
+        data_object = successful_data_object(payload)
+        if not data_object:
+            error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
+
+            # If the semantic default coordinate is invalid, probe nearby
+            # metadata-derived coordinates in one bounded batch and use the
+            # first provider-successful series.  This fixes generic direct
+            # table-title queries for products that have no aggregate member.
+            fallback_coordinates: List[str] = []
+            if coordinate_candidate_parts:
+                def expand_candidates(index: int, parts: List[int]) -> None:
+                    if len(fallback_coordinates) >= 48:
+                        return
+                    if index >= len(coordinate_candidate_parts):
+                        candidate_coordinate = self._build_wds_coordinate(parts)
+                        if candidate_coordinate != coordinate and candidate_coordinate not in fallback_coordinates:
+                            fallback_coordinates.append(candidate_coordinate)
+                        return
+                    for member_id in coordinate_candidate_parts[index]:
+                        expand_candidates(index + 1, [*parts, member_id])
+                        if len(fallback_coordinates) >= 48:
+                            break
+
+                expand_candidates(0, [])
+
+            if fallback_coordinates:
+                logger.info(
+                    "StatsCan coordinate %s failed for %s; probing %s metadata-derived alternatives",
+                    coordinate,
+                    product_id,
+                    len(fallback_coordinates),
+                )
+                fallback_response = await client.post(
+                    f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+                    json=[
+                        {
+                            "productId": product_id,
+                            "coordinate": fallback_coordinate,
+                            "latestN": periods,
+                        }
+                        for fallback_coordinate in fallback_coordinates
+                    ],
+                    headers={"Content-Type": "application/json"},
+                    timeout=300.0,
+                )
+                self._raise_for_status_or_data_unavailable(
+                    fallback_response,
+                    f"probing fallback coordinates for product {product_id}",
+                )
+                fallback_payload = fallback_response.json()
+                data_object = successful_data_object(fallback_payload)
+                if data_object:
+                    coordinate = str(data_object.get("coordinate") or "").strip() or coordinate
+                    logger.info(
+                        "✅ StatsCan fallback coordinate selected for %s: %s",
+                        product_id,
+                        coordinate,
+                    )
+
+            if not data_object:
+                raise DataNotAvailableError(
+                    f"StatsCan query failed for {indicator}: {error_msg}"
+                )
+
         vector_data = data_object.get("vectorDataPoint", [])
 
         if not vector_data:

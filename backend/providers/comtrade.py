@@ -394,6 +394,8 @@ class ComtradeProvider(BaseProvider):
         if not flow:
             return "M,X"
         key = flow.upper()
+        if key in {"M", "X", "M,X"}:
+            return key
         return ComtradeProvider.FLOW_MAPPINGS.get(key, "M,X")
 
     @staticmethod
@@ -1116,6 +1118,7 @@ class ComtradeProvider(BaseProvider):
             reporter_raw: str,
             partner_code: str,
             period_param: str,
+            flow_code_arg: str = flow_code,
         ) -> List[NormalizedData]:
             async with semaphore:
                 async with _global_request_semaphore():
@@ -1125,7 +1128,7 @@ class ComtradeProvider(BaseProvider):
                         reporter_raw,
                         partner_code,
                         commodity_code,
-                        flow_code,
+                        flow_code_arg,
                         period_param,
                         freq_code,
                     )
@@ -1167,6 +1170,41 @@ class ComtradeProvider(BaseProvider):
                 last_error = result
                 continue
             all_results.extend(result)
+
+        if not all_results and flow_code in {"X", "M"}:
+            # UN Comtrade's v1 endpoint can return an empty payload for a
+            # narrow flow-specific world-total request while the equivalent
+            # both-flow request returns the requested flow records. Retry once
+            # with the provider-native both-flow code and keep only the
+            # originally requested direction.
+            logger.info(
+                "Comtrade %s request returned no rows for %s; retrying with M,X flow envelope",
+                flow_code,
+                commodity_code,
+            )
+            fallback_tasks = [
+                _guarded_fetch(reporter_raw, partner_code, period_param, "M,X")
+                for reporter_raw in reporter_list
+                for partner_code in partner_codes
+                for period_param in period_chunks
+            ]
+            try:
+                fallback_results_list = await asyncio.wait_for(
+                    asyncio.gather(*fallback_tasks, return_exceptions=True),
+                    timeout=_comtrade_overall_time_budget(len(fallback_tasks)),
+                )
+            except asyncio.TimeoutError:
+                fallback_results_list = []
+
+            desired_prefix = "export" if flow_code == "X" else "import"
+            for result in fallback_results_list:
+                if isinstance(result, BaseException):
+                    last_error = result
+                    continue
+                for series in result:
+                    indicator_text = str(getattr(series.metadata, "indicator", "") or "").lower()
+                    if indicator_text.startswith(desired_prefix):
+                        all_results.append(series)
 
         # When ALL sub-tasks failed, propagate the most informative error
         # so the caller gets a specific message (e.g. "Taiwan does not report")

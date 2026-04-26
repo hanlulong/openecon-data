@@ -930,7 +930,11 @@ async def fetch_from_provider_dispatch(
             reporter=reporter_value,
             reporters=reporters_value,
             partner=params.get("partner"),
-            commodity=params.get("commodity"),
+            commodity=params.get("commodity") or (
+                params.get("indicator")
+                if str(params.get("indicator") or "").strip().isdigit()
+                else None
+            ),
             flow=params.get("flow"),
             start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
@@ -2045,7 +2049,22 @@ async def fetch_data(
     # dispatch/cache materialization so sparse/stale exact series are not
     # blocked by a recent default window. Explicit time scopes remain strict.
     if (
-        provider in {"FRED", "WORLDBANK", "WORLD BANK"}
+        provider in {"FRED", "WORLDBANK", "WORLD BANK", "STATSCAN", "STATISTICS CANADA"}
+        and is_exact_match_locked(params)
+        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+        and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+    ):
+        params = dict(params)
+        for key in ("startDate", "endDate", "start_year", "end_year"):
+            params.pop(key, None)
+        intent.parameters = params
+
+    # Provider-locked exact-title Comtrade rows represent a specific commodity
+    # code/title.  A friendly recent default window can make discontinued or
+    # sparse flows look unsupported, so remove only non-user-specified defaults
+    # before dispatch/cache identity materialization.
+    if (
+        provider == "COMTRADE"
         and is_exact_match_locked(params)
         and not _query_has_explicit_time_scope(intent.originalQuery or "")
         and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
