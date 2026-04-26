@@ -62,6 +62,16 @@ _RECENCY_CUE_RE = re.compile(
     r"\b(?:latest|most recent|current|currently|today|yesterday|now)\b",
     flags=re.IGNORECASE,
 )
+_CURRENT_MEASUREMENT_CUE_RE = re.compile(
+    r"\bcurrent\s+(?:"
+    r"prices?|"
+    r"us\$|u\.s\.\$|u\.s\. dollars?|us dollars?|dollars?|"
+    r"lcu|local currency|national currency|"
+    r"account|activity|assets?|liabilities?|"
+    r"expenditure|expenditures|revenues?|costs?"
+    r")\b",
+    flags=re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +113,8 @@ def _query_has_explicit_time_scope(query: str) -> bool:
     query_text = str(query or "").strip()
     if not query_text:
         return False
-    if _RECENCY_CUE_RE.search(query_text):
+    recency_query_text = _CURRENT_MEASUREMENT_CUE_RE.sub(" ", query_text)
+    if _RECENCY_CUE_RE.search(recency_query_text):
         return True
     if _TIME_SCOPE_YEAR_RE.search(query_text) and _TIME_SCOPE_RELATIVE_RE.search(query_text):
         return True
