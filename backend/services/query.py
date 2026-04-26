@@ -432,10 +432,7 @@ class QueryService:
             return None
 
         candidate = str(stripped).upper()
-        if (
-            not self._looks_like_provider_indicator_code(explicit_provider, candidate)
-            and explicit_provider == "IMF"
-        ):
+        if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             code_candidates = [
                 token.upper()
                 for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_.]{2,}\b", str(query or ""))

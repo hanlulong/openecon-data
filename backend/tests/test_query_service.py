@@ -451,6 +451,18 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "NY.GDP.MKTP.CD")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_extracts_worldbank_code_with_country_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Germany SH.TBS.INCD from World Bank"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "SH.TBS.INCD")
+        self.assertEqual(intent.parameters.get("country"), "DE")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_fetch_data_replaces_explicit_fred_code_when_query_conflicts(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
