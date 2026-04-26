@@ -1080,6 +1080,10 @@ class OECDProvider(BaseProvider):
         if any(x in structure_upper for x in ["TRADE", "EXPORT", "IMPORT", "TRAD"]):
             return "OECD.TAD"
 
+        # Public governance indicators (Government at a Glance, public finance dashboards)
+        if "DSD_GOV" in structure_upper or "GOV_" in dataflow_upper:
+            return "OECD.GOV.GIP"
+
         # Tax Policy and Statistics (Revenue Statistics, Tax Revenues)
         # IMPORTANT: Tax revenue dataflows use OECD.CTP.TPS agency
         if any(x in structure_upper for x in ["REV", "TAX"]) and "OECD" in dataflow_upper:

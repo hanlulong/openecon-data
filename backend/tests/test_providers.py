@@ -58,6 +58,15 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
         self.assertEqual(version, "1.0")
 
+    def test_oecd_resolve_indicator_maps_government_dataflows_to_gov_agency(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        agency, dataflow, version = run(provider._resolve_indicator("DSD_GOV@DF_GOV_PF_2025"))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.GOV.GIP")
+        self.assertEqual(dataflow, "DSD_GOV@DF_GOV_PF_2025")
+        self.assertEqual(version, "1.0")
+
     def test_oecd_resolve_indicator_uses_canonical_gdp_dataflow(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
 

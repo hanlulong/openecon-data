@@ -161,7 +161,7 @@ else:
 
 
 def _ignore_country_alias_match(normalized: str, following_text: str) -> bool:
-    return normalized == 'US' and re.match(r'\s+dollars?\b', following_text) is not None
+    return normalized == 'US' and re.match(r'\s*(?:dollars?\b|\$)', following_text) is not None
 
 
 def detect_country_codes_in_text(text: str) -> set[str]:
@@ -1072,8 +1072,11 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         inferred_country = (
             detect_single_country_from_text(name)
             or detect_single_country_from_text(str(row.get('coverage') or ''))
-            or detect_single_country_from_text(description)
         )
+        if not inferred_country:
+            description_country = detect_single_country_from_text(description)
+            if description_country and description_country.lower() not in {'world', 'global', 'worldwide'}:
+                inferred_country = description_country
         if inferred_country:
             choice = inferred_country
     phrase = natural_phrase_from_name(name, description)
@@ -1538,7 +1541,11 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('worldbank_specialized_source_family')
     if any(term in worldbank_text for term in ['rights to inherit assets', 'are other banks permitted', 'commercial banks permitted']):
         reasons.append('worldbank_binary_policy_query')
-    if any(term in worldbank_text for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
+    if provider_upper == 'WORLDBANK' and (origin_code_upper in {'CC.EST', 'GE.EST', 'PV.EST', 'RQ.EST', 'RL.EST', 'VA.EST'} or 'worldwide governance indicators' in worldbank_text):
+        reasons.append('worldbank_specialized_source_family')
+    if provider_upper == 'WORLDBANK' and (origin_code_upper.startswith('DC.DAC.') or 'net bilateral aid flows from dac donors' in worldbank_text):
+        reasons.append('worldbank_specialized_source_family')
+    if any(term in worldbank_text for term in ['contract teachers', 'salary expenditures per teacher', 'off-budget', 'share of tertiary expenditures', "salaries' share of tertiary recurrent expenditures", 'salaries share of tertiary recurrent expenditures', 'pasec', 'pupil/teacher ratio', 'civil service teachers', 'technical/vocational', 'private institution fees', 'egra', 'zero score']):
         reasons.append('worldbank_education_finance_query')
     if provider_upper == 'WORLDBANK' and 'government expenditure' in worldbank_text and 'tertiary education' in worldbank_text and any(term in worldbank_text for term in ['ppp', 'millions']):
         reasons.append('worldbank_education_expenditure_family')
@@ -1598,8 +1605,14 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'pupils/class',
     ]):
         reasons.append('worldbank_education_expenditure_family')
-    if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency']):
+    if any(term in worldbank_text for term in ['national assessment for learning outcomes', 'optimal competency', 'sea-plm', 'above proficiency', 'piaac']):
         reasons.append('worldbank_assessment_family')
+    if provider_upper == 'WORLDBANK' and any(term in worldbank_text for term in ['national learning goals', 'global education policy dashboard']):
+        reasons.append('worldbank_assessment_family')
+    if provider_upper == 'WORLDBANK' and (origin_code_upper.startswith('HH.DHS.') or 'demographic and health surveys' in worldbank_text):
+        reasons.append('worldbank_education_expenditure_family')
+    if provider_upper == 'WORLDBANK' and ('adjusted wealth parity index' in worldbank_text or origin_code_upper.endswith('.WPIA')):
+        reasons.append('worldbank_demographic_literacy_slice')
     if 'current allocation - modality' in worldbank_text:
         reasons.append('worldbank_specialized_source_family')
     if any(term in worldbank_text for term in ['public sector wage premium', 'price level ratio of ppp conversion factor', 'elevation is below 5 meters']):
@@ -1613,6 +1626,10 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     if provider_upper == 'OECD' and _metadata_annotation_is_true(parsed_metadata, 'NonProductionDataflow'):
         reasons.append('oecd_non_production_dataflow')
     if provider_upper == 'OECD' and any(term in worldbank_text for term in ['key indicators of informality', 'formal to informal employees', 'informal employment']):
+        reasons.append('oecd_low_viability_family')
+    if provider_upper == 'OECD' and (origin_code_upper.startswith('OECD_DSD_TEC') or 'trade in goods by enterprise characteristics' in worldbank_text):
+        reasons.append('oecd_low_viability_family')
+    if provider_upper == 'OECD' and 'instruction time per subject' in worldbank_text:
         reasons.append('oecd_low_viability_family')
     if provider == 'OECD' and 'population in the national accounts' in query_lower and 'distributions by' in query_lower:
         reasons.append('oecd_low_viability_family')

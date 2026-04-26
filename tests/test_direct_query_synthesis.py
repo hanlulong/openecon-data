@@ -156,7 +156,41 @@ def test_detect_single_country_from_text_ignores_ambiguous_america_region_alias(
 
 def test_detect_single_country_from_text_ignores_currency_and_preposition_aliases() -> None:
     assert detect_single_country_from_text("Current account balance U.S. dollars") is None
+    assert detect_single_country_from_text("Industry value added current US$") is None
     assert detect_single_country_from_text("Cost per training hour") is None
+
+
+def test_default_query_for_row_does_not_treat_current_us_dollar_unit_as_country_scope() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "NV.IND.TOTL.CD",
+        "name": "Industry (including construction), value added (current US$)",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query != "Industry (including construction) value added (current US$) from World Bank"
+    assert query.lower().endswith("from world bank")
+    assert query.startswith(("Germany ", "Brazil ", "India ", "Nigeria ", "China "))
+
+
+def test_default_query_for_row_does_not_treat_worldwide_source_family_as_country_scope() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "CC.EST",
+        "name": "Control of Corruption: Estimate",
+        "description": (
+            "The Worldwide Governance Indicators (WGI) are a research dataset summarizing "
+            "views on the quality of governance."
+        ),
+    }
+
+    query = default_query_for_row(row)
+
+    assert query != "Worldwide Control of Corruption: Estimate from World Bank"
+    assert query.lower().endswith("control of corruption: estimate from world bank")
+    assert query.startswith(("Germany ", "Brazil ", "India ", "Nigeria ", "China "))
 
 
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
@@ -322,6 +356,129 @@ def test_audit_direct_query_shape_flags_worldbank_country_partnership_strategy_q
     assert "worldbank_niche_catalog_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_dhs_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India DHS Primary completion rate Urban from World Bank",
+            "origin": {
+                "name": "DHS: Primary completion rate. Urban",
+                "source_indicator_code": "HH.DHS.PCR.U",
+                "category": "Education Statistics",
+                "sourceOrganization": "Demographic and Health Surveys",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_expenditure_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_dac_donor_role_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "Net bilateral aid flows from DAC donors Estonia (current US$) from World Bank",
+            "origin": {
+                "name": "Net bilateral aid flows from DAC donors, Estonia (current US$)",
+                "source_indicator_code": "DC.DAC.ESTL.CD",
+                "category": "World Development Indicators",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_archived_wgi_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India Control of Corruption: Estimate from World Bank",
+            "origin": {
+                "name": "Control of Corruption: Estimate",
+                "source_indicator_code": "CC.EST",
+                "category": "World Development Indicators",
+                "sourceOrganization": "Worldwide Governance Indicators, World Bank (WB)",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_specialized_source_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_national_learning_goals_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India National Learning Goals Average score for incentives from World Bank",
+            "origin": {
+                "name": "(National Learning Goals) Average score for incentives",
+                "source_indicator_code": "SE.PRM.BNLG.4",
+                "category": "Education Statistics",
+                "sourceOrganization": "Global Education Policy Dashboard",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_assessment_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_piaac_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India PIAAC: Mean Young Adult Literacy Proficiency. Male from World Bank",
+            "origin": {
+                "name": "PIAAC: Mean Young Adult Literacy Proficiency. Male",
+                "source_indicator_code": "LO.PIAAC.LIT.YOU.MA",
+                "category": "Education Statistics",
+                "sourceOrganization": "OECD Programme for the International Assessment of Adult Competencies (PIAAC)",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_assessment_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_salaries_share_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India World Bank Salaries' share of tertiary recurrent expenditures percent from World Bank",
+            "origin": {
+                "name": "World Bank: Salaries' share of tertiary recurrent expenditures (%)",
+                "source_indicator_code": "PER.TER.SAL.SHARE.RCT",
+                "category": "Education Statistics",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_education_finance_query" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_flags_worldbank_adjusted_wealth_parity_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India primary education rural male Completion rate adjusted wealth parity index WPIA from World Bank",
+            "origin": {
+                "name": "Completion rate, primary education, rural, male, adjusted wealth parity index (WPIA)",
+                "source_indicator_code": "UIS.CR.1.RUR.M.WPIA",
+                "category": "Education Statistics",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_demographic_literacy_slice" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_publication_table_queries():
     audit = audit_direct_query_shape(
         {
@@ -374,9 +531,27 @@ def test_audit_direct_query_shape_flags_oecd_sdg_goal_dataflows() -> None:
     assert "oecd_low_viability_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_oecd_trade_enterprise_characteristics_dataflows() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Canada Trade in goods by enterprise characteristics by activity sectors from OECD",
+            "origin": {
+                "name": "Trade in goods by enterprise characteristics by activity sectors",
+                "source_indicator_code": "OECD_DSD_TEC_ISIC4@DF_TEC09",
+                "category": "OECD Dataflow",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "oecd_low_viability_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_instruction_time_and_childcare_dataflows() -> None:
     for query, code in [
         ("Germany Instruction time in compulsory general education by age from OECD", "OECD_DSD_EAG_IT@DF_EAG_IT_AGE"),
+        ("United States Instruction time per subject by level of education from OECD", "OECD_DSD_EAG_IT@DF_EAG_IT_SUBJ_ISCED"),
         ("Japan Net childcare cost for parents using centre-based childcare from OECD", "OECD_DSD_TAXBEN_NCC@DF_NCC"),
         ("Germany Number of students and repeaters by grade and level of education from OECD", "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_RAW_RPTR"),
         ("Japan Number of mobile students enrolled and graduated by country of origin from OECD", "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_RAW_MOB"),

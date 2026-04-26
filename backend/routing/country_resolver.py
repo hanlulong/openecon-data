@@ -746,13 +746,20 @@ class CountryResolver:
         # Longest aliases first to prioritize specific names over shorter variants
         sorted_aliases = sorted(cls.COUNTRY_ALIASES.keys(), key=len, reverse=True)
 
+        def _is_us_currency_unit(match_end: int) -> bool:
+            # Economic indicator titles commonly include units such as
+            # "(current US$)" or "U.S. dollars"; those are not country scope.
+            return re.match(r"\s*(?:\$|dollars?\b)", query[match_end:], flags=re.IGNORECASE) is not None
+
         for alias in sorted_aliases:
             code = cls.COUNTRY_ALIASES[alias]
             alias_lower = alias.lower()
 
             # Special handling for US to avoid pronoun false positives ("show us ...")
             if alias_lower == "us":
-                for match in re.finditer(r"\bUS\b|\bU\.S\.A?\.\b", query):
+                for match in re.finditer(r"(?<!\w)(?:US|U\.S(?:\.A)?\.?)(?!\w)", query):
+                    if _is_us_currency_unit(match.end()):
+                        continue
                     pos = match.start()
                     if code not in country_positions or pos < country_positions[code]:
                         country_positions[code] = pos
@@ -766,6 +773,8 @@ class CountryResolver:
 
             pattern = rf"(?<!\w){re.escape(alias_lower)}(?!\w)"
             for match in re.finditer(pattern, query_lower):
+                if code == "US" and _is_us_currency_unit(match.end()):
+                    continue
                 pos = match.start()
                 if code not in country_positions or pos < country_positions[code]:
                     country_positions[code] = pos
