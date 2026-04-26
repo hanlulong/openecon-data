@@ -1148,6 +1148,60 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("/IMF.STA,CPI/NPL.CPI.CP01.IX.A", result[0].metadata.apiUrl or "")
         self.assertEqual(result[0].data[0].value, 145.2)
 
+    def test_imf_non_datamapper_cpi_base_year_code_uses_public_sdmx_v21(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _TextResponse(MockAsyncResponse):
+            def __init__(self, text: str) -> None:
+                super().__init__({})
+                self.text = text
+                self.content = text.encode("utf-8")
+
+        empty_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
+          <message:DataSet />
+        </message:StructureSpecificData>
+        """
+        monthly_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
+          <message:DataSet>
+            <Series COUNTRY="BRA" INDEX_TYPE="CPI" COICOP_1999="CP01" TYPE_OF_TRANSFORMATION="IX" FREQUENCY="M">
+              <Obs TIME_PERIOD="2020-M01" OBS_VALUE="110.0" />
+            </Series>
+          </message:DataSet>
+        </message:StructureSpecificData>
+        """
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=(
+                "PCPI_CP_01_BY2010_IX",
+                "Prices, Consumer Price Index, Food and non-alcoholic beverages, Base Year = 2010, Index",
+            ),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ), patch(
+            "backend.providers.imf.get_http1_client",
+            return_value=MockAsyncClient([_TextResponse(empty_xml), _TextResponse(monthly_xml)]),
+        ):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="PCPI_CP_01_BY2010_IX",
+                    countries=["Brazil"],
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "Brazil")
+        self.assertIn("/IMF.STA,CPI/BRA.CPI.CP01.IX.M", result[0].metadata.apiUrl or "")
+        self.assertEqual(result[0].metadata.seriesId, "PCPI_CP_01_BY2010_IX")
+        self.assertEqual(result[0].metadata.frequency, "monthly")
+        self.assertEqual(result[0].data[0].date, "2020-01-01")
+        self.assertEqual(result[0].data[0].value, 110.0)
+
     def test_imf_detailed_trade_code_still_fails_closed_without_public_sdmx_mapping(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 

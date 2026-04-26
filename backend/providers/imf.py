@@ -1267,6 +1267,9 @@ class IMFProvider(BaseProvider):
         match = re.search(r"(?:^|_)CP_?(\d{2})(?:\d{0,3})?(?:_|$)", code)
         if match:
             return f"CP{match.group(1)}"
+        match = re.search(r"(?:^|_)XCP_?(\d{2})(?:\d{0,3})?(?:_|$)", code)
+        if match:
+            return f"XCP{match.group(1)}"
         if any(term in text for term in ["food", "beverage"]):
             return "CP01"
         if any(term in text for term in ["clothing", "footwear"]):
@@ -1295,7 +1298,7 @@ class IMFProvider(BaseProvider):
             return False
         if code == "PCPI_IX":
             return True
-        if re.fullmatch(r"PCPI_CP_?\d{2}_IX", code):
+        if re.fullmatch(r"PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", code):
             return True
         return bool("consumer price" in text and code == "PCPI_IX")
 
@@ -1349,17 +1352,19 @@ class IMFProvider(BaseProvider):
         if self._is_cpi_candidate(bare_code, label):
             coicop = self._coicop_from_cpi_code_or_label(bare_code, label)
             transformation = "IX"
+            frequencies = ["A"] if coicop == "_T" else ["A", "M", "Q"]
             for country in countries_to_try:
-                candidates.append(
-                    {
-                        "flow": "CPI",
-                        "key": f"{country}.CPI.{coicop}.{transformation}.A",
-                        "country": country,
-                        "frequency": "A",
-                        "unit": "index",
-                        "data_type": "Index",
-                    }
-                )
+                for frequency in frequencies:
+                    candidates.append(
+                        {
+                            "flow": "CPI",
+                            "key": f"{country}.CPI.{coicop}.{transformation}.{frequency}",
+                            "country": country,
+                            "frequency": frequency,
+                            "unit": "index",
+                            "data_type": "Index",
+                        }
+                    )
             return candidates
 
         if self._is_ppi_candidate(bare_code, label):

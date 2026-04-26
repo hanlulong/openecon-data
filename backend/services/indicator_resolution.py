@@ -2246,6 +2246,35 @@ async def resolve_indicator_for_fetch(
                 return params
 
     existing_indicator = str(params.get("indicator") or "").strip()
+    if provider == "IMF" and not existing_indicator and len(intent.indicators or []) == 1:
+        candidate_indicator = str((intent.indicators or [""])[0] or "").strip()
+        catalog_exact_match = False
+        if candidate_indicator and svc._looks_like_provider_indicator_code(provider, candidate_indicator):
+            try:
+                from .indicator_database import get_indicator_lookup
+
+                catalog_exact_match = bool(get_indicator_lookup().get(provider, candidate_indicator.upper()))
+            except Exception as exc:
+                logger.debug(
+                    "IMF parsed-code catalog check skipped for %s: %s",
+                    candidate_indicator,
+                    exc,
+                )
+        if catalog_exact_match:
+            logger.info(
+                "🔒 Using provider-native %s indicator from parsed intent without dynamic resolution: %s",
+                provider,
+                candidate_indicator,
+            )
+            params = _apply_indicator_with_semantic_label(
+                candidate_indicator,
+                __semantic_indicator_label=candidate_indicator,
+                __catalog_resolved=True,
+                __exact_provider_code_match=True,
+            )
+            intent.parameters = params
+            existing_indicator = candidate_indicator
+
     has_explicit_code = bool(
         existing_indicator
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)

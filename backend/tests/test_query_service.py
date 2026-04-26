@@ -568,6 +568,46 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_direct_query_shape_treats_imf_cpi_base_year_as_public_sdmx(self) -> None:
+        from scripts.validation.common import imf_public_sdmx_runtime_family
+
+        self.assertEqual(
+            imf_public_sdmx_runtime_family(
+                "PCPI_CP_01_BY2010_IX",
+                "Prices, Consumer Price Index, Food and non-alcoholic beverages, Base Year = 2010, Index",
+                "INDICATOR",
+            ),
+            "cpi_aggregate",
+        )
+
+    def test_resolve_indicator_for_fetch_keeps_imf_code_from_intent_without_selector(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["PCPI_CP_01_BY2010_IX"],
+            parameters={"country": "United States"},
+            clarificationNeeded=False,
+            originalQuery="United States PCPI_CP_01_BY2010_IX from IMF",
+        )
+
+        def _resolver_should_not_run():
+            raise AssertionError("legacy resolver should not run for provider-native IMF code intent")
+
+        params = run(
+            __import__(
+                "backend.services.indicator_resolution",
+                fromlist=["resolve_indicator_for_fetch"],
+            ).resolve_indicator_for_fetch(
+                self.service,
+                "IMF",
+                intent,
+                dict(intent.parameters or {}),
+                _get_indicator_resolver=_resolver_should_not_run,
+            )
+        )
+
+        self.assertEqual(params.get("indicator"), "PCPI_CP_01_BY2010_IX")
+        self.assertTrue(params.get("__exact_provider_code_match"))
+
     def test_fetch_data_dispatches_simple_imf_ppi_code(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",

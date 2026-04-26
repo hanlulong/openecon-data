@@ -1663,23 +1663,22 @@ async def _fetch_from_imf(
             if resolved_indicator:
                 indicators_to_fetch = [resolved_indicator]
             for indicator in indicators_to_fetch:
-                series = await svc.imf_provider.fetch_indicator(
+                series_list = await svc.imf_provider.fetch_batch_indicator(
                     indicator=indicator,
-                    country=country,
+                    countries=[country],
                     start_year=request_start_year,
                     end_year=request_end_year,
                 )
-                all_data.append(series)
+                all_data.extend(series_list)
             return all_data
         else:
             indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
-            series = await svc.imf_provider.fetch_indicator(
+            return await svc.imf_provider.fetch_batch_indicator(
                 indicator=resolved_indicator or indicator,
-                country=country,
+                countries=[country],
                 start_year=request_start_year,
                 end_year=request_end_year,
             )
-            return [series]
 
 
 async def _fetch_from_eurostat(
