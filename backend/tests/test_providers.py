@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import httpx
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -56,6 +57,72 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(agency, "OECD.SDD.TPS")
         self.assertEqual(dataflow, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
+        self.assertEqual(version, "1.0")
+
+    def test_oecd_resolve_indicator_uses_exact_registry_agency_and_version(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        code = "DSD_EAG_UOE_FIN@DF_UOE_FIN_NATURE_CUR_CAP"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": json.dumps(
+                {
+                    "agencyID": "OECD.EDU.IMEP",
+                    "version": "3.1",
+                    "structure": "urn:sdmx:org.sdmx.infomodel.datastructure.DataStructure=OECD.EDU.IMEP:DSD_EAG_UOE_FIN(3.1)",
+                }
+            ),
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            agency, dataflow, version = run(provider._resolve_indicator(code))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.EDU.IMEP")
+        self.assertEqual(dataflow, code)
+        self.assertEqual(version, "3.1")
+        lookup.get.assert_called_with("OECD", code)
+
+    def test_oecd_discovery_prefers_exact_registry_metadata_over_heuristic_agency(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        code = "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": json.dumps(
+                {
+                    "agencyID": "OECD.EDU.IMEP",
+                    "version": "1.0",
+                }
+            ),
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            agency, dataflow, version = provider._build_result_from_discovery(  # pylint: disable=protected-access
+                code,
+                {"agency": "OECD.SDD.EDSTAT"},
+            )
+
+        self.assertEqual(agency, "OECD.EDU.IMEP")
+        self.assertEqual(dataflow, code)
+        self.assertEqual(version, "1.0")
+
+    def test_oecd_registry_metadata_falls_back_when_raw_metadata_is_malformed(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        code = "DSD_UNKNOWN@DF_UNKNOWN"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": "{not-json",
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            agency, dataflow, version = run(provider._resolve_indicator(code))  # pylint: disable=protected-access
+
+        self.assertEqual(agency, "OECD.SDD.NAD")
+        self.assertEqual(dataflow, code)
         self.assertEqual(version, "1.0")
 
     def test_oecd_resolve_indicator_maps_government_dataflows_to_gov_agency(self) -> None:

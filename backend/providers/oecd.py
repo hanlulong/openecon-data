@@ -248,6 +248,78 @@ class OECDProvider(BaseProvider):
 
         return cls._DATAFLOWS_CATALOG
 
+    @staticmethod
+    def _canonical_dataflow_code(dataflow_code: str) -> str:
+        """Return the OECD SDMX dataflow ID without local catalog prefixes."""
+        code = str(dataflow_code or "").strip()
+        if code.upper().startswith("OECD_"):
+            return code[5:]
+        return code
+
+    @classmethod
+    def _lookup_dataflow_registry_metadata(cls, dataflow_code: str) -> tuple[Optional[str], Optional[str]]:
+        """Look up agency/version for an exact OECD dataflow from the local registry.
+
+        OECD's public SDMX API requires the owning agency and active DSD
+        version in the URL.  The dataflow ID alone is not enough: education,
+        labour, and tax-benefit dataflows commonly live outside the heuristic
+        ``OECD.SDD.*`` agencies, and some active structures are not version
+        ``1.0``.  The indicator registry stores the provider-native
+        ``agencyID`` and ``version`` captured from OECD metadata; use it before
+        falling back to heuristics.
+        """
+        code = cls._canonical_dataflow_code(dataflow_code)
+        if not re.fullmatch(r"DSD_[A-Za-z0-9_]+@DF_[A-Za-z0-9_]+", code):
+            return None, None
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+            row = lookup.get("OECD", code)
+        except Exception as exc:
+            logger.debug("OECD registry lookup skipped for %s: %s", code, exc)
+            row = None
+
+        if not row:
+            return None, None
+
+        row_code = str(row.get("code") or "").strip()
+        if row_code.upper() != code.upper():
+            return None, None
+
+        raw_metadata = row.get("raw_metadata")
+        metadata: dict = {}
+        if isinstance(raw_metadata, str) and raw_metadata.strip():
+            try:
+                parsed = json.loads(raw_metadata)
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except json.JSONDecodeError:
+                logger.debug("OECD registry raw metadata is not JSON for %s", code)
+        elif isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+
+        agency = str(metadata.get("agencyID") or metadata.get("agency") or "").strip() or None
+        version = str(metadata.get("version") or "").strip() or None
+
+        structure = str(metadata.get("structure") or "").strip()
+        if structure:
+            structure_match = re.search(
+                r"DataStructure=([^:()]+):[^()]+(?:\(([^()]+)\))?",
+                structure,
+            )
+            if structure_match:
+                agency = agency or structure_match.group(1)
+                version = version or structure_match.group(2)
+
+        if agency and not re.fullmatch(r"[A-Za-z0-9_.-]+", agency):
+            agency = None
+        if version and not re.fullmatch(r"[0-9][A-Za-z0-9_.-]*", version):
+            version = None
+
+        return agency, version
+
     def _country_code(self, country: str) -> str:
         """Normalize country code to OECD format (ISO alpha-3).
 
@@ -411,13 +483,26 @@ class OECDProvider(BaseProvider):
                 # Prefer the shortest matching catalog key to avoid drifting to
                 # longer, more specialized derivatives when the fragment already
                 # identifies a common parent dataflow.
-                flow_id = min(prefix_matches, key=len)
+                exact_matches = [
+                    flow_id
+                    for flow_id in prefix_matches
+                    if flow_id.upper() == explicit_prefix
+                ]
+                flow_id = exact_matches[0] if exact_matches else min(prefix_matches, key=len)
                 logger.info(
                     "🔒 Resolved OECD dataflow prefix '%s' -> %s via local catalog",
                     explicit_dataflow,
                     flow_id,
                 )
-                result = self._build_result_from_discovery(flow_id, {})
+                if exact_matches:
+                    result = self._build_result_from_discovery(flow_id, {})
+                else:
+                    structure = flow_id.split("@")[0]
+                    result = (
+                        self._extract_agency_from_structure(structure, flow_id),
+                        self._canonical_dataflow_code(flow_id),
+                        "1.0",
+                    )
                 cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
                 return result
 
@@ -869,19 +954,13 @@ class OECDProvider(BaseProvider):
                 candidates.sort(key=lambda x: x[0], reverse=True)
                 best_score, flow_id, flow_info, structure = candidates[0]
 
-                agency = self._extract_agency_from_structure(structure, flow_id)
-
-                # Keep full catalog entry format (DSD_XXX@DF_XXX) for later extraction
-                # fetch_indicator will extract both DSD ID and dataflow ID as needed
-                dataflow = flow_id
-                version = "1.0"
-
-                result = (agency, dataflow, version)
+                result = self._build_result_from_discovery(flow_id, {})
+                agency, dataflow, version = result
                 for cache_key in cache_keys:
                     cache_service.set(cache_key, result, ttl=86400)  # Cache 24h
                 logger.info(
                     f"✅ Found OECD indicator '{indicator}' in local catalog → {dataflow} "
-                    f"(priority-adjusted score: {best_score}, structure: {structure}, agency: {agency})"
+                    f"(priority-adjusted score: {best_score}, structure: {structure}, agency: {agency}, version: {version})"
                 )
                 return result
 
@@ -990,9 +1069,13 @@ class OECDProvider(BaseProvider):
         Returns:
             Tuple of (agency, dataflow, version)
         """
-        # Check if agency is already in discovery result (from metadata search)
-        if discovery.get("agency"):
-            agency = discovery["agency"]
+        registry_agency, registry_version = self._lookup_dataflow_registry_metadata(dataflow_code)
+        discovery_agency = str(discovery.get("agency") or "").strip()
+        agency = registry_agency or discovery_agency
+
+        if registry_agency:
+            logger.info("Using agency from OECD registry metadata: %s", agency)
+        elif discovery_agency:
             logger.info(f"Using agency from discovery: {agency}")
         else:
             # Extract agency from structure
@@ -1001,8 +1084,8 @@ class OECDProvider(BaseProvider):
             logger.info(f"Extracted agency from structure: {agency}")
 
         # Keep full format (DSD_XXX@DF_XXX) for later extraction in fetch_indicator
-        dataflow = dataflow_code
-        version = "1.0"
+        dataflow = self._canonical_dataflow_code(dataflow_code)
+        version = str(discovery.get("version") or registry_version or "1.0")
 
         return (agency, dataflow, version)
 
@@ -1036,7 +1119,7 @@ class OECDProvider(BaseProvider):
 
         # Education Statistics (EAG = Education at a Glance) - check BEFORE labor market
         if "EAG" in structure_upper:
-            return "OECD.SDD.EDSTAT"
+            return "OECD.EDU.IMEP"
 
         # Hours Worked statistics (DSD_HW) - use OECD.ELS.SAE (Employment, Labour and Social Affairs)
         # This is DIFFERENT from other labor force statistics (LFS, IALFS) which use OECD.SDD.TPS
