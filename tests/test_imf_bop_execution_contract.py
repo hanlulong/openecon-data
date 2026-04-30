@@ -69,6 +69,21 @@ def _sample_series(series_id: str = "NGDP_RPCH") -> NormalizedData:
     )
 
 
+def _bop_structure_metadata(**overrides):
+    metadata = {
+        "dimension_ids": ["COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"],
+        "allowed_values_by_dimension": {
+            "COUNTRY": {"USA"},
+            "BOP_ACCOUNTING_ENTRY": {"BX"},
+            "INDICATOR": {"SRLO"},
+            "UNIT": {"USD"},
+            "FREQUENCY": {"A"},
+        },
+    }
+    metadata.update(overrides)
+    return metadata
+
+
 def test_build_bop_query_payload_splits_code_into_dimensions() -> None:
     provider = IMFProvider(metadata_search_service=None)
 
@@ -87,6 +102,19 @@ def test_build_bop_query_payload_splits_code_into_dimensions() -> None:
     assert {"dimensionId": "BOP_ACCOUNTING_ENTRY", "values": ["BX"]} in payload["filters"]
     assert {"dimensionId": "INDICATOR", "values": ["SRLO"]} in payload["filters"]
     assert {"dimensionId": "UNIT", "values": ["USD"]} in payload["filters"]
+    assert {"dimensionId": "FREQUENCY", "values": ["A"]} in payload["filters"]
+
+
+def test_validate_bop_structure_candidate_rejects_absent_legacy_dimension_value() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    error = provider._validate_bop_structure_candidate(  # pylint: disable=protected-access
+        _bop_structure_metadata(),
+        indicator_code="BXC_375_XDC",
+        countries=["USA"],
+    )
+
+    assert error == "INDICATOR value(s) not present in BOP structure: C_375"
 
 
 def test_fetch_batch_indicator_routes_bop_hint_into_bop_lane() -> None:
@@ -149,7 +177,11 @@ def test_fetch_bop_family_reports_ott_retrieval_failure_explicitly() -> None:
         get_response=_MockHTTPResponse(status_code=503, text="maintenance"),
     )
 
-    with patch("backend.providers.imf.get_http_client", return_value=client):
+    with patch.object(
+        provider,
+        "_get_imf_dataflow_structure",
+        AsyncMock(return_value=_bop_structure_metadata()),
+    ), patch("backend.providers.imf.get_http_client", return_value=client):
         try:
             run(
                 provider._fetch_bop_family(  # pylint: disable=protected-access
@@ -167,7 +199,7 @@ def test_fetch_bop_family_reports_ott_retrieval_failure_explicitly() -> None:
 
     assert "OTT retrieval is currently unavailable" in message
     assert "payload_fingerprint=" in message
-    assert "filter_dimensions=COUNTRY,BOP_ACCOUNTING_ENTRY,INDICATOR,UNIT,TIME_PERIOD" in message
+    assert "filter_dimensions=COUNTRY,BOP_ACCOUNTING_ENTRY,INDICATOR,UNIT,FREQUENCY,TIME_PERIOD" in message
     assert client.post_calls
     assert client.get_calls
 
@@ -185,7 +217,11 @@ def test_fetch_bop_family_reports_embedded_engine_error_explicitly() -> None:
         ),
     )
 
-    with patch("backend.providers.imf.get_http_client", return_value=client):
+    with patch.object(
+        provider,
+        "_get_imf_dataflow_structure",
+        AsyncMock(return_value=_bop_structure_metadata()),
+    ), patch("backend.providers.imf.get_http_client", return_value=client):
         try:
             run(
                 provider._fetch_bop_family(  # pylint: disable=protected-access
@@ -205,6 +241,39 @@ def test_fetch_bop_family_reports_embedded_engine_error_explicitly() -> None:
     assert "payload_fingerprint=" in message
     assert "ott_parts=2" in message
     assert "series_dimensions=COUNTRY" in message
+
+
+def test_fetch_bop_family_fails_closed_when_structure_rejects_candidate() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    client = _MockHTTPClient(
+        post_response=_MockHTTPResponse(status_code=200, text="test-ott"),
+        get_response=_MockHTTPResponse(status_code=200, text="{}"),
+    )
+
+    with patch.object(
+        provider,
+        "_get_imf_dataflow_structure",
+        AsyncMock(return_value=_bop_structure_metadata()),
+    ), patch("backend.providers.imf.get_http_client", return_value=client):
+        try:
+            run(
+                provider._fetch_bop_family(  # pylint: disable=protected-access
+                    indicator_code="BXC_375_XDC",
+                    indicator_label="Balance of Payments detail",
+                    countries=["USA"],
+                    start_year=2020,
+                    end_year=2021,
+                )
+            )
+        except DataNotAvailableError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected DataNotAvailableError")
+
+    assert "cannot structurally validate BXC_375_XDC" in message
+    assert "INDICATOR value(s) not present" in message
+    assert client.post_calls == []
+    assert client.get_calls == []
 
 
 def test_payload_fingerprint_is_stable_for_equivalent_payloads() -> None:

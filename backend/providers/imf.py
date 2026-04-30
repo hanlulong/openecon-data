@@ -1842,6 +1842,48 @@ class IMFProvider(BaseProvider):
             "UNIT": unit,
         }
 
+    def _validate_bop_structure_candidate(
+        self,
+        metadata: Optional[Dict[str, Any]],
+        indicator_code: str,
+        countries: List[str],
+    ) -> Optional[str]:
+        """Return a fail-closed diagnostic when a BOP candidate is structurally invalid."""
+        if not metadata:
+            return "BOP structure metadata unavailable"
+
+        required_dimensions = {"COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"}
+        dimension_ids = {str(dim or "").strip().upper() for dim in metadata.get("dimension_ids") or []}
+        missing_dimensions = sorted(required_dimensions - dimension_ids)
+        if missing_dimensions:
+            return f"missing BOP dimensions: {', '.join(missing_dimensions)}"
+
+        split_code = self._split_bop_series_code(indicator_code)
+        requested_by_dimension = {
+            "COUNTRY": [self._country_code(country) for country in countries],
+            "BOP_ACCOUNTING_ENTRY": [split_code.get("BOP_ACCOUNTING_ENTRY", "")],
+            "INDICATOR": [split_code.get("INDICATOR", "")],
+            "UNIT": [split_code.get("UNIT", "")],
+            "FREQUENCY": ["A"],
+        }
+        allowed_by_dimension = dict(metadata.get("allowed_values_by_dimension") or {})
+        for dimension, requested_values in requested_by_dimension.items():
+            allowed_values = {
+                str(value or "").strip().upper()
+                for value in allowed_by_dimension.get(dimension) or []
+                if str(value or "").strip()
+            }
+            if not allowed_values:
+                continue
+            missing_values = [
+                str(value or "").strip().upper()
+                for value in requested_values
+                if str(value or "").strip() and str(value or "").strip().upper() not in allowed_values
+            ]
+            if missing_values:
+                return f"{dimension} value(s) not present in BOP structure: {', '.join(missing_values)}"
+        return None
+
     def _build_bop_query_payload(
         self,
         indicator_code: str,
@@ -1861,6 +1903,7 @@ class IMFProvider(BaseProvider):
             value = split_code.get(dim)
             if value:
                 filters.append({"dimensionId": dim, "values": [value]})
+        filters.append({"dimensionId": "FREQUENCY", "values": ["A"]})
         if start_year or end_year:
             filters.append(
                 {
@@ -2025,6 +2068,18 @@ class IMFProvider(BaseProvider):
         first, while remaining fail-closed until end-to-end payload semantics
         and result normalization are proven stable.
         """
+        structure = await self._get_imf_dataflow_structure("BOP")
+        structure_error = self._validate_bop_structure_candidate(
+            structure,
+            indicator_code=indicator_code,
+            countries=countries,
+        )
+        if structure_error:
+            raise DataNotAvailableError(
+                f"IMF BOP execution lane cannot structurally validate {indicator_code}: {structure_error}. "
+                "The non-WEO BOP family remains fail-closed until exact public SDMX dimensions are proven."
+            )
+
         payload = self._build_bop_query_payload(
             indicator_code=indicator_code,
             countries=countries,
