@@ -462,7 +462,25 @@ class OECDProvider(BaseProvider):
         Raises:
             DataNotAvailableError if no suitable dataflow found after all fallback attempts
         """
-        explicit_dataflow = str(indicator or "").strip().upper()
+        raw_indicator = str(indicator or "").strip()
+        explicit_dataflow = raw_indicator.upper()
+
+        exact_parts = [part.strip() for part in raw_indicator.split(",")]
+        if len(exact_parts) in (2, 3):
+            exact_agency = exact_parts[0]
+            exact_dataflow = self._canonical_dataflow_code(exact_parts[1])
+            exact_version = exact_parts[2] if len(exact_parts) == 3 else ""
+            if (
+                re.fullmatch(r"[A-Za-z0-9_.-]+", exact_agency or "")
+                and re.fullmatch(r"DSD_[A-Za-z0-9_]+@DF_[A-Za-z0-9_]+", exact_dataflow or "")
+                and (not exact_version or re.fullmatch(r"[0-9][A-Za-z0-9_.-]*", exact_version))
+            ):
+                _, registry_version = self._lookup_dataflow_registry_metadata(exact_dataflow)
+                result = (exact_agency, exact_dataflow, exact_version or registry_version or "1.0")
+                logger.info("🔒 Treating exact OECD agency/dataflow tuple as resolved: %s", result)
+                cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
+                return result
+
         if re.fullmatch(r"DSD_[A-Z0-9_]+@DF_[A-Z0-9_]+", explicit_dataflow):
             logger.info("🔒 Treating explicit OECD dataflow as resolved: %s", explicit_dataflow)
             result = self._build_result_from_discovery(explicit_dataflow, {})

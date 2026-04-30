@@ -83,6 +83,36 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(version, "3.1")
         lookup.get.assert_called_with("OECD", code)
 
+    def test_oecd_resolve_indicator_accepts_exact_agency_dataflow_tuple(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        code = "DSD_EAG_UOE_FIN@DF_UOE_FIN_NATURE_CUR_CAP"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": json.dumps({"version": "3.1"}),
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            agency, dataflow, version = run(  # pylint: disable=protected-access
+                provider._resolve_indicator(f"OECD.EDU.IMEP,{code}")
+            )
+
+        self.assertEqual(agency, "OECD.EDU.IMEP")
+        self.assertEqual(dataflow, code)
+        self.assertEqual(version, "3.1")
+
+    def test_oecd_resolve_indicator_accepts_exact_agency_dataflow_version_tuple(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        agency, dataflow, version = run(  # pylint: disable=protected-access
+            provider._resolve_indicator("OECD.ELS.JAI,DSD_TAXBEN_IMW@DF_IMW,1.0")
+        )
+
+        self.assertEqual(agency, "OECD.ELS.JAI")
+        self.assertEqual(dataflow, "DSD_TAXBEN_IMW@DF_IMW")
+        self.assertEqual(version, "1.0")
+
     def test_oecd_discovery_prefers_exact_registry_metadata_over_heuristic_agency(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
         code = "DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_SHARE_VET"
