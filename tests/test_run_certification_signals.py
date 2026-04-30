@@ -467,6 +467,94 @@ def test_preflight_classifies_high_risk_non_weo_imf_surface_as_supportability_bl
     )
 
 
+def test_preflight_classifies_imf_bop_detail_as_supportability_blocked(tmp_path: Path):
+    module = load_module()
+    unsupported_bop = {
+        "id": "direct-imf-bop",
+        "provider_stratum": "IMF",
+        "query": (
+            "Panama Current account Balance of Payments Primary Income Investment Income "
+            "Reserve Assets Credit from IMF"
+        ),
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "PAN_BOP6_C_375_XDC",
+            "name": (
+                "Current account Balance of Payments Primary Income Investment Income "
+                "Reserve Assets Credit"
+            ),
+            "category": "INDICATOR",
+        },
+    }
+
+    audit = module.preflight_audit_rows(
+        [unsupported_bop],
+        classify_unsupported_direct=True,
+    )
+
+    assert audit["summary"]["high_risk_rows"] == 1
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_reason_counts"] == {
+        "imf_non_weo_public_surface_unsupported": 1
+    }
+    flagged = audit["flagged_rows_sample"][0]
+    assert flagged["execution_mode"] == "supportability_blocked"
+    assert "imf_complex_finance_family" in flagged["reasons"]
+    assert "imf_low_viability_family" in flagged["reasons"]
+    module.enforce_preflight_audit(
+        tmp_path / "unsupported-imf-bop.json",
+        [unsupported_bop],
+        allow_high_risk_direct=False,
+        classify_unsupported_direct=True,
+    )
+
+
+def test_execute_rows_keeps_imf_bop_detail_off_runtime(tmp_path: Path, monkeypatch):
+    module = load_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url, json, timeout):
+        calls.append(json)
+        raise AssertionError("unsupported IMF BOP row should not hit runtime")
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    row = {
+        "id": "direct-imf-bop",
+        "provider_stratum": "IMF",
+        "query": (
+            "Panama Current account Balance of Payments Primary Income Investment Income "
+            "Reserve Assets Credit from IMF"
+        ),
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "PAN_BOP6_C_375_XDC",
+            "category": "INDICATOR",
+            "name": (
+                "Current account Balance of Payments Primary Income Investment Income "
+                "Reserve Assets Credit"
+            ),
+        },
+    }
+
+    results = module.execute_rows(
+        [row],
+        "http://localhost:3001",
+        progress_output=tmp_path / "results.jsonl.inprogress",
+        progress_meta=tmp_path / "results.jsonl.progress.json",
+        classify_unsupported_direct=True,
+        runtime_unavailable_reason="health probe timed out",
+    )
+
+    assert calls == []
+    assert len(results) == 1
+    record = results[0]
+    assert record["session_id"] == "direct-imf-bop"
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "imf_non_weo_public_surface_unsupported"
+    assert "runtime_unavailable" not in record
+
+
 def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
     module = load_module()
     runnable_oecd = {
