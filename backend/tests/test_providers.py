@@ -195,6 +195,69 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
         self.assertEqual(version, "1.0")
 
+    def test_oecd_builds_positional_key_from_structure_metadata(self) -> None:
+        metadata = {
+            "dimensions": [
+                {"id": "MEASURE", "position": 0},
+                {"id": "REF_AREA", "position": 1},
+                {"id": "ACTIVITY", "position": 2},
+                {"id": "COUNTERPART_AREA", "position": 3},
+                {"id": "UNIT_MEASURE", "position": 4},
+                {"id": "FREQ", "position": 5},
+            ]
+        }
+
+        key = OECDProvider._build_oecd_key_from_structure(  # pylint: disable=protected-access
+            metadata,
+            "JPN",
+            custom_defaults={"frequency": "A"},
+        )
+
+        self.assertEqual(key, ".JPN....A")
+
+    def test_oecd_builds_all_key_when_structure_has_no_country_dimension(self) -> None:
+        metadata = {
+            "dimensions": [
+                {"id": "MEASURE", "position": 0},
+                {"id": "POLLUTANT", "position": 1},
+                {"id": "PLASTIC_LIFEC_S", "position": 2},
+                {"id": "FREQ", "position": 3},
+            ]
+        }
+
+        key = OECDProvider._build_oecd_key_from_structure(  # pylint: disable=protected-access
+            metadata,
+            "USA",
+        )
+
+        self.assertEqual(key, "all")
+
+    def test_oecd_clamps_default_time_window_to_constraint_range(self) -> None:
+        params = {
+            "dimensionAtObservation": "AllDimensions",
+            "startPeriod": "2021",
+            "endPeriod": "2026",
+        }
+        metadata = {
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "2015-01-01T00:00:00"},
+                        "endPeriod": {"period": "2019-12-31T00:00:00"},
+                    },
+                }
+            ]
+        }
+
+        OECDProvider._clamp_default_time_params_to_oecd_constraints(  # pylint: disable=protected-access
+            params,
+            metadata,
+        )
+
+        self.assertEqual(params["startPeriod"], "2015")
+        self.assertEqual(params["endPeriod"], "2019")
+
     def test_fred_series_id_explicit_codes_passthrough(self) -> None:
         """Test that explicit FRED series codes pass through directly without resolver."""
         provider = FREDProvider(api_key="test-key")
@@ -1627,7 +1690,7 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("DEU", call_countries)
         self.assertNotIn("OECD", call_countries)
 
-    def test_oecd_fetch_indicator_uses_all_dimension_key_then_filters_country(self) -> None:
+    def test_oecd_fetch_indicator_uses_dimension_key_then_filters_country(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
 
         class _KeyBuilder:
@@ -1671,6 +1734,10 @@ class ProviderTests(unittest.TestCase):
             provider,
             "_resolve_indicator",
             new=AsyncMock(return_value=("OECD.SDD.TPS", "DSD_TEST@DF_TEST", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=None),
         ), patch("backend.providers.oecd.get_dimension_key_builder", return_value=key_builder), \
              patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
              patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
@@ -1679,7 +1746,7 @@ class ProviderTests(unittest.TestCase):
              patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
             series = run(provider.fetch_indicator("TEST", country="USA", start_year=2023, end_year=2023))
 
-        self.assertIn("/data/OECD.SDD.TPS,DSD_TEST@DF_TEST,1.0/all", captured["url"])
+        self.assertIn("/data/OECD.SDD.TPS,DSD_TEST@DF_TEST,1.0/USA........", captured["url"])
         self.assertEqual(captured["params"], {
             "dimensionAtObservation": "AllDimensions",
             "startPeriod": "2023",
@@ -1688,6 +1755,72 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.metadata.country, "United States Of America")
         self.assertEqual(len(series.data), 1)
         self.assertEqual(series.data[0].value, 1.0)
+
+    def test_oecd_fetch_indicator_uses_dedicated_space_from_structure_metadata(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        captured = {}
+        structure_metadata = {
+            "base_url": "https://sdmx.oecd.org/sti-public/rest",
+            "dimensions": [
+                {"id": "MEASURE", "position": 0},
+                {"id": "REF_AREA", "position": 1},
+                {"id": "ACTIVITY", "position": 2},
+                {"id": "COUNTERPART_AREA", "position": 3},
+                {"id": "UNIT_MEASURE", "position": 4},
+                {"id": "FREQ", "position": 5},
+            ],
+            "dimension_ids": ["MEASURE", "REF_AREA", "ACTIVITY", "COUNTERPART_AREA", "UNIT_MEASURE", "FREQ"],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                captured["url"] = url
+                captured["params"] = params
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0": [3.0]}}],
+                            "structures": [
+                                {
+                                    "name": "TiVA shares",
+                                    "dimensions": {
+                                        "observation": [
+                                            {
+                                                "id": "REF_AREA",
+                                                "values": [{"id": "JPN", "name": "Japan"}],
+                                            },
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2023"}]},
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2024-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.STI.PIE", "DSD_TIVA_MAINSH@DF_MAINSH", "1.1")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=structure_metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TiVA", country="Japan", start_year=2023, end_year=2023))
+
+        self.assertIn(
+            "https://sdmx.oecd.org/sti-public/rest/data/OECD.STI.PIE,DSD_TIVA_MAINSH@DF_MAINSH,1.1/.JPN....",
+            captured["url"],
+        )
+        self.assertEqual(captured["params"]["startPeriod"], "2023")
+        self.assertEqual(series.metadata.country, "Japan")
+        self.assertEqual(series.data[0].value, 3.0)
 
     def test_oecd_fetch_indicator_fails_fast_when_rate_limit_wait_is_too_long(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import json
 import re
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
 from ..config import get_settings
@@ -77,6 +77,7 @@ class OECDProvider(BaseProvider):
 
     # Cached dataflows catalog (loaded once per process)
     _DATAFLOWS_CATALOG: Optional[Dict] = None
+    _DATAFLOW_STRUCTURE_CACHE: Dict[str, Dict[str, Any]] = {}
 
     # OECD member countries (38 members as of 2024)
     # Ordered list for "all OECD countries" queries
@@ -319,6 +320,370 @@ class OECDProvider(BaseProvider):
             version = None
 
         return agency, version
+
+    @staticmethod
+    def _oecd_structure_cache_key(base_url: str, agency: str, dataflow: str, version: str) -> str:
+        """Return a stable cache key for OECD dataflow structure metadata."""
+        return "|".join(
+            [
+                str(base_url or "").rstrip("/"),
+                str(agency or ""),
+                str(dataflow or ""),
+                str(version or ""),
+            ]
+        )
+
+    @staticmethod
+    def _oecd_rest_base_from_link(href: str) -> Optional[str]:
+        """Extract an OECD SDMX REST base URL from a dataflow external-reference link."""
+        link = str(href or "").strip()
+        if "/rest/" not in link:
+            return None
+        base = link.split("/rest/", 1)[0] + "/rest"
+        if not re.fullmatch(r"https://sdmx\.oecd\.org/[A-Za-z0-9_-]+/rest", base):
+            return None
+        return base.rstrip("/")
+
+    @staticmethod
+    def _annotation_value(annotations: Any, annotation_id: str) -> Optional[str]:
+        if not isinstance(annotations, list):
+            return None
+        for annotation in annotations:
+            if not isinstance(annotation, dict):
+                continue
+            if str(annotation.get("id") or "") == annotation_id:
+                value = annotation.get("title")
+                return str(value) if value is not None else None
+        return None
+
+    @classmethod
+    def _parse_oecd_dataflow_structure(
+        cls,
+        payload: Dict[str, Any],
+        base_url: str,
+    ) -> Dict[str, Any]:
+        """Parse OECD structure/dataflow metadata into provider-friendly fields.
+
+        OECD's `structure/dataflow` response is the most reliable source for
+        the dataflow's DSD, dimension order, content constraints, observation
+        count, and external dissemination-space links.
+        """
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            data = {}
+
+        dataflows = data.get("dataflows") if isinstance(data.get("dataflows"), list) else []
+        dataflow_info = dataflows[0] if dataflows and isinstance(dataflows[0], dict) else {}
+
+        data_structures = (
+            data.get("dataStructures")
+            if isinstance(data.get("dataStructures"), list)
+            else []
+        )
+        dsd = data_structures[0] if data_structures and isinstance(data_structures[0], dict) else {}
+        components = dsd.get("dataStructureComponents", {}) if isinstance(dsd, dict) else {}
+        dim_list = components.get("dimensionList", {}) if isinstance(components, dict) else {}
+        raw_dimensions = dim_list.get("dimensions", []) if isinstance(dim_list, dict) else []
+
+        dimensions: List[Dict[str, Any]] = []
+        for idx, dim in enumerate(raw_dimensions):
+            if not isinstance(dim, dict):
+                continue
+            position = dim.get("position", idx)
+            if not isinstance(position, int):
+                try:
+                    position = int(position)
+                except (TypeError, ValueError):
+                    position = idx
+            local_representation = dim.get("localRepresentation", {})
+            if not isinstance(local_representation, dict):
+                local_representation = {}
+            dimensions.append(
+                {
+                    "id": dim.get("id"),
+                    "position": position,
+                    "name": dim.get("name", dim.get("id")),
+                    "codelist": local_representation.get("enumeration"),
+                }
+            )
+        dimensions.sort(key=lambda item: item.get("position", 0))
+
+        valid_values_by_dimension: Dict[str, set[str]] = {}
+        time_ranges: List[Dict[str, Any]] = []
+        obs_count: Optional[int] = None
+        content_constraints = (
+            data.get("contentConstraints")
+            if isinstance(data.get("contentConstraints"), list)
+            else []
+        )
+        for constraint in content_constraints:
+            if not isinstance(constraint, dict):
+                continue
+            obs_count_text = cls._annotation_value(constraint.get("annotations"), "obs_count")
+            if obs_count_text and obs_count is None:
+                try:
+                    obs_count = int(float(obs_count_text))
+                except (TypeError, ValueError):
+                    obs_count = None
+
+            for cube_region in constraint.get("cubeRegions", []) or []:
+                if not isinstance(cube_region, dict) or cube_region.get("isIncluded") is False:
+                    continue
+                for key_value in cube_region.get("keyValues", []) or []:
+                    if not isinstance(key_value, dict):
+                        continue
+                    dim_id = str(key_value.get("id") or "").strip()
+                    if not dim_id:
+                        continue
+                    values = key_value.get("values")
+                    if isinstance(values, list):
+                        valid_values_by_dimension.setdefault(dim_id, set()).update(
+                            str(value) for value in values if value is not None
+                        )
+                    time_range = key_value.get("timeRange")
+                    if isinstance(time_range, dict):
+                        time_ranges.append({"dimension": dim_id, "timeRange": time_range})
+
+        links = dataflow_info.get("links", []) if isinstance(dataflow_info, dict) else []
+        external_base_urls: List[str] = []
+        if isinstance(links, list):
+            for link in links:
+                if not isinstance(link, dict):
+                    continue
+                rest_base = cls._oecd_rest_base_from_link(str(link.get("href") or ""))
+                if rest_base and rest_base not in external_base_urls:
+                    external_base_urls.append(rest_base)
+
+        return {
+            "base_url": str(base_url or "").rstrip("/"),
+            "agency": dataflow_info.get("agencyID"),
+            "dataflow": dataflow_info.get("id"),
+            "version": dataflow_info.get("version"),
+            "name": dataflow_info.get("name"),
+            "is_external_reference": bool(dataflow_info.get("isExternalReference")),
+            "external_base_urls": external_base_urls,
+            "dsd_id": dsd.get("id") if isinstance(dsd, dict) else None,
+            "dsd_agency": dsd.get("agencyID") if isinstance(dsd, dict) else None,
+            "dsd_version": dsd.get("version") if isinstance(dsd, dict) else None,
+            "dimensions": dimensions,
+            "dimension_ids": [dim.get("id") for dim in dimensions],
+            "valid_values_by_dimension": {
+                dim_id: sorted(values) for dim_id, values in valid_values_by_dimension.items()
+            },
+            "time_ranges": time_ranges,
+            "obs_count": obs_count,
+        }
+
+    async def _fetch_oecd_dataflow_structure_at_base(
+        self,
+        base_url: str,
+        agency: str,
+        dataflow: str,
+        version: str,
+    ) -> Dict[str, Any]:
+        cache_key = self._oecd_structure_cache_key(base_url, agency, dataflow, version)
+        cached = self._DATAFLOW_STRUCTURE_CACHE.get(cache_key)
+        if cached:
+            return cached
+
+        url = (
+            f"{base_url.rstrip('/')}/v2/structure/dataflow/"
+            f"{agency}/{dataflow}/{version}"
+        )
+        params = {"references": "all", "detail": "referencepartial"}
+        headers = {
+            "Accept": "application/vnd.sdmx.structure+json;version=1.0",
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+        http_client = get_http_client()
+        response = await http_client.get(url, params=params, headers=headers, timeout=60.0)
+        response.raise_for_status()
+        metadata = self._parse_oecd_dataflow_structure(response.json(), base_url.rstrip("/"))
+        metadata["structureUrl"] = str(response.request.url)
+        self._DATAFLOW_STRUCTURE_CACHE[cache_key] = metadata
+        return metadata
+
+    async def _get_oecd_dataflow_structure(
+        self,
+        agency: str,
+        dataflow: str,
+        version: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch OECD dataflow structure metadata, following external space links.
+
+        The main `/public` space may return only an external-reference stub for
+        large dedicated-space dataflows (for example TiVA under `sti-public`).
+        When that happens, follow the advertised link and re-run the same
+        structure query against that REST base.
+        """
+        try:
+            metadata = await self._fetch_oecd_dataflow_structure_at_base(
+                self.base_url,
+                agency,
+                dataflow,
+                version,
+            )
+        except Exception as exc:
+            logger.info(
+                "OECD structure/dataflow lookup failed for %s,%s,%s at %s: %s",
+                agency,
+                dataflow,
+                version,
+                self.base_url,
+                exc,
+            )
+            metadata = None
+
+        if metadata and metadata.get("dimensions"):
+            return metadata
+
+        external_bases = list(metadata.get("external_base_urls", [])) if metadata else []
+        for external_base in external_bases:
+            if external_base.rstrip("/") == self.base_url.rstrip("/"):
+                continue
+            try:
+                external_metadata = await self._fetch_oecd_dataflow_structure_at_base(
+                    external_base,
+                    agency,
+                    dataflow,
+                    version,
+                )
+            except Exception as exc:
+                logger.info(
+                    "OECD external structure lookup failed for %s,%s,%s at %s: %s",
+                    agency,
+                    dataflow,
+                    version,
+                    external_base,
+                    exc,
+                )
+                continue
+            if external_metadata.get("dimensions"):
+                logger.info(
+                    "Using OECD dedicated dissemination space for %s: %s",
+                    dataflow,
+                    external_metadata.get("base_url"),
+                )
+                return external_metadata
+
+        return metadata
+
+    @staticmethod
+    def _build_oecd_key_from_structure(
+        structure_metadata: Dict[str, Any],
+        country_code: str,
+        custom_defaults: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """Build an SDMX v1 positional key from OECD structure metadata."""
+        dimensions = structure_metadata.get("dimensions") or []
+        if not dimensions:
+            return None
+
+        key_parts = [""] * len(dimensions)
+        defaults = custom_defaults or {}
+        country_dims = {"REF_AREA", "geo", "COUNTRY"}
+        filled = False
+
+        for array_idx, dim in enumerate(dimensions):
+            if not isinstance(dim, dict):
+                continue
+            dim_id = str(dim.get("id") or "")
+            position = dim.get("position", array_idx)
+            if not isinstance(position, int) or position < 0 or position >= len(key_parts):
+                position = array_idx
+
+            if dim_id in country_dims:
+                key_parts[position] = str(country_code)
+                filled = True
+            elif dim_id in defaults and defaults[dim_id]:
+                key_parts[position] = str(defaults[dim_id])
+                filled = True
+            elif dim_id == "FREQ" and defaults.get("frequency"):
+                key_parts[position] = str(defaults["frequency"])
+                filled = True
+
+        if not filled:
+            return "all"
+        return ".".join(key_parts)
+
+    @staticmethod
+    def _year_from_oecd_period(period: Any) -> Optional[int]:
+        match = re.search(r"(\d{4})", str(period or ""))
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _valid_year_range_from_structure(
+        cls,
+        structure_metadata: Dict[str, Any],
+    ) -> tuple[Optional[int], Optional[int]]:
+        """Return the valid data year range advertised by OECD constraints."""
+        for entry in structure_metadata.get("time_ranges") or []:
+            if not isinstance(entry, dict):
+                continue
+            time_range = entry.get("timeRange")
+            if not isinstance(time_range, dict):
+                continue
+            start_info = time_range.get("startPeriod", {})
+            end_info = time_range.get("endPeriod", {})
+            start_year = cls._year_from_oecd_period(
+                start_info.get("period") if isinstance(start_info, dict) else start_info
+            )
+            end_year = cls._year_from_oecd_period(
+                end_info.get("period") if isinstance(end_info, dict) else end_info
+            )
+            if start_year or end_year:
+                return start_year, end_year
+        return None, None
+
+    @classmethod
+    def _clamp_default_time_params_to_oecd_constraints(
+        cls,
+        params: Dict[str, str],
+        structure_metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        """Clamp provider-generated default dates to OECD's valid time range.
+
+        This is intentionally used only for provider-generated default windows,
+        not explicit user-requested dates, so a true user request for an
+        unavailable year still surfaces as unavailable rather than silently
+        returning a different year.
+        """
+        if not structure_metadata:
+            return
+        valid_start, valid_end = cls._valid_year_range_from_structure(structure_metadata)
+        if valid_start is None and valid_end is None:
+            return
+
+        request_start = cls._year_from_oecd_period(params.get("startPeriod"))
+        request_end = cls._year_from_oecd_period(params.get("endPeriod"))
+
+        if request_start is None and request_end is None:
+            if valid_start is not None:
+                params["startPeriod"] = str(valid_start)
+            if valid_end is not None:
+                params["endPeriod"] = str(valid_end)
+            return
+
+        no_overlap = (
+            (request_end is not None and valid_start is not None and request_end < valid_start)
+            or (request_start is not None and valid_end is not None and request_start > valid_end)
+        )
+        if no_overlap:
+            if valid_start is not None:
+                params["startPeriod"] = str(valid_start)
+            if valid_end is not None:
+                params["endPeriod"] = str(valid_end)
+            return
+
+        if request_start is not None and valid_start is not None and request_start < valid_start:
+            params["startPeriod"] = str(valid_start)
+        if request_end is not None and valid_end is not None and request_end > valid_end:
+            params["endPeriod"] = str(valid_end)
 
     def _country_code(self, country: str) -> str:
         """Normalize country code to OECD format (ISO alpha-3).
@@ -1242,9 +1607,12 @@ class OECDProvider(BaseProvider):
         current_year = datetime.now().year
 
         params = {"dimensionAtObservation": "AllDimensions"}
+        used_default_time_range = (not start_year and not end_year) or (
+            start_year == current_year - 5 and end_year == current_year
+        )
 
         # Default to last 5 years if no time range specified
-        if not start_year and not end_year:
+        if used_default_time_range:
             params["startPeriod"] = str(current_year - 5)
             params["endPeriod"] = str(current_year)
         else:
@@ -1253,31 +1621,57 @@ class OECDProvider(BaseProvider):
             if end_year:
                 params["endPeriod"] = str(end_year)
 
+        # Determine expected frequency based on indicator type and dataflow.
+        # This is used both for optional key defaults and later metadata labels.
+        indicator_upper = indicator.upper()
+        expected_freq = None
+
+        if "QNA" in dataflow or "QUARTERLY" in indicator_upper:
+            expected_freq = "Q"  # Quarterly
+        elif indicator_upper in ["GDP", "GDP_GROWTH", "GDP_PER_CAPITA", "TRADE",
+                                  "EXPORTS", "IMPORTS", "GOVERNMENT_DEBT", "GOVERNMENT_DEFICIT",
+                                  "TAX_REVENUE", "PRODUCTIVITY", "EDUCATION_SPENDING",
+                                  "EDUCATION_EXPENDITURE", "HEALTH_EXPENDITURE", "HEALTH_SPENDING"]:
+            expected_freq = "A"  # Annual
+        elif "MONTHLY" in indicator_upper or "UNE" in dataflow:
+            expected_freq = "M"  # Monthly
+
         # Build SDMX filter key using dynamic DSD lookup (general solution)
         # Extract DSD ID from dataflow string (format: DSD_XXX@DF_YYY)
         dsd_id = dataflow.split("@")[0] if "@" in dataflow else dataflow
+        data_base_url = self.base_url
+        structure_metadata = await self._get_oecd_dataflow_structure(agency, dataflow, version)
+        filter_key = None
+        if structure_metadata and structure_metadata.get("dimensions"):
+            if used_default_time_range:
+                self._clamp_default_time_params_to_oecd_constraints(params, structure_metadata)
+            data_base_url = str(structure_metadata.get("base_url") or self.base_url).rstrip("/")
+            defaults = {"frequency": expected_freq} if expected_freq else None
+            filter_key = self._build_oecd_key_from_structure(
+                structure_metadata,
+                country_code,
+                custom_defaults=defaults,
+            )
+            if filter_key and "REF_AREA" not in set(structure_metadata.get("dimension_ids") or []):
+                logger.info(
+                    "OECD dataflow %s has no REF_AREA dimension; using structure-derived key %s without country filter",
+                    dataflow,
+                    filter_key,
+                )
 
         # Build proper dimension key to avoid downloading ALL data (causes rate limiting)
-        # Use DSD cache service to dynamically discover dimension structure
-        # (already imported at module top)
-        key_builder = get_dimension_key_builder()
-        filter_key = await key_builder.build_key(
-            provider="OECD",
-            agency=agency,
-            dsd_id=dsd_id,
-            version=version,
-            base_url=self.base_url,
-            user_params={"country": country_code},
-            custom_defaults=None,
-        )
-        if filter_key:
-            country_dim_key = filter_key
-            filter_key = "all"
-            logger.info(
-                "Using all-dimension OECD request for dataflow=%s; parsed results remain filtered to country=%s (country key would be %s)",
-                dataflow,
-                country_code,
-                country_dim_key,
+        # Prefer OECD's structure/dataflow metadata; fall back to the legacy DSD
+        # key builder only when that metadata is unavailable.
+        if not filter_key:
+            key_builder = get_dimension_key_builder()
+            filter_key = await key_builder.build_key(
+                provider="OECD",
+                agency=agency,
+                dsd_id=dsd_id,
+                version=version,
+                base_url=data_base_url,
+                user_params={"country": country_code},
+                custom_defaults={"frequency": expected_freq} if expected_freq else None,
             )
 
         # Fallback with smart defaults if dimension key building fails
@@ -1294,20 +1688,6 @@ class OECDProvider(BaseProvider):
         else:
             logger.info(f"Built OECD dimension key: {filter_key}")
 
-        # Determine expected frequency based on indicator type and dataflow
-        indicator_upper = indicator.upper()
-        expected_freq = None
-
-        if "QNA" in dataflow or "QUARTERLY" in indicator_upper:
-            expected_freq = "Q"  # Quarterly
-        elif indicator_upper in ["GDP", "GDP_GROWTH", "GDP_PER_CAPITA", "TRADE",
-                                  "EXPORTS", "IMPORTS", "GOVERNMENT_DEBT", "GOVERNMENT_DEFICIT",
-                                  "TAX_REVENUE", "PRODUCTIVITY", "EDUCATION_SPENDING",
-                                  "EDUCATION_EXPENDITURE", "HEALTH_EXPENDITURE", "HEALTH_SPENDING"]:
-            expected_freq = "A"  # Annual
-        elif "MONTHLY" in indicator_upper or "UNE" in dataflow:
-            expected_freq = "M"  # Monthly
-
         # Determine expected measure/transformation for specific indicators
         expected_measure = None
         expected_transform = None
@@ -1319,7 +1699,7 @@ class OECDProvider(BaseProvider):
 
         # Construct URL
         # OECD SDMX API requires the FULL dataflow ID including DSD_XXX@DF_XXX format
-        url = f"{self.base_url}/data/{agency},{dataflow},{version}/{filter_key}"
+        url = f"{data_base_url}/data/{agency},{dataflow},{version}/{filter_key}"
 
         # STEP 1: Wait for rate limiter before making request
         # This prevents hitting rate limits in the first place by enforcing delays
@@ -1412,11 +1792,27 @@ class OECDProvider(BaseProvider):
         dimensions = dimensions_dict.get("observation", [])
 
         # Find TIME_PERIOD dimension
-        time_dim = next((d for d in dimensions if d.get("id") == "TIME_PERIOD"), None)
-        if not time_dim:
-            raise RuntimeError("No TIME_PERIOD dimension found")
+        time_dim_index = None
+        time_dim = None
+        for array_idx, dim in enumerate(dimensions):
+            if dim.get("id") == "TIME_PERIOD":
+                time_dim_index = array_idx
+                time_dim = dim
+                break
 
-        time_values = time_dim.get("values", [])
+        time_values = time_dim.get("values", []) if time_dim else []
+        observation_attributes = (
+            (structure.get("attributes") or {}).get("observation", [])
+            if isinstance(structure.get("attributes"), dict)
+            else []
+        )
+        ref_period_attr_index = None
+        ref_period_values = []
+        for attr_idx, attr in enumerate(observation_attributes):
+            if isinstance(attr, dict) and attr.get("id") == "REF_PERIOD":
+                ref_period_attr_index = attr_idx
+                ref_period_values = attr.get("values", []) or []
+                break
 
         # Find dimensions for filtering
         # CRITICAL: OECD doesn't populate position field, so use array index instead
@@ -1493,59 +1889,80 @@ class OECDProvider(BaseProvider):
 
             # Filter by country if we found the country dimension
             if country_dim_index is not None and country_value_index is not None:
-                if indices[country_dim_index] != country_value_index:
+                if country_dim_index >= len(indices) or indices[country_dim_index] != country_value_index:
                     skip_observation = True
 
             # Filter by frequency if specified
             if freq_dim_index is not None and freq_value_indices:
-                if indices[freq_dim_index] not in freq_value_indices:
+                if freq_dim_index >= len(indices) or indices[freq_dim_index] not in freq_value_indices:
                     skip_observation = True
 
             # Filter by measure if specified
             if measure_dim_index is not None and measure_value_indices:
-                if indices[measure_dim_index] not in measure_value_indices:
+                if measure_dim_index >= len(indices) or indices[measure_dim_index] not in measure_value_indices:
                     skip_observation = True
 
             # Filter by transformation if specified
             if transform_dim_index is not None and transform_value_indices:
-                if indices[transform_dim_index] not in transform_value_indices:
+                if transform_dim_index >= len(indices) or indices[transform_dim_index] not in transform_value_indices:
                     skip_observation = True
 
             if skip_observation:
                 observations_filtered_out += 1
                 continue
 
-            # The last dimension is typically TIME_PERIOD
-            time_index = indices[-1]
-            if time_index is not None and time_index < len(time_values):
-                time_info = time_values[time_index]
-                # Check if time_info is None before accessing
-                if time_info is None:
-                    continue
-                time_period = time_info.get("id")
-                # Skip if time_period is None
-                if time_period is None:
-                    continue
+            time_period = None
+            if (
+                time_dim_index is not None
+                and time_dim_index < len(indices)
+                and indices[time_dim_index] is not None
+                and indices[time_dim_index] < len(time_values)
+            ):
+                time_info = time_values[indices[time_dim_index]]
+                if time_info:
+                    time_period = time_info.get("id") or time_info.get("value")
+            elif (
+                ref_period_attr_index is not None
+                and isinstance(obs_value, list)
+                and len(obs_value) > 1 + ref_period_attr_index
+            ):
+                ref_period_index = obs_value[1 + ref_period_attr_index]
+                if (
+                    ref_period_index is not None
+                    and isinstance(ref_period_index, int)
+                    and ref_period_index < len(ref_period_values)
+                ):
+                    ref_period_info = ref_period_values[ref_period_index]
+                    if isinstance(ref_period_info, dict):
+                        time_period = (
+                            ref_period_info.get("id")
+                            or ref_period_info.get("value")
+                            or ref_period_info.get("name")
+                        )
 
-                # obs_value is an array where first element is the value
-                value = obs_value[0] if isinstance(obs_value, list) and obs_value else obs_value
+            if not time_period:
+                continue
 
-                if value is not None:
-                    # Convert time period to ISO date
-                    # OECD returns formats like "2020", "2020-Q1", "2020-01"
-                    if "-Q" in time_period:
-                        # Quarterly: convert 2020-Q1 to 2020-03-31
-                        year, quarter = time_period.split("-Q")
-                        month = int(quarter) * 3
-                        date_str = f"{year}-{month:02d}-01"
-                    elif "-" in time_period and len(time_period.split("-")) == 2:
-                        # Monthly: 2020-01
-                        date_str = f"{time_period}-01"
-                    else:
-                        # Annual: 2020
-                        date_str = f"{time_period}-01-01"
+            # obs_value is an array where first element is the value
+            value = obs_value[0] if isinstance(obs_value, list) and obs_value else obs_value
 
-                    data_points.append({"date": date_str, "value": float(value)})
+            if value is not None:
+                # Convert time period to ISO date
+                # OECD returns formats like "2020", "2020-Q1", "2020-01"
+                time_period = str(time_period)
+                if "-Q" in time_period:
+                    # Quarterly: convert 2020-Q1 to 2020-03-31
+                    year, quarter = time_period.split("-Q")
+                    month = int(quarter) * 3
+                    date_str = f"{year}-{month:02d}-01"
+                elif "-" in time_period and len(time_period.split("-")) == 2:
+                    # Monthly: 2020-01
+                    date_str = f"{time_period}-01"
+                else:
+                    # Annual: 2020
+                    date_str = f"{time_period}-01-01"
+
+                data_points.append({"date": date_str, "value": float(value)})
 
         logger.info(f"📊 Filtering results:")
         logger.info(f"   Observations checked: {observations_checked}")
