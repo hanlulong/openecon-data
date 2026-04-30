@@ -117,6 +117,48 @@ def test_validate_bop_structure_candidate_rejects_absent_legacy_dimension_value(
     assert error == "INDICATOR value(s) not present in BOP structure: C_375"
 
 
+def test_xml_bop_structure_codelists_drive_fail_closed_validation() -> None:
+    xml = """<?xml version='1.0' encoding='UTF-8'?>
+    <mes:Structure xmlns:mes="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message"
+        xmlns:str="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure"
+        xmlns:com="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/common">
+      <mes:Structures>
+        <str:DataStructures>
+          <str:DataStructure agencyID="IMF.STA" id="DSD_BOP" version="24.0.0">
+            <str:DataStructureComponents>
+              <str:DimensionList>
+                <str:Dimension id="COUNTRY" position="0"><str:ConceptIdentity><Ref id="COUNTRY"/></str:ConceptIdentity></str:Dimension>
+                <str:Dimension id="BOP_ACCOUNTING_ENTRY" position="1"><str:ConceptIdentity><Ref id="BOP_ACCOUNTING_ENTRY"/></str:ConceptIdentity></str:Dimension>
+                <str:Dimension id="INDICATOR" position="2"><str:ConceptIdentity><Ref id="INDICATOR"/></str:ConceptIdentity></str:Dimension>
+                <str:Dimension id="UNIT" position="3"><str:ConceptIdentity><Ref id="UNIT"/></str:ConceptIdentity></str:Dimension>
+                <str:Dimension id="FREQUENCY" position="4"><str:ConceptIdentity><Ref id="FREQ"/></str:ConceptIdentity></str:Dimension>
+              </str:DimensionList>
+            </str:DataStructureComponents>
+          </str:DataStructure>
+        </str:DataStructures>
+        <str:Codelists>
+          <str:Codelist id="CL_COUNTRY"><str:Code id="USA"/></str:Codelist>
+          <str:Codelist id="CL_BOP_ACCOUNTING_ENTRY"><str:Code id="BX"/></str:Codelist>
+          <str:Codelist id="CL_BOP_INDICATOR"><str:Code id="SRLO"/></str:Codelist>
+          <str:Codelist id="CL_UNIT"><str:Code id="USD"/></str:Codelist>
+          <str:Codelist id="CL_FREQ"><str:Code id="A"/></str:Codelist>
+        </str:Codelists>
+      </mes:Structures>
+    </mes:Structure>
+    """
+    provider = IMFProvider(metadata_search_service=None)
+    metadata = IMFProvider._parse_imf_dataflow_structure(xml)  # pylint: disable=protected-access
+
+    assert metadata["allowed_values_by_dimension"]["INDICATOR"] == {"SRLO"}
+    error = provider._validate_bop_structure_candidate(  # pylint: disable=protected-access
+        metadata,
+        indicator_code="BXC_375_XDC",
+        countries=["USA"],
+    )
+
+    assert error == "INDICATOR value(s) not present in BOP structure: C_375"
+
+
 def test_fetch_batch_indicator_routes_bop_hint_into_bop_lane() -> None:
     provider = IMFProvider(metadata_search_service=None)
     fake_result = [_sample_series("BXSRLO_USD")]

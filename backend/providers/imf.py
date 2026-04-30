@@ -1504,32 +1504,63 @@ class IMFProvider(BaseProvider):
             dimensions.sort(key=lambda item: item.get("position", 0))
 
             codelists: List[Dict[str, Any]] = []
+            codelist_values: Dict[str, set[str]] = {}
             for element in root.iter():
                 if cls._local_xml_name(element.tag) != "Codelist":
                     continue
                 sample_codes: List[Dict[str, str]] = []
+                values: set[str] = set()
                 code_count = 0
                 for code in element:
                     if cls._local_xml_name(code.tag) != "Code":
                         continue
+                    code_id = str(code.attrib.get("id") or "")
                     code_count += 1
+                    if code_id:
+                        values.add(code_id.upper())
                     if len(sample_codes) < 20:
                         sample_codes.append(
                             {
-                                "id": str(code.attrib.get("id") or ""),
+                                "id": code_id,
                                 "name": cls._first_sdmx_name(code) or "",
                             }
                         )
+                codelist_id = str(element.attrib.get("id") or "")
+                if codelist_id and values:
+                    codelist_values[codelist_id] = values
                 codelists.append(
                     {
                         "agency": element.attrib.get("agencyID"),
-                        "id": element.attrib.get("id"),
+                        "id": codelist_id,
                         "version": element.attrib.get("version"),
                         "name": cls._first_sdmx_name(element),
                         "code_count": code_count,
                         "sample_codes": sample_codes,
                     }
                 )
+
+            codelist_aliases_by_dimension = {
+                "COUNTRY": ("CL_COUNTRY",),
+                "BOP_ACCOUNTING_ENTRY": ("CL_BOP_ACCOUNTING_ENTRY",),
+                "INDICATOR": ("CL_BOP_INDICATOR", "CL_INDICATOR"),
+                "UNIT": ("CL_UNIT",),
+                "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
+            }
+            allowed_values_by_dimension: Dict[str, set[str]] = {}
+            for dimension in dimensions:
+                if dimension.get("is_time"):
+                    continue
+                dim_id = str(dimension.get("id") or "")
+                concept_id = str((dimension.get("concept_ref") or {}).get("id") or "")
+                candidate_codelists = (
+                    codelist_aliases_by_dimension.get(dim_id)
+                    or codelist_aliases_by_dimension.get(concept_id)
+                    or (f"CL_{dim_id}",)
+                )
+                for codelist_id in candidate_codelists:
+                    if codelist_id in codelist_values:
+                        allowed_values_by_dimension[dim_id] = codelist_values[codelist_id]
+                        break
 
             return {
                 "source_url": source_url,
@@ -1538,6 +1569,7 @@ class IMFProvider(BaseProvider):
                 "dimensions": dimensions,
                 "dimension_ids": [dimension.get("id") for dimension in dimensions],
                 "codelists": codelists,
+                "allowed_values_by_dimension": allowed_values_by_dimension,
             }
 
         data = payload.get("data", {}) if isinstance(payload, dict) else {}
