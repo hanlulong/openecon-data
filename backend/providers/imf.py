@@ -1467,6 +1467,7 @@ class IMFProvider(BaseProvider):
 
             data_structure_info: Dict[str, Any] = {}
             dimensions: List[Dict[str, Any]] = []
+            time_dimensions: List[Dict[str, Any]] = []
             for element in root.iter():
                 if cls._local_xml_name(element.tag) != "DataStructure":
                     continue
@@ -1483,25 +1484,29 @@ class IMFProvider(BaseProvider):
                     dim_id = str(child.attrib.get("id") or "").strip()
                     if not dim_id:
                         continue
+                    default_position = len(dimensions) + len(time_dimensions)
                     try:
-                        position = int(child.attrib.get("position", len(dimensions)))
+                        position = int(child.attrib.get("position", default_position))
                     except (TypeError, ValueError):
-                        position = len(dimensions)
+                        position = default_position
                     concept_ref: Dict[str, str] = {}
                     for candidate in child.iter():
                         if cls._local_xml_name(candidate.tag) == "Ref":
                             concept_ref = {str(key): str(value) for key, value in candidate.attrib.items()}
                             break
-                    dimensions.append(
-                        {
-                            "id": dim_id,
-                            "position": position,
-                            "is_time": local == "TimeDimension",
-                            "concept_ref": concept_ref,
-                        }
-                    )
+                    parsed_dimension = {
+                        "id": dim_id,
+                        "position": position,
+                        "type": local,
+                        "concept_ref": concept_ref,
+                    }
+                    if local == "TimeDimension":
+                        time_dimensions.append(parsed_dimension)
+                    else:
+                        dimensions.append(parsed_dimension)
                 break
             dimensions.sort(key=lambda item: item.get("position", 0))
+            time_dimensions.sort(key=lambda item: item.get("position", 0))
 
             codelists: List[Dict[str, Any]] = []
             codelist_values: Dict[str, set[str]] = {}
@@ -1564,11 +1569,23 @@ class IMFProvider(BaseProvider):
 
             return {
                 "source_url": source_url,
-                "dataflow": dataflow_info,
-                "data_structure": data_structure_info,
+                "agency": dataflow_info.get("agency") or data_structure_info.get("agency"),
+                "dataflow": dataflow_info.get("dataflow"),
+                "version": dataflow_info.get("version") or data_structure_info.get("version"),
+                "name": dataflow_info.get("name"),
+                "dsd_id": data_structure_info.get("id"),
+                "dsd_agency": data_structure_info.get("agency"),
+                "dsd_version": data_structure_info.get("version"),
                 "dimensions": dimensions,
                 "dimension_ids": [dimension.get("id") for dimension in dimensions],
+                "time_dimensions": time_dimensions,
+                "time_dimension_ids": [dimension.get("id") for dimension in time_dimensions],
                 "codelists": codelists,
+                "codelist_sizes": {
+                    str(codelist.get("id") or ""): int(codelist.get("code_count") or 0)
+                    for codelist in codelists
+                    if str(codelist.get("id") or "")
+                },
                 "allowed_values_by_dimension": allowed_values_by_dimension,
             }
 
