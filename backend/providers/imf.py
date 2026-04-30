@@ -41,6 +41,8 @@ class IMFProvider(BaseProvider):
     """
 
     SDMX_DATA_BASE_URL = "https://api.imf.org/external/sdmx/2.1/data/IMF.STA"
+    SDMX_STRUCTURE_BASE_URL = "https://api.imf.org/external/sdmx/2.1/dataflow/IMF.STA"
+    _DATAFLOW_STRUCTURE_CACHE: Dict[str, Dict[str, Any]] = {}
 
     # Indicators NOT available in DataMapper API
     # These will trigger clarification responses
@@ -1402,6 +1404,251 @@ class IMFProvider(BaseProvider):
             url = f"{url}?{urlencode(params)}"
         return url
 
+    @staticmethod
+    def _sdmx_codelist_id(reference: Any) -> Optional[str]:
+        value = str(reference or "").strip()
+        if not value:
+            return None
+        match = re.search(r"Codelist=[^:]+:([A-Za-z0-9_]+)\(", value)
+        if match:
+            return match.group(1)
+        return value if re.fullmatch(r"[A-Za-z0-9_]+", value) else None
+
+    @classmethod
+    def _first_sdmx_name(cls, element: ET.Element) -> Optional[str]:
+        fallback: Optional[str] = None
+        for child in element:
+            if cls._local_xml_name(child.tag) != "Name":
+                continue
+            text = str(child.text or "").strip()
+            if not text:
+                continue
+            if child.attrib.get("{http://www.w3.org/XML/1998/namespace}lang") == "en":
+                return text
+            if fallback is None:
+                fallback = text
+        return fallback
+
+    @classmethod
+    def _parse_imf_dataflow_structure(
+        cls,
+        payload: Any,
+        *,
+        source_url: str = "",
+    ) -> Dict[str, Any]:
+        """Parse IMF Data Portal SDMX structure metadata.
+
+        Metadata is diagnostic only; supportability remains fail-closed until
+        exact family routing and observation retrieval are implemented.
+        """
+        if isinstance(payload, str):
+            try:
+                root = ET.fromstring(str(payload or "").strip())
+            except ET.ParseError as exc:
+                raise DataNotAvailableError(f"IMF SDMX structure response was not parseable XML: {exc}") from exc
+
+            dataflow_info: Dict[str, Any] = {}
+            for element in root.iter():
+                if cls._local_xml_name(element.tag) != "Dataflow":
+                    continue
+                structure_ref: Dict[str, str] = {}
+                for child in element.iter():
+                    if cls._local_xml_name(child.tag) == "Ref":
+                        structure_ref = {str(key): str(value) for key, value in child.attrib.items()}
+                        break
+                dataflow_info = {
+                    "agency": element.attrib.get("agencyID"),
+                    "dataflow": element.attrib.get("id"),
+                    "version": element.attrib.get("version"),
+                    "name": cls._first_sdmx_name(element),
+                    "data_structure_ref": structure_ref,
+                }
+                break
+
+            data_structure_info: Dict[str, Any] = {}
+            dimensions: List[Dict[str, Any]] = []
+            for element in root.iter():
+                if cls._local_xml_name(element.tag) != "DataStructure":
+                    continue
+                data_structure_info = {
+                    "agency": element.attrib.get("agencyID"),
+                    "id": element.attrib.get("id"),
+                    "version": element.attrib.get("version"),
+                    "name": cls._first_sdmx_name(element),
+                }
+                for child in element.iter():
+                    local = cls._local_xml_name(child.tag)
+                    if local not in {"Dimension", "TimeDimension"}:
+                        continue
+                    dim_id = str(child.attrib.get("id") or "").strip()
+                    if not dim_id:
+                        continue
+                    try:
+                        position = int(child.attrib.get("position", len(dimensions)))
+                    except (TypeError, ValueError):
+                        position = len(dimensions)
+                    concept_ref: Dict[str, str] = {}
+                    for candidate in child.iter():
+                        if cls._local_xml_name(candidate.tag) == "Ref":
+                            concept_ref = {str(key): str(value) for key, value in candidate.attrib.items()}
+                            break
+                    dimensions.append(
+                        {
+                            "id": dim_id,
+                            "position": position,
+                            "is_time": local == "TimeDimension",
+                            "concept_ref": concept_ref,
+                        }
+                    )
+                break
+            dimensions.sort(key=lambda item: item.get("position", 0))
+
+            codelists: List[Dict[str, Any]] = []
+            for element in root.iter():
+                if cls._local_xml_name(element.tag) != "Codelist":
+                    continue
+                sample_codes: List[Dict[str, str]] = []
+                code_count = 0
+                for code in element:
+                    if cls._local_xml_name(code.tag) != "Code":
+                        continue
+                    code_count += 1
+                    if len(sample_codes) < 20:
+                        sample_codes.append(
+                            {
+                                "id": str(code.attrib.get("id") or ""),
+                                "name": cls._first_sdmx_name(code) or "",
+                            }
+                        )
+                codelists.append(
+                    {
+                        "agency": element.attrib.get("agencyID"),
+                        "id": element.attrib.get("id"),
+                        "version": element.attrib.get("version"),
+                        "name": cls._first_sdmx_name(element),
+                        "code_count": code_count,
+                        "sample_codes": sample_codes,
+                    }
+                )
+
+            return {
+                "source_url": source_url,
+                "dataflow": dataflow_info,
+                "data_structure": data_structure_info,
+                "dimensions": dimensions,
+                "dimension_ids": [dimension.get("id") for dimension in dimensions],
+                "codelists": codelists,
+            }
+
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        dataflows = data.get("dataflows") if isinstance(data.get("dataflows"), list) else []
+        dataflow_info = dataflows[0] if dataflows and isinstance(dataflows[0], dict) else {}
+        structures = data.get("dataStructures") if isinstance(data.get("dataStructures"), list) else []
+        dsd = structures[0] if structures and isinstance(structures[0], dict) else {}
+        components = dsd.get("dataStructureComponents", {}) if isinstance(dsd, dict) else {}
+        dimension_list = components.get("dimensionList", {}) if isinstance(components, dict) else {}
+
+        codelist_sizes: Dict[str, int] = {}
+        codelist_values: Dict[str, set[str]] = {}
+        codelists = data.get("codelists") if isinstance(data.get("codelists"), list) else []
+        for codelist in codelists:
+            if not isinstance(codelist, dict):
+                continue
+            codelist_id = str(codelist.get("id") or "").strip()
+            codes = codelist.get("codes") or codelist.get("items")
+            if codelist_id and isinstance(codes, list):
+                codelist_sizes[codelist_id] = len(codes)
+                codelist_values[codelist_id] = {
+                    str(code.get("id") or "").strip().upper()
+                    for code in codes
+                    if isinstance(code, dict) and str(code.get("id") or "").strip()
+                }
+
+        def parse_dimensions(values: Any) -> List[Dict[str, Any]]:
+            dimensions: List[Dict[str, Any]] = []
+            for index, dim in enumerate(values if isinstance(values, list) else []):
+                if not isinstance(dim, dict):
+                    continue
+                position = dim.get("position", index)
+                if not isinstance(position, int):
+                    try:
+                        position = int(position)
+                    except (TypeError, ValueError):
+                        position = index
+                representation = dim.get("localRepresentation", {})
+                representation = representation if isinstance(representation, dict) else {}
+                codelist = cls._sdmx_codelist_id(representation.get("enumeration"))
+                parsed: Dict[str, Any] = {
+                    "id": dim.get("id"),
+                    "position": position,
+                    "type": dim.get("type"),
+                    "name": dim.get("name", dim.get("id")),
+                    "codelist": codelist,
+                }
+                if codelist and codelist in codelist_sizes:
+                    parsed["value_count"] = codelist_sizes[codelist]
+                dimensions.append(parsed)
+            dimensions.sort(key=lambda item: item.get("position", 0))
+            return dimensions
+
+        dimensions = parse_dimensions(dimension_list.get("dimensions") if isinstance(dimension_list, dict) else [])
+        time_dimensions = parse_dimensions(dimension_list.get("timeDimensions") if isinstance(dimension_list, dict) else [])
+        allowed_values_by_dimension = {
+            str(dim.get("id")): codelist_values[str(dim.get("codelist"))]
+            for dim in dimensions
+            if dim.get("id") and dim.get("codelist") and str(dim.get("codelist")) in codelist_values
+        }
+
+        return {
+            "agency": dataflow_info.get("agencyID"),
+            "dataflow": dataflow_info.get("id"),
+            "version": dataflow_info.get("version"),
+            "name": dataflow_info.get("name"),
+            "dsd_id": dsd.get("id") if isinstance(dsd, dict) else None,
+            "dsd_agency": dsd.get("agencyID") if isinstance(dsd, dict) else None,
+            "dsd_version": dsd.get("version") if isinstance(dsd, dict) else None,
+            "dimensions": dimensions,
+            "dimension_ids": [dim.get("id") for dim in dimensions],
+            "time_dimensions": time_dimensions,
+            "time_dimension_ids": [dim.get("id") for dim in time_dimensions],
+            "codelist_sizes": codelist_sizes,
+            "allowed_values_by_dimension": allowed_values_by_dimension,
+        }
+
+    async def _get_imf_dataflow_structure(self, dataflow: str) -> Optional[Dict[str, Any]]:
+        """Fetch official IMF.STA dataflow structure metadata, without unblocking supportability."""
+        flow = str(dataflow or "").strip().upper()
+        if not flow:
+            return None
+        cache_key = f"IMF.STA:{flow}:latest"
+        cached = self._DATAFLOW_STRUCTURE_CACHE.get(cache_key)
+        if cached:
+            return cached
+        url = f"{self.SDMX_STRUCTURE_BASE_URL}/{flow}/latest"
+        client = get_http1_client()
+        try:
+            response = await client.get(
+                url,
+                params={"references": "all"},
+                headers={"Accept": "application/vnd.sdmx.structure+json;version=1.0.0"},
+                timeout=effective_timeout(30.0),
+            )
+            response.raise_for_status()
+            response_text = str(getattr(response, "text", "") or "").strip()
+            if response_text.startswith("<"):
+                metadata = self._parse_imf_dataflow_structure(response_text)
+            else:
+                metadata = self._parse_imf_dataflow_structure(response.json())
+                if not metadata.get("dimension_ids") and response_text:
+                    metadata = self._parse_imf_dataflow_structure(response_text)
+        except Exception as exc:
+            logger.info("IMF SDMX dataflow structure lookup failed for %s: %s", flow, exc)
+            return None
+        metadata["structureUrl"] = str(getattr(getattr(response, "request", None), "url", url))
+        self._DATAFLOW_STRUCTURE_CACHE[cache_key] = metadata
+        return metadata
+
     def _parse_sdmx_structure_specific_xml(
         self,
         response_text: str,
@@ -1989,7 +2236,7 @@ class IMFProvider(BaseProvider):
         # while still failing closed for fake codes because they will miss the
         # local exact lookup and continue down the normal validation path.
         exact_code_candidate = str(indicator or "").upper().strip()
-        exact_code_like = bool(
+        exact_code_like = self._looks_like_imf_code(exact_code_candidate) or bool(
             re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_candidate)
             and (
                 "_" in exact_code_candidate
@@ -2012,6 +2259,16 @@ class IMFProvider(BaseProvider):
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
 
+        indicator_text = str(indicator or "").strip()
+        prioritize_local_catalog = (
+            not self._looks_like_imf_code(indicator_text)
+            and len(indicator_text.split()) >= 5
+        )
+        if prioritize_local_catalog:
+            local_resolution = await self._resolve_from_local_catalog(indicator)
+            if local_resolution:
+                return local_resolution
+
         # Step 2: Try cross-provider indicator translator after exact-code
         # catalog lookup.  Translator fuzzy matching is useful for user phrases,
         # but it must not collapse explicit long-tail provider codes such as
@@ -2028,16 +2285,6 @@ class IMFProvider(BaseProvider):
         # (e.g. "custom imf" -> "Customs Revenues"), so when a live metadata
         # search service is available we let that provider-specific discovery
         # path arbitrate short phrases before falling back to local FTS.
-        indicator_text = str(indicator or "").strip()
-        prioritize_local_catalog = (
-            not self._looks_like_imf_code(indicator_text)
-            and len(indicator_text.split()) >= 5
-        )
-        if prioritize_local_catalog:
-            local_resolution = await self._resolve_from_local_catalog(indicator)
-            if local_resolution:
-                return local_resolution
-
         if self.metadata_search:
             # Use hierarchical search: SDMX first, then IMF DataMapper API.
             search_results = await self.metadata_search.search_with_sdmx_fallback(

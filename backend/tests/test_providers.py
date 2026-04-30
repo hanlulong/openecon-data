@@ -1379,6 +1379,82 @@ class ProviderTests(unittest.TestCase):
 
         self.assertIn("requires IMF dataset-family routing", str(ctx.exception))
 
+    def test_imf_parses_bop_dataflow_structure_dimensions(self) -> None:
+        payload = {
+            "data": {
+                "codelists": [{"id": "CL_COUNTRY", "codes": [{"id": "USA"}, {"id": "BRA"}]}],
+                "dataflows": [{"id": "BOP", "agencyID": "IMF.STA", "version": "21.0.0"}],
+                "dataStructures": [
+                    {
+                        "id": "DSD_BOP",
+                        "agencyID": "IMF.STA",
+                        "version": "17.0.0",
+                        "dataStructureComponents": {
+                            "dimensionList": {
+                                "dimensions": [
+                                    {
+                                        "id": "COUNTRY",
+                                        "position": 0,
+                                        "type": "Dimension",
+                                        "localRepresentation": {
+                                            "enumeration": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=IMF:CL_COUNTRY(1.0.0)"
+                                        },
+                                    },
+                                    {"id": "BOP_ACCOUNTING_ENTRY", "position": 1, "type": "Dimension"},
+                                    {"id": "INDICATOR", "position": 2, "type": "Dimension"},
+                                    {"id": "UNIT", "position": 3, "type": "Dimension"},
+                                    {"id": "FREQUENCY", "position": 4, "type": "Dimension"},
+                                ],
+                                "timeDimensions": [{"id": "TIME_PERIOD", "position": 5, "type": "TimeDimension"}],
+                            }
+                        },
+                    }
+                ],
+            }
+        }
+
+        metadata = IMFProvider._parse_imf_dataflow_structure(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(metadata["agency"], "IMF.STA")
+        self.assertEqual(metadata["dataflow"], "BOP")
+        self.assertEqual(metadata["dimension_ids"], ["COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"])
+        self.assertEqual(metadata["time_dimension_ids"], ["TIME_PERIOD"])
+        self.assertEqual(metadata["dimensions"][0]["value_count"], 2)
+
+    def test_imf_fetches_and_caches_bop_dataflow_structure(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+        provider._DATAFLOW_STRUCTURE_CACHE.clear()  # pylint: disable=protected-access
+        payload = {
+            "data": {
+                "dataflows": [{"id": "BOP", "agencyID": "IMF.STA", "version": "21.0.0"}],
+                "dataStructures": [
+                    {
+                        "id": "DSD_BOP",
+                        "dataStructureComponents": {
+                            "dimensionList": {
+                                "dimensions": [{"id": "COUNTRY", "position": 0}],
+                                "timeDimensions": [{"id": "TIME_PERIOD", "position": 1}],
+                            }
+                        },
+                    }
+                ],
+            }
+        }
+        response = MockAsyncResponse(
+            payload,
+            request_url="https://api.imf.org/external/sdmx/2.1/dataflow/IMF.STA/BOP/latest?references=all",
+        )
+
+        with patch("backend.providers.imf.get_http1_client", return_value=MockAsyncClient([response])):
+            first = run(provider._get_imf_dataflow_structure(dataflow="BOP"))  # pylint: disable=protected-access
+            second = run(provider._get_imf_dataflow_structure(dataflow="BOP"))  # pylint: disable=protected-access
+
+        self.assertIs(first, second)
+        self.assertEqual(first["dataflow"], "BOP")
+        self.assertEqual(first["dimension_ids"], ["COUNTRY"])
+        self.assertEqual(first["time_dimension_ids"], ["TIME_PERIOD"])
+        self.assertIn("dataflow/IMF.STA/BOP/latest", first["structureUrl"])
+
     def test_imf_gdp_resolves_to_level_code_not_growth(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
