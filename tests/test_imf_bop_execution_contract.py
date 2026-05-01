@@ -147,6 +147,42 @@ def test_build_bop_sdmx_candidates_from_structure_codelist_names() -> None:
     assert candidates[0]["key"] == "USA.CD_T.IN2_S1W.USD.A"
 
 
+def test_build_bop_sdmx_candidates_trusts_structure_country_prefix() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    metadata = _bop_structure_metadata(
+        allowed_values_by_dimension={
+            "COUNTRY": {"BRA", "MDV"},
+            "BOP_ACCOUNTING_ENTRY": {"A_NFA_T"},
+            "INDICATOR": {"O_FL1_S122"},
+            "UNIT": {"USD"},
+            "FREQUENCY": {"A"},
+        },
+        codelist_entries_by_dimension={
+            "INDICATOR": [
+                {
+                    "id": "O_FL1_S122",
+                    "name": "Other investment, Debt instruments, Deposit-taking corporations",
+                }
+            ]
+        },
+    )
+
+    candidates = provider._build_bop_sdmx_series_candidates(  # pylint: disable=protected-access
+        indicator_code="MDV_BOP_BFOADDC_USD",
+        indicator_label=(
+            "Brazil Other investment Debt Instruments Maldives Definition Balance of Payments "
+            "Summary of Balance of Payments Financial account Net Acquisition of Financial Assets "
+            "Deposit Taking Corporations"
+        ),
+        countries=["Brazil"],
+        structure=metadata,
+    )
+
+    assert candidates
+    assert {candidate["country"] for candidate in candidates} == {"MDV"}
+    assert all(candidate["key"].startswith("MDV.") for candidate in candidates)
+
+
 def test_fetch_bop_family_uses_public_sdmx_candidate_before_engine() -> None:
     provider = IMFProvider(metadata_search_service=None)
     metadata = _bop_structure_metadata(

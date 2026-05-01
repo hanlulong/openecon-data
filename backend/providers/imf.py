@@ -1970,7 +1970,23 @@ class IMFProvider(BaseProvider):
             if len(token) >= 3
         }
 
-    def _bop_country_codes(self, indicator_code: str, countries: List[str]) -> List[str]:
+    def _bop_country_codes(
+        self,
+        indicator_code: str,
+        countries: List[str],
+        structure: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        structure_countries = set()
+        if structure:
+            structure_countries = {
+                str(value or "").strip().upper()
+                for value in (structure.get("allowed_values_by_dimension") or {}).get("COUNTRY") or []
+                if str(value or "").strip()
+            }
+        raw_prefix_match = re.match(r"^([A-Z]{3})_", str(indicator_code or "").strip().upper())
+        if raw_prefix_match and raw_prefix_match.group(1) in structure_countries:
+            return [raw_prefix_match.group(1)]
+
         prefix = self._country_prefix_from_indicator_code(indicator_code)
         if prefix:
             return [prefix]
@@ -2065,7 +2081,7 @@ class IMFProvider(BaseProvider):
             return []
 
         candidates: List[Dict[str, str]] = []
-        for country in self._bop_country_codes(indicator_code, countries):
+        for country in self._bop_country_codes(indicator_code, countries, structure):
             for accounting_entry in self._bop_accounting_entries(indicator_code, label):
                 for bop_indicator in indicator_candidates:
                     for unit in self._bop_units(indicator_code, label):
