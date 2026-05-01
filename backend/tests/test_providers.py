@@ -527,6 +527,50 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(data.data[0].date, "2020-01-01")
         self.assertEqual(data.data[0].value, 21000000000000)
 
+    def test_worldbank_recognizes_public_rest_exact_code_shapes(self) -> None:
+        provider = WorldBankProvider()
+
+        self.assertTrue(provider._looks_like_worldbank_indicator_code("NY.GDP.MKTP.CD"))  # pylint: disable=protected-access
+        self.assertTrue(provider._looks_like_worldbank_indicator_code("fin14q2"))  # pylint: disable=protected-access
+        self.assertTrue(provider._looks_like_worldbank_indicator_code("al_prim_some_dfcl_all"))  # pylint: disable=protected-access
+        self.assertTrue(provider._looks_like_worldbank_indicator_code("gtap10VALabor"))  # pylint: disable=protected-access
+        self.assertFalse(provider._looks_like_worldbank_indicator_code("GDP"))  # pylint: disable=protected-access
+        self.assertFalse(provider._looks_like_worldbank_indicator_code("household income"))  # pylint: disable=protected-access
+
+    def test_worldbank_exact_archived_code_does_not_try_alternatives(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient(MockAsyncClient):
+            async def get(self, url: str, *, params: dict | None = None, **kwargs) -> MockAsyncResponse:
+                calls.append({"url": url, "params": dict(params or {})})
+                return await super().get(url, params=params, **kwargs)
+
+        missing_response = MockAsyncResponse(
+            [
+                {
+                    "message": [
+                        {
+                            "id": "175",
+                            "key": "Invalid format",
+                            "value": "The indicator was not found. It may have been deleted or archived.",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([missing_response])), \
+             patch.object(provider, "_get_alternative_indicators", new=AsyncMock(side_effect=AssertionError("no alternatives for exact codes"))), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch("backend.providers.worldbank._wb_record_failure"):
+            with self.assertRaises(DataNotAvailableError) as ctx:
+                run(provider.fetch_indicator("w_F_skl", country="China", start_date="2018", end_date="2025"))
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("/country/CN/indicator/w_F_skl", calls[0]["url"])
+        self.assertIn("exact indicator code 'w_F_skl'", str(ctx.exception))
+
     def test_worldbank_no_country_uses_lowercase_all_endpoint(self) -> None:
         provider = WorldBankProvider()
 

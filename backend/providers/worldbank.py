@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Dict, List, Optional, TYPE_CHECKING
 import logging
+import re
 
 import httpx
 
@@ -555,6 +556,23 @@ class WorldBankProvider(BaseProvider):
             logger.debug(f"Could not get alternative indicators: {e}")
             return []
 
+    @staticmethod
+    def _looks_like_worldbank_indicator_code(indicator: str) -> bool:
+        """Return true for exact WorldBank indicator-code shapes.
+
+        WorldBank public REST indicator IDs are not limited to dotted WDI
+        forms; public sources such as G20 FII and DDH also use lower-case,
+        underscore, and digit-bearing codes (for example `fin14q2` and
+        `al_prim_some_dfcl_all`).  These should be treated as exact provider
+        requests, not natural-language text that should try alternatives.
+        """
+        text = str(indicator or "").strip()
+        if not text or re.search(r"\s", text) or not text[0].isalpha():
+            return False
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{1,127}", text):
+            return False
+        return "." in text or "_" in text or any(ch.isdigit() for ch in text)
+
     # Reverse mapping: sets of ISO2 country codes that correspond to
     # WorldBank aggregate region codes.  When the query service expands
     # a region like "Sub-Saharan Africa" into individual countries, we
@@ -582,6 +600,7 @@ class WorldBankProvider(BaseProvider):
                 f"WorldBank API is temporarily unavailable (circuit breaker open). "
                 f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
             )
+        exact_indicator_request = self._looks_like_worldbank_indicator_code(indicator)
         indic = await self._resolve_indicator_code(indicator)
         country_list = countries or ([country] if country else ["all"])
 
@@ -678,6 +697,7 @@ class WorldBankProvider(BaseProvider):
         logger.info(f"WorldBank API call: {url} | params={params} | countries={len(country_list)}")
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
+        api_error_detail = None
         if prefer_parallel_small_group:
             logger.info(
                 "WorldBank: skipping batched multi-country request for small group (%d countries); "
@@ -701,6 +721,7 @@ class WorldBankProvider(BaseProvider):
                         error_msg = payload[0]["message"]
                         if isinstance(error_msg, list) and len(error_msg) > 0:
                             error_detail = error_msg[0].get("value", "Unknown error")
+                            api_error_detail = str(error_detail)
                             logger.warning(f"World Bank API error: {error_detail}")
                             payload = None
 
@@ -763,6 +784,13 @@ class WorldBankProvider(BaseProvider):
             except Exception as e:
                 logger.warning(f"Error fetching batched data: {e}")
                 payload = None
+
+        if api_error_detail and exact_indicator_request:
+            _wb_record_failure()
+            raise DataNotAvailableError(
+                f"WorldBank exact indicator code '{indic}' is not available from the public data endpoint: "
+                f"{api_error_detail}"
+            )
 
         # If batch request failed, fall back to parallel per-country fetch.
         # Accumulate ALL country records into a single payload so the
@@ -961,7 +989,7 @@ class WorldBankProvider(BaseProvider):
 
         # 2. Alternative indicators (only if time budget allows and not already tried)
         _alt_elapsed = _time.perf_counter() - _fetch_start
-        if not _skip_alternatives and _alt_elapsed < _FETCH_BUDGET_S:
+        if not _skip_alternatives and not exact_indicator_request and _alt_elapsed < _FETCH_BUDGET_S:
             alternatives = await self._get_alternative_indicators(indicator, indic, limit=3)
             if alternatives:
                 logger.info(f"⚠️ Primary indicator {indic} failed. Trying {len(alternatives)} alternatives: {alternatives}")
@@ -1010,13 +1038,13 @@ class WorldBankProvider(BaseProvider):
            Only used as last resort with a 15s timeout cap.
         """
         # Short-circuit: if indicator is already a valid WorldBank code
-        # (contains dots like "NY.GDP.MKTP.CD" or "NV.IND.TOTL.KD.ZG"),
+        # (dotted WDI forms and public REST codes with underscores/digits),
         # return it directly without re-resolving through the resolver.
         # This prevents double-resolution where an already-correct code
         # gets re-resolved to a different (wrong) indicator.
-        if indicator and "." in indicator and indicator[0].isalpha():
+        if self._looks_like_worldbank_indicator_code(indicator):
             logger.info(f"🔒 WorldBank: Using pre-resolved indicator code: {indicator}")
-            return indicator
+            return str(indicator).strip()
 
         exact_title_text = str(indicator or "").strip()
         if exact_title_text:
