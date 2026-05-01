@@ -1854,6 +1854,62 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.data[0].value, 1000)
         self.assertEqual(metadata_stub.keyword, "custom eurostat")
 
+    def test_eurostat_jsonstat_parser_uses_sparse_non_default_tuple(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+        response = MockAsyncResponse(
+            {
+                "value": {"2": 1000, "3": 1100},
+                "dimension": {
+                    "unit": {
+                        "category": {
+                            "index": {"EUR": 0},
+                            "label": {"EUR": "Euro"},
+                        }
+                    },
+                    "nace_r1": {
+                        "category": {
+                            "index": {"C-O": 0, "C-K": 1},
+                            "label": {
+                                "C-O": "All NACE activities",
+                                "C-K": "Industry and services",
+                            },
+                        }
+                    },
+                    "geo": {
+                        "category": {
+                            "index": {"FR": 0},
+                            "label": {"FR": "France"},
+                        }
+                    },
+                    "time": {
+                        "category": {
+                            "index": {"2002": 0, "2003": 1},
+                            "label": {"2002": "2002", "2003": "2003"},
+                        }
+                    },
+                },
+                "id": ["unit", "nace_r1", "geo", "time"],
+                "size": [1, 2, 1, 2],
+                "updated": "2024-01-01",
+            }
+        )
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=MockAsyncClient([response])):
+            series = run(
+                provider.fetch_indicator(
+                    indicator="custom_sparse",
+                    country="FR",
+                    start_year=2002,
+                    end_year=2003,
+                )
+            )
+
+        self.assertEqual(series.metadata.seriesId, "custom_sparse")
+        self.assertEqual(series.data[0].date, "2002-01-01")
+        self.assertEqual(series.data[0].value, 1000)
+        self.assertEqual(series.data[1].date, "2003-01-01")
+        self.assertEqual(series.data[1].value, 1100)
+
     def test_eurostat_resolve_accepts_uppercase_table_code_with_digits(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)
 

@@ -807,6 +807,8 @@ class EurostatProvider(BaseProvider):
     def _parse_json_stat(self, payload: Dict[str, Any], dataset_code: str) -> list[Dict[str, Any]]:
         """Parse JSON-stat 2.0 format from Eurostat API with proper unit selection."""
         values = payload.get("value", {})
+        if isinstance(values, list):
+            values = {str(idx): val for idx, val in enumerate(values)}
         dimensions = payload.get("dimension", {})
         time_dim = dimensions.get("time", {})
         indexes = time_dim.get("category", {}).get("index", {})
@@ -867,7 +869,126 @@ class EurostatProvider(BaseProvider):
                     "value": value,
                 }
             )
-        return data_points
+        if data_points:
+            return data_points
+
+        return self._parse_first_available_json_stat_series(
+            values=values,
+            dimensions=dimensions,
+            id_list=id_list,
+            sizes=sizes,
+        )
+
+    def _parse_first_available_json_stat_series(
+        self,
+        *,
+        values: Dict[str, Any],
+        dimensions: Dict[str, Any],
+        id_list: list[str],
+        sizes: list[int],
+    ) -> list[Dict[str, Any]]:
+        """Parse the first viable non-default JSON-stat series.
+
+        Many long-tail Eurostat datasets are sparse across their non-time
+        dimensions.  The default tuple can be empty even when the requested
+        country has public observations for another tuple.  When the primary
+        parser finds no values, group non-null flattened observations by their
+        non-time dimension coordinates and return the best-covered series.
+        """
+        if not values or len(id_list) != len(sizes) or "time" not in id_list:
+            return []
+
+        time_pos = id_list.index("time")
+        time_dim = dimensions.get("time", {})
+        time_indexes = time_dim.get("category", {}).get("index", {})
+        if not time_indexes:
+            return []
+        time_label_by_index = {idx: label for label, idx in time_indexes.items()}
+
+        dim_value_by_position: Dict[str, Dict[int, str]] = {}
+        for dim_id in id_list:
+            dim = dimensions.get(dim_id, {})
+            category_index = dim.get("category", {}).get("index", {})
+            dim_value_by_position[dim_id] = {
+                idx: value_id for value_id, idx in category_index.items()
+            }
+
+        def decode_position(flat_index: int) -> Optional[list[int]]:
+            coordinates: list[int] = []
+            remaining = flat_index
+            for size in reversed(sizes):
+                if size <= 0:
+                    return None
+                coordinates.append(remaining % size)
+                remaining //= size
+            if remaining:
+                return None
+            return list(reversed(coordinates))
+
+        def aggregate_preference(coordinates: list[int]) -> int:
+            score = 0
+            for pos, dim_id in enumerate(id_list):
+                if pos == time_pos:
+                    continue
+                value_id = dim_value_by_position.get(dim_id, {}).get(coordinates[pos], "")
+                value_upper = str(value_id or "").upper()
+                if value_upper in {"TOTAL", "T"} or value_upper.endswith("_TOTAL"):
+                    score += 5
+                if pos == 0:
+                    score += max(0, 3 - coordinates[pos])
+            return score
+
+        grouped: Dict[tuple[int, ...], Dict[str, Any]] = {}
+        for flat_key, value in values.items():
+            if value is None:
+                continue
+            try:
+                flat_index = int(flat_key)
+            except (TypeError, ValueError):
+                continue
+            coordinates = decode_position(flat_index)
+            if not coordinates:
+                continue
+            time_index = coordinates[time_pos]
+            time_label = time_label_by_index.get(time_index)
+            if time_label is None:
+                continue
+            series_key = tuple(
+                coordinate for pos, coordinate in enumerate(coordinates) if pos != time_pos
+            )
+            bucket = grouped.setdefault(
+                series_key,
+                {
+                    "points": [],
+                    "first_flat_index": flat_index,
+                    "preference": aggregate_preference(coordinates),
+                },
+            )
+            bucket["first_flat_index"] = min(bucket["first_flat_index"], flat_index)
+            bucket["points"].append(
+                {
+                    "date": self._normalize_time_label(str(time_label)),
+                    "value": value,
+                }
+            )
+
+        if not grouped:
+            return []
+
+        best = max(
+            grouped.values(),
+            key=lambda bucket: (
+                len(bucket["points"]),
+                bucket["preference"],
+                -bucket["first_flat_index"],
+            ),
+        )
+        points = sorted(best["points"], key=lambda point: point["date"])
+        logger.info(
+            "Eurostat JSON-stat default tuple was empty; selected sparse series with %d points",
+            len(points),
+        )
+        return points
 
     def _normalize_time_label(self, label: str) -> str:
         if label and "-" in label:
