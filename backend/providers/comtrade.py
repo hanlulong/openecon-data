@@ -1060,6 +1060,7 @@ class ComtradeProvider(BaseProvider):
         flow_code = self._flow_code(flow)
 
         now = datetime.now(timezone.utc)
+        implicit_default_period = start_year is None and end_year is None
         start = start_year or now.year - 5
         end = end_year or now.year - 1
 
@@ -1133,45 +1134,56 @@ class ComtradeProvider(BaseProvider):
                         freq_code,
                     )
 
-        tasks = [
-            _guarded_fetch(reporter_raw, partner_code, period_param)
-            for reporter_raw in reporter_list
-            for partner_code in partner_codes
-            for period_param in period_chunks
-        ]
+        async def _run_fetch_for_chunks(
+            chunks: List[str],
+            flow_code_arg: str,
+        ) -> Tuple[List[NormalizedData], Optional[BaseException]]:
+            tasks = [
+                _guarded_fetch(reporter_raw, partner_code, period_param, flow_code_arg)
+                for reporter_raw in reporter_list
+                for partner_code in partner_codes
+                for period_param in chunks
+            ]
+            if not tasks:
+                return [], None
 
-        # Overall time budget: cap total wall-clock time so a cascade of 429
-        # retries across many tasks cannot stall the pipeline for minutes.
-        # The lower bound must still cover one full single-reporter retry
-        # envelope, otherwise transient Comtrade timeouts are surfaced as false
-        # data-not-available results before the provider retry policy completes.
-        overall_budget = _comtrade_overall_time_budget(len(tasks))
+            # Overall time budget: cap total wall-clock time so a cascade of
+            # 429 retries across many tasks cannot stall the pipeline for
+            # minutes. The lower bound must still cover one full
+            # single-reporter retry envelope, otherwise transient Comtrade
+            # timeouts are surfaced as false data-not-available results before
+            # the provider retry policy completes.
+            overall_budget = _comtrade_overall_time_budget(len(tasks))
+            try:
+                results_list = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=overall_budget,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Comtrade overall time budget (%.0fs) exceeded for %d tasks; "
+                    "returning partial results",
+                    overall_budget,
+                    len(tasks),
+                )
+                return [], None
 
-        try:
-            results_list = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=overall_budget,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Comtrade overall time budget (%.0fs) exceeded for %d tasks; "
-                "returning partial results",
-                overall_budget,
-                len(tasks),
-            )
-            results_list = []
+            flattened: List[NormalizedData] = []
+            newest_error: Optional[BaseException] = None
+            for result in results_list:
+                if isinstance(result, BaseException):
+                    logger.debug("Comtrade sub-task failed: %s", result)
+                    newest_error = result
+                    continue
+                flattened.extend(result)
+            return flattened, newest_error
 
-        # Flatten results (each task returns a list; exceptions become empty)
-        all_results = []
-        last_error: Optional[BaseException] = None
-        for result in results_list:
-            if isinstance(result, BaseException):
-                logger.debug("Comtrade sub-task failed: %s", result)
-                last_error = result
-                continue
-            all_results.extend(result)
+        all_results, last_error = await _run_fetch_for_chunks(period_chunks, flow_code)
 
-        if not all_results and flow_code in {"X", "M"}:
+        async def _retry_both_flow_envelope(chunks: List[str]) -> None:
+            nonlocal all_results, last_error
+            if all_results or flow_code not in {"X", "M"}:
+                return
             # UN Comtrade's v1 endpoint can return an empty payload for a
             # narrow flow-specific world-total request while the equivalent
             # both-flow request returns the requested flow records.  This also
@@ -1183,29 +1195,51 @@ class ComtradeProvider(BaseProvider):
                 flow_code,
                 commodity_code,
             )
-            fallback_tasks = [
-                _guarded_fetch(reporter_raw, partner_code, period_param, "M,X")
-                for reporter_raw in reporter_list
-                for partner_code in partner_codes
-                for period_param in period_chunks
-            ]
-            try:
-                fallback_results_list = await asyncio.wait_for(
-                    asyncio.gather(*fallback_tasks, return_exceptions=True),
-                    timeout=_comtrade_overall_time_budget(len(fallback_tasks)),
-                )
-            except asyncio.TimeoutError:
-                fallback_results_list = []
-
+            fallback_results, fallback_error = await _run_fetch_for_chunks(chunks, "M,X")
+            if fallback_error is not None:
+                last_error = fallback_error
             desired_prefix = "export" if flow_code == "X" else "import"
-            for result in fallback_results_list:
-                if isinstance(result, BaseException):
-                    last_error = result
-                    continue
-                for series in result:
-                    indicator_text = str(getattr(series.metadata, "indicator", "") or "").lower()
-                    if indicator_text.startswith(desired_prefix):
-                        all_results.append(series)
+            for series in fallback_results:
+                indicator_text = str(getattr(series.metadata, "indicator", "") or "").lower()
+                if indicator_text.startswith(desired_prefix):
+                    all_results.append(series)
+
+        await _retry_both_flow_envelope(period_chunks)
+
+        if (
+            not all_results
+            and implicit_default_period
+            and freq_code == "A"
+            and commodity_code != "TOTAL"
+            and start > 2002
+        ):
+            # Exact long-tail HS subheadings are often sparse or discontinued.
+            # With no user-specified date, a recent friendly default can create
+            # false negatives even though UN Comtrade has older observations.
+            # Retry only the older years that were not already requested;
+            # explicit date windows remain strict.
+            historical_period_values = self._generate_period_values(
+                2002,
+                start - 1,
+                frequency,
+            )
+            historical_chunks = self._chunk_period_values(
+                historical_period_values,
+                max_periods=12,
+            )
+            logger.info(
+                "Comtrade found no recent rows for sparse HS %s; retrying historical annual window 2002-%s",
+                commodity_code,
+                start - 1,
+            )
+            historical_results, historical_error = await _run_fetch_for_chunks(
+                historical_chunks,
+                flow_code,
+            )
+            if historical_error is not None:
+                last_error = historical_error
+            all_results.extend(historical_results)
+            await _retry_both_flow_envelope(historical_chunks)
 
         # When ALL sub-tasks failed, propagate the most informative error
         # so the caller gets a specific message (e.g. "Taiwan does not report")

@@ -978,6 +978,47 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
         sleep_mock.assert_not_awaited()
 
+    def test_comtrade_fetch_trade_data_expands_implicit_sparse_hs_history(self) -> None:
+        provider = ComtradeProvider(api_key="demo")
+        responses = [
+            MockAsyncResponse({"data": []}),  # recent explicit-flow window
+            MockAsyncResponse({"data": []}),  # recent both-flow envelope
+            MockAsyncResponse(
+                {
+                    "data": [
+                        {
+                            "period": 2003,
+                            "periodDesc": "2003",
+                            "reporterDesc": "China",
+                            "partnerDesc": "World",
+                            "flowDesc": "Exports",
+                            "primaryValue": 97316,
+                            "cmdCode": "300110",
+                            "cmdDesc": "Glands and other organs",
+                        },
+                    ]
+                }
+            ),
+            MockAsyncResponse({"data": []}),
+        ]
+        client = MockAsyncClient(responses)
+
+        with patch("backend.providers.comtrade.get_http_client", return_value=client):
+            result = run(
+                provider.fetch_trade_data(
+                    reporter="China",
+                    commodity="300110",
+                    flow="EXPORT",
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.indicator, "Exports - Glands and other organs")
+        self.assertEqual(result[0].data[0].date, "2003-01-01")
+        self.assertEqual(result[0].data[0].value, 97316)
+        self.assertIn("period=2002", result[0].metadata.apiUrl)
+        self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
+
     def test_comtrade_fetch_trade_data_retries_sparse_hs_with_both_flow_envelope(self) -> None:
         provider = ComtradeProvider(api_key="demo")
         responses = [
@@ -1105,7 +1146,20 @@ class ProviderTests(unittest.TestCase):
             max_active = max(max_active, active)
             await asyncio.sleep(0.01)
             active -= 1
-            return []
+            return [
+                NormalizedData.model_validate(
+                    {
+                        "metadata": {
+                            "source": "UN Comtrade",
+                            "indicator": "Exports - All Commodities",
+                            "country": reporter_raw,
+                            "frequency": "annual",
+                            "unit": "USD",
+                        },
+                        "data": [{"date": "2020-01-01", "value": 1}],
+                    }
+                )
+            ]
 
         async def _run_two_fetches():
             with (
