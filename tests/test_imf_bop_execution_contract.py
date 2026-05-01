@@ -25,10 +25,12 @@ from backend.providers.imf import IMFProvider
 
 
 class _MockHTTPResponse:
-    def __init__(self, *, status_code: int = 200, text: str = "", json_data=None) -> None:
+    def __init__(self, *, status_code: int = 200, text: str = "", json_data=None, headers=None) -> None:
         self.status_code = status_code
         self.text = text
         self._json = json_data or {}
+        self.headers = headers or {}
+        self.request = SimpleNamespace(url="https://api.imf.org/test")
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -115,6 +117,92 @@ def test_validate_bop_structure_candidate_rejects_absent_legacy_dimension_value(
     )
 
     assert error == "INDICATOR value(s) not present in BOP structure: C_375"
+
+
+def test_build_bop_sdmx_candidates_from_structure_codelist_names() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    metadata = _bop_structure_metadata(
+        codelist_entries_by_dimension={
+            "INDICATOR": [
+                {
+                    "id": "IN2_S1W",
+                    "name": "Secondary income, Financial corporations, nonfinancial corporations, households, and NPISHs",
+                },
+                {"id": "SC", "name": "Transport"},
+            ]
+        }
+    )
+
+    candidates = provider._build_bop_sdmx_series_candidates(  # pylint: disable=protected-access
+        indicator_code="BXISON_BP6_USD",
+        indicator_label=(
+            "Balance of Payments, Supplementary Items, Current Account, Secondary Income, "
+            "Financial corporations, nonfinancial corporations, households, and NPISHs, Credit, NGO's [BPM6], US Dollars"
+        ),
+        countries=["USA"],
+        structure=metadata,
+    )
+
+    assert candidates[0]["flow"] == "BOP"
+    assert candidates[0]["key"] == "USA.CD_T.IN2_S1W.USD.A"
+
+
+def test_fetch_bop_family_uses_public_sdmx_candidate_before_engine() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    metadata = _bop_structure_metadata(
+        codelist_entries_by_dimension={
+            "INDICATOR": [
+                {
+                    "id": "IN2_S1W",
+                    "name": "Secondary income, Financial corporations, nonfinancial corporations, households, and NPISHs",
+                }
+            ]
+        }
+    )
+    csv_payload = (
+        "DATAFLOW,COUNTRY,BOP_ACCOUNTING_ENTRY,INDICATOR,UNIT,FREQUENCY,TIME_PERIOD,OBS_VALUE\n"
+        "IMF.STA:BOP(21.0.0),USA,CD_T,IN2_S1W,USD,A,2020,123.4\n"
+        "IMF.STA:BOP(21.0.0),USA,CD_T,IN2_S1W,USD,A,2021,125.6\n"
+    )
+    data_client = _MockHTTPClient(
+        post_response=_MockHTTPResponse(status_code=500, text="engine should not be used"),
+        get_response=_MockHTTPResponse(status_code=200, text=csv_payload, headers={"content-type": "text/csv"}),
+    )
+    engine_client = _MockHTTPClient(
+        post_response=_MockHTTPResponse(status_code=500, text="engine should not be used"),
+        get_response=_MockHTTPResponse(status_code=500, text="engine should not be used"),
+    )
+
+    with patch.object(
+        provider,
+        "_get_imf_dataflow_structure",
+        AsyncMock(return_value=metadata),
+    ), patch("backend.providers.imf.get_http1_client", return_value=data_client), patch(
+        "backend.providers.imf.get_http_client",
+        return_value=engine_client,
+    ):
+        result = run(
+            provider._fetch_bop_family(  # pylint: disable=protected-access
+                indicator_code="BXISON_BP6_USD",
+                indicator_label=(
+                    "Balance of Payments, Supplementary Items, Current Account, Secondary Income, "
+                    "Financial corporations, nonfinancial corporations, households, and NPISHs, Credit, NGO's [BPM6], US Dollars"
+                ),
+                countries=["USA"],
+                start_year=2020,
+                end_year=2021,
+            )
+        )
+
+    assert len(result) == 1
+    assert result[0].metadata.seriesId == "BXISON_BP6_USD"
+    assert result[0].metadata.apiUrl.endswith("IMF.STA,BOP/USA.CD_T.IN2_S1W.USD.A?startPeriod=2020&endPeriod=2021")
+    assert [(point.date, point.value) for point in result[0].data] == [
+        ("2020-01-01", 123.4),
+        ("2021-01-01", 125.6),
+    ]
+    assert data_client.get_calls
+    assert engine_client.post_calls == []
 
 
 def test_xml_bop_structure_codelists_drive_fail_closed_validation() -> None:

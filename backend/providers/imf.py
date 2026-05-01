@@ -1510,29 +1510,34 @@ class IMFProvider(BaseProvider):
 
             codelists: List[Dict[str, Any]] = []
             codelist_values: Dict[str, set[str]] = {}
+            codelist_entries: Dict[str, List[Dict[str, str]]] = {}
             for element in root.iter():
                 if cls._local_xml_name(element.tag) != "Codelist":
                     continue
                 sample_codes: List[Dict[str, str]] = []
+                entries: List[Dict[str, str]] = []
                 values: set[str] = set()
                 code_count = 0
                 for code in element:
                     if cls._local_xml_name(code.tag) != "Code":
                         continue
                     code_id = str(code.attrib.get("id") or "")
+                    code_name = cls._first_sdmx_name(code) or ""
                     code_count += 1
                     if code_id:
                         values.add(code_id.upper())
+                        entries.append({"id": code_id, "name": code_name})
                     if len(sample_codes) < 20:
                         sample_codes.append(
                             {
                                 "id": code_id,
-                                "name": cls._first_sdmx_name(code) or "",
+                                "name": code_name,
                             }
                         )
                 codelist_id = str(element.attrib.get("id") or "")
                 if codelist_id and values:
                     codelist_values[codelist_id] = values
+                    codelist_entries[codelist_id] = entries
                 codelists.append(
                     {
                         "agency": element.attrib.get("agencyID"),
@@ -1552,6 +1557,7 @@ class IMFProvider(BaseProvider):
                 "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
             }
             allowed_values_by_dimension: Dict[str, set[str]] = {}
+            codelist_entries_by_dimension: Dict[str, List[Dict[str, str]]] = {}
             for dimension in dimensions:
                 if dimension.get("is_time"):
                     continue
@@ -1565,6 +1571,7 @@ class IMFProvider(BaseProvider):
                 for codelist_id in candidate_codelists:
                     if codelist_id in codelist_values:
                         allowed_values_by_dimension[dim_id] = codelist_values[codelist_id]
+                        codelist_entries_by_dimension[dim_id] = codelist_entries.get(codelist_id, [])
                         break
 
             return {
@@ -1587,6 +1594,7 @@ class IMFProvider(BaseProvider):
                     if str(codelist.get("id") or "")
                 },
                 "allowed_values_by_dimension": allowed_values_by_dimension,
+                "codelist_entries_by_dimension": codelist_entries_by_dimension,
             }
 
         data = payload.get("data", {}) if isinstance(payload, dict) else {}
@@ -1600,6 +1608,7 @@ class IMFProvider(BaseProvider):
 
         codelist_sizes: Dict[str, int] = {}
         codelist_values: Dict[str, set[str]] = {}
+        codelist_entries: Dict[str, List[Dict[str, str]]] = {}
         codelists = data.get("codelists") if isinstance(data.get("codelists"), list) else []
         for codelist in codelists:
             if not isinstance(codelist, dict):
@@ -1613,6 +1622,14 @@ class IMFProvider(BaseProvider):
                     for code in codes
                     if isinstance(code, dict) and str(code.get("id") or "").strip()
                 }
+                codelist_entries[codelist_id] = [
+                    {
+                        "id": str(code.get("id") or "").strip(),
+                        "name": str(code.get("name") or code.get("label") or "").strip(),
+                    }
+                    for code in codes
+                    if isinstance(code, dict) and str(code.get("id") or "").strip()
+                ]
 
         def parse_dimensions(values: Any) -> List[Dict[str, Any]]:
             dimensions: List[Dict[str, Any]] = []
@@ -1643,11 +1660,26 @@ class IMFProvider(BaseProvider):
 
         dimensions = parse_dimensions(dimension_list.get("dimensions") if isinstance(dimension_list, dict) else [])
         time_dimensions = parse_dimensions(dimension_list.get("timeDimensions") if isinstance(dimension_list, dict) else [])
-        allowed_values_by_dimension = {
-            str(dim.get("id")): codelist_values[str(dim.get("codelist"))]
-            for dim in dimensions
-            if dim.get("id") and dim.get("codelist") and str(dim.get("codelist")) in codelist_values
+        codelist_aliases_by_dimension = {
+            "COUNTRY": ("CL_COUNTRY",),
+            "BOP_ACCOUNTING_ENTRY": ("CL_BOP_ACCOUNTING_ENTRY",),
+            "INDICATOR": ("CL_BOP_INDICATOR", "CL_INDICATOR"),
+            "UNIT": ("CL_UNIT",),
+            "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
         }
+        allowed_values_by_dimension: Dict[str, set[str]] = {}
+        codelist_entries_by_dimension: Dict[str, List[Dict[str, str]]] = {}
+        for dim in dimensions:
+            dim_id = str(dim.get("id") or "")
+            codelist = str(dim.get("codelist") or "")
+            candidate_codelists = (
+                (codelist,) if codelist else ()
+            ) + tuple(codelist_aliases_by_dimension.get(dim_id) or (f"CL_{dim_id}",))
+            for codelist_id in candidate_codelists:
+                if codelist_id in codelist_values:
+                    allowed_values_by_dimension[dim_id] = codelist_values[codelist_id]
+                    codelist_entries_by_dimension[dim_id] = codelist_entries.get(codelist_id, [])
+                    break
 
         return {
             "agency": dataflow_info.get("agencyID"),
@@ -1663,6 +1695,7 @@ class IMFProvider(BaseProvider):
             "time_dimension_ids": [dim.get("id") for dim in time_dimensions],
             "codelist_sizes": codelist_sizes,
             "allowed_values_by_dimension": allowed_values_by_dimension,
+            "codelist_entries_by_dimension": codelist_entries_by_dimension,
         }
 
     async def _get_imf_dataflow_structure(self, dataflow: str) -> Optional[Dict[str, Any]]:
@@ -1891,6 +1924,165 @@ class IMFProvider(BaseProvider):
             "UNIT": unit,
         }
 
+    @staticmethod
+    def _normalize_bop_match_text(value: Any) -> str:
+        """Normalize BOP labels for conservative codelist-name matching."""
+        text = str(value or "").lower()
+        text = text.replace("non-profit", "nonprofit").replace("nonfinancial", "non financial")
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        stopwords = {
+            "balance",
+            "payments",
+            "bop",
+            "bpm6",
+            "definition",
+            "current",
+            "account",
+            "financial",
+            "capital",
+            "supplementary",
+            "items",
+            "national",
+            "currency",
+            "dollars",
+            "dollar",
+            "euros",
+            "debit",
+            "credit",
+            "net",
+            "from",
+            "and",
+            "the",
+            "of",
+            "in",
+            "on",
+            "for",
+            "with",
+            "other",
+        }
+        return " ".join(token for token in text.split() if token and token not in stopwords)
+
+    @classmethod
+    def _bop_match_tokens(cls, value: Any) -> set[str]:
+        return {
+            token
+            for token in cls._normalize_bop_match_text(value).split()
+            if len(token) >= 3
+        }
+
+    def _bop_country_codes(self, indicator_code: str, countries: List[str]) -> List[str]:
+        prefix = self._country_prefix_from_indicator_code(indicator_code)
+        if prefix:
+            return [prefix]
+        return [self._country_code(country) for country in countries or ["USA"]]
+
+    def _bop_accounting_entries(self, indicator_code: str, label: str) -> List[str]:
+        bare_code = self._strip_country_prefix(indicator_code)
+        text = f"{indicator_code} {label}".lower()
+        entries: List[str] = []
+        if bare_code.startswith("BX") or re.search(r"\bcredit\b|\breceipts?\b", text):
+            entries.append("CD_T")
+        if bare_code.startswith("BM") or re.search(r"\bdebit\b|\bpayments?\b", text):
+            entries.append("DB_T")
+        if bare_code.startswith("BN") or "credits less debits" in text:
+            entries.append("NETCD_T")
+        if "net acquisition of financial assets" in text:
+            entries.append("A_NFA_T")
+        if "net incurrence of liabilities" in text:
+            entries.append("L_NIL_T")
+        if "assets" in text and "net acquisition" not in text:
+            entries.append("A_T")
+        if "liabilities" in text and "net incurrence" not in text:
+            entries.append("L_T")
+        return list(dict.fromkeys(entries or ["CD_T"]))
+
+    @staticmethod
+    def _bop_units(indicator_code: str, label: str) -> List[str]:
+        text = f"{indicator_code} {label}".upper()
+        units: List[str] = []
+        if "USD" in text or "US DOLLAR" in text:
+            units.append("USD")
+        if "EUR" in text or "EURO" in text:
+            units.append("EUR")
+        if "XDR" in text or "SDR" in text:
+            units.append("XDR")
+        if "XDC" in text or "NATIONAL CURRENCY" in text:
+            units.append("XDC")
+        return list(dict.fromkeys(units or ["USD", "XDC"]))
+
+    def _bop_indicator_candidates(
+        self,
+        structure: Optional[Dict[str, Any]],
+        label: str,
+        *,
+        limit: int = 5,
+    ) -> List[str]:
+        """Choose BOP indicator codes by matching labels to official codelist names."""
+        entries = []
+        if structure:
+            entries = list((structure.get("codelist_entries_by_dimension") or {}).get("INDICATOR") or [])
+        if not entries:
+            return []
+
+        label_norm = self._normalize_bop_match_text(label)
+        label_tokens = self._bop_match_tokens(label)
+        scored: List[tuple[int, str]] = []
+        for entry in entries:
+            code = str(entry.get("id") or "").strip().upper()
+            name = str(entry.get("name") or "").strip()
+            if not code or not name:
+                continue
+            name_norm = self._normalize_bop_match_text(name)
+            name_tokens = self._bop_match_tokens(name)
+            if not name_tokens:
+                continue
+            overlap = len(label_tokens & name_tokens)
+            if not overlap:
+                continue
+            score = overlap * 5
+            if name_norm and name_norm in label_norm:
+                score += 40
+            if label_norm and label_norm in name_norm:
+                score += 20
+            score -= max(0, len(name_tokens - label_tokens) - 2)
+            scored.append((score, code))
+
+        scored.sort(reverse=True)
+        return [code for score, code in scored if score >= 12][:limit]
+
+    def _build_bop_sdmx_series_candidates(
+        self,
+        *,
+        indicator_code: str,
+        indicator_label: Optional[str],
+        countries: List[str],
+        structure: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        """Build exact IMF.STA BOP REST candidates from a legacy BOP label."""
+        label = str(indicator_label or indicator_code or "")
+        indicator_candidates = self._bop_indicator_candidates(structure, label)
+        if not indicator_candidates:
+            return []
+
+        candidates: List[Dict[str, str]] = []
+        for country in self._bop_country_codes(indicator_code, countries):
+            for accounting_entry in self._bop_accounting_entries(indicator_code, label):
+                for bop_indicator in indicator_candidates:
+                    for unit in self._bop_units(indicator_code, label):
+                        candidates.append(
+                            {
+                                "flow": "BOP",
+                                "key": f"{country}.{accounting_entry}.{bop_indicator}.{unit}.A",
+                                "country": country,
+                                "frequency": "A",
+                                "unit": unit,
+                                "data_type": "Level",
+                            }
+                        )
+                        if len(candidates) >= 20:
+                            return candidates
+        return candidates
+
     def _validate_bop_structure_candidate(
         self,
         metadata: Optional[Dict[str, Any]],
@@ -2118,6 +2310,27 @@ class IMFProvider(BaseProvider):
         and result normalization are proven stable.
         """
         structure = await self._get_imf_dataflow_structure("BOP")
+        sdmx_candidates = self._build_bop_sdmx_series_candidates(
+            indicator_code=indicator_code,
+            indicator_label=indicator_label,
+            countries=countries,
+            structure=structure,
+        )
+        if sdmx_candidates:
+            try:
+                return await self._fetch_sdmx_exact_indicator_family(
+                    indicator_code=indicator_code,
+                    indicator_label=indicator_label,
+                    candidates=sdmx_candidates,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+            except DataNotAvailableError as exc:
+                raise DataNotAvailableError(
+                    f"IMF BOP public SDMX returned no observations for exact candidates derived from {indicator_code}: {exc}. "
+                    "The non-WEO BOP family remains fail-closed until exact public SDMX observations are available."
+                ) from exc
+
         structure_error = self._validate_bop_structure_candidate(
             structure,
             indicator_code=indicator_code,
