@@ -232,6 +232,50 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(key, "all")
 
+    def test_oecd_country_constraint_error_rejects_absent_ref_area(self) -> None:
+        metadata = {
+            "dimension_ids": ["REF_AREA", "MEASURE"],
+            "valid_values_by_dimension": {"REF_AREA": ["BEFL", "BEFR", "US01"]},
+        }
+
+        error = OECDProvider._oecd_country_constraint_error(  # pylint: disable=protected-access
+            metadata,
+            "CAN",
+            "DSD_EAG_WT@DF_STA_TCH_REG",
+        )
+
+        self.assertIsNotNone(error)
+        self.assertIn("REF_AREA=CAN", error or "")
+        self.assertIn("DSD_EAG_WT@DF_STA_TCH_REG", error or "")
+
+    def test_oecd_country_constraint_error_allows_no_ref_area_dataflow(self) -> None:
+        metadata = {
+            "dimension_ids": ["MEASURE", "FREQ"],
+            "valid_values_by_dimension": {"MEASURE": ["GHG"]},
+        }
+
+        error = OECDProvider._oecd_country_constraint_error(  # pylint: disable=protected-access
+            metadata,
+            "USA",
+            "DSD_GHG_PLC@DF_GHG_PLC",
+        )
+
+        self.assertIsNone(error)
+
+    def test_oecd_country_constraint_error_allows_subnational_prefixes(self) -> None:
+        metadata = {
+            "dimension_ids": ["REF_AREA", "MEASURE"],
+            "valid_values_by_dimension": {"REF_AREA": ["US01", "US02", "BEFL"]},
+        }
+
+        error = OECDProvider._oecd_country_constraint_error(  # pylint: disable=protected-access
+            metadata,
+            "USA",
+            "DSD_EAG_WT@DF_STA_TCH_REG",
+        )
+
+        self.assertIsNone(error)
+
     def test_oecd_clamps_default_time_window_to_constraint_range(self) -> None:
         params = {
             "dimensionAtObservation": "AllDimensions",
@@ -1904,6 +1948,38 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.metadata.country, "United States Of America")
         self.assertEqual(len(series.data), 1)
         self.assertEqual(series.data[0].value, 1.0)
+
+    def test_oecd_fetch_indicator_fails_fast_when_constraints_exclude_country(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+
+        metadata = {
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "MEASURE", "position": 1},
+            ],
+            "dimension_ids": ["REF_AREA", "MEASURE"],
+            "valid_values_by_dimension": {"REF_AREA": ["BEFL", "BEFR", "US01"]},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, *args, **kwargs):
+                raise AssertionError("OECD data endpoint should not be called")
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.EDU.IMEP", "DSD_EAG_WT@DF_STA_TCH_REG", "2.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            with self.assertRaises(DataNotAvailableError) as ctx:
+                run(provider.fetch_indicator("TEST", country="CAN", start_year=2023, end_year=2023))
+
+        self.assertIn("does not advertise REF_AREA=CAN", str(ctx.exception))
 
     def test_oecd_fetch_indicator_uses_dedicated_space_from_structure_metadata(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

@@ -607,6 +607,61 @@ class OECDProvider(BaseProvider):
         return ".".join(key_parts)
 
     @staticmethod
+    def _oecd_country_constraint_error(
+        structure_metadata: Optional[Dict[str, Any]],
+        country_code: str,
+        dataflow: str,
+    ) -> Optional[str]:
+        """Return a diagnostic when OECD constraints exclude the requested country."""
+        if not structure_metadata:
+            return None
+        dimension_ids = {
+            str(dim_id or "").strip()
+            for dim_id in structure_metadata.get("dimension_ids") or []
+            if str(dim_id or "").strip()
+        }
+        if "REF_AREA" not in dimension_ids:
+            return None
+
+        valid_ref_areas = {
+            str(value or "").strip().upper()
+            for value in (structure_metadata.get("valid_values_by_dimension") or {}).get("REF_AREA") or []
+            if str(value or "").strip()
+        }
+        if not valid_ref_areas:
+            return None
+
+        requested = str(country_code or "").strip().upper()
+        if not requested or requested in valid_ref_areas:
+            return None
+
+        compatible_prefixes = set()
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            iso2 = CountryResolver.to_iso2(requested)
+            if iso2:
+                compatible_prefixes.add(iso2.upper())
+        except Exception:
+            compatible_prefixes = set()
+        if requested == "GBR":
+            # OECD Education subnational regional area codes use UK* rather than GB*.
+            compatible_prefixes.add("UK")
+
+        if compatible_prefixes and any(
+            value.startswith(prefix)
+            for value in valid_ref_areas
+            for prefix in compatible_prefixes
+        ):
+            return None
+
+        sample = ", ".join(sorted(valid_ref_areas)[:12])
+        return (
+            f"OECD dataflow {dataflow} does not advertise REF_AREA={requested} "
+            f"in its content constraints. Available REF_AREA sample: {sample}."
+        )
+
+    @staticmethod
     def _year_from_oecd_period(period: Any) -> Optional[int]:
         match = re.search(r"(\d{4})", str(period or ""))
         if not match:
@@ -1643,6 +1698,13 @@ class OECDProvider(BaseProvider):
         structure_metadata = await self._get_oecd_dataflow_structure(agency, dataflow, version)
         filter_key = None
         if structure_metadata and structure_metadata.get("dimensions"):
+            country_constraint_error = self._oecd_country_constraint_error(
+                structure_metadata,
+                country_code,
+                dataflow,
+            )
+            if country_constraint_error:
+                raise DataNotAvailableError(country_constraint_error)
             if used_default_time_range:
                 self._clamp_default_time_params_to_oecd_constraints(params, structure_metadata)
             data_base_url = str(structure_metadata.get("base_url") or self.base_url).rstrip("/")
