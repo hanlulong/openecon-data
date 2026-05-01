@@ -1421,6 +1421,55 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(metadata["time_dimension_ids"], ["TIME_PERIOD"])
         self.assertEqual(metadata["dimensions"][0]["value_count"], 2)
 
+    def test_imf_parses_xml_bop_dataflow_structure_dimensions(self) -> None:
+        payload = """<?xml version='1.0' encoding='UTF-8'?>
+        <mes:Structure xmlns:mes="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message"
+            xmlns:str="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure"
+            xmlns:com="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/common"
+            xmlns:xml="http://www.w3.org/XML/1998/namespace">
+          <mes:Structures>
+            <str:Dataflows>
+              <str:Dataflow agencyID="IMF.STA" id="BOP" version="21.0.0">
+                <com:Name xml:lang="en">Balance of Payments (BOP)</com:Name>
+              </str:Dataflow>
+            </str:Dataflows>
+            <str:DataStructures>
+              <str:DataStructure agencyID="IMF.STA" id="DSD_BOP" version="24.0.0">
+                <str:DataStructureComponents>
+                  <str:DimensionList>
+                    <str:Dimension id="COUNTRY" position="0"><str:ConceptIdentity><Ref id="COUNTRY"/></str:ConceptIdentity></str:Dimension>
+                    <str:Dimension id="BOP_ACCOUNTING_ENTRY" position="1"><str:ConceptIdentity><Ref id="BOP_ACCOUNTING_ENTRY"/></str:ConceptIdentity></str:Dimension>
+                    <str:Dimension id="INDICATOR" position="2"><str:ConceptIdentity><Ref id="INDICATOR"/></str:ConceptIdentity></str:Dimension>
+                    <str:Dimension id="UNIT" position="3"><str:ConceptIdentity><Ref id="UNIT"/></str:ConceptIdentity></str:Dimension>
+                    <str:Dimension id="FREQUENCY" position="4"><str:ConceptIdentity><Ref id="FREQ"/></str:ConceptIdentity></str:Dimension>
+                    <str:TimeDimension id="TIME_PERIOD"><str:ConceptIdentity><Ref id="TIME_PERIOD"/></str:ConceptIdentity></str:TimeDimension>
+                  </str:DimensionList>
+                </str:DataStructureComponents>
+              </str:DataStructure>
+            </str:DataStructures>
+            <str:Codelists>
+              <str:Codelist agencyID="IMF.STA" id="CL_BOP_ACCOUNTING_ENTRY" version="3.3.0">
+                <str:Code id="BX"><com:Name xml:lang="en">Credit</com:Name></str:Code>
+              </str:Codelist>
+              <str:Codelist agencyID="IMF.STA" id="CL_BOP_INDICATOR" version="1.0.0">
+                <str:Code id="SRLO"><com:Name xml:lang="en">Royalties</com:Name></str:Code>
+              </str:Codelist>
+            </str:Codelists>
+          </mes:Structures>
+        </mes:Structure>
+        """
+
+        metadata = IMFProvider._parse_imf_dataflow_structure(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(metadata["agency"], "IMF.STA")
+        self.assertEqual(metadata["dataflow"], "BOP")
+        self.assertEqual(metadata["dsd_id"], "DSD_BOP")
+        self.assertEqual(metadata["dimension_ids"], ["COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"])
+        self.assertEqual(metadata["time_dimension_ids"], ["TIME_PERIOD"])
+        self.assertEqual(metadata["codelist_sizes"]["CL_BOP_INDICATOR"], 1)
+        self.assertEqual(metadata["allowed_values_by_dimension"]["BOP_ACCOUNTING_ENTRY"], {"BX"})
+        self.assertEqual(metadata["allowed_values_by_dimension"]["INDICATOR"], {"SRLO"})
+
     def test_imf_fetches_and_caches_bop_dataflow_structure(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
         provider._DATAFLOW_STRUCTURE_CACHE.clear()  # pylint: disable=protected-access
