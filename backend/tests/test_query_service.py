@@ -411,6 +411,58 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.clarificationNeeded)
         self.assertEqual(len(response.data or []), 1)
 
+    def test_process_query_refreshes_stale_intent_cache_with_exact_comtrade_title(self) -> None:
+        query = (
+            "China exports of Fabrics, woven; of cotton, unbleached, "
+            "weighing more than 200g/m2, n.e.c. in chapter 52 from Comtrade"
+        )
+        stale_cached_intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={"country": "CN"},
+            clarificationNeeded=False,
+            confidence=0.7,
+            queryType="data_fetch",
+        )
+        exact_title_intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=[
+                "521221 - Fabrics, woven; of cotton, unbleached, "
+                "weighing more than 200g/m2, n.e.c. in chapter 52"
+            ],
+            parameters={
+                "country": "CN",
+                "reporter": "China",
+                "flow": "EXPORT",
+                "indicator": "521221",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            confidence=0.99,
+            queryType="data_fetch",
+        )
+        stale_result = ParseRouteResult(
+            intent=stale_cached_intent,
+            explicit_provider="COMTRADE",
+            routed_provider="COMTRADE",
+            validation_warning=None,
+        )
+
+        with patch("backend.services.query._get_cached_parse_result", return_value=stale_result), \
+             patch("backend.services.query._put_cached_parse_result") as cache_put, \
+             patch.object(self.service, "_build_explicit_provider_code_intent", return_value=None), \
+             patch.object(self.service, "_build_exact_indicator_title_intent", return_value=exact_title_intent), \
+             patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, side_effect=AssertionError("LLM parse should be skipped")), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, return_value=[sample_series_with(source="UN Comtrade", indicator="Exports - 521221", country="CN")]) as fetch_mock:
+            response = run(self.service.process_query(query))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertEqual(len(response.data or []), 1)
+        self.assertTrue(cache_put.called)
+        self.assertEqual(fetch_mock.call_args.kwargs.get("commodity"), "521221")
+
     def test_build_exact_indicator_title_intent_rejects_generic_suffix_only_match(self) -> None:
         class _Lookup:
             def search(self, text, provider=None, limit=5):
@@ -7225,6 +7277,42 @@ class QueryServiceTests(unittest.TestCase):
         clarification = self.service._build_multi_concept_query_clarification(  # pylint: disable=protected-access
             conversation_id="conv-openness",
             query=intent.originalQuery,
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+
+        self.assertIsNone(clarification)
+
+    def test_build_multi_concept_query_clarification_skips_exact_comtrade_title(self) -> None:
+        query = (
+            "China exports of Fabrics, woven; of cotton, unbleached, "
+            "weighing more than 200g/m2, n.e.c. in chapter 52 from Comtrade"
+        )
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=[
+                "521221 - Fabrics, woven; of cotton, unbleached, "
+                "weighing more than 200g/m2, n.e.c. in chapter 52"
+            ],
+            parameters={
+                "country": "CN",
+                "reporter": "China",
+                "flow": "EXPORT",
+                "indicator": "521221",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery=query,
+        )
+
+        concept_groups = self.service._infer_query_concept_groups(query)  # pylint: disable=protected-access
+        self.assertGreaterEqual(len(concept_groups), 2)
+
+        clarification = self.service._build_multi_concept_query_clarification(  # pylint: disable=protected-access
+            conversation_id="conv-comtrade-exact",
+            query=query,
             intent=intent,
             is_multi_indicator=False,
             processing_steps=None,

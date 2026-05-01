@@ -1115,6 +1115,19 @@ def build_multi_concept_query_clarification(
     if intent.indicators and len(intent.indicators) > 1:
         return None
 
+    params = intent.parameters or {}
+    provider = normalize_provider_name(intent.apiProvider or "")
+    if (
+        provider == "COMTRADE"
+        and params.get("__semantic_provider_locked")
+        and params.get("__exact_indicator_title_match")
+    ):
+        # Exact UN Comtrade HS titles often contain tokens such as "m2" or
+        # "chapter 52" that look like unrelated macro concepts.  Once the
+        # exact-title fast path has locked a specific Comtrade commodity code,
+        # do not ask a generic multi-concept question before fetching it.
+        return None
+
     concept_groups = infer_query_concept_groups(query)
     if len(concept_groups) < 2:
         return None

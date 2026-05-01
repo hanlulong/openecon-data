@@ -4275,6 +4275,44 @@ class QueryService:
                     import copy
                     parse_result = copy.deepcopy(_cached)
                     logger.info("⚡ Intent cache HIT for: %s (skipped LLM call)", query[:60])
+                    exact_code_intent = (
+                        self._build_explicit_provider_code_intent(query)
+                        if conversation_context is None
+                        else None
+                    )
+                    exact_title_intent = (
+                        self._build_exact_indicator_title_intent(query)
+                        if conversation_context is None and exact_code_intent is None
+                        else None
+                    )
+                    shortcut_intent = exact_code_intent or exact_title_intent
+                    if shortcut_intent is not None:
+                        cached_intent = parse_result.intent
+                        cached_params = cached_intent.parameters or {}
+                        shortcut_params = shortcut_intent.parameters or {}
+                        cached_provider = normalize_provider_name(cached_intent.apiProvider or "")
+                        shortcut_provider = normalize_provider_name(shortcut_intent.apiProvider or "")
+                        cached_indicator = str(cached_params.get("indicator") or "").upper()
+                        shortcut_indicator = str(shortcut_params.get("indicator") or "").upper()
+                        if (
+                            not _ir_is_provider_locked(cached_params)
+                            or cached_provider != shortcut_provider
+                            or cached_indicator != shortcut_indicator
+                        ):
+                            parse_result = ParseRouteResult(
+                                intent=shortcut_intent,
+                                explicit_provider=shortcut_intent.apiProvider,
+                                routed_provider=shortcut_intent.apiProvider,
+                                validation_warning=None,
+                            )
+                            if _query_hash:
+                                _put_cached_parse_result(_query_hash, parse_result)
+                            logger.info(
+                                "⚡ Intent cache refreshed with deterministic shortcut: %s -> %s/%s",
+                                query[:80],
+                                shortcut_intent.apiProvider,
+                                shortcut_params.get("indicator"),
+                            )
                 else:
                     exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
                     exact_title_intent = (
