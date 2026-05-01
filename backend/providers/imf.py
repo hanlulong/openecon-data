@@ -2348,6 +2348,11 @@ class IMFProvider(BaseProvider):
                 or any(ch.isdigit() for ch in exact_code_candidate)
             )
         )
+        exact_code_has_namespace = (
+            "_" in exact_code_candidate
+            or "." in exact_code_candidate
+            or any(ch.isdigit() for ch in exact_code_candidate)
+        )
         if exact_code_like:
             try:
                 from ..services.indicator_database import get_indicator_lookup
@@ -2358,7 +2363,10 @@ class IMFProvider(BaseProvider):
                 logger.debug("IMF exact-code lookup skipped for '%s': %s", indicator, exc)
                 exact_meta = None
 
-            if exact_meta:
+            if exact_meta and (
+                exact_code_has_namespace
+                or str(exact_meta.get("category") or "").strip().upper() == "WEO"
+            ):
                 label_hint = str(exact_meta.get("name") or indicator)
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)

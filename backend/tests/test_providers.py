@@ -1175,6 +1175,30 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNotNone(label)
         translator_factory.assert_not_called()
 
+    def test_imf_short_non_weo_catalog_code_does_not_bypass_translator(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _Lookup:
+            def get(self, provider_name: str, code: str):
+                if provider_name == "IMF" and code == "ABC":
+                    return {
+                        "code": "ABC",
+                        "category": "INDICATOR",
+                        "name": "Ambiguous short non-WEO catalog code",
+                    }
+                return None
+
+        translator = MagicMock()
+        translator.translate_indicator.return_value = ("NGDP_RPCH", "Real GDP growth")
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()), \
+             patch("backend.providers.imf.get_indicator_translator", return_value=translator):
+            code, label = run(provider._resolve_indicator_code("ABC"))
+
+        self.assertEqual(code, "NGDP_RPCH")
+        self.assertEqual(label, "Real GDP growth")
+        translator.translate_indicator.assert_called_once_with("ABC", "IMF")
+
     def test_imf_non_datamapper_trade_code_uses_public_sdmx_v21(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
