@@ -1695,6 +1695,15 @@ def format_informational_results(
 # Semantic discriminator verification
 # ====================================================================
 
+# Context terms that fundamentally change the requested measure. Kept local to
+# verification so this module does not instantiate the legacy resolver just to
+# read its private discriminator set.
+SEMANTIC_DISCRIMINATORS: set[str] = {
+    "growth", "real", "nominal", "level", "per capita",
+    "constant", "current", "change", "rate",
+    "ppp", "purchasing power",
+}
+
 def discriminator_present(disc: str, text: str) -> bool:
     """Check whether semantic discriminator *disc* is satisfied by *text*.
 
@@ -1746,10 +1755,7 @@ def verify_semantic_discriminators(
     Returns True if the code/name matches the query's semantic discriminators.
     """
     original_lower = str(original_query or "").lower()
-    from ..services import query as _qmod
-    resolver = _qmod.get_indicator_resolver()
-    disc_set = getattr(resolver, '_semantic_discriminators', set())
-    query_discs = {d for d in disc_set if d in original_lower}
+    query_discs = {d for d in SEMANTIC_DISCRIMINATORS if d in original_lower}
     if not query_discs:
         return True
 

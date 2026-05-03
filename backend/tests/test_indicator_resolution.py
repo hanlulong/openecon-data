@@ -102,8 +102,7 @@ class IndicatorResolutionTests(unittest.TestCase):
                     svc,
                     "STATSCAN",
                     intent,
-                    dict(intent.parameters or {}),
-                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                    dict(intent.parameters or {})
                 )
             )
 
@@ -146,8 +145,7 @@ class IndicatorResolutionTests(unittest.TestCase):
                     svc,
                     "STATSCAN",
                     intent,
-                    dict(intent.parameters or {}),
-                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                    dict(intent.parameters or {})
                 )
             )
 
@@ -185,8 +183,7 @@ class IndicatorResolutionTests(unittest.TestCase):
                     svc,
                     "STATSCAN",
                     intent,
-                    dict(intent.parameters or {}),
-                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                    dict(intent.parameters or {})
                 )
             )
 
@@ -233,8 +230,7 @@ class IndicatorResolutionTests(unittest.TestCase):
                     svc,
                     "STATSCAN",
                     intent,
-                    dict(intent.parameters or {}),
-                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                    dict(intent.parameters or {})
                 )
             )
 

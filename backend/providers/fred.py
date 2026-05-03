@@ -286,8 +286,8 @@ class FREDProvider(BaseProvider):
         1. Explicit series_id passthrough (with optional transformation suffix like ":pc1")
         2. Raw FRED code detection (short alphanumeric strings that look like series IDs)
 
-        All natural-language indicator resolution is delegated to IndicatorResolver
-        and dynamic FRED API search in _resolve_series_id_async().
+        All natural-language indicator discovery is delegated to provider metadata
+        search in _resolve_series_id_async().
 
         Args:
             indicator: Natural language indicator name (e.g., "GDP growth", "unemployment rate")
@@ -314,8 +314,8 @@ class FREDProvider(BaseProvider):
         if re.fullmatch(r"[A-Z0-9]{1,25}", candidate):
             return candidate, None
 
-        # No direct series ID detected - return None to signal that IndicatorResolver
-        # and dynamic search should be tried in _resolve_series_id_async().
+        # No direct series ID detected - return None to signal that provider
+        # metadata discovery should be tried in _resolve_series_id_async().
         return None, None
 
     async def _resolve_series_id_async(
@@ -327,10 +327,10 @@ class FREDProvider(BaseProvider):
         Resolution priority:
         1. Explicit series_id passthrough (with optional transformation suffix)
         2. Raw FRED code detection (short alphanumeric strings)
-        3. IndicatorResolver (FTS5 search over 330K+ indicators in database)
-        4. Dynamic FRED API search fallback
+        3. Provider metadata discovery (local FRED metadata index, then FRED API search)
 
-        This ensures ANY valid FRED series can be discovered without hardcoded mappings.
+        This keeps provider code/title passthrough mechanical while avoiding the
+        legacy universal resolver/translator as final semantic authority.
 
         Args:
             indicator: Natural language indicator name
@@ -348,21 +348,7 @@ class FREDProvider(BaseProvider):
         if result_series is not None:
             return result_series, transform
 
-        # Use IndicatorResolver as primary resolution (FTS5 search over 330K+ indicators)
-        if indicator:
-            try:
-                from ..services.indicator_resolver import get_indicator_resolver
-                resolver = get_indicator_resolver()
-                resolved = resolver.resolve(indicator, provider="FRED")
-                if resolved and resolved.confidence >= 0.7:
-                    logger.info(f"IndicatorResolver: FRED '{indicator}' -> '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
-                    # Auto-apply pc1 transformation for index series when user asks for rate/change
-                    transform = self._infer_transformation(indicator, resolved.code)
-                    return resolved.code, transform
-            except Exception as e:
-                logger.debug(f"IndicatorResolver failed, continuing to dynamic search: {e}")
-
-        # IndicatorResolver failed - try dynamic search (async, FRED API call)
+        # Try provider metadata discovery (local metadata index, then FRED API).
         if indicator:
             logger.info(f"No database match for '{indicator}', attempting dynamic FRED series search...")
             dynamic_series = await self._find_best_series(indicator)
@@ -394,28 +380,17 @@ class FREDProvider(BaseProvider):
     def _series_id(self, indicator: Optional[str], series_id: Optional[str]) -> str:
         """Legacy synchronous method - returns just the series ID.
 
-        Tries explicit series_id / raw code detection, then falls back to
-        IndicatorResolver (FTS5 database search). Does NOT support async
-        dynamic FRED API search. For full functionality, use fetch_series().
+        Tries explicit series_id / raw code detection only. Natural-language
+        discovery is async metadata search in fetch_series(); this synchronous
+        compatibility method must not invoke the legacy resolver/translator.
         """
         series, _ = self._series_id_with_transform(indicator, series_id)
         if series is not None:
             return series
 
-        # Try IndicatorResolver (synchronous FTS5 search)
-        if indicator:
-            try:
-                from ..services.indicator_resolver import get_indicator_resolver
-                resolver = get_indicator_resolver()
-                resolved = resolver.resolve(indicator, provider="FRED")
-                if resolved and resolved.confidence >= 0.7:
-                    return resolved.code
-            except Exception:
-                pass
-
         raise DataNotAvailableError(
             f"Unknown FRED indicator: '{indicator}'. "
-            f"Use fetch_series() for dynamic search support, or provide an explicit FRED series ID."
+            f"Use fetch_series() for provider metadata discovery, or provide an explicit FRED series ID."
         )
 
     @staticmethod

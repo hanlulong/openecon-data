@@ -57,6 +57,7 @@ SCAN_GLOBS = (
     "backend/services/indicator_translator.py",
     "backend/services/query.py",
     "backend/services/query_helpers.py",
+    "backend/services/provider_fallback.py",
     "backend/services/query_parsing.py",
     "backend/services/relevance_scorer.py",
     "backend/services/statscan_metadata.py",
@@ -134,6 +135,13 @@ PATTERNS = (
         regex=r"resolve_concept_for_fallback|resolve_indicator_for_fallback_provider|get_best_provider|find_concept_by_term",
         classification="banned_semantic_final_authority",
         rationale="Cross-provider fallback can resolve concepts through catalog code mappings.",
+    ),
+    ShortcutPattern(
+        id="provider_fallback_legacy_semantic_provider_choice",
+        path_glob="backend/services/provider_fallback.py",
+        regex=r"IndicatorResolver|indicator_resolver|get_indicator_resolver|catalog-based|get_compat_fallbacks|catalog_service",
+        classification="banned_semantic_final_authority",
+        rationale="Fallback provider ordering must not use legacy resolver/catalog semantic matches as final provider choice.",
     ),
     ShortcutPattern(
         id="query_parsing_cue_inference",

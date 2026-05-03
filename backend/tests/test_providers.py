@@ -314,35 +314,16 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(result, code,
                     f"Explicit code '{code}' should pass through directly")
 
-    def test_fred_series_id_delegates_to_indicator_resolver(self) -> None:
-        """Test that natural language indicators are resolved via IndicatorResolver."""
+    def test_fred_series_id_rejects_natural_language_without_legacy_resolver(self) -> None:
+        """Natural language must use async metadata discovery, not legacy resolver."""
         provider = FREDProvider(api_key="test-key")
 
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockResolved:
-            code: str
-            name: str
-            confidence: float
-            source: str
-            metadata: dict = None
-            def __post_init__(self):
-                if self.metadata is None:
-                    self.metadata = {}
-
-        mock_resolver = MagicMock()
-        mock_resolver.resolve.return_value = MockResolved(
-            code="A191RL1Q225SBEA",
-            name="Real GDP Growth Rate",
-            confidence=0.95,
-            source="database",
-        )
-
-        with patch("backend.services.indicator_resolver.get_indicator_resolver", return_value=mock_resolver):
-            result = provider._series_id("GDP growth", None)
-            self.assertEqual(result, "A191RL1Q225SBEA")
-            mock_resolver.resolve.assert_called_with("GDP growth", provider="FRED")
+        with patch(
+            "backend.services.indicator_resolver.get_indicator_resolver",
+            side_effect=AssertionError("legacy resolver must not run"),
+        ):
+            with self.assertRaises(DataNotAvailableError):
+                provider._series_id("GDP growth", None)
 
     def test_fred_series_id_explicit_override(self) -> None:
         """Test that explicit series IDs override indicator names."""

@@ -368,7 +368,7 @@ class QueryService:
         # Deterministic baseline router (single source of routing truth).
         self.unified_router = UnifiedRouter()
         # Small in-memory cache to avoid repeated cross-provider fallback scans.
-        self._fallback_provider_cache: "OrderedDict[Tuple[str, str, Tuple[str, ...]], List[str]]" = OrderedDict()
+        self._fallback_provider_cache: "OrderedDict[Tuple[str, Tuple[str, ...]], List[str]]" = OrderedDict()
         # Shared parse/routing/validation stages used by multiple execution paths.
         self.pipeline = QueryPipeline(self)
 
@@ -2540,10 +2540,7 @@ class QueryService:
         self, provider: str, intent: ParsedIntent, params: dict,
     ) -> dict:
         """Delegates to :func:`indicator_resolution.resolve_indicator_for_fetch`."""
-        return await _ir_resolve_indicator_for_fetch(
-            self, provider, intent, params,
-            _get_indicator_resolver=get_indicator_resolver,
-        )
+        return await _ir_resolve_indicator_for_fetch(self, provider, intent, params)
 
     def _select_indicator_query_for_resolution(self, intent: ParsedIntent) -> str:
         """Delegates to :func:`indicator_resolution.select_indicator_query_for_resolution`."""
@@ -3440,7 +3437,6 @@ class QueryService:
         fallback_result: List[NormalizedData],
         target_countries: Optional[List[str]] = None,
         original_query: Optional[str] = None,
-        original_concept: Optional[str] = None,
     ) -> bool:
         """Check if fallback result is semantically related to the original query.
 
@@ -3448,7 +3444,6 @@ class QueryService:
         """
         return _pf_is_fallback_relevant(
             original_indicators, fallback_result, target_countries, original_query,
-            original_concept=original_concept,
         )
 
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):

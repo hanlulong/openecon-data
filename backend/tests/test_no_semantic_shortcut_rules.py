@@ -32,6 +32,7 @@ RUNTIME_FILES = [
     Path("backend/services/indicator_selector.py"),
     Path("backend/services/indicator_clarification.py"),
     Path("backend/services/query_helpers.py"),
+    Path("backend/services/provider_fallback.py"),
     Path("backend/services/query_pipeline.py"),
 ]
 
@@ -143,6 +144,7 @@ def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> N
         "backend/services/indicator_translator.py",
         "backend/services/query.py",
         "backend/services/query_helpers.py",
+        "backend/services/provider_fallback.py",
         "backend/services/query_parsing.py",
         "backend/services/relevance_scorer.py",
         "backend/services/statscan_metadata.py",
@@ -197,6 +199,19 @@ def test_unified_router_has_no_banned_provider_final_authority_findings() -> Non
     ]
 
     assert unified_banned == []
+
+
+def test_provider_fallback_has_no_legacy_resolver_or_catalog_provider_choice() -> None:
+    findings = scan_semantic_shortcuts()
+
+    fallback_banned = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.path.as_posix() == "backend/services/provider_fallback.py"
+        and finding.pattern_id == "provider_fallback_legacy_semantic_provider_choice"
+    ]
+
+    assert fallback_banned == []
 
 
 def test_indicator_selector_has_no_top_candidate_final_authority_fallback() -> None:

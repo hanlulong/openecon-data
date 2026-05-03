@@ -8,7 +8,7 @@ This module provides:
 - Plausibility checks for resolved indicator codes vs query intent
 - Resolution threshold computation (dynamic acceptance levels)
 - Disabled provider override shims kept only for compatibility
-- Full indicator resolution pipeline (IndicatorSelector -> legacy resolver)
+- Full indicator resolution pipeline (exact provider-native title/code -> IndicatorSelector)
 - Distilled indicator query building for cross-provider resolution
 - Query type detection (ranking, comparison, temporal split)
 - BIS metadata label normalization
@@ -1491,30 +1491,19 @@ async def resolve_indicator_for_fetch(
     provider: str,
     intent: ParsedIntent,
     params: dict,
-    *,
-    _get_indicator_resolver: Any = None,
 ) -> dict:
     """Resolve and validate the indicator code for a fetch operation.
 
-    Uses IndicatorSelector (embed -> LLM pick) as primary resolution,
-    falling back to the legacy IndicatorResolver if embeddings are unavailable.
+    Uses exact provider-native passthrough and IndicatorSelector (embed -> LLM
+    pick) as final indicator authority. If those paths cannot decide, the
+    fetch keeps provider-neutral semantic text and fails closed downstream
+    rather than falling through to legacy catalog/translator shortcuts.
 
     Mutates intent.parameters and potentially intent.indicators (for
     WorldBank multi-indicator collapse). Returns the updated params dict.
     """
-    if _get_indicator_resolver is None:
-        from ..services.indicator_resolver import get_indicator_resolver as _get_indicator_resolver
-
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
-
-    resolver = None
-
-    def _resolver() -> Any:
-        nonlocal resolver
-        if resolver is None:
-            resolver = _get_indicator_resolver()
-        return resolver
 
     def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
         semantic_label = str(
@@ -1673,10 +1662,30 @@ async def resolve_indicator_for_fetch(
     exact_title_query = (original_selector_query or selector_query).strip()
     if provider and looks_like_exact_provider_title_match(exact_title_query, provider):
         logger.info(
-            "🎯 Skipping IndicatorSelector for exact %s title match: %s",
+            "🎯 Resolving exact %s title match without semantic shortcuts: %s",
             provider,
             exact_title_query,
         )
+        exact_match = find_exact_provider_title_match(exact_title_query, provider)
+        if exact_match and exact_match.get("code"):
+            params = _apply_indicator_with_semantic_label(
+                str(exact_match["code"]),
+                __semantic_indicator_label=str(exact_match.get("name") or exact_title_query),
+                __semantic_authority="exact_user_input",
+                __decision_source="exact_title",
+                __exact_indicator_title_match=True,
+            )
+            intent.parameters = params
+            return params
+        logger.info(
+            "🚫 Exact-title detector found no provider-local code for %s: %s",
+            provider,
+            exact_title_query,
+        )
+        params = _apply_indicator_with_semantic_label(indicator_query)
+        params["__indicator_selection_status"] = "exact_title_unresolved"
+        intent.parameters = params
+        return params
     else:
         selector_attempted = False
         selector_without_final_authority = False
@@ -1760,82 +1769,11 @@ async def resolve_indicator_for_fetch(
             intent.parameters = params
             return params
 
-    # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
-    resolved = _resolver().resolve(
-        indicator_query,
-        provider=provider,
-        country=country_context,
-        countries=countries_context,
-    )
-
-    # Evaluate resolver result
-    accepted_resolved = False
-    if resolved:
-        threshold = indicator_resolution_threshold(
-            indicator_query=indicator_query,
-            resolved_source=resolved.source,
-        )
-        relevance_threshold = minimum_resolved_relevance_threshold(
-            indicator_query,
-        )
-        resolved_relevance = score_resolved_indicator_relevance(
-            svc=svc,
-            indicator_query=indicator_query,
-            provider=provider,
-            resolved=resolved,
-        )
-        accepted_resolved = resolved.confidence >= threshold
-        if accepted_resolved and not is_resolved_indicator_plausible(
-            svc=svc,
-            provider=provider,
-            indicator_query=indicator_query,
-            resolved_code=resolved.code,
-            resolved_name=" ".join(
-                part
-                for part in [
-                    str(getattr(resolved, "name", "") or ""),
-                    str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
-                    str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
-                ]
-                if part
-            ),
-        ):
-            accepted_resolved = False
-        if accepted_resolved and resolved_relevance < relevance_threshold:
-            accepted_resolved = False
-        logger.info(
-            (
-                "🔍 IndicatorResolver candidate: '%s' → '%s' "
-                "(conf=%.2f, src=%s, threshold=%.2f, relevance=%.2f, min_relevance=%.2f, accepted=%s)"
-            ),
-            indicator_query,
-            resolved.code,
-            resolved.confidence,
-            resolved.source,
-            threshold,
-            resolved_relevance,
-            relevance_threshold,
-            accepted_resolved,
-        )
-
-    # Apply best result or fall back to raw query
-    if accepted_resolved and resolved:
-        authority_markers = {}
-        if provider and looks_like_exact_provider_title_match(exact_title_query, provider):
-            authority_markers = {
-                "__semantic_authority": "exact_user_input",
-                "__decision_source": "exact_title",
-                "__exact_indicator_title_match": True,
-            }
-        params = _apply_indicator_with_semantic_label(resolved.code, **authority_markers)
-        if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
-            logger.info(
-                "🔎 Collapsing World Bank multi-indicator intent to resolved indicator '%s' after semantic override",
-                resolved.code,
-            )
-            intent.indicators = [resolved.code]
-    else:
-        params = _apply_indicator_with_semantic_label(indicator_query)
+    # No selector final authority. Keep provider-neutral semantic text and let
+    # provider retrieval fail closed or ask for clarification; do not invoke the
+    # legacy catalog/translator resolver as final authority.
+    params = _apply_indicator_with_semantic_label(indicator_query)
+    params.setdefault("__indicator_selection_status", "no_decision")
 
     intent.parameters = params
     return params

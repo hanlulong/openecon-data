@@ -624,8 +624,7 @@ class QueryServiceTests(unittest.TestCase):
                     self.service,
                     "IMF",
                     intent,
-                    dict(intent.parameters or {}),
-                    _get_indicator_resolver=lambda: _Resolver(),
+                    dict(intent.parameters or {})
                 )
             )
 
@@ -748,8 +747,7 @@ class QueryServiceTests(unittest.TestCase):
                 self.service,
                 "IMF",
                 intent,
-                dict(intent.parameters or {}),
-                _get_indicator_resolver=_resolver_should_not_run,
+                dict(intent.parameters or {})
             )
         )
 
@@ -8773,32 +8771,22 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params.get("baseCurrency"), "USD")
         self.assertEqual(params.get("targetCurrency"), "CHF")
 
-    def test_get_fallback_providers_passes_country_context_to_resolver(self) -> None:
-        class _Resolved:
-            confidence = 0.8
-
-        class _Resolver:
-            def __init__(self):
-                self.calls = []
-
-            def resolve(self, *args, **kwargs):
-                self.calls.append(kwargs)
-                return _Resolved()
-
-        resolver = _Resolver()
-        with patch("backend.services.indicator_resolver.get_indicator_resolver", return_value=resolver):
-            _ = self.service._get_fallback_providers(  # pylint: disable=protected-access
+    def test_get_fallback_providers_does_not_use_legacy_resolver_or_catalog(self) -> None:
+        with patch(
+            "backend.services.indicator_resolver.get_indicator_resolver",
+            side_effect=AssertionError("legacy resolver must not choose fallback providers"),
+        ), patch(
+            "backend.services.catalog_service.get_fallback_providers",
+            side_effect=AssertionError("catalog fallback must not choose fallback providers"),
+        ):
+            fallbacks = self.service._get_fallback_providers(  # pylint: disable=protected-access
                 "IMF",
                 indicator="imports",
                 country="CN",
                 countries=["CN", "GB"],
             )
 
-        self.assertTrue(resolver.calls)
-        first_call = resolver.calls[0]
-        self.assertEqual(first_call.get("country"), "CN")
-        self.assertEqual(first_call.get("countries"), ["CN", "GB"])
-        self.assertFalse(first_call.get("use_cache", True))
+        self.assertEqual(fallbacks, ["WORLDBANK"])
 
     def test_execute_with_langgraph_handles_generated_file_models(self) -> None:
         class _FakeGraph:

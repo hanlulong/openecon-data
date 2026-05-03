@@ -1029,13 +1029,15 @@ class WorldBankProvider(BaseProvider):
         )
 
     async def _resolve_indicator_code(self, indicator: str) -> str:
-        """Resolve WorldBank indicator code through IndicatorResolver (unified) or metadata search.
+        """Resolve WorldBank indicator code without legacy semantic shortcuts.
 
         Resolution priority:
         1. Pre-resolved codes (contain dots, e.g., NY.GDP.MKTP.CD) -- instant
-        2. IndicatorResolver (FTS5 + catalog + translator) -- fast, local
-        3. Metadata search (SDMX + WB REST API + LLM) -- slow, network I/O
-           Only used as last resort with a 15s timeout cap.
+        2. Exact provider-native title match from local metadata -- mechanical
+        3. Metadata search (SDMX + WB REST API + LLM) -- bounded network I/O
+
+        The legacy universal IndicatorResolver/catalog/translator path is not
+        used as final semantic authority here.
         """
         # Short-circuit: if indicator is already a valid WorldBank code
         # (dotted WDI forms and public REST codes with underscores/digits),
@@ -1061,18 +1063,6 @@ class WorldBankProvider(BaseProvider):
                 logger.info("🔒 WorldBank: Using exact local indicator code '%s' from provider-title match", code)
                 return code
 
-        # Use IndicatorResolver as the unified first attempt
-        # This consolidates FTS5 search, translator, and catalog into one service
-        try:
-            from ..services.indicator_resolver import get_indicator_resolver
-            resolver = get_indicator_resolver()
-            resolved = resolver.resolve(indicator, provider="WorldBank")
-            if resolved and resolved.confidence >= 0.7:
-                logger.info(f"🔍 IndicatorResolver: WorldBank '{indicator}' → '{resolved.code}' (confidence: {resolved.confidence:.2f}, source: {resolved.source})")
-                return resolved.code
-        except Exception as e:
-            logger.debug(f"IndicatorResolver failed, falling back: {e}")
-
         # Allow users to supply raw WorldBank indicator codes directly
         if indicator and "." in indicator:
             return indicator
@@ -1086,7 +1076,7 @@ class WorldBankProvider(BaseProvider):
         # Cap total metadata search time to 15s to prevent 60s+ hangs when
         # the WB indicator API is slow. The upstream pipeline
         # (resolve_indicator_for_fetch) should have already resolved most
-        # indicators via the catalog or IndicatorSelector.
+        # indicators via exact passthrough or IndicatorSelector.
         import time as _time
         _meta_start = _time.perf_counter()
         try:

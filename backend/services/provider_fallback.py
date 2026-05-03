@@ -4,7 +4,7 @@ Extracted from query.py to reduce file size and isolate the fallback
 orchestration into a testable, reusable module.
 
 This module provides:
-- Smart fallback provider ordering using IndicatorResolver + catalog + static chains
+- Structural fallback provider ordering from provider relationships
 - Semantic relevance validation of fallback results
 - User-facing "no data" suggestion text
 - LRU cache for fallback provider lookups
@@ -108,7 +108,7 @@ MAX_FALLBACK_CACHE_ENTRIES = 1024
 def get_fallback_providers(
     primary_provider: str,
     unified_router: Any,
-    fallback_cache: "OrderedDict[Tuple[str, str, Tuple[str, ...]], List[str]]",
+    fallback_cache: "OrderedDict[Tuple[str, Tuple[str, ...]], List[str]]",
     *,
     indicator: Optional[str] = None,
     country: Optional[str] = None,
@@ -117,13 +117,9 @@ def get_fallback_providers(
 ) -> List[str]:
     """Return an ordered list of fallback providers for a given primary provider.
 
-    Uses THREE sources for smarter fallbacks:
-    1. IndicatorResolver database search (330K+ indicators) - HIGHEST priority
-    2. Catalog-based fallbacks (YAML concept definitions)
-    3. General fallback chains (provider relationships)
-
-    The IndicatorResolver search finds which providers ACTUALLY have the indicator,
-    rather than relying on static mappings.
+    Uses provider relationship fallbacks only. The optional indicator argument is
+    retained for API compatibility and cache separation, but it must not trigger
+    legacy resolver/catalog semantic provider selection.
 
     Args:
         primary_provider: The primary provider that failed.
@@ -140,25 +136,19 @@ def get_fallback_providers(
     from .query import normalize_provider_name
 
     primary_upper = primary_provider.upper()
-    cache_key: Optional[Tuple[str, str, Tuple[str, ...]]] = None
-    if indicator:
-        normalized_geo = tuple(
-            sorted({
-                normalize_country_to_iso2(str(c)) or str(c).strip().upper()
-                for c in [*(countries or []), country]
-                if c
-            })
-        )
-        cache_key = (
-            primary_upper,
-            str(indicator).strip().lower(),
-            normalized_geo,
-        )
-        cached = fallback_cache.get(cache_key)
-        if cached:
-            # LRU refresh on read.
-            fallback_cache.move_to_end(cache_key)
-            return list(cached)
+    normalized_geo = tuple(
+        sorted({
+            normalize_country_to_iso2(str(c)) or str(c).strip().upper()
+            for c in [*(countries or []), country]
+            if c
+        })
+    )
+    cache_key: Optional[Tuple[str, Tuple[str, ...]]] = (primary_upper, normalized_geo)
+    cached = fallback_cache.get(cache_key)
+    if cached:
+        # LRU refresh on read.
+        fallback_cache.move_to_end(cache_key)
+        return list(cached)
 
     fallback_list: List[str] = []
     try:
@@ -189,62 +179,12 @@ def get_fallback_providers(
                 fallback_cache.popitem(last=False)
         return result
 
-    # INFRASTRUCTURE FIX: Use IndicatorResolver to find providers that have this indicator
-    # This searches the 330K+ indicator database for actual matches
-    if indicator:
-        try:
-            from .indicator_resolver import get_indicator_resolver
-            resolver = get_indicator_resolver()
-
-            # Search for this indicator across ALL providers
-            all_providers = ["WORLDBANK", "IMF", "FRED", "EUROSTAT", "OECD", "BIS", "STATSCAN"]
-            indicator_fallbacks: List[Tuple[str, float]] = []
-
-            for provider in all_providers:
-                if provider == primary_upper:
-                    continue  # Skip the provider that failed
-                if context_countries and not provider_covers_country_list(provider, context_countries):
-                    continue
-
-                # Check if this provider has the indicator
-                resolved = resolver.resolve(
-                    indicator,
-                    provider=provider,
-                    country=country,
-                    countries=context_countries or None,
-                    use_cache=False,
-                )
-                if resolved and resolved.confidence >= 0.6:
-                    indicator_fallbacks.append((provider, resolved.confidence))
-                    logger.debug(
-                        "IndicatorResolver found '%s' in %s (conf: %.2f)",
-                        indicator, provider, resolved.confidence,
-                    )
-
-            # Sort by confidence and take providers
-            if indicator_fallbacks:
-                indicator_fallbacks.sort(key=lambda x: x[1], reverse=True)
-                resolver_providers = [p for p, _ in indicator_fallbacks]
-                # Merge: resolver-based first, then general fallbacks
-                combined = resolver_providers + [p for p in fallback_list if p not in resolver_providers]
-                logger.info("Smart fallback for '%s': %s", indicator, combined[:5])
-                return _cache_and_return(combined[:5])
-
-        except Exception as e:
-            logger.debug("IndicatorResolver fallback search failed: %s", e)
-
-    # Fallback to catalog-based compatibility
-    if indicator:
-        try:
-            from .catalog_service import get_fallback_providers as get_compat_fallbacks
-            compat_fallbacks = get_compat_fallbacks(indicator, primary_upper)
-            if compat_fallbacks:
-                compat_providers = [p for p, _, _ in compat_fallbacks]
-                combined = compat_providers + [p for p in fallback_list if p not in compat_providers]
-                logger.debug("Using catalog fallbacks for '%s': %s", indicator, combined)
-                return _cache_and_return(combined)
-        except Exception as e:
-            logger.debug("Could not get catalog-based fallbacks: %s", e)
+    if context_countries:
+        fallback_list = [
+            provider_name
+            for provider_name in fallback_list
+            if provider_covers_country_list(provider_name, context_countries)
+        ]
 
     return _cache_and_return(fallback_list)
 
@@ -447,7 +387,6 @@ def is_fallback_relevant(
     fallback_result: List[NormalizedData],
     target_countries: Optional[List[str]] = None,
     original_query: Optional[str] = None,
-    original_concept: Optional[str] = None,
 ) -> bool:
     """Check if a fallback result is semantically related to the original query.
 
@@ -461,44 +400,17 @@ def is_fallback_relevant(
     Also validates COUNTRY matching to prevent returning data for a different
     country than requested.
 
-    When ``original_concept`` is provided, the catalog's ``explicit_exclusions``
-    for that concept are used to reject fallback indicators that match a known
-    wrong-type indicator (e.g., "gdp growth rate" when the concept is "gdp").
-
     Args:
         original_indicators: Original indicator names from user query.
         fallback_result: Data returned from fallback provider.
         target_countries: Optional countries the query is targeting.
         original_query: Optional raw user query text.
-        original_concept: Optional catalog concept name for exclusion checking.
 
     Returns:
         ``True`` if fallback data is relevant, ``False`` otherwise.
     """
     if not fallback_result or not original_indicators:
         return False
-
-    # --- Catalog concept exclusion check ---
-    # Use the catalog's curated explicit_exclusions to reject wrong-type indicators.
-    if original_concept:
-        try:
-            from .catalog_service import is_excluded_term
-            for data in fallback_result:
-                if not data.metadata:
-                    continue
-                indicator_name = str(data.metadata.indicator or "")
-                description = str(data.metadata.description or "")
-                # Check both indicator name and description against exclusions
-                for text in (indicator_name, description):
-                    if text and is_excluded_term(text, original_concept):
-                        logger.warning(
-                            "Fallback rejected: indicator '%s' matches explicit_exclusion "
-                            "for concept '%s'",
-                            text, original_concept,
-                        )
-                        return False
-        except Exception as exc:
-            logger.debug("Catalog exclusion check failed: %s", exc)
 
     # Country validation (generalized): enforce match for known ISO2 country contexts.
     requested_iso2 = {
