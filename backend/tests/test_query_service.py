@@ -76,6 +76,8 @@ class QueryServiceTests(unittest.TestCase):
         cache_service.clear()
         self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
         self.service.settings.use_outcome_decision_stage = False
+        self.service.settings.use_post_fetch_semantic_judge = False
+        self.service.settings.use_staged_state_commit = False
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -7922,8 +7924,11 @@ class QueryServiceTests(unittest.TestCase):
                     provider="IMF",
                     confidence=0.88,
                     fallbacks=["WorldBank"],
-                    reasoning="semantic-router match",
-                    match_type="semantic",
+                    reasoning="LLM router match",
+                    match_type="litellm",
+                    decision_source="llm_provider",
+                    semantic_authority="llm_adjudication",
+                    final_authority=True,
                 )
 
         class _HybridRouter:
@@ -7936,7 +7941,7 @@ class QueryServiceTests(unittest.TestCase):
         provider = run(self.service._select_routed_provider(intent, "government debt in china"))  # pylint: disable=protected-access
         self.assertEqual(provider, "IMF")
 
-    def test_select_routed_provider_does_not_lock_candidate_only_deterministic_match(self) -> None:
+    def test_select_routed_provider_rejects_candidate_only_semantic_router_match(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["gdp to debt ratio"],
@@ -7969,7 +7974,7 @@ class QueryServiceTests(unittest.TestCase):
         self.service.hybrid_router = None
 
         provider = run(self.service._select_routed_provider(intent, "gdp to debt ratio in china"))  # pylint: disable=protected-access
-        self.assertEqual(provider, "BIS")
+        self.assertEqual(provider, "WORLDBANK")
 
     def test_select_routed_provider_keeps_llm_provider_for_candidate_only_router_baseline(self) -> None:
         intent = ParsedIntent(
@@ -8640,6 +8645,75 @@ class QueryServiceTests(unittest.TestCase):
         concept = self.service._resolve_concept_for_fallback(intent, "IMF")
         # Should find real_effective_exchange_rate or similar from catalog
         self.assertIsNotNone(concept)
+
+    def test_promoted_path_fallback_skips_catalog_concept_code_mapping(self) -> None:
+        self.service.settings.use_outcome_decision_stage = True
+        self.service.settings.use_post_fetch_semantic_judge = True
+        self.service.settings.use_staged_state_commit = True
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["gdp growth"],
+            parameters={"country": "FR"},
+            clarificationNeeded=False,
+            originalQuery="gdp growth in France",
+        )
+        observed: dict[str, Any] = {}
+
+        def fake_resolve_indicator_for_fallback_provider(
+            concept_name: str | None,
+            fallback_provider: str,
+            semantic_query: str,
+            countries: list | None,
+        ) -> list[str]:
+            observed["concept_name"] = concept_name
+            observed["fallback_provider"] = fallback_provider
+            observed["semantic_query"] = semantic_query
+            observed["countries"] = countries
+            return [semantic_query]
+
+        async def fake_fetch_data(fallback_intent: ParsedIntent) -> list[NormalizedData]:
+            observed["fallback_intent"] = fallback_intent
+            return [
+                sample_series_with(
+                    source="World Bank",
+                    indicator="GDP growth (annual %)",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="FR",
+                )
+            ]
+
+        with patch.object(
+            self.service,
+            "_resolve_concept_for_fallback",
+            side_effect=AssertionError("promoted path must not use catalog concept fallback"),
+        ), patch.object(
+            self.service,
+            "_resolve_indicator_for_fallback_provider",
+            side_effect=fake_resolve_indicator_for_fallback_provider,
+        ), patch.object(
+            self.service,
+            "_get_fallback_providers",
+            return_value=["WORLDBANK"],
+        ), patch.object(
+            self.service,
+            "_fetch_data",
+            new=AsyncMock(side_effect=fake_fetch_data),
+        ), patch.object(
+            self.service,
+            "_is_fallback_relevant",
+            return_value=True,
+        ):
+            result = run(
+                self.service._try_with_fallback(  # pylint: disable=protected-access
+                    intent,
+                    DataNotAvailableError("primary failed"),
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertIsNone(observed["concept_name"])
+        self.assertEqual(observed["fallback_provider"], "WORLDBANK")
+        self.assertNotIn("NY.GDP", observed["fallback_intent"].indicators[0])
 
     def test_select_indicator_query_prefers_original_query_over_provider_code(self) -> None:
         """_select_indicator_query_for_resolution should not return provider codes."""

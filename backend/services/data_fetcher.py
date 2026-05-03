@@ -95,6 +95,77 @@ def _normalize_provider_name(provider: str) -> str:
     return normalize_provider_name(provider)
 
 
+_PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS = {
+    "STATSCAN",
+    "STATISTICS CANADA",
+    "OECD",
+    "EUROSTAT",
+    "IMF",
+    "BIS",
+    "FRED",
+}
+
+
+def _use_promoted_semantic_path(svc: Any) -> bool:
+    """Return whether the new semantic verification path is enabled end-to-end."""
+    settings = getattr(svc, "settings", None)
+    return bool(
+        getattr(settings, "use_outcome_decision_stage", False)
+        and getattr(settings, "use_post_fetch_semantic_judge", False)
+        and getattr(settings, "use_staged_state_commit", False)
+    )
+
+
+def _has_provider_map_authority(params: dict) -> bool:
+    """Return whether provider-internal maps may be used as API mechanics.
+
+    On the promoted path, natural-language provider maps are never semantic
+    final authority. They are allowed only after an exact user/provider-native
+    target or an LLM selector decision has already established semantic
+    authority.
+    """
+    if is_exact_match_locked(params):
+        return True
+    return str(params.get("__semantic_authority") or "") in {
+        "exact_user_input",
+        "llm_adjudication",
+        "post_fetch_semantic_judge",
+    }
+
+
+def _assert_promoted_path_provider_map_authority(
+    svc: Any,
+    provider: str,
+    intent: ParsedIntent,
+    params: dict,
+) -> None:
+    """Fail closed before provider-internal semantic maps can become final.
+
+    The old/default path can still execute legacy provider maps while the
+    migration proceeds. The promoted path (outcome decision + post-fetch judge +
+    staged commit) must have explicit/LLM authority before dispatching to
+    providers known to contain natural-language maps.
+    """
+    if not _use_promoted_semantic_path(svc):
+        return
+    if provider not in _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS:
+        return
+    if _has_provider_map_authority(params):
+        return
+
+    indicator_text = str(
+        params.get("indicator")
+        or (intent.indicators[0] if intent.indicators else "")
+        or ""
+    ).strip()
+    raise DataNotAvailableError(
+        "Promoted semantic path blocked provider-internal map dispatch without "
+        "final semantic authority. "
+        f"provider={provider}, indicator={indicator_text or '<missing>'}, "
+        f"selector_status={params.get('__indicator_selection_status') or 'unknown'}"
+    )
+
+
 def _execution_plan_candidate_code(intent: ParsedIntent, params: dict) -> str:
     candidates = [
         params.get("indicator"),
@@ -896,6 +967,7 @@ async def fetch_from_provider_dispatch(
     """
     provider = _normalize_provider_name(execution_plan.provider)
     params = dict(execution_plan.params or {})
+    _assert_promoted_path_provider_map_authority(svc, provider, intent, params)
 
     if provider == "FRED":
         fred_request = dict(execution_plan.provider_request or {})
@@ -2128,6 +2200,8 @@ async def fetch_data(
     else:
         # PHASE B: Resolve indicator code via unified resolution pipeline
         params = await svc._resolve_indicator_for_fetch(provider, intent, params)
+
+    _assert_promoted_path_provider_map_authority(svc, provider, intent, params)
 
     internal_param_keys = {
         "__fallback_excluded_providers",

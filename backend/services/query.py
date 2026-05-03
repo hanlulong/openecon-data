@@ -639,6 +639,18 @@ class QueryService:
                     query,
                     intent.indicators,
                 )
+                semantic_has_final_authority = bool(
+                    getattr(decision, "final_authority", False)
+                    and getattr(decision, "semantic_authority", "") == "llm_adjudication"
+                )
+                if semantic_provider != routed_provider and not semantic_has_final_authority:
+                    logger.info(
+                        "🧭 Semantic router candidate only: keeping provider=%s; candidate=%s source=%s",
+                        routed_provider,
+                        semantic_provider,
+                        getattr(decision, "decision_source", decision.match_type),
+                    )
+                    return routed_provider
                 if countries and len(countries) > 1 and not self._provider_covers_country_list(semantic_provider, countries):
                     logger.info(
                         "🧭 Semantic provider rejected by coverage: %s for countries=%s",
@@ -705,6 +717,17 @@ class QueryService:
                 query,
                 intent.indicators,
             )
+            hybrid_has_final_authority = bool(
+                getattr(decision, "final_authority", False)
+                and getattr(decision, "semantic_authority", "") == "llm_adjudication"
+            )
+            if hybrid_provider != routed_provider and not hybrid_has_final_authority:
+                logger.info(
+                    "🧠 Hybrid router candidate only: keeping provider=%s; candidate=%s",
+                    routed_provider,
+                    hybrid_provider,
+                )
+                return routed_provider
             if hybrid_provider != routed_provider:
                 logger.info(
                     "🧠 Hybrid routing override: %s -> %s (%s)",
@@ -2675,6 +2698,17 @@ class QueryService:
         queries don't share the same cache entry.
         """
         cache_params = dict(params or {})
+        for internal_key in (
+            "__semantic_authority",
+            "__decision_source",
+            "__indicator_selection_source",
+            "__indicator_selection_status",
+            "__indicator_rejection_reason",
+            "__indicator_retry_query",
+            "__exact_provider_code_match",
+            "__semantic_provider_locked",
+        ):
+            cache_params.pop(internal_key, None)
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION
         execution_plan_identity = params.get("__execution_plan_identity") if params else None
         if execution_plan_identity:
@@ -2792,6 +2826,10 @@ class QueryService:
             cached_data = await redis_cache.get(provider, query_key, cache_params)
             if cached_data and self._cached_result_has_complete_country_coverage(params, cached_data):
                 logger.info(f"Redis cache hit for {provider}")
+                try:
+                    cache_service.cache_data(provider, cache_params, cached_data)
+                except Exception as exc:
+                    logger.debug("Failed to mirror Redis hit into in-memory cache: %s", exc)
                 return cached_data
             if cached_data:
                 logger.info(f"Redis cache entry rejected for {provider} due to incomplete country coverage")
@@ -3470,8 +3508,21 @@ class QueryService:
             )
             raise primary_error
 
-        # Resolve the concept name for cross-provider fallback.
-        concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
+        # Resolve the concept name for cross-provider fallback only on the
+        # legacy path.  On the promoted semantic path, catalog concepts are
+        # candidate evidence at most; final fallback provider codes must be
+        # chosen by the provider's own retrieval + LLM adjudication flow.
+        if (
+            bool(getattr(self.settings, "use_outcome_decision_stage", False))
+            and self._use_post_fetch_semantic_judge()
+            and self._use_staged_state_commit()
+        ):
+            concept_name = None
+            logger.info(
+                "🔄 Promoted semantic path: cross-provider fallback uses semantic query, not catalog code mapping"
+            )
+        else:
+            concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
 
         # Use semantic indicator query (or original query) for smarter fallbacks.
         # This is the human-readable phrase, never a provider-specific code.

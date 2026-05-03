@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
-from backend.models import ParsedIntent
+import pytest
+
+from backend.models import ExecutionPlan, ParsedIntent
 from backend.routing.unified_router import UnifiedRouter
+from backend.services.data_fetcher import fetch_from_provider_dispatch
 from backend.services.indicator_resolution import (
     apply_catalog_availability_override,
     apply_concept_provider_override,
@@ -15,6 +20,7 @@ from backend.tests.semantic_shortcut_audit import (
     iter_scan_paths,
     scan_semantic_shortcuts,
 )
+from backend.utils.retry import DataNotAvailableError
 
 
 RUNTIME_FILES = [
@@ -204,3 +210,116 @@ def test_indicator_selector_has_no_top_candidate_final_authority_fallback() -> N
     ]
 
     assert selector_banned == []
+
+
+def test_optional_router_modes_have_no_legacy_disabled_bypass_findings() -> None:
+    findings = scan_semantic_shortcuts()
+
+    legacy_disabled = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.classification == "legacy_disabled_must_not_enable"
+    ]
+
+    assert legacy_disabled == []
+
+
+def test_promoted_path_blocks_provider_internal_map_dispatch_without_authority() -> None:
+    svc = SimpleNamespace(
+        settings=SimpleNamespace(
+            use_outcome_decision_stage=True,
+            use_post_fetch_semantic_judge=True,
+            use_staged_state_commit=True,
+        ),
+        fred_provider=SimpleNamespace(fetch_series=lambda _params: None),
+    )
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["mortgage rate"],
+        parameters={"indicator": "mortgage rate"},
+        clarificationNeeded=False,
+        originalQuery="mortgage rate in the US",
+    )
+    plan = ExecutionPlan(
+        provider="FRED",
+        candidate_id="FRED:MORTGAGE_RATE",
+        fetch_strategy="provider_dispatch",
+        params={"indicator": "mortgage rate"},
+        provider_request={"series_id": "mortgage rate"},
+    )
+
+    with pytest.raises(DataNotAvailableError, match="blocked provider-internal map dispatch"):
+        asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
+
+
+def test_promoted_path_allows_exact_provider_code_dispatch_as_mechanical_authority() -> None:
+    async def _fetch_series(params: dict) -> dict:
+        return {"indicator": params["indicator"]}
+
+    svc = SimpleNamespace(
+        settings=SimpleNamespace(
+            use_outcome_decision_stage=True,
+            use_post_fetch_semantic_judge=True,
+            use_staged_state_commit=True,
+        ),
+        fred_provider=SimpleNamespace(fetch_series=_fetch_series),
+    )
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["MORTGAGE30US"],
+        parameters={
+            "indicator": "MORTGAGE30US",
+            "__exact_provider_code_match": True,
+            "__semantic_authority": "exact_user_input",
+            "__decision_source": "exact_code",
+        },
+        clarificationNeeded=False,
+        originalQuery="FRED MORTGAGE30US",
+    )
+    plan = ExecutionPlan(
+        provider="FRED",
+        candidate_id="FRED:MORTGAGE30US",
+        fetch_strategy="provider_dispatch",
+        params=dict(intent.parameters),
+        provider_request={"series_id": "MORTGAGE30US"},
+    )
+
+    result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
+
+    assert result == [{"indicator": "MORTGAGE30US"}]
+
+
+def test_promoted_path_allows_llm_adjudicated_provider_code_dispatch() -> None:
+    async def _fetch_series(params: dict) -> dict:
+        return {"indicator": params["indicator"]}
+
+    svc = SimpleNamespace(
+        settings=SimpleNamespace(
+            use_outcome_decision_stage=True,
+            use_post_fetch_semantic_judge=True,
+            use_staged_state_commit=True,
+        ),
+        fred_provider=SimpleNamespace(fetch_series=_fetch_series),
+    )
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["mortgage rate"],
+        parameters={
+            "indicator": "MORTGAGE30US",
+            "__semantic_authority": "llm_adjudication",
+            "__decision_source": "llm_pick",
+        },
+        clarificationNeeded=False,
+        originalQuery="mortgage rate in the US",
+    )
+    plan = ExecutionPlan(
+        provider="FRED",
+        candidate_id="FRED:MORTGAGE30US",
+        fetch_strategy="provider_dispatch",
+        params=dict(intent.parameters),
+        provider_request={"series_id": "MORTGAGE30US"},
+    )
+
+    result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
+
+    assert result == [{"indicator": "MORTGAGE30US"}]

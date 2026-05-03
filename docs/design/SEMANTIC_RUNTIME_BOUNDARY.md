@@ -84,6 +84,31 @@ The following are allowed, and expected:
 
 These are structural because they validate contracts, not semantic guesses.
 
+### Mechanical metadata vs semantic authority
+
+Provider-native constants are allowed only after semantic authority has already
+been established. Examples:
+
+- exact user/provider codes such as FRED series IDs, World Bank indicator codes,
+  StatsCan table/vector IDs, IMF dataset codes, and Eurostat/OECD dataflow codes;
+- provider API dimensions, coordinate IDs, frequency codes, units, and schema
+  names required to execute a selected provider-native request;
+- country/date/currency parsing needed to build a valid API request.
+
+These constants must not be used as natural-language shortcut maps. On the
+promoted semantic path (`USE_OUTCOME_DECISION_STAGE=true`,
+`USE_POST_FETCH_SEMANTIC_JUDGE=true`, and `USE_STAGED_STATE_COMMIT=true`), a
+provider-internal map may dispatch only when one of these authority markers is
+present:
+
+- exact user/provider-native target (`__exact_provider_code_match` or
+  `__semantic_authority=exact_user_input`);
+- LLM/adjudicator pick (`__semantic_authority=llm_adjudication`);
+- a post-fetch semantic judge approval (`__semantic_authority=post_fetch_semantic_judge`).
+
+If none of those markers is present, provider maps are treated as candidate
+evidence or legacy compatibility only and must fail closed on the promoted path.
+
 ---
 
 ## Forbidden runtime patterns
@@ -143,4 +168,3 @@ production surface:
 
 No rollout is complete until those user-visible surfaces are verified alongside
 the backend contracts.
-

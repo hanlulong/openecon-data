@@ -3,7 +3,7 @@ Semantic + LLM Provider Router
 
 Provider routing strategy:
 1. Deterministic baseline from UnifiedRouter (always available)
-2. semantic-router similarity routing over candidate providers
+2. semantic-router similarity evidence over candidate providers
 3. LiteLLM JSON routing fallback when semantic confidence is low
 
 The router is designed as a general framework:
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import Settings
@@ -421,13 +422,28 @@ class SemanticProviderRouter:
         if semantic_choice:
             provider, similarity = semantic_choice
             if similarity >= self._similarity_threshold:
-                return RoutingDecision(
-                    provider=provider,
-                    confidence=similarity,
-                    fallbacks=self._fallbacks_for(provider, candidates),
-                    reasoning=f"semantic-router similarity match ({similarity:.2f})",
-                    match_type="semantic",
-                    matched_pattern="semantic-router",
+                candidate_providers: List[str] = []
+                for candidate in [
+                    provider,
+                    *getattr(baseline, "candidate_providers", []),
+                    *candidates,
+                ]:
+                    normalized = self._normalize_provider(candidate)
+                    if normalized and normalized not in candidate_providers:
+                        candidate_providers.append(normalized)
+                baseline_reasoning = str(getattr(baseline, "reasoning", "") or "").strip()
+                semantic_reasoning = (
+                    f"semantic-router candidate evidence ({provider}, {similarity:.2f})"
+                )
+                return replace(
+                    baseline,
+                    reasoning=(
+                        f"{baseline_reasoning}; {semantic_reasoning}"
+                        if baseline_reasoning
+                        else semantic_reasoning
+                    ),
+                    matched_pattern="semantic-router-candidate",
+                    candidate_providers=candidate_providers,
                 )
 
         litellm_choice = await self._litellm_route_choice(
@@ -446,6 +462,10 @@ class SemanticProviderRouter:
                 reasoning=reasoning,
                 match_type="litellm",
                 matched_pattern="litellm",
+                decision_source="llm_provider",
+                semantic_authority="llm_adjudication",
+                final_authority=True,
+                candidate_providers=candidates,
             )
 
         return baseline

@@ -138,6 +138,131 @@ def test_score_ambiguity_requires_ordered_score_evidence() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,provider,wrong_code,wrong_title,correct_code,correct_title",
+    [
+        (
+            "number of households in Canada",
+            "STATSCAN",
+            "42100012",
+            "Number of children in Canada",
+            "17100159",
+            "Estimates of the number of private households by size on July 1st",
+        ),
+        (
+            "number of children in Canada",
+            "STATSCAN",
+            "17100159",
+            "Estimates of the number of private households by size on July 1st",
+            "42100012",
+            "Number of children in Canada",
+        ),
+        (
+            "total unemployment rate in Canada",
+            "STATSCAN",
+            "YOUTH_UNEMP",
+            "Youth unemployment rate, 15 to 24 years",
+            "TOTAL_UNEMP",
+            "Unemployment rate, total labour force",
+        ),
+        (
+            "youth unemployment rate in Canada",
+            "STATSCAN",
+            "TOTAL_UNEMP",
+            "Unemployment rate, total labour force",
+            "YOUTH_UNEMP",
+            "Youth unemployment rate, 15 to 24 years",
+        ),
+        (
+            "GDP growth rate in Germany",
+            "WORLDBANK",
+            "NY.GDP.MKTP.CD",
+            "GDP (current US$)",
+            "NY.GDP.MKTP.KD.ZG",
+            "GDP growth (annual %)",
+        ),
+        (
+            "GDP per capita in Japan",
+            "WORLDBANK",
+            "NY.GDP.MKTP.CD",
+            "GDP (current US$)",
+            "NY.GDP.PCAP.CD",
+            "GDP per capita (current US$)",
+        ),
+        (
+            "inflation rate in France",
+            "WORLDBANK",
+            "FP.CPI.TOTL",
+            "Consumer price index (2010 = 100)",
+            "FP.CPI.TOTL.ZG",
+            "Inflation, consumer prices (annual %)",
+        ),
+        (
+            "imports as percent of GDP for China",
+            "WORLDBANK",
+            "NE.EXP.GNFS.ZS",
+            "Exports of goods and services (% of GDP)",
+            "NE.IMP.GNFS.ZS",
+            "Imports of goods and services (% of GDP)",
+        ),
+        (
+            "current account balance Germany",
+            "IMF",
+            "TRADE_BAL",
+            "Trade balance of goods and services",
+            "BCA",
+            "Current account balance",
+        ),
+        (
+            "bitcoin price history",
+            "COINGECKO",
+            "GDP",
+            "Gross Domestic Product",
+            "bitcoin",
+            "Bitcoin price",
+        ),
+    ],
+)
+async def test_selector_semantic_confusion_oracles_choose_correct_candidate_without_shortcut_rules(
+    monkeypatch,
+    query: str,
+    provider: str,
+    wrong_code: str,
+    wrong_title: str,
+    correct_code: str,
+    correct_title: str,
+) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    def fake_candidates(candidate_query: str, candidate_provider: str):
+        assert candidate_query == query
+        assert candidate_provider == provider
+        return [
+            (wrong_code, wrong_title),
+            (correct_code, correct_title),
+        ], [0.93, 0.79]
+
+    async def fake_llm_pick(candidate_query, candidates, candidate_provider, prefer_ask=False):  # noqa: ANN001, ARG001
+        titles = {title: code for code, title in candidates}
+        assert wrong_title in titles
+        assert correct_title in titles
+        return SelectionResult(
+            code=titles[correct_title],
+            name=correct_title,
+            source="llm_pick",
+        )
+
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", fake_candidates)
+    monkeypatch.setattr(selector, "_llm_pick", fake_llm_pick)
+
+    result = await selector.select(query, provider)
+
+    assert result.code == correct_code
+    assert result.name == correct_title
+    assert result.source == "llm_pick"
+
+
+@pytest.mark.asyncio
 async def test_select_researches_with_llm_retry_query_when_candidates_are_rejected(monkeypatch) -> None:
     selector = IndicatorSelector(settings=SimpleNamespace())
     first_candidates = [

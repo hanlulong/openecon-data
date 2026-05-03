@@ -169,18 +169,11 @@ class HybridRouter:
             f"Country context: {geo_text}\n\n"
             "Candidate providers:\n"
             + "\n".join(candidate_lines)
-            + "\n\nDecision rules:\n"
+            + "\n\nDecision contract:\n"
             "- Choose exactly ONE provider from candidates.\n"
-            "- Prefer provider with strongest domain/country fit for the requested data.\n"
-            "- Bilateral trade flows -> Comtrade.\n"
-            "- Macro ratios (% of GDP) across countries -> WorldBank.\n"
-            "- Forecasts/projections/global macro aggregates -> IMF.\n"
-            "- EU official country statistics -> Eurostat.\n"
-            "- Canada official statistics -> StatsCan.\n"
-            "- Property prices -> BIS.\n"
-            "- US-only macro series -> FRED.\n"
-            "- FX rates -> ExchangeRate.\n"
-            "- Crypto -> CoinGecko.\n\n"
+            "- Use the query, parsed indicators, country context, and provider descriptions as evidence.\n"
+            "- Do not apply hidden keyword-to-provider rules or select outside the candidate set.\n"
+            "- If candidates are inadequate, choose the least-bad candidate and explain the uncertainty.\n\n"
             "Return ONLY valid JSON:\n"
             "{\n"
             '  "provider": "CandidateProvider",\n'
@@ -294,4 +287,8 @@ class HybridRouter:
             reasoning=str(choice.get("reasoning") or "LLM-ranked candidate selection"),
             match_type="hybrid_llm",
             matched_pattern=matched_pattern,
+            decision_source="llm_provider",
+            semantic_authority="llm_adjudication",
+            final_authority=True,
+            candidate_providers=candidates,
         )

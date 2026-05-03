@@ -75,6 +75,25 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.provider, "IMF")
         self.assertEqual(decision.match_type, "hybrid_llm")
         self.assertEqual(decision.matched_pattern, "concept:government_debt")
+        self.assertEqual(decision.semantic_authority, "llm_adjudication")
+        self.assertTrue(decision.final_authority)
+        self.assertIn("IMF", decision.candidate_providers)
+
+    def test_prompt_does_not_encode_keyword_provider_shortcut_rules(self):
+        router = HybridRouter()
+
+        prompt = router._build_prompt(  # pylint: disable=protected-access
+            "property prices in Canada",
+            indicators=["property prices"],
+            country="CA",
+            countries=[],
+            candidates=["BIS", "StatsCan", "WorldBank"],
+        )
+
+        self.assertNotIn("Property prices -> BIS", prompt)
+        self.assertNotIn("Canada official statistics -> StatsCan", prompt)
+        self.assertNotIn("->", prompt)
+        self.assertIn("Do not apply hidden keyword-to-provider rules", prompt)
 
     async def test_wrong_llm_semantic_choice_is_not_fixed_by_catalog_shortcut(self):
         router = HybridRouter(

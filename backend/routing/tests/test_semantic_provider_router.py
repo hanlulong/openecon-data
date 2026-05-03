@@ -59,7 +59,7 @@ class _FakeSemanticEngine:
 
 
 @pytest.mark.asyncio
-async def test_semantic_router_overrides_baseline_when_confident():
+async def test_semantic_router_adds_candidate_evidence_without_final_authority():
     router = SemanticProviderRouter(
         settings=_FakeSettings(),
         deterministic_router=_FakeDeterministicRouter(provider="WorldBank", fallbacks=["IMF", "OECD"]),
@@ -68,9 +68,11 @@ async def test_semantic_router_overrides_baseline_when_confident():
 
     decision = await router.route("government debt to gdp in china")
 
-    assert decision.provider == "IMF"
-    assert decision.match_type == "semantic"
-    assert decision.confidence >= 0.9
+    assert decision.provider == "WorldBank"
+    assert decision.match_type == "default"
+    assert decision.final_authority is False
+    assert decision.matched_pattern == "semantic-router-candidate"
+    assert "IMF" in decision.candidate_providers
 
 
 @pytest.mark.asyncio
@@ -105,6 +107,8 @@ async def test_litellm_fallback_used_when_semantic_is_low():
     assert decision.provider == "OECD"
     assert decision.match_type == "litellm"
     assert decision.confidence == pytest.approx(0.77, abs=1e-6)
+    assert decision.semantic_authority == "llm_adjudication"
+    assert decision.final_authority is True
 
 
 def test_build_semantic_encoder_uses_openai_encoder_for_openai_models(monkeypatch):
