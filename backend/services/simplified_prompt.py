@@ -50,9 +50,14 @@ Task:
 
 Important constraints:
 - Select apiProvider using the PROVIDER CAPABILITIES section below.
-  The deterministic routing layer may refine your choice based on catalog or country context,
-  but your selection matters — choose the best-fit provider for the query.
-- Do not invent indicator codes. Use natural-language indicator names unless user explicitly gives a code.
+  Backend may refine explicit provider, structural coverage, or country context;
+  choose the best-fit provider for the query.
+- Do not invent indicator codes. Indicator arrays must contain plain-language metric names
+  copied from the user's intent, never provider-native IDs/codes unless the user explicitly
+  supplied that exact code.
+- Do not convert count/number questions into financial stock concepts. For any direct
+  count/number/total request, preserve the requested count metric wording; do not infer
+  debt, credit, balance-sheet, distribution, or ratio concepts unless the user asked for them.
 - Keep compound concepts as ONE indicator, not split into multiple:
   - "average wages and earnings" → ["average wages and earnings"] (one item, NOT two)
   - "housing starts and building permits" → ["housing starts", "building permits"] (two distinct series — split is OK)
@@ -381,8 +386,8 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
 - CoinGecko: Cryptocurrency — prices, market cap, volume for Bitcoin, Ethereum, and
   thousands of other coins/tokens.
   Best for: crypto prices, market data.
-- StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade for Canada
-  and Canadian provinces. The ONLY Canada-specific provider with monthly/quarterly data.
+- StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade, population,
+  census/demographic counts for Canada/provinces (monthly/quarterly data).
   Best for: Canada-specific data, provincial breakdowns, Canadian CPI/employment.
   Dimension modifiers: StatsCan tables have multiple dimensions (Geography, Sex/Gender,
   Age group, Industry, etc.). When the user specifies a sub-category like "male",

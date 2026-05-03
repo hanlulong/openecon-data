@@ -99,7 +99,18 @@ def test_simplified_prompt_avoids_hardcoded_provider_routing_rules() -> None:
         "provider selection hierarchy",
         "regional keyword mappings",
         "use sparingly",
+        "catalog",
     ]
 
     for phrase in banned_phrases:
         assert phrase not in prompt
+
+
+def test_simplified_prompt_preserves_count_metrics_without_provider_codes() -> None:
+    prompt = SimplifiedPrompt.generate()
+
+    assert "never provider-native IDs/codes" in prompt
+    assert "unless the user explicitly" in prompt
+    assert "Do not convert count/number questions into financial stock concepts" in prompt
+    assert "For any direct" in prompt
+    assert "census/demographic counts" in prompt

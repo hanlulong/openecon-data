@@ -195,23 +195,14 @@ def build_alternative_series(intent: ParsedIntent, data: Any) -> Optional[list]:
     Shows related indicators the user might also want to explore.
     E.g., after GDP (current US$), suggest GDP growth, GDP per capita, GDP PPP.
 
-    Performance optimizations:
-    1. Skip entirely for catalog-resolved indicators (high confidence).
-    2. Uses FTS5 full-text search instead of LIKE '%...%' scan.
+    Performance optimization: uses FTS5 full-text search instead of
+    LIKE '%...%' scan.
     """
     from .indicator_database import IndicatorDatabase
     from ..models import AlternativeSeries
 
     try:
         if not data:
-            return None
-
-        # Skip alternatives for catalog-resolved indicators (already correct).
-        if getattr(intent, "_catalog_resolved", False):
-            logger.debug(
-                "Skipping alternative series — catalog-resolved indicator: %s",
-                (intent.parameters or {}).get("indicator", "?"),
-            )
             return None
 
         # Get the indicator code from returned data
@@ -631,10 +622,8 @@ def resolve_concept_for_fallback(
 ) -> Optional[str]:
     """Resolve a catalog concept name from the intent for cross-provider fallback.
 
-    Checks (in order):
-    1. Stored ``__catalog_concept`` parameter (set during catalog resolution)
-    2. Reverse lookup from provider-specific indicator code via catalog
-    3. Forward lookup from the original query text via ``find_concept_by_term``
+    Checks catalog evidence from the current code/query only.  It does not
+    consume stored shortcut state from prior semantic overrides.
 
     Returns:
         Catalog concept name (e.g., ``"exports_pct_gdp"``) or ``None``.
@@ -642,13 +631,7 @@ def resolve_concept_for_fallback(
     try:
         from .catalog_service import find_concept_by_term, find_concepts_by_code
 
-        # 1. Check stored concept from prior catalog resolution
-        stored_concept = (intent.parameters or {}).get("__catalog_concept")
-        if stored_concept:
-            logger.debug("Fallback concept from __catalog_concept: %s", stored_concept)
-            return str(stored_concept)
-
-        # 2. Reverse lookup: provider code -> concept
+        # Reverse lookup: provider code -> concept
         for ind in (intent.indicators or []):
             ind_str = str(ind or "").strip()
             if ind_str and svc._looks_like_provider_indicator_code(primary_provider, ind_str):

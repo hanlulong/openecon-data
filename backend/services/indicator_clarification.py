@@ -825,35 +825,13 @@ def get_direct_provider_indicator_translation(
     provider: str,
     indicator_query: str,
 ) -> Optional[str]:
-    """Return a direct provider-native code when the translator has a strong match."""
-    provider_name = normalize_provider_name(provider)
-    indicator_text = str(indicator_query or "").strip()
-    if not provider_name or not indicator_text:
-        return None
+    """Disabled: do not translate semantic text directly into provider codes.
 
-    try:
-        translated_code, translated_concept = qs.indicator_translator.translate_indicator(
-            indicator_text,
-            target_provider=provider_name,
-        )
-    except Exception:
-        return None
-
-    if _is_placeholder_indicator_code(translated_code):
-        return None
-    if not provider_can_execute_indicator_option(
-        qs=qs,
-        provider=provider_name,
-        code=str(translated_code),
-        option_name=translated_concept,
-    ):
-        return None
-    if not _is_resolved_indicator_plausible(
-        qs, provider_name, indicator_text, str(translated_code),
-        str(translated_concept or indicator_text),
-    ):
-        return None
-    return str(translated_code)
+    Direct translator mappings are a rule-based shortcut path.  Callers should
+    rely on retrieval plus LLM adjudication, exact user-provided codes/titles,
+    or provider metadata discovery instead.
+    """
+    return None
 
 
 # ====================================================================
@@ -1065,6 +1043,78 @@ def collect_indicator_choice_options(
     raw_options = [option for _, option, _ in scored_options]
     deduped_options = dedupe_indicator_choice_options(qs, raw_options)
     return deduped_options[:max_options]
+
+
+async def collect_statscan_selector_choice_options(
+    query: str,
+    max_options: int = 4,
+) -> List[str]:
+    """Ask the retrieval+LLM selector for StatsCan options when resolver options fail.
+
+    This is deliberately not a keyword/product map.  It reuses the generic
+    embed -> LLM selector, including its ability to reject the candidate set and
+    retry with alternative search terms.  The prefetch gate can then clarify
+    instead of either guessing or falling back to a provider shortcut.
+    """
+    selector_query = str(query or "").strip()
+    if not selector_query:
+        return []
+
+    try:
+        from .indicator_selector import IndicatorSelector
+
+        selection = await IndicatorSelector().select(
+            selector_query,
+            "StatsCan",
+            country="CA",
+        )
+    except Exception as exc:
+        logger.debug("StatsCan selector choice fallback failed: %s", exc)
+        return []
+
+    options: List[str] = []
+    if getattr(selection, "needs_user_choice", False):
+        for option in getattr(selection, "options", []) or []:
+            code = str(option.get("code") or "").strip()
+            name = str(option.get("name") or "").strip()
+            if code and name:
+                options.append(f"[StatsCan] {name} ({code})")
+    elif getattr(selection, "code", None):
+        code = str(getattr(selection, "code") or "").strip()
+        name = str(getattr(selection, "name", "") or selector_query).strip()
+        if code:
+            options.append(f"[StatsCan] {name or selector_query} ({code})")
+
+        # A single LLM pick from a previously failed resolver path is not enough
+        # evidence to auto-fetch.  Add neighboring retrieval candidates so the
+        # user can clarify rather than letting one uncertain pick become a
+        # silent provider-code overwrite.
+        try:
+            candidates, _ = IndicatorSelector()._get_candidates_with_scores(  # pylint: disable=protected-access
+                selector_query,
+                "StatsCan",
+                top_k=max(max_options, 4),
+            )
+            seen_codes = {code.upper()}
+            for candidate_code, candidate_name in candidates:
+                candidate_code_text = str(candidate_code or "").strip()
+                candidate_name_text = str(candidate_name or "").strip()
+                if (
+                    not candidate_code_text
+                    or not candidate_name_text
+                    or candidate_code_text.upper() in seen_codes
+                ):
+                    continue
+                seen_codes.add(candidate_code_text.upper())
+                options.append(
+                    f"[StatsCan] {candidate_name_text} ({candidate_code_text})"
+                )
+                if len(options) >= max_options:
+                    break
+        except Exception as exc:
+            logger.debug("StatsCan selector neighbor candidates unavailable: %s", exc)
+
+    return options[:max_options]
 
 
 # ====================================================================
@@ -2045,61 +2095,6 @@ def build_unspecified_geography_breakdown_clarification(
     )
 
 
-_AMBIGUOUS_CONCEPT_OPTIONS = {
-    "employment": [
-        {
-            "label": "employment rate",
-            "provider": "OECD",
-            "code": "DSD_LFS@DF_IALFS_EMP_WAP_Q",
-        },
-        {
-            "label": "number employed",
-            "provider": "STATSCAN",
-            "code": "14100287",
-        },
-        {
-            "label": "employment-to-population ratio",
-            "provider": "WORLDBANK",
-            "code": "SL.EMP.TOTL.SP.ZS",
-        },
-    ],
-    "interest rate": [
-        {
-            "label": "policy rate",
-            "provider": "BIS",
-            "code": "WS_CBPOL",
-        },
-        {
-            "label": "long-term government bond yield",
-            "provider": "OECD",
-            "code": "IRLT",
-        },
-        {
-            "label": "real interest rate",
-            "provider": "FRED",
-            "code": "REAINTRATREARAT10Y",
-        },
-    ],
-    "government debt": [
-        {
-            "label": "government debt-to-GDP ratio",
-            "provider": "WORLDBANK",
-            "code": "GC.DOD.TOTL.GD.ZS",
-        },
-        {
-            "label": "nominal government debt",
-            "provider": "IMF",
-            "code": "GGXWDG_NGDP",
-        },
-        {
-            "label": "government debt service",
-            "provider": "WORLDBANK",
-            "code": "GC.XPN.TOTL.GD.ZS",
-        },
-    ],
-}
-
-
 def build_catalog_concept_clarification(
     qs: Any,
     conversation_id: str,
@@ -2107,55 +2102,8 @@ def build_catalog_concept_clarification(
     intent: Optional[ParsedIntent],
     processing_steps: Optional[List[Any]] = None,
 ) -> Optional[QueryResponse]:
-    """Ask for a specific metric when a catalog concept is still too broad."""
-    if not intent:
-        return None
-
-    concept_name = str((intent.parameters or {}).get("__catalog_concept") or "").strip().lower()
-    if not concept_name or concept_name not in _AMBIGUOUS_CONCEPT_OPTIONS:
-        return None
-
-    query_text = str(query or "").strip()
-    query_lower = query_text.lower()
-    option_specs = _AMBIGUOUS_CONCEPT_OPTIONS[concept_name]
-    labels = [str(spec["label"]).strip() for spec in option_specs]
-    if any(label in query_lower for label in labels):
-        return None
-
-    options = [
-        ClarificationOption(
-            id=str(idx),
-            label=str(spec["label"]).strip(),
-            value=_semantic_metric_option_value(query_text, str(spec["label"]).strip()),
-            provider=str(spec.get("provider") or "") or None,
-            code=str(spec.get("code") or "") or None,
-        )
-        for idx, spec in enumerate(option_specs, start=1)
-    ]
-
-    clarification_questions = [
-        f"Your query uses the broad concept '{concept_name}', which can mean several different metrics.",
-        "Please choose the exact metric you want:",
-    ]
-    clarification_questions.extend(f"{option.id}. {option.label}" for option in options)
-    clarification_questions.append("Reply with the option number, or type the exact metric you want.")
-
-    payload = {
-        "kind": f"{concept_name}_metric",
-        "original_query": query_text,
-        "question_lines": clarification_questions,
-        "options": [option.model_dump() for option in options],
-    }
-    store_pending_semantic_clarification(conversation_id, payload)
-
-    return QueryResponse(
-        conversationId=conversation_id,
-        intent=intent,
-        clarificationNeeded=True,
-        clarificationQuestions=clarification_questions,
-        clarificationOptions=options,
-        processingSteps=processing_steps,
-    )
+    """Disabled: broad concept clarification must come from the LLM, not code maps."""
+    return None
 
 
 def _semantic_metric_option_value(original_query: str, label: str) -> str:
@@ -2197,8 +2145,6 @@ def build_structured_semantic_clarification(
         return None
 
     questions = [str(item).strip() for item in (intent.clarificationQuestions or []) if str(item).strip()]
-    concept_name = str((intent.parameters or {}).get("__catalog_concept") or "").strip().lower()
-
     options: List[ClarificationOption] = []
     for idx, question in enumerate(questions, start=1):
         label = _extract_semantic_metric_label(question)
@@ -2211,18 +2157,6 @@ def build_structured_semantic_clarification(
                 value=_semantic_metric_option_value(query, label),
             )
         )
-
-    if len(options) < 2 and concept_name in _AMBIGUOUS_CONCEPT_OPTIONS:
-        options = [
-            ClarificationOption(
-                id=str(idx),
-                label=str(spec["label"]).strip(),
-                value=_semantic_metric_option_value(query, str(spec["label"]).strip()),
-                provider=str(spec.get("provider") or "") or None,
-                code=str(spec.get("code") or "") or None,
-            )
-            for idx, spec in enumerate(_AMBIGUOUS_CONCEPT_OPTIONS[concept_name], start=1)
-        ]
 
     if len(options) < 2:
         return None
@@ -2394,13 +2328,6 @@ async def build_prefetch_indicator_choice_clarification(
         return None
 
     params = dict(intent.parameters or {})
-    if params.get("__catalog_resolved"):
-        logger.info(
-            "Skipping prefetch clarification -- catalog-resolved indicator: %s",
-            params.get("indicator", "?"),
-        )
-        return None
-
     query_text = str(query or "").strip()
     indicator_query = qs._select_indicator_query_for_resolution(intent)
     if not indicator_query:
@@ -2421,8 +2348,55 @@ async def build_prefetch_indicator_choice_clarification(
     ):
         return None
 
+    option_budget = (
+        CandidateEvidenceBuilder.MAX_CLARIFICATION_LIMIT
+        if use_outcome_decision_stage
+        else 4
+    )
     target_countries = qs._collect_target_countries(params)
     target_country = target_countries[0] if target_countries else None
+
+    # For StatsCan, let the framework selector (embedding retrieval -> LLM
+    # adjudication, including REJECT/retry) make the first call before any
+    # legacy resolver/fallback option construction runs.  This prevents a
+    # low-relevance catalog/translator result from seeding cross-provider
+    # clarification options and blocking a valid primary-provider fetch.
+    if normalize_provider_name(provider) == "STATSCAN" and not current_indicator:
+        try:
+            from .indicator_selector import IndicatorSelector
+
+            selection = await IndicatorSelector().select(
+                indicator_query,
+                "StatsCan",
+                country=target_country,
+            )
+        except Exception as exc:
+            logger.debug("StatsCan prefetch selector unavailable: %s", exc)
+            selection = None
+
+        if selection is not None:
+            if getattr(selection, "code", None):
+                selection_code = str(getattr(selection, "code") or "").strip()
+                selection_name = str(getattr(selection, "name", "") or "").strip()
+                if _is_resolved_indicator_plausible(
+                    qs,
+                    provider,
+                    indicator_query,
+                    selection_code,
+                    selection_name,
+                ):
+                    params["indicator"] = selection_code
+                    params["__semantic_indicator_label"] = indicator_query
+                    intent.parameters = params
+                    return None
+
+            if getattr(selection, "needs_user_choice", False):
+                logger.debug(
+                    "StatsCan prefetch selector requested clarification for '%s'; "
+                    "continuing to existing prefetch evidence path.",
+                    indicator_query,
+                )
+
     from ..services import query as _qmod
     resolver = _qmod.get_indicator_resolver()
     resolved = None
@@ -2438,6 +2412,7 @@ async def build_prefetch_indicator_choice_clarification(
         resolved = None
 
     primary_accepted = False
+    primary_plausible = False
     primary_relevance = -999.0
     current_label = f"{provider or 'Unknown provider'} routing guess"
     if resolved and getattr(resolved, "code", None):
@@ -2471,6 +2446,7 @@ async def build_prefetch_indicator_choice_clarification(
             plausible = _is_resolved_indicator_plausible(
                 qs, provider, indicator_query, str(resolved.code), resolved_name_full,
             )
+            primary_plausible = bool(plausible)
             logger.info("Plausibility check: %s (code=%s)", plausible, resolved.code)
             if not plausible:
                 primary_accepted = False
@@ -2492,16 +2468,18 @@ async def build_prefetch_indicator_choice_clarification(
         ):
             return None
 
-    option_budget = (
-        CandidateEvidenceBuilder.MAX_CLARIFICATION_LIMIT
-        if use_outcome_decision_stage
-        else 4
-    )
     options = qs._collect_indicator_choice_options(
         query_text or indicator_query,
         intent,
         max_options=option_budget,
     )
+    if primary_accepted and resolved and getattr(resolved, "code", None):
+        current_provider_label = (
+            "StatsCan" if normalize_provider_name(provider) == "STATSCAN"
+            else provider or str(getattr(resolved, "provider", "") or "Provider")
+        )
+        current_option = f"[{current_provider_label}] {current_name} ({resolved.code})"
+        options = dedupe_indicator_choice_options(qs, [current_option, *options])
     if not options:
         if not primary_accepted:
             direct_translation = get_direct_provider_indicator_translation(
@@ -2522,9 +2500,10 @@ async def build_prefetch_indicator_choice_clarification(
             original_provider = intent.apiProvider
             for fb_provider in fallback_providers:
                 fb_query = indicator_query or query_text or ""
-                intent.apiProvider = fb_provider
+                fb_intent = intent.model_copy(deep=True)
+                fb_intent.apiProvider = fb_provider
                 fb_options = qs._collect_indicator_choice_options(
-                    fb_query, intent, max_options=4,
+                    fb_query, fb_intent, max_options=4,
                 )
                 if fb_options:
                     logger.info(
@@ -2545,8 +2524,13 @@ async def build_prefetch_indicator_choice_clarification(
                     )
                     return None
 
+            intent.apiProvider = original_provider
+            if not options and normalize_provider_name(provider) == "STATSCAN":
+                options = await collect_statscan_selector_choice_options(
+                    indicator_query or query_text,
+                    max_options=option_budget,
+                )
             if not options:
-                intent.apiProvider = original_provider
                 return build_no_reliable_indicator_match_response(
                     conversation_id=conversation_id,
                     intent=intent,
@@ -2554,7 +2538,8 @@ async def build_prefetch_indicator_choice_clarification(
                     qs=qs,
                     processing_steps=processing_steps,
                 )
-        return None
+        if not options:
+            return None
     if len(options) >= 2 and not has_materially_distinct_indicator_options(qs, options):
         return None
 
@@ -2589,9 +2574,16 @@ async def build_prefetch_indicator_choice_clarification(
     )
 
     if len(options) == 1:
-        if top_option and (not primary_accepted or not top_matches_primary):
+        if (
+            top_option
+            and normalize_provider_name(top_option[0]) != normalize_provider_name(provider)
+        ):
+            if normalize_provider_name(provider) == "STATSCAN" or primary_accepted:
+                return None
+            # Let the normal clarification builder ask before crossing providers.
+        elif top_option and (not primary_accepted or not top_matches_primary):
             apply_indicator_option_to_intent(intent, options[0])
-        return None
+            return None
 
     if len(options) < 2:
         if not primary_accepted:

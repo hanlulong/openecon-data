@@ -7,8 +7,8 @@ This module provides:
 - Semantic code hints for provider-native indicator codes
 - Plausibility checks for resolved indicator codes vs query intent
 - Resolution threshold computation (dynamic acceptance levels)
-- Catalog-based provider override and availability routing
-- Full indicator resolution pipeline (IndicatorSelector -> legacy resolver -> translator)
+- Disabled provider override shims kept only for compatibility
+- Full indicator resolution pipeline (IndicatorSelector -> legacy resolver)
 - Distilled indicator query building for cross-provider resolution
 - Query type detection (ranking, comparison, temporal split)
 - BIS metadata label normalization
@@ -148,68 +148,6 @@ _EUROSTAT_GENERIC_DETAIL_MARKERS = {
     },
 }
 
-_IMF_AGGREGATE_PPI_CODE = "PPPI_IX"
-_IMF_AGGREGATE_PPI_LABEL = "Producer Price Index"
-_IMF_AGGREGATE_PPI_DETAIL_MARKERS = {
-    "activity",
-    "activities",
-    "agricultural",
-    "agriculture",
-    "animal",
-    "beverage",
-    "capital city",
-    "chapter",
-    "commodity by activity",
-    "commodities by activity",
-    "construction",
-    "food",
-    "fruit",
-    "health",
-    "industry",
-    "manufactur",
-    "mining",
-    "nace",
-    "quarry",
-    "sector",
-    "service",
-    "social work",
-    "vegetable",
-    "veterinary",
-}
-
-
-def _resolve_imf_aggregate_indicator_fast_path(
-    *,
-    indicator_query: str,
-    original_query: str,
-) -> Optional[tuple[str, str]]:
-    """Return a verified IMF aggregate code for simple public SDMX concepts.
-
-    IMF long-tail exact catalog rows often contain detailed sector/activity
-    qualifiers that are not served by the public SDMX surfaces we can execute.
-    This helper is deliberately narrow: it only maps the broad, aggregate
-    Producer Price Index wording to the verified public PPI SDMX code and
-    fails closed when the original user wording contains detail markers.
-    """
-    resolution_text = str(indicator_query or "").strip().lower()
-    original_text = str(original_query or "").strip().lower()
-    if not resolution_text and not original_text:
-        return None
-
-    signal_text = resolution_text or original_text
-    if not re.search(
-        r"\b(?:ppi|producer prices?|producer price index|producer price inflation)\b",
-        signal_text,
-    ):
-        return None
-
-    detail_text = original_text or resolution_text
-    if any(marker in detail_text for marker in _IMF_AGGREGATE_PPI_DETAIL_MARKERS):
-        return None
-
-    return _IMF_AGGREGATE_PPI_CODE, _IMF_AGGREGATE_PPI_LABEL
-
-
 def _looks_like_provider_indicator_code_local(provider: str, indicator: str) -> bool:
     """Small local code-shape guard that avoids importing heavier query helpers."""
     if not indicator:
@@ -304,7 +242,7 @@ def build_exact_indicator_title_intent(
     countries: Optional[List[str]] = None,
     all_providers: Optional[List[str]] = None,
 ) -> Optional[ParsedIntent]:
-    """Build a provider-locked ParsedIntent for an exact provider-title shortcut."""
+    """Build a provider-locked ParsedIntent for an exact provider-title match."""
     provider_candidates = (
         [_normalize_provider_name(explicit_provider)] if explicit_provider else list(all_providers or [])
     )
@@ -314,23 +252,6 @@ def build_exact_indicator_title_intent(
     seen = set()
     for provider in provider_candidates:
         candidate = find_exact_provider_title_match(query, provider)
-        if not candidate and broad_concept:
-            try:
-                from .indicator_database import get_indicator_lookup
-
-                lookup = get_indicator_lookup()
-                broad_results = lookup.search(query, provider=provider, limit=5)
-                candidate = next(
-                    (
-                        result
-                        for result in broad_results
-                        if str(result.get("code") or "").strip()
-                        and str(result.get("name") or "").strip()
-                    ),
-                    None,
-                )
-            except Exception:
-                candidate = None
         if not candidate:
             continue
         key = (_normalize_provider_name(candidate.get("provider") or provider), str(candidate.get("code") or ""))
@@ -360,8 +281,6 @@ def build_exact_indicator_title_intent(
         params.update(candidate_params)
     if provider == "COINGECKO":
         params["coinIds"] = [code]
-    if broad_concept:
-        params["__catalog_concept"] = broad_concept
 
     countries = list(countries or [])
     if len(countries) == 1:
@@ -1533,541 +1452,17 @@ def apply_concept_provider_override(
     intent: ParsedIntent,
     params: dict,
 ) -> tuple[str, dict]:
+    """Compatibility shim: do not force semantic provider/code overrides.
+
+    Semantic catalog/rule-based provider or indicator remapping is intentionally
+    disabled. Indicator/provider selection must be handled by retrieval plus LLM
+    adjudication, exact user-provided codes/titles, or mechanical API plumbing.
     """
-    Re-route provider using catalog concept availability from the original query.
-
-    This prevents semantically impossible provider/concept combinations from
-    continuing into indicator resolution (e.g., public debt ratio on BIS).
-    """
-    # For explicit provider detection, use the raw query text (user may have
-    # said "from IMF"). For concept search, use the effective query which
-    # is resolvedQuery for follow-ups (e.g. "GDP per capita India").
-    raw_query = str(intent.originalQuery or "").strip()
-    original_query = _effective_original_query(intent)
-    explicit_provider_requested = _normalize_provider_name(
-        svc._detect_explicit_provider(raw_query) or ""
-    )
-    # When the user explicitly requested this provider (e.g., "from IMF"),
-    # we still need to do the concept lookup and inject the canonical
-    # indicator code (e.g., GDP growth rate → NGDP_RPCH).  We just must
-    # NOT re-route to a different provider.
-    explicit_provider_locked = bool(
-        explicit_provider_requested and explicit_provider_requested == provider
-    )
-    if is_provider_locked(params):
-        explicit_provider_locked = True
-
-    existing_indicator = str(params.get("indicator") or "").strip()
-    if (
-        provider == "IMF"
-        and not (
-            existing_indicator
-            and _looks_like_provider_indicator_code_local(provider, existing_indicator)
-            and is_exact_match_locked(params)
-        )
-    ):
-        indicator_hint = str(
-            intent.indicators[0] if intent.indicators else existing_indicator
-        ).strip()
-        if not indicator_hint:
-            indicator_hint = str(params.get("__semantic_indicator_label") or "").strip()
-        fast_path = _resolve_imf_aggregate_indicator_fast_path(
-            indicator_query=indicator_hint or existing_indicator,
-            original_query=original_query,
-        )
-        if fast_path:
-            code, label = fast_path
-            logger.info(
-                "📋 IMF aggregate concept shortcut: '%s' -> %s",
-                indicator_hint or existing_indicator,
-                code,
-            )
-            params = {
-                **params,
-                "indicator": code,
-                "__semantic_indicator_label": label,
-                "__catalog_resolved": True,
-                "__imf_public_sdmx_fast_path": label,
-            }
-            intent.parameters = params
-            if not intent.indicators or len(intent.indicators) <= 1:
-                intent.indicators = [code]
-            return provider, params
-
-    blocked_override_providers = {
-        _normalize_provider_name(str(candidate))
-        for candidate in (params.get("__fallback_excluded_providers") or [])
-        if candidate
-    }
-    blocked_override_providers.discard("")
-    in_fallback_context = bool(blocked_override_providers)
-
-    distilled_query = build_distilled_indicator_query(svc, original_query) if original_query else ""
-    concept_candidates: List[str] = []
-    if original_query:
-        concept_candidates.append(original_query)
-
-    if distilled_query and distilled_query not in concept_candidates:
-        concept_candidates.append(distilled_query)
-
-    fallback_query = select_indicator_query_for_resolution(svc, intent)
-    if fallback_query and fallback_query not in concept_candidates:
-        concept_candidates.append(fallback_query)
-
-    if not concept_candidates:
-        return provider, params
-
-    if provider and looks_like_exact_provider_title_match(original_query, provider):
-        logger.info(
-            "📋 Skipping concept/provider override for exact %s title match: %s",
-            provider,
-            original_query,
-        )
-        return provider, params
-
-    def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
-        semantic_label = str(
-            params.get("__semantic_indicator_label")
-            or extra.get("__semantic_indicator_label")
-            or ""
-        ).strip()
-        if not semantic_label:
-            semantic_label = (
-                select_indicator_query_for_resolution(svc, intent)
-                or _effective_original_query(intent)
-                or str(intent.indicators[0] if intent.indicators else "")
-            ).strip()
-
-        merged = {**params, "indicator": indicator_value, **extra}
-        if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
-            merged["__semantic_indicator_label"] = semantic_label
-        return merged
-
-    try:
-        from .catalog_service import (
-            find_concept_by_term,
-            get_best_provider,
-            get_variant_for_query,
-            is_indicator_code_for_concept,
-            is_provider_available,
-            is_provider_explicitly_excluded,
-        )
-
-        concept_name = None
-        matched_query = ""
-        matched_candidates: List[tuple[str, str]] = []
-        for candidate in concept_candidates:
-            matched_concept = find_concept_by_term(candidate)
-            if matched_concept:
-                matched_candidates.append((matched_concept, candidate))
-        if matched_candidates:
-            concept_name, matched_query = max(
-                matched_candidates,
-                key=lambda item: (
-                    len(str(item[0]).split("_")),
-                    len(str(item[1]).strip()),
-                ),
-            )
-        if not concept_name:
-            return provider, params
-
-        query_lower = original_query.lower()
-        bilateral_trade_request = False
-        if provider == "COMTRADE":
-            router = getattr(svc, "unified_router", None)
-            if router is not None and original_query:
-                try:
-                    bilateral_trade_request = bool(
-                        router._is_bilateral_trade_query(query_lower, original_query)
-                    )
-                except Exception:
-                    bilateral_trade_request = False
-            if not bilateral_trade_request:
-                bilateral_trade_request = bool(params.get("partner") or params.get("reporter"))
-            if bilateral_trade_request and concept_name in {"trade", "exports", "imports", "trade_balance"}:
-                logger.info(
-                    "📋 Concept override skipped: preserving COMTRADE for bilateral trade concept '%s'",
-                    concept_name,
-                )
-                return provider, params
-
-        # Large-catalog country-specific providers (e.g. StatsCan with 40K+
-        # tables) often have data the catalog hasn't mapped yet.  When the
-        # concept doesn't *explicitly* exclude the current provider (i.e. it's
-        # not in ``not_available``), keep the provider and let its FTS5 /
-        # embedding indicator resolver find the right table -- don't reroute
-        # to a global provider just because the catalog entry is incomplete.
-        _LARGE_CATALOG_COUNTRY_PROVIDERS = {"STATSCAN"}
-        if (
-            provider in _LARGE_CATALOG_COUNTRY_PROVIDERS
-            and not is_provider_explicitly_excluded(concept_name, provider)
-            and not is_provider_available(concept_name, provider)
-        ):
-            logger.info(
-                "📋 Concept override skipped: %s not explicitly excluded for '%s' "
-                "(catalog incomplete, letting provider resolver handle it)",
-                provider,
-                concept_name,
-            )
-            return provider, params
-
-        countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
-        if not countries_ctx:
-            country_value = params.get("country") or params.get("region")
-            countries_ctx = [country_value] if country_value else None
-        coverage_ok = svc._provider_covers_country_list(provider, countries_ctx or [])
-
-        # Evaluate current provider suitability (availability + coverage + confidence)
-        preferred_provider, preferred_code, preferred_confidence = get_best_provider(
-            concept_name,
-            countries_ctx,
-            preferred_provider=provider,
-        )
-        preferred_provider_normalized = _normalize_provider_name(preferred_provider or "")
-        provider_supported = (
-            bool(preferred_provider_normalized)
-            and preferred_provider_normalized == provider
-        )
-        if not coverage_ok:
-            provider_supported = False
-            preferred_confidence = max(0.0, float(preferred_confidence or 0.0) - 0.25)
-
-        best_provider, best_code, best_confidence = get_best_provider(concept_name, countries_ctx)
-        best_provider_normalized = _normalize_provider_name(best_provider or "")
-        requested_country_count = len(countries_ctx or [])
-        broad_global_providers = {"WORLDBANK", "IMF"}
-        niche_coverage_providers = {"OECD", "EUROSTAT", "FRED", "STATSCAN"}
-
-        # Keep existing provider when:
-        # 1) it is available and suitable for requested coverage, and
-        # 2) no clearly better provider exists.
-        if provider_supported:
-            confidence_gain = float(best_confidence or 0.0) - float(preferred_confidence or 0.0)
-            low_confidence_current = float(preferred_confidence or 0.0) < 0.80
-            if (
-                requested_country_count >= 2
-                and provider in broad_global_providers
-                and best_provider_normalized in niche_coverage_providers
-                and confidence_gain < (0.18 if low_confidence_current else 0.28)
-            ):
-                return provider, params
-            current_indicator = params.get("indicator")
-            current_indicator_is_code = (
-                bool(current_indicator)
-                and svc._looks_like_provider_indicator_code(provider, str(current_indicator))
-            )
-            canonical_code = preferred_code if provider_supported else best_code
-            # Some provider mnemonics (e.g. OECD "GDP", "IRLT") look code-like
-            # but are still coarse aliases. If the catalog has a more specific
-            # canonical code for the same provider, do not let the short alias
-            # block canonical code injection.
-            current_indicator_text = str(current_indicator or "")
-            if (
-                provider == "OECD"
-                and canonical_code
-                and current_indicator
-                and current_indicator_is_code
-                and canonical_code != current_indicator_text
-                and "@" not in current_indicator_text
-                and not current_indicator_text.startswith("DSD_")
-                and not any(separator in current_indicator_text for separator in ("_", ".", "-"))
-                and len(current_indicator_text) <= 8
-            ):
-                # Only bare mnemonic aliases like GDP/IRLT/CPI should be
-                # auto-upgraded to a canonical OECD dataflow here. Structured
-                # OECD codes with separators (for example LFS_UNEM_A) already
-                # encode meaningful scope and should survive as explicit
-                # provider-native inputs.
-                current_indicator_is_code = False
-            current_indicator_matches_concept = False
-            current_indicator_plausible = True
-            current_indicator_text_upper = current_indicator_text.upper()
-            if current_indicator and current_indicator_is_code:
-                try:
-                    current_indicator_matches_concept = is_indicator_code_for_concept(
-                        concept_name,
-                        provider,
-                        current_indicator_text,
-                    )
-                except Exception:
-                    current_indicator_matches_concept = False
-
-                try:
-                    from .indicator_resolver import get_indicator_resolver
-
-                    _resolver = get_indicator_resolver()
-                    current_meta = _resolver.lookup.get(provider, current_indicator_text) if provider else None
-                    current_name = (current_meta.get("name", "") if current_meta else "")
-                    current_indicator_plausible = is_resolved_indicator_plausible(
-                        svc=svc,
-                        provider=provider,
-                        indicator_query=original_query or matched_query or current_indicator_text,
-                        resolved_code=current_indicator_text,
-                        resolved_name=current_name,
-                    )
-                except Exception:
-                    current_indicator_plausible = True
-
-            should_replace_existing_code = bool(
-                canonical_code
-                and current_indicator
-                and current_indicator_is_code
-                and current_indicator_text_upper != str(canonical_code).upper()
-                and (not current_indicator_matches_concept and not current_indicator_plausible)
-            )
-
-            if canonical_code and (not current_indicator or not current_indicator_is_code or should_replace_existing_code):
-                # Unified semantic verification -- single source of truth
-                from .indicator_resolver import get_indicator_resolver
-                _resolver = get_indicator_resolver()
-                code_meta = _resolver.lookup.get(provider, canonical_code) if provider else None
-                code_name = (code_meta.get("name", "") if code_meta else "")
-
-                # Cycle 27 fix: Frequency-aware variant override.
-                # If user explicitly requested a frequency (monthly/quarterly/etc.)
-                # and the canonical code's frequency doesn't match, try a catalog
-                # variant that does.  This is a general fix using existing catalog
-                # variant infrastructure.
-                _query_lower = (original_query or "").lower()
-                _freq_hints = {
-                    "monthly": "monthly", "month": "monthly",
-                    "quarterly": "quarterly", "quarter": "quarterly",
-                    "weekly": "weekly", "week": "weekly",
-                    "daily": "daily", "day": "daily",
-                }
-                _requested_freq = None
-                for hint, freq in _freq_hints.items():
-                    if hint in _query_lower:
-                        _requested_freq = freq
-                        break
-                if _requested_freq:
-                    code_freq = (code_meta.get("frequency", "") if code_meta else "").lower()
-                    if code_freq and code_freq != _requested_freq:
-                        # Try variant lookup for frequency match
-                        variant_code, _ = get_variant_for_query(
-                            concept_name, provider, original_query, countries_ctx,
-                        )
-                        if variant_code and variant_code != canonical_code:
-                            var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
-                            var_freq = (var_meta.get("frequency", "") if var_meta else "").lower()
-                            if var_freq == _requested_freq:
-                                logger.info(
-                                    "📋 Frequency variant override: %s (%s) → %s (%s) for query freq=%s",
-                                    canonical_code, code_freq, variant_code, var_freq, _requested_freq,
-                                )
-                                canonical_code = variant_code
-                                code_meta = var_meta
-                                code_name = (var_meta.get("name", "") if var_meta else "")
-
-                # Cycle 29: ALWAYS try variant lookup if query has variant
-                # discriminator keywords that don't appear in the canonical code's
-                # name.  This catches cases like "core CPI" where the catalog
-                # matches "inflation" → CPIAUCSL but the user wants the "core"
-                # variant CPILFESL.  Skipping the discriminator check is fine for
-                # confidence reasons, but variant lookup uses the catalog's own
-                # explicit variant definitions, not heuristics.
-                _query_lower_var = (original_query or "").lower()
-                _variant_keywords = (
-                    "core", "headline", "ppp", "constant", "real", "nominal",
-                    "growth", "per capita", "pce",
-                    "monthly", "quarterly", "weekly", "daily",
-                    "brent", "wti", "west texas intermediate",
-                )
-                _has_variant_hint = any(
-                    kw in _query_lower_var for kw in _variant_keywords
-                )
-                _name_lower_var = (code_name or "").lower()
-                if _has_variant_hint:
-                    # Check if any variant keyword in query is missing from
-                    # the primary's name — if so, try variant lookup
-                    _missing_in_primary = [
-                        kw for kw in _variant_keywords
-                        if kw in _query_lower_var and kw not in _name_lower_var
-                    ]
-                    if _missing_in_primary:
-                        variant_code, _ = get_variant_for_query(
-                            concept_name, provider, original_query, countries_ctx,
-                        )
-                        if variant_code and variant_code != canonical_code:
-                            var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
-                            var_name = (var_meta.get("name", "") if var_meta else "")
-                            logger.info(
-                                "📋 Variant override (cycle 29): %s → %s for query "
-                                "'%s' (missing keywords: %s)",
-                                canonical_code, variant_code,
-                                original_query[:50],
-                                _missing_in_primary,
-                            )
-                            canonical_code = variant_code
-                            code_meta = var_meta
-                            code_name = var_name
-
-                # High-confidence catalog matches (>= 0.90) are authoritative —
-                # the concept itself already encodes the query's semantic intent
-                # (e.g. gdp_growth concept already implies "growth").  Discriminator
-                # checks should NOT override the catalog in these cases.
-                _skip_discriminator = float(preferred_confidence or 0.0) >= 0.90
-                if _skip_discriminator:
-                    logger.debug(
-                        "📋 Skipping discriminator check for high-confidence catalog match "
-                        "'%s' (confidence=%.2f, concept=%s)",
-                        canonical_code, float(preferred_confidence or 0.0), concept_name,
-                    )
-                if not _skip_discriminator and not svc._verify_semantic_discriminators(original_query, canonical_code, code_name):
-                    # Primary variant doesn't match query discriminators (e.g.,
-                    # user asked for "GDP per capita PPP" but primary is current US$).
-                    # Try named catalog variants (ppp, growth, constant, etc.)
-                    # BEFORE falling through to expensive IndicatorSelector/metadata search.
-                    variant_code, variant_conf = get_variant_for_query(
-                        concept_name, provider, original_query, countries_ctx,
-                    )
-                    if variant_code:
-                        # Verify the variant passes semantic discriminators
-                        var_meta = _resolver.lookup.get(provider, variant_code) if provider else None
-                        var_name = (var_meta.get("name", "") if var_meta else "")
-                        if svc._verify_semantic_discriminators(original_query, variant_code, var_name):
-                            logger.info(
-                                "📋 Catalog variant resolved: %s → %s for %s (concept=%s)",
-                                canonical_code, variant_code, provider, concept_name,
-                            )
-                            params = _apply_indicator_with_semantic_label(
-                                variant_code,
-                                __catalog_resolved=True,
-                                __catalog_concept=concept_name,
-                            )
-                            intent.parameters = params
-                            if not intent.indicators or len(intent.indicators) <= 1:
-                                intent.indicators = [variant_code]
-                            return provider, params
-                        else:
-                            logger.info(
-                                "📋 Catalog variant %s also failed discriminator check, continuing",
-                                variant_code,
-                            )
-
-                    # No matching variant found — try provider-agnostic resolution
-                    # but only if the user didn't explicitly lock this provider
-                    if not explicit_provider_locked:
-                        alt_provider, alt_code, alt_conf = get_best_provider(
-                            concept_name, countries_ctx
-                        )
-                        alt_normalized = _normalize_provider_name(alt_provider or "")
-                        if alt_normalized and alt_normalized != provider and alt_code:
-                            alt_meta = _resolver.lookup.get(alt_normalized, alt_code) if alt_normalized else None
-                            alt_name = (alt_meta.get("name", "") if alt_meta else "").lower()
-                            # Check discriminators from the original query
-                            disc_set = getattr(_resolver, '_semantic_discriminators', set())
-                            query_discs = {d for d in disc_set if d in original_query.lower()}
-                            from ..services.indicator_clarification import find_missing_discriminators as _find_missing
-                            alt_missing = _find_missing(
-                                query_discs, alt_name, alt_code.lower(),
-                            )
-                            if not alt_missing:
-                                logger.info(
-                                    "🔄 Switching provider %s → %s (code %s matches discriminators better)",
-                                    provider, alt_normalized, alt_code,
-                                )
-                                params = {**params, "indicator": alt_code}
-                                intent.parameters = params
-                                intent.indicators = [alt_code]
-                                intent.apiProvider = alt_normalized
-                                return alt_normalized, params
-                    return provider, params
-
-                params = _apply_indicator_with_semantic_label(
-                    canonical_code,
-                    __catalog_resolved=True,
-                    __catalog_concept=concept_name,
-                )
-                intent.parameters = params
-                distinct_indicators = {str(value) for value in (intent.indicators or []) if value}
-                if not distinct_indicators or len(distinct_indicators) == 1:
-                    intent.indicators = [canonical_code]
-                logger.info(
-                    "📋 Concept code override: %s -> %s for provider %s (concept=%s)",
-                    matched_query,
-                    canonical_code,
-                    provider,
-                    concept_name,
-                )
-
-            if (
-                not best_provider_normalized
-                or best_provider_normalized == provider
-                or best_confidence < (preferred_confidence + 0.08)
-            ):
-                return provider, params
-        else:
-            # If catalog still says provider is available but suitability could not be confirmed,
-            # only override when we have a concrete better provider.
-            if coverage_ok and is_provider_available(concept_name, provider) and (
-                not best_provider_normalized or best_provider_normalized == provider
-            ):
-                return provider, params
-
-        # When the user explicitly requested this provider, never re-route
-        # to a different one.  Code injection (if any) already happened above.
-        if explicit_provider_locked:
-            return provider, params
-
-        if (
-            in_fallback_context
-            and best_provider_normalized
-            and best_provider_normalized != provider
-        ):
-            logger.info(
-                "📋 Concept override skipped in fallback context: keeping %s instead of rerouting to %s",
-                provider,
-                best_provider_normalized,
-            )
-            return provider, params
-
-        alt_provider = best_provider
-        alt_code = best_code
-        alt_provider_normalized = best_provider_normalized
-        if not alt_provider_normalized or alt_provider_normalized == provider:
-            return provider, params
-        if alt_provider_normalized in blocked_override_providers:
-            logger.info(
-                "📋 Concept override skipped: candidate provider %s is blocked in this fallback context",
-                alt_provider_normalized,
-            )
-            return provider, params
-
-        logger.info(
-            "📋 Concept override: rerouting '%s' from %s to %s (best_conf=%.2f, current_conf=%.2f, coverage_ok=%s)",
-            concept_name,
-            provider,
-            alt_provider_normalized,
-            best_confidence,
-            preferred_confidence,
-            provider_supported,
-        )
-        provider = alt_provider_normalized
-        intent.apiProvider = alt_provider or provider
-
-        if alt_code:
-            params = _apply_indicator_with_semantic_label(
-                alt_code,
-                __catalog_resolved=True,
-                __catalog_concept=concept_name,
-            )
-            intent.parameters = params
-            if not intent.indicators or len(intent.indicators) <= 1:
-                intent.indicators = [alt_code]
-            logger.info(
-                "📋 Concept override indicator: %s -> %s",
-                matched_query,
-                alt_code,
-            )
-    except Exception as exc:
-        logger.debug("Concept provider override skipped: %s", exc)
-
     return provider, params
 
 
 # ---------------------------------------------------------------------------
-# Catalog availability override
+# Disabled catalog availability remapping
 # ---------------------------------------------------------------------------
 
 def apply_catalog_availability_override(
@@ -2077,100 +1472,12 @@ def apply_catalog_availability_override(
     params: dict,
     fallback_excluded_providers: set,
 ) -> tuple[str, dict]:
-    """Check catalog availability and re-route to a better provider if needed.
+    """Compatibility shim: do not reroute using catalog availability.
 
-    If the current provider is in the not_available list for the resolved
-    indicator, proactively switches to the best alternative provider.
-    Respects explicit provider requests from the user.
-
-    Returns (provider, params) -- both may be updated.
+    Catalog availability was a semantic rule layer that could replace a valid
+    provider-native selection with a forced provider/code. It is intentionally
+    disabled under the no semantic shortcut rule.
     """
-    indicator_term = (params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
-    logger.info(f"📋 Catalog check: indicator='{indicator_term}', provider='{provider}'")
-
-    original_query = intent.originalQuery or ""
-    explicit_provider_requested = _normalize_provider_name(svc._detect_explicit_provider(original_query) or "")
-    if is_provider_locked(params):
-        logger.info(f"📋 Skipping catalog override - semantic clarification locked {provider}")
-        return provider, params
-
-    if explicit_provider_requested and explicit_provider_requested == provider:
-        logger.info(f"📋 Skipping catalog override - user explicitly requested {provider}")
-        return provider, params
-
-    if not indicator_term or not provider:
-        return provider, params
-
-    try:
-        from .catalog_service import find_concept_by_term, get_best_provider, is_provider_available
-        concept = find_concept_by_term(indicator_term)
-        logger.info(f"📋 Catalog concept: '{concept}' for term '{indicator_term}'")
-        bilateral_trade_request = False
-        if provider == "COMTRADE":
-            router = getattr(svc, "unified_router", None)
-            if router is not None and original_query:
-                try:
-                    bilateral_trade_request = bool(
-                        router._is_bilateral_trade_query(original_query.lower(), original_query)
-                    )
-                except Exception:
-                    bilateral_trade_request = False
-            if not bilateral_trade_request:
-                bilateral_trade_request = bool(params.get("reporter") or params.get("partner"))
-            if bilateral_trade_request and concept in {"trade", "exports", "imports", "trade_balance"}:
-                logger.info(
-                    "📋 Catalog availability override skipped: preserving COMTRADE for bilateral trade concept '%s'",
-                    concept,
-                )
-                return provider, params
-        if concept and not is_provider_available(concept, provider):
-            countries_ctx = params.get("countries") if isinstance(params.get("countries"), list) else None
-            if not countries_ctx:
-                country = params.get("country") or params.get("region")
-                countries_ctx = [country] if country else None
-
-            alt_provider, alt_code, _ = get_best_provider(concept, countries_ctx)
-            if alt_provider and alt_provider.upper() != provider:
-                alt_provider_normalized = _normalize_provider_name(alt_provider)
-                if (
-                    fallback_excluded_providers
-                    and alt_provider_normalized
-                    and alt_provider_normalized != provider
-                ):
-                    logger.info(
-                        "📋 Catalog reroute skipped in fallback context: keeping %s instead of %s",
-                        provider,
-                        alt_provider_normalized,
-                    )
-                elif alt_provider_normalized in fallback_excluded_providers:
-                    logger.info(
-                        "📋 Catalog reroute skipped: candidate provider %s is blocked in this fallback context",
-                        alt_provider_normalized,
-                    )
-                else:
-                    logger.info(
-                        "📋 Catalog: %s not available for '%s', routing to %s",
-                        provider,
-                        indicator_term,
-                        alt_provider,
-                    )
-                    intent.apiProvider = alt_provider
-                    provider = alt_provider_normalized
-
-                    if alt_code:
-                        params = {**params, "indicator": alt_code}
-                        intent.parameters = params
-                        if not intent.indicators or len(intent.indicators) == 1:
-                            intent.indicators = [alt_code]
-                        logger.info(
-                            "📋 Catalog remapped indicator for %s: %s -> %s",
-                            provider,
-                            indicator_term,
-                            alt_code,
-                        )
-    except Exception as e:
-        logger.warning(f"Catalog availability check failed: {e}")
-
     return provider, params
 
 
@@ -2226,25 +1533,6 @@ async def resolve_indicator_for_fetch(
             merged["__semantic_indicator_label"] = semantic_label
         return merged
 
-    # --- StatsCan fast-path: if intent.indicators match a known vector or coordinate
-    # mapping, lock the indicator immediately and skip the IndicatorSelector.
-    if provider in {"STATSCAN", "STATISTICS CANADA"}:
-        _sc = svc.statscan_provider
-        for hr_indicator in (intent.indicators or []):
-            hr_key = hr_indicator.upper().replace(" ", "_").replace("-", "_")
-            if hr_key in _sc.VECTOR_MAPPINGS or hr_key in _sc.COORDINATE_PRODUCT_MAPPINGS:
-                logger.info(
-                    "StatsCan fast-path: intent indicator '%s' matches known mapping '%s'; "
-                    "skipping IndicatorSelector to use verified vector/coordinate",
-                    hr_indicator, hr_key,
-                )
-                params = _apply_indicator_with_semantic_label(
-                    hr_key,
-                    __catalog_resolved=True,
-                )
-                intent.parameters = params
-                return params
-
     existing_indicator = str(params.get("indicator") or "").strip()
     if provider == "IMF" and not existing_indicator and len(intent.indicators or []) == 1:
         candidate_indicator = str((intent.indicators or [""])[0] or "").strip()
@@ -2269,7 +1557,6 @@ async def resolve_indicator_for_fetch(
             params = _apply_indicator_with_semantic_label(
                 candidate_indicator,
                 __semantic_indicator_label=candidate_indicator,
-                __catalog_resolved=True,
                 __exact_provider_code_match=True,
             )
             intent.parameters = params
@@ -2280,133 +1567,6 @@ async def resolve_indicator_for_fetch(
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)
     )
     exact_match_locked = is_exact_match_locked(params)
-
-    if provider == "IMF" and not (has_explicit_code and exact_match_locked):
-        fast_indicator_query = str(
-            intent.indicators[0] if intent.indicators else existing_indicator
-        ).strip()
-        if not fast_indicator_query:
-            fast_indicator_query = str(params.get("__semantic_indicator_label") or "").strip()
-        fast_path = _resolve_imf_aggregate_indicator_fast_path(
-            indicator_query=fast_indicator_query or existing_indicator,
-            original_query=_effective_original_query(intent),
-        )
-        if fast_path:
-            code, label = fast_path
-            logger.info(
-                "⚡ IMF aggregate fast-path: '%s' -> %s",
-                fast_indicator_query or existing_indicator,
-                code,
-            )
-            params = _apply_indicator_with_semantic_label(
-                code,
-                __semantic_indicator_label=label,
-                __catalog_resolved=True,
-                __imf_public_sdmx_fast_path=label,
-            )
-            intent.parameters = params
-            return params
-
-    # Qualifier-aware indicator recovery: when the LLM strips qualifiers
-    # ("GDP growth G7" -> indicators=["GDP"]), recover the full indicator
-    # from the original query before any resolution path.
-    # SKIP if indicator is already a provider-specific code (e.g., SP.POP.GROW,
-    # NY.GDP.MKTP.KD.ZG) -- these are already resolved and should not be augmented.
-    if not params.get("__qualifier_checked"):
-        original_q = _effective_original_query(intent).lower()
-        # Use the indicator TEXT (from LLM or intent) not the resolved CODE
-        indicator_text = ""
-        if intent.indicators:
-            indicator_text = str(intent.indicators[0] or "").strip().lower()
-        if not indicator_text:
-            indicator_text = existing_indicator.lower() if existing_indicator else ""
-        # Skip qualifier recovery if indicator is already a provider code
-        _skip_qualifier = svc._looks_like_provider_indicator_code(
-            provider, indicator_text.upper()
-        ) if indicator_text else False
-        _qual_pairs = [
-            ("per capita", " per capita"),
-            ("per person", " per capita"),
-            ("growth rate", " growth rate"),
-            ("growth", " growth"),
-        ]
-        for qual, suffix in _qual_pairs:
-            if _skip_qualifier:
-                break
-            if qual in original_q and qual not in indicator_text:
-                augmented = indicator_text + suffix
-                # Verify the augmented query resolves to a different (better) code
-                aug_code = svc._get_direct_provider_indicator_translation(
-                    provider=provider, indicator_query=augmented.strip(),
-                )
-                if aug_code and aug_code != existing_indicator:
-                    existing_indicator = aug_code
-                    has_explicit_code = True
-                    params = _apply_indicator_with_semantic_label(
-                        aug_code,
-                        __catalog_resolved=True,
-                        __qualifier_checked=True,
-                    )
-                    intent.parameters = params
-                    logger.info(
-                        "📝 Qualifier recovered: '%s' + '%s' → %s",
-                        indicator_text, suffix.strip(), aug_code,
-                    )
-                break
-        params = {**params, "__qualifier_checked": True}
-        intent.parameters = params
-
-    # Catalog-resolved codes may be the BASE indicator (e.g., total unemployment).
-    # If the query has variant qualifiers (female, youth, male, rural, per capita, PPP),
-    # let the IndicatorSelector find the specific variant instead of locking to base.
-    _catalog_variant_fallback: Optional[str] = None
-    if has_explicit_code and params.get("__catalog_resolved"):
-        original_query = _effective_original_query(intent).lower()
-        variant_qualifiers = {
-            "female", "male", "youth", "young", "adolescent", "adult", "elderly",
-            "rural", "urban", "primary", "secondary", "tertiary",
-            "per capita", "per person", "per 1000", "per 100",
-            "ppp", "constant", "real", "nominal", "net", "gross",
-        }
-        matched_qualifiers = {q for q in variant_qualifiers if q in original_query}
-
-        # If qualifiers are found, check whether the catalog-resolved
-        # indicator's name already contains them.
-        if matched_qualifiers:
-            resolved_name_lower = ""
-            try:
-                _lookup = _resolver().lookup
-                _meta = _lookup.get(provider, existing_indicator)
-                if _meta:
-                    resolved_name_lower = (_meta.get("name") or "").lower()
-            except Exception:
-                pass
-            if not resolved_name_lower and intent.indicators:
-                resolved_name_lower = str(intent.indicators[0] or "").lower()
-            unresolved_qualifiers = {
-                q for q in matched_qualifiers if q not in resolved_name_lower
-            }
-            matched_qualifiers = unresolved_qualifiers
-
-        has_variant = bool(matched_qualifiers)
-        if not has_variant:
-            logger.info(
-                "🔒 Keeping catalog-resolved %s indicator: %s",
-                provider, existing_indicator,
-            )
-            params = _apply_indicator_with_semantic_label(existing_indicator)
-            intent.parameters = params
-            return params
-        else:
-            logger.info(
-                "🔓 Catalog resolved %s but query has variant qualifiers %s — letting IndicatorSelector refine",
-                existing_indicator, matched_qualifiers,
-            )
-            # Clear catalog lock so IndicatorSelector can run.
-            # Track original catalog code so we can fall back to it
-            # instead of running the expensive legacy resolver.
-            has_explicit_code = False
-            _catalog_variant_fallback = existing_indicator
 
     # Path 1: Validate explicit code against query context
     if has_explicit_code and exact_match_locked:
@@ -2470,7 +1630,7 @@ async def resolve_indicator_for_fetch(
         )
         has_explicit_code = False
 
-    # Path 2-4: Dynamic resolution (direct translation -> resolver -> raw query)
+    # Dynamic resolution (IndicatorSelector -> resolver -> raw query)
     indicator_query = select_indicator_query_for_resolution(svc, intent)
     if not indicator_query and intent.indicators:
         indicator_query = str(intent.indicators[0] or "").strip()
@@ -2487,33 +1647,24 @@ async def resolve_indicator_for_fetch(
         and indicator_query != str(intent.indicators[0] or "").strip()
     )
 
-    # Qualifier preservation: the LLM sometimes drops key modifiers
-    original_q = _effective_original_query(intent).lower()
-    iq_lower = indicator_query.lower()
-    _qualifier_map = [
-        ("per capita", " per capita"),
-        ("per person", " per capita"),
-        ("growth rate", " growth rate"),
-        ("growth", " growth"),
-    ]
-    for qualifier, suffix in _qualifier_map:
-        if qualifier in original_q and qualifier not in iq_lower:
-            indicator_query = indicator_query + suffix
-            logger.info(
-                "📝 Qualifier preserved: added '%s' to indicator query -> '%s'",
-                suffix.strip(), indicator_query,
-            )
-            break
-
-    # Path 1.5: IndicatorSelector (embed -> LLM pick) -- primary resolution
-    # For follow-ups, use resolvedQuery (e.g. "GDP per capita India") rather
-    # than the raw follow-up text (e.g. "show from IMF instead").
-    selector_query = (_effective_original_query(intent) or indicator_query or "").strip()
-    if provider and looks_like_exact_provider_title_match(selector_query, provider):
+    # Path 1.5: IndicatorSelector (embed -> LLM pick) -- primary resolution.
+    # For StatsCan, search on the distilled indicator phrase rather than the
+    # full user query.  Geography/date words such as "Canada" or "in 2017"
+    # are fetch parameters, not indicator semantics, and can cause unrelated
+    # country-specific tables to outrank the intended measure.
+    original_selector_query = (_effective_original_query(intent) or "").strip()
+    if provider in {"STATSCAN", "STATISTICS CANADA"}:
+        selector_query = (indicator_query or original_selector_query).strip()
+    else:
+        # For follow-ups, use resolvedQuery (e.g. "GDP per capita India")
+        # rather than the raw follow-up text (e.g. "show from IMF instead").
+        selector_query = (original_selector_query or indicator_query or "").strip()
+    exact_title_query = (original_selector_query or selector_query).strip()
+    if provider and looks_like_exact_provider_title_match(exact_title_query, provider):
         logger.info(
             "🎯 Skipping IndicatorSelector for exact %s title match: %s",
             provider,
-            selector_query,
+            exact_title_query,
         )
     else:
         try:
@@ -2541,6 +1692,12 @@ async def resolve_indicator_for_fetch(
                         indicator_query, selection.code, selection.source,
                     )
                     params = _apply_indicator_with_semantic_label(selection.code)
+                    if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
+                        logger.info(
+                            "🔎 Collapsing World Bank multi-indicator intent to selector-resolved indicator '%s'",
+                            selection.code,
+                        )
+                        intent.indicators = [selection.code]
                     intent.parameters = params
                     return params
             if selection.needs_user_choice:
@@ -2550,41 +1707,9 @@ async def resolve_indicator_for_fetch(
                 )
                 params = {**params, "__indicator_options": selection.options}
                 intent.parameters = params
-                if _catalog_variant_fallback:
-                    # Catalog already resolved a base code; IndicatorSelector offered
-                    # options for the variant.  Return now instead of also running the
-                    # expensive legacy resolver -- the options are already the best we
-                    # can offer without a user decision.
-                    logger.info(
-                        "🔒 Catalog-variant path: returning user-choice options without legacy fallback",
-                    )
-                    return params
                 # Don't return -- fall through to legacy resolver as backup
         except Exception as e:
-            if _catalog_variant_fallback:
-                # IndicatorSelector failed but we have the catalog base code --
-                # use it directly instead of running the legacy resolver.
-                logger.info(
-                    "🔒 IndicatorSelector unavailable; falling back to catalog-resolved code: %s (error: %s)",
-                    _catalog_variant_fallback, e,
-                )
-                params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
-                intent.parameters = params
-                return params
             logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
-
-    # When the catalog already resolved a code and IndicatorSelector ran but
-    # found nothing (no code, no user-choice options), fall back to the
-    # catalog code rather than running the legacy resolver redundantly.
-    if _catalog_variant_fallback:
-        logger.info(
-            "🔒 IndicatorSelector returned no result for variant query; "
-            "keeping catalog-resolved code: %s",
-            _catalog_variant_fallback,
-        )
-        params = _apply_indicator_with_semantic_label(_catalog_variant_fallback)
-        intent.parameters = params
-        return params
 
     # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
     resolved = _resolver().resolve(
@@ -2644,35 +1769,7 @@ async def resolve_indicator_for_fetch(
             accepted_resolved,
         )
 
-    # Path 3: Direct translation fallback (fuzzy IndicatorTranslator)
-    direct_translation_code: Optional[str] = None
-    if not accepted_resolved:
-        direct_translation = svc._get_direct_provider_indicator_translation(
-            provider=provider,
-            indicator_query=indicator_query,
-        )
-        if direct_translation and svc._looks_like_provider_indicator_code(provider, direct_translation):
-            _resolver_inst = _resolver()
-            _lookup = getattr(_resolver_inst, 'lookup', None)
-            _meta = _lookup.get(provider, direct_translation) if _lookup else None
-            _name = (_meta.get("name", "") if _meta else "")
-            if not svc._verify_semantic_discriminators(
-                _effective_original_query(intent) or indicator_query,
-                direct_translation,
-                _name,
-            ):
-                direct_translation = None
-
-        if direct_translation and svc._looks_like_provider_indicator_code(provider, direct_translation):
-            logger.info(
-                "📌 Using direct %s indicator translation fallback: '%s' -> '%s'",
-                provider,
-                indicator_query,
-                direct_translation,
-            )
-            direct_translation_code = str(direct_translation)
-
-    # Path 4: Apply best result or fall back to raw query
+    # Apply best result or fall back to raw query
     if accepted_resolved and resolved:
         params = _apply_indicator_with_semantic_label(resolved.code)
         if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
@@ -2723,6 +1820,12 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
     def _fallback_to_original_or_distilled() -> str:
         if provider_locked:
+            # Provider locking means "do not switch providers"; for StatsCan it
+            # should not force geography/date words back into indicator
+            # selection.  Other providers still prefer the full original query
+            # because prior semantic labels can be polluted by fallback state.
+            if _normalize_provider_name(intent.apiProvider or "") in {"STATSCAN", "STATISTICS CANADA"}:
+                return semantic_indicator_label or distilled_original or original_query
             return original_query or distilled_original or semantic_indicator_label
         return semantic_indicator_label or distilled_original or original_query
 

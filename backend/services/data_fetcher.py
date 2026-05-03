@@ -110,6 +110,35 @@ def _execution_plan_candidate_code(intent: ParsedIntent, params: dict) -> str:
     return "UNKNOWN"
 
 
+def _restore_semantic_indicator_label_for_generic_metadata(
+    result: List[NormalizedData],
+    params: dict,
+) -> None:
+    """Use the user's metric text when provider metadata only exposes a raw code.
+
+    This is a display/traceability repair, not semantic remapping: the provider
+    code selected by retrieval stays unchanged.  It prevents successful dynamic
+    fetches from being reported as unhelpful labels such as ``Vector 41690914``.
+    """
+    semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+    if not semantic_label:
+        return
+
+    resolved_code = str(params.get("indicator") or "").strip().lower()
+    for series in result or []:
+        metadata = getattr(series, "metadata", None)
+        if metadata is None:
+            continue
+        current_indicator = str(getattr(metadata, "indicator", "") or "").strip()
+        current_lower = current_indicator.lower()
+        if (
+            re.fullmatch(r"vector\s+\d+", current_lower)
+            or (resolved_code and current_lower == resolved_code)
+            or current_lower in {"", "unknown", "indicator"}
+        ):
+            metadata.indicator = semantic_label
+
+
 def _years_from_params(params: dict) -> tuple[Optional[int], Optional[int]]:
     start_year = params.get("start_year")
     end_year = params.get("end_year")
@@ -1200,48 +1229,29 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     results = await svc.statscan_provider.fetch_multi_dimension_data(decomposition_params)
                     return results if isinstance(results, list) else [results]
             except Exception as e:
-                logger.warning(f"StatsCan dimension decomposition dispatch failed: {e}. Falling through.")
-                semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
-                if semantic_label:
-                    alt_code = svc._get_direct_provider_indicator_translation("STATSCAN", semantic_label)
-                    if alt_code:
-                        alt_product_id = svc.statscan_provider._normalize_metadata_product_id(str(alt_code))
-                        if alt_product_id != _product_id_dim:
-                            alt_base = str(alt_code).upper().replace(" ", "_").replace("-", "_")
-                            if alt_base.isdigit():
-                                resolved_alt_base = _resolve_numeric_to_vector_key(alt_base)
-                                if resolved_alt_base:
-                                    alt_base = resolved_alt_base
-                            try:
-                                dimension_periods = _statscan_periods_from_date_range(params, 60)
-                                alt_decomposition_params = {
-                                    "productId": alt_product_id,
-                                    "indicator": alt_base,
-                                    "indicatorLabel": semantic_label,
-                                    "axis": dimension_decomposition_axis,
-                                    "periods": dimension_periods,
-                                    "dimensions": dimensions,
-                                    "startDate": params.get("startDate"),
-                                    "endDate": params.get("endDate"),
-                                }
-                                logger.info(
-                                    "StatsCan dimension decomposition fallback: semantic=%s product=%s axis=%s",
-                                    semantic_label,
-                                    alt_product_id,
-                                    dimension_decomposition_axis,
-                                )
-                                results = await svc.statscan_provider.fetch_multi_dimension_data(alt_decomposition_params)
-                                params["indicator"] = alt_product_id
-                                params["__statscan_product_id"] = alt_product_id
-                                intent.parameters = params
-                                return results if isinstance(results, list) else [results]
-                            except Exception as alt_exc:
-                                logger.warning(
-                                    "StatsCan dimension decomposition fallback failed for semantic=%s product=%s: %s",
-                                    semantic_label,
-                                    alt_product_id,
-                                    alt_exc,
-                                )
+                logger.warning(f"StatsCan dimension decomposition dispatch failed: {e}. Trying product-preserving fallback.")
+                if state_product_id:
+                    try:
+                        start_year = int(params["startDate"][:4]) if params.get("startDate") else None
+                        end_year = int(params["endDate"][:4]) if params.get("endDate") else None
+                        series = await svc.statscan_provider.fetch_with_dimensions(
+                            base_indicator=_base,
+                            modifiers=dimensions,
+                            start_year=start_year,
+                            end_year=end_year,
+                            periods=params.get("periods", _statscan_periods_from_date_range(params, 240)),
+                            indicator_label=(
+                                params.get("__semantic_indicator_label")
+                                or str(intent.indicators[0] if intent.indicators else _base)
+                            ),
+                        )
+                        return series if isinstance(series, list) else [series]
+                    except Exception as fallback_exc:
+                        logger.warning(
+                            "StatsCan product-preserving dimension fallback failed: %s. Falling through.",
+                            fallback_exc,
+                        )
+
 
         # Check if this is a dimension BREAKDOWN (e.g., Geography="Province")
         # vs a dimension FILTER (e.g., Geography="Ontario")
@@ -1579,6 +1589,10 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 "geography": params.get("geography"),
                 "periods": params.get("periods", 240),
             }
+            if params.get("startDate"):
+                dynamic_params["startDate"] = params.get("startDate")
+            if params.get("endDate"):
+                dynamic_params["endDate"] = params.get("endDate")
             try:
                 result = await svc.statscan_provider.fetch_dynamic_data(dynamic_params)
                 return [result]
@@ -1638,6 +1652,41 @@ async def _fetch_from_imf(
         countries_param,
     )
 
+    async def _fetch_imf_series_batch(
+        *,
+        indicator: str,
+        countries: List[str],
+        start_year: Optional[int],
+        end_year: Optional[int],
+    ) -> List[NormalizedData]:
+        """Fetch IMF data across countries using the provider's best interface."""
+        batch_fetch = getattr(svc.imf_provider, "fetch_batch_indicator", None)
+        if callable(batch_fetch):
+            return await batch_fetch(
+                indicator=indicator,
+                countries=countries,
+                start_year=start_year,
+                end_year=end_year,
+            )
+
+        single_fetch = getattr(svc.imf_provider, "fetch_indicator", None)
+        if not callable(single_fetch):
+            raise AttributeError("IMF provider exposes neither fetch_batch_indicator nor fetch_indicator")
+
+        series: List[NormalizedData] = []
+        for country_code in countries:
+            fetched = await single_fetch(
+                indicator=indicator,
+                country=country_code,
+                start_year=start_year,
+                end_year=end_year,
+            )
+            if isinstance(fetched, list):
+                series.extend(fetched)
+            elif fetched is not None:
+                series.append(fetched)
+        return series
+
     if len(resolved_countries) > 1:
         logger.info("Using IMF batch method for %d countries", len(resolved_countries))
         all_data: List[NormalizedData] = []
@@ -1648,7 +1697,7 @@ async def _fetch_from_imf(
             indicators_to_fetch = [resolved_indicator] if resolved_indicator else []
 
         for indicator in indicators_to_fetch:
-            series_list = await svc.imf_provider.fetch_batch_indicator(
+            series_list = await _fetch_imf_series_batch(
                 indicator=indicator,
                 countries=resolved_countries,
                 start_year=request_start_year,
@@ -1664,7 +1713,7 @@ async def _fetch_from_imf(
             if resolved_indicator:
                 indicators_to_fetch = [resolved_indicator]
             for indicator in indicators_to_fetch:
-                series_list = await svc.imf_provider.fetch_batch_indicator(
+                series_list = await _fetch_imf_series_batch(
                     indicator=indicator,
                     countries=[country],
                     start_year=request_start_year,
@@ -1674,7 +1723,7 @@ async def _fetch_from_imf(
             return all_data
         else:
             indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
-            return await svc.imf_provider.fetch_batch_indicator(
+            return await _fetch_imf_series_batch(
                 indicator=resolved_indicator or indicator,
                 countries=[country],
                 start_year=request_start_year,
@@ -2074,34 +2123,21 @@ async def fetch_data(
                 "Delta-resolved: indicator changed to '%s', resolving (query overridden from '%s')",
                 _resolution_query, _saved_query,
             )
-            # For provider-change deltas, the concept override must respect
-            # the user's explicit provider choice.  Temporarily restore the
-            # raw query so _detect_explicit_provider sees "World Bank" / "FRED".
-            _raw_for_override = _saved_query or _resolution_query
-            _override_orig = intent.originalQuery
-            intent.originalQuery = _raw_for_override
-            provider, params = svc._apply_concept_provider_override(provider, intent, params)
-            intent.originalQuery = _override_orig
-            intent.parameters = params
             params = await svc._resolve_indicator_for_fetch(provider, intent, params)
             intent.originalQuery = _saved_query
     else:
-        provider, params = svc._apply_concept_provider_override(provider, intent, params)
-        intent.parameters = params
-
         # PHASE B: Resolve indicator code via unified resolution pipeline
         params = await svc._resolve_indicator_for_fetch(provider, intent, params)
 
-        # Check catalog availability and re-route if needed
-        provider, params = svc._apply_catalog_availability_override(
-            provider, intent, params, fallback_excluded_providers
-        )
-
-    # Preserve catalog-resolved flag as a transient attribute on the intent
-    if params.get("__catalog_resolved"):
-        object.__setattr__(intent, "_catalog_resolved", True)
-
-    internal_param_keys = {"__fallback_excluded_providers", "__catalog_resolved", "__catalog_concept", "__qualifier_checked", "__geo_split_child", "__delta_resolved", "__delta_indicator_changed", "__semantic_provider_locked", "__imf_public_sdmx_fast_path"}
+    internal_param_keys = {
+        "__fallback_excluded_providers",
+        "__qualifier_checked",
+        "__geo_split_child",
+        "__delta_resolved",
+        "__delta_indicator_changed",
+        "__semantic_provider_locked",
+        "__indicator_options",
+    }
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params
@@ -2194,6 +2230,7 @@ async def fetch_data(
         logger.info("Cache hit for %s", execution_plan.provider)
         result_list = cached if isinstance(cached, list) else [cached]
         svc._normalize_bis_metadata_labels(result_list)
+        _restore_semantic_indicator_label_for_generic_metadata(result_list, params)
         if tracker:
             with tracker.track(
                 "cache_hit",
@@ -2318,6 +2355,7 @@ async def fetch_data(
         )
 
     svc._normalize_bis_metadata_labels(result)
+    _restore_semantic_indicator_label_for_generic_metadata(result, params)
 
     # Validate data before returning
     from backend.services.data_validator import get_data_validator
@@ -2382,12 +2420,10 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         params = dict(intent.parameters) if intent.parameters else {}
 
         params["indicator"] = indicator
-        # Strip all internal flags — each sub-indicator needs independent
-        # resolution through the full pipeline (database search, not shortcuts).
+        # Strip internal flags — each sub-indicator needs independent
+        # resolution through the full pipeline.
         # Without this, "GDP" gets treated as a literal FRED code instead of
         # being resolved to the best GDP indicator.
-        params.pop("__catalog_resolved", None)
-        params.pop("__catalog_concept", None)
         params.pop("__delta_resolved", None)
         params.pop("__delta_indicator_changed", None)
 

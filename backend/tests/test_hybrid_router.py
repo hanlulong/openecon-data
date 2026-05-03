@@ -76,7 +76,7 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.match_type, "hybrid_llm")
         self.assertEqual(decision.matched_pattern, "concept:government_debt")
 
-    async def test_catalog_guardrail_rejects_unavailable_provider(self):
+    async def test_wrong_llm_semantic_choice_is_not_fixed_by_catalog_shortcut(self):
         router = HybridRouter(
             llm_provider=_FakeLLMProvider(
                 {
@@ -89,8 +89,8 @@ class HybridRouterTests(unittest.IsolatedAsyncioTestCase):
 
         decision = await router.route("bitcoin price history", indicators=["bitcoin"])
 
-        self.assertEqual(decision.provider, "CoinGecko")
-        self.assertNotEqual(decision.match_type, "hybrid_llm")
+        self.assertEqual(decision.provider, "WorldBank")
+        self.assertEqual(decision.match_type, "hybrid_llm")
 
 
 if __name__ == "__main__":

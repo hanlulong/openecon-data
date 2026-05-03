@@ -1,7 +1,7 @@
 """
 Hybrid Router
 
-Combines deterministic candidate generation with LLM ranking and hard guardrails.
+Combines structural candidate generation with LLM ranking and hard guardrails.
 The goal is flexibility for phrasing variation while preserving reliability.
 """
 
@@ -16,11 +16,6 @@ from .unified_router import (
     UnifiedRouter,
     detect_explicit_provider_match,
     _correct_coingecko,
-)
-from ..services.catalog_service import (
-    find_concept_by_term,
-    get_available_providers,
-    is_provider_available,
 )
 from ..services.json_parser import parse_llm_json
 
@@ -106,24 +101,11 @@ class HybridRouter:
         if explicit:
             boost(explicit[0], 200.0)
 
-        # NOTE: indicator keyword and regional keyword boosting were removed
-        # in the Phase 2 LLM refactor.  The baseline deterministic router
-        # already incorporates catalog, country, and special-case signals.
+        # NOTE: semantic keyword/catalog boosting is intentionally not used
+        # here. The candidate set is structural plus the LLM/provider hint; the
+        # LLM adjudicates semantic provider fit from the prompt.
 
         boost(llm_provider_hint, 35.0)
-
-        concepts = set()
-        for term in indicators:
-            concept = find_concept_by_term(term)
-            if concept:
-                concepts.add(concept)
-        concept_from_query = find_concept_by_term(query)
-        if concept_from_query:
-            concepts.add(concept_from_query)
-
-        for concept in concepts:
-            for provider in get_available_providers(concept):
-                boost(provider, 24.0)
 
         if countries and len(countries) > 1:
             boost("WorldBank", 15.0)
@@ -207,23 +189,6 @@ class HybridRouter:
             "}\n"
         )
 
-    def _catalog_guardrail(
-        self,
-        selected_provider: str,
-        indicators: List[str],
-    ) -> bool:
-        concepts = []
-        for term in indicators:
-            concept = find_concept_by_term(term)
-            if concept:
-                concepts.append(concept)
-
-        if not concepts:
-            return True
-
-        # Reject provider if unavailable for all recognized concepts.
-        return any(is_provider_available(concept, selected_provider) for concept in concepts)
-
     async def route(
         self,
         query: str,
@@ -295,14 +260,6 @@ class HybridRouter:
             indicators,
         )
         selected = self._normalize_provider(selected) or baseline.provider
-
-        if not self._catalog_guardrail(selected, indicators):
-            logger.info(
-                "HybridRouter rejected catalog-incompatible provider '%s'; fallback=%s",
-                selected,
-                baseline.provider,
-            )
-            return baseline
 
         fallback_candidates = choice.get("fallbacks", [])
         if not isinstance(fallback_candidates, list):

@@ -53,6 +53,7 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 - Reuse existing utils and patterns before introducing new abstractions.
 - No new dependencies without explicit request.
 - Keep diffs small, reviewable, and reversible.
+- Do not fix semantic matching, provider selection, or indicator resolution by adding rule-based shortcut guards, keyword maps, or forced overrides. When a match is wrong, remove/demote the rule-based path or improve retrieval/LLM adjudication with regression tests; only mechanical normalization/plumbing rules are allowed.
 - Run lint, typecheck, tests, and static analysis after changes.
 - Final reports must include changed files, simplifications made, and remaining risks.
 

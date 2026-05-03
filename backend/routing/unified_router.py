@@ -1,7 +1,7 @@
 """
 Unified Router - Single Entry Point for All Routing Decisions
 
-The LLM now handles all semantic routing (indicator detection, crypto vs.
+The LLM now handles semantic routing (indicator detection, crypto vs.
 fiscal classification, US-only indicators, etc.) via the provider capability
 matrix in the prompt.
 
@@ -9,9 +9,8 @@ This router retains only STRUCTURAL routing:
 1. Explicit provider mention ("from FRED", "using IMF")
 2. Exchange rate detection (ExchangeRate-API + BIS for REER/NEER)
 3. Bilateral trade detection (Comtrade is the ONLY bilateral trade provider)
-4. Catalog concept matching (data-driven YAML lookups, not rules)
-5. Country-based defaults (structural membership: EU→Eurostat, US→FRED)
-6. LLM provider choice (trust the LLM for everything else)
+4. Country-based defaults (structural membership: EU→Eurostat, US→FRED)
+5. LLM provider choice (trust the LLM for everything else)
 
 A lightweight CoinGecko guard (_correct_coingecko) prevents fiscal queries
 from landing on the crypto-only provider.
@@ -124,7 +123,7 @@ class RoutingDecision:
     confidence: float
     fallbacks: List[str] = field(default_factory=list)
     reasoning: str = ""
-    match_type: str = "default"  # explicit, indicator, country, catalog, region, llm, default
+    match_type: str = "default"  # explicit, indicator, country, region, llm, default
     matched_pattern: Optional[str] = None
 
 
@@ -138,11 +137,10 @@ class UnifiedRouter:
     3. Bilateral trade → Comtrade (only bilateral trade provider)
     4. Canadian queries → StatsCan (only Canada-specific provider)
     5. Regional group routing (EU countries → Eurostat, etc.)
-    6. Catalog concept match (data-driven YAML lookups)
-    7. Country-based routing (US → FRED, EU → Eurostat, etc.)
-    8. Multi-country routing
-    9. LLM provider choice (trust the LLM for semantic decisions)
-    10. Default → WorldBank
+    6. Country-based routing (US → FRED, EU → Eurostat, etc.)
+    7. Multi-country routing
+    8. LLM provider choice (trust the LLM for semantic decisions)
+    9. Default → WorldBank
 
     Semantic routing (US-only indicators, crypto detection, indicator
     classification) is handled by the LLM via the provider capability
@@ -177,16 +175,10 @@ class UnifiedRouter:
     DEFAULT_PROVIDER = "WorldBank"
 
     def __init__(self, catalog_service=None, use_catalog: bool = True):
-        self._catalog_service = catalog_service
-        self._use_catalog = use_catalog
-
-        if self._catalog_service is None and self._use_catalog:
-            try:
-                from ..services import catalog_service as cs
-                self._catalog_service = cs
-            except ImportError:
-                logger.debug("CatalogService not available, catalog routing disabled")
-                self._use_catalog = False
+        # Arguments retained for API compatibility only. Provider routing must
+        # not use semantic catalog shortcuts under the no-rule matching policy.
+        self._catalog_service = None
+        self._use_catalog = False
 
     def route(
         self,
@@ -220,11 +212,6 @@ class UnifiedRouter:
                 country = detected_countries[0]
             elif len(detected_countries) > 1:
                 countries = detected_countries
-
-        # Detect regional context (EU/Europe, OECD, etc.) from the query.
-        # This feeds into catalog routing so coverage-specific providers
-        # (e.g., Eurostat for EU) are preferred over global defaults.
-        detected_region = self._detect_region_context(query_lower)
 
         # 1. Explicit provider mention (ABSOLUTE HIGHEST)
         explicit_match = detect_explicit_provider_match(query)
@@ -324,29 +311,16 @@ class UnifiedRouter:
             )
 
         # 6. Regional group routing (EU countries, OECD countries, etc.)
-        #    Moved BEFORE catalog so regional context overrides catalog defaults.
         regional_decision = self._route_by_regional_group(query_lower)
         if regional_decision:
             return regional_decision
 
-        # 7. Catalog concept match (data-driven YAML lookups)
-        #    Pass detected region AND countries so coverage-specific providers
-        #    are preferred (e.g. StatsCan for CA, Eurostat for EU).
-        if self._use_catalog and self._catalog_service:
-            catalog_decision = self._route_by_catalog(
-                indicators, country, query=query,
-                region_context=detected_region,
-                countries=countries,
-            )
-            if catalog_decision:
-                return catalog_decision
-
-        # 8. Country-based routing
+        # 7. Country-based routing
         country_decision = self._route_by_country(country, countries, query_lower, indicators)
         if country_decision:
             return country_decision
 
-        # 9. Multi-country with non-OECD → WorldBank
+        # 8. Multi-country with non-OECD → WorldBank
         if countries and len(countries) > 1:
             has_non_oecd = any(CountryResolver.is_non_oecd_major(c) for c in countries)
             if has_non_oecd:
@@ -357,7 +331,7 @@ class UnifiedRouter:
                     reasoning="Multi-country query with non-OECD countries → WorldBank",
                 )
 
-        # 10. Trust LLM's provider choice
+        # 9. Trust LLM's provider choice
         if llm_provider and llm_provider != self.DEFAULT_PROVIDER:
             corrected, reason = _correct_coingecko(llm_provider, query, indicators)
             return self._create_decision(
@@ -572,7 +546,7 @@ class UnifiedRouter:
 
         IMPORTANT: Aggregate trade indicators (import/export share of GDP, trade as % of GDP)
         are macro indicators from WorldBank/IMF, NOT bilateral trade flows. These must NOT
-        match here so they can fall through to catalog routing.
+        match here so they can fall through to the general routing path.
         """
         # Early exit: aggregate trade indicators (% of GDP, share of GDP) are NOT bilateral
         if self._is_aggregate_trade_indicator(query_lower):
@@ -611,12 +585,8 @@ class UnifiedRouter:
         1. Property market → BIS (structural: BIS has cross-country property data)
         2. Bilateral trade → Comtrade (structural: only bilateral trade provider)
         3. Non-bilateral trade → StatsCan
-        4. Catalog-aware routing: if the catalog concept lists StatsCan as a
-           provider with coverage [CA], prefer StatsCan (country-specific source
-           with higher frequency/timeliness). Otherwise fall back to the best
-           global provider from the catalog.
-        5. Development-only indicators (no StatsCan coverage) → WorldBank
-        6. Default → StatsCan
+        4. Development-only indicators (no StatsCan coverage) → WorldBank
+        5. Default → StatsCan
         """
         query_lower = query.lower()
         indicators_str = " ".join(indicators).lower()
@@ -655,17 +625,6 @@ class UnifiedRouter:
                 reasoning="Canadian trade (no partner) → StatsCan",
             )
 
-        # Catalog-aware routing: check if StatsCan covers the concept.
-        # This replaces the old hardcoded global_indicators list with a
-        # data-driven approach. The catalog YAML files are the source of
-        # truth for which providers cover which concepts and countries.
-        if self._use_catalog and self._catalog_service:
-            catalog_decision = self._route_canada_by_catalog(
-                indicators, query, combined,
-            )
-            if catalog_decision:
-                return catalog_decision
-
         # Development-only indicators unlikely to be in StatsCan — route to
         # WorldBank. These are structural: StatsCan is a national statistics
         # office and does not track global development metrics.
@@ -691,74 +650,6 @@ class UnifiedRouter:
             matched_pattern="Canada",
             reasoning="Canadian query routed to StatsCan",
         )
-
-    def _route_canada_by_catalog(
-        self,
-        indicators: List[str],
-        query: str,
-        combined: str,
-    ) -> Optional[RoutingDecision]:
-        """Use the catalog to decide between StatsCan and global providers for Canada.
-
-        For each indicator/query term, find the catalog concept. If the concept
-        lists StatsCan as a provider (meaning it has Canada-specific data),
-        prefer StatsCan. Otherwise, use the catalog's best provider for CA.
-
-        This is a FRAMEWORK solution: as new concepts are added to catalog YAML
-        files with StatsCan entries, they automatically route correctly without
-        any code changes.
-        """
-        if not self._catalog_service:
-            return None
-
-        # Build candidate terms: parsed indicators + raw query
-        terms_to_check = list(indicators) if indicators else []
-        query_clean = query.strip()
-        if query_clean and query_clean not in terms_to_check:
-            terms_to_check.append(query_clean)
-
-        if not terms_to_check:
-            return None
-
-        for term in terms_to_check:
-            concept_name = self._catalog_service.find_concept_by_term(term)
-            if not concept_name:
-                continue
-
-            # Check if StatsCan is listed as a provider for this concept
-            statscan_available = self._catalog_service.is_provider_available(
-                concept_name, "StatsCan"
-            )
-
-            if statscan_available:
-                # StatsCan has this concept — prefer it for Canada queries
-                code = self._catalog_service.get_indicator_code(
-                    concept_name, "StatsCan", "primary"
-                )
-                logger.info(
-                    f"📚 Canada catalog match: {term} → {concept_name} → StatsCan"
-                    f" (code: {code})"
-                )
-                return self._create_decision(
-                    provider="StatsCan",
-                    confidence=0.88,
-                    match_type="catalog",
-                    matched_pattern=f"catalog:{concept_name}:StatsCan",
-                    reasoning=(
-                        f"Catalog lookup: Canada + {concept_name} → StatsCan "
-                        f"(country-specific source, code: {code})"
-                    ),
-                )
-
-            # Concept exists but StatsCan doesn't have it — fall through
-            # to StatsCan default instead of redirecting to a global provider.
-            # StatsCan has 40K+ tables; the indicator resolver's FTS5/embedding
-            # search will find the right table even without a catalog entry.
-            logger.info(
-                f"📚 Canada catalog match: {term} → {concept_name} — "
-                f"StatsCan not in catalog, falling through to StatsCan default"
-            )
-            return None
 
     def _route_by_regional_group(self, query_lower: str) -> Optional[RoutingDecision]:
         """Route queries that mention specific regional/country groups."""
@@ -884,122 +775,6 @@ class UnifiedRouter:
                 matched_pattern=country,
                 reasoning=f"OECD non-EU country ({country}) → WorldBank (broader coverage)",
             )
-
-        return None
-
-    @staticmethod
-    def _detect_region_context(query_lower: str) -> Optional[str]:
-        """Detect regional context from query text.
-
-        Returns a region tag (``"eu"``, ``"oecd"``, etc.) when the query
-        mentions a region/bloc but not a specific country.  This allows
-        downstream catalog routing to prefer region-specific providers
-        (e.g. Eurostat for EU queries, OECD for OECD-group queries).
-        """
-        # EU / Europe / Eurozone
-        if re.search(r"\b(?:eu|euro(?:pe|pean|zone|stat)?)\b", query_lower):
-            return "eu"
-        # OECD
-        if re.search(r"\boecd\b", query_lower):
-            return "oecd"
-        return None
-
-    @staticmethod
-    def _region_to_representative_countries(region: str) -> Optional[List[str]]:
-        """Map a detected region tag to a representative country list.
-
-        The catalog's ``get_best_provider`` uses country context to apply
-        coverage bonuses.  By supplying a representative EU member, we
-        nudge the catalog toward Eurostat (coverage=eu_members) instead
-        of WorldBank (coverage=global).
-        """
-        if region == "eu":
-            # DE (Germany) is an EU member; any single EU member works.
-            return ["DE"]
-        if region == "oecd":
-            # Use a non-EU OECD member so the catalog prefers OECD-coverage
-            # providers over EU-specific ones.
-            return ["AU"]
-        return None
-
-    def _route_by_catalog(
-        self,
-        indicators: List[str],
-        country: Optional[str],
-        query: Optional[str] = None,
-        region_context: Optional[str] = None,
-        countries: Optional[List[str]] = None,
-    ) -> Optional[RoutingDecision]:
-        """Route using CatalogService YAML mappings (data-driven, not rules)."""
-        if not self._catalog_service:
-            return None
-
-        # Build candidate terms: parsed indicators + raw query
-        terms_to_check = list(indicators) if indicators else []
-        if query:
-            query_clean = query.strip()
-            if query_clean and query_clean not in terms_to_check:
-                terms_to_check.append(query_clean)
-
-        if not terms_to_check:
-            return None
-
-        for term in terms_to_check:
-            concept_name = self._catalog_service.find_concept_by_term(term)
-            if concept_name:
-                # Merge single country and countries list into one list
-                # so the catalog can apply coverage bonuses for ALL detected
-                # countries (e.g. StatsCan for CA, Eurostat for EU).
-                countries_list: Optional[List[str]] = None
-                if country:
-                    countries_list = [country]
-                if countries:
-                    countries_list = list(dict.fromkeys(
-                        (countries_list or []) + list(countries)
-                    ))
-
-                # If no explicit country but a region was detected, use a
-                # representative country so the catalog applies coverage bonuses
-                # (e.g. Eurostat for EU queries).
-                if not countries_list and region_context:
-                    countries_list = self._region_to_representative_countries(region_context)
-
-                provider, code, confidence = self._catalog_service.get_best_provider(
-                    concept_name,
-                    countries=countries_list,
-                )
-                if provider and confidence > 0.5:
-                    logger.info(f"📚 Catalog match: {term} → {concept_name} → {provider}")
-                    return self._create_decision(
-                        provider=provider,
-                        confidence=confidence,
-                        match_type="catalog",
-                        matched_pattern=f"catalog:{concept_name}",
-                        reasoning=f"Catalog lookup: {concept_name} → {provider} (code: {code})",
-                    )
-
-                # Check if concept exists but ALL providers are unavailable
-                concept = self._catalog_service.get_concept(concept_name)
-                if concept:
-                    providers_map = concept.get("providers", {})
-                    not_available = concept.get("not_available", [])
-                    has_any_provider = bool(providers_map) and any(
-                        p.lower() not in [na.lower() for na in not_available]
-                        for p in providers_map
-                    )
-                    if not has_any_provider:
-                        desc = concept.get("description", "").strip()
-                        logger.info(
-                            f"📚 Catalog concept '{concept_name}' has no available providers"
-                        )
-                        return self._create_decision(
-                            provider="not_available",
-                            confidence=0.99,
-                            match_type="catalog",
-                            matched_pattern=f"catalog:{concept_name}:not_available",
-                            reasoning=f"Not available: {desc}" if desc else
-                            f"'{concept_name}' is not available through any provider",
-                        )
 
         return None
 

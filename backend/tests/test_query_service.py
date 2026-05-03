@@ -17,6 +17,7 @@ from backend.services.conversation import conversation_manager
 from backend.services.conversation_state_v2 import AnswerSetMember, ConversationState, FollowUpDelta
 from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
+from backend.services.indicator_selector import SelectionResult
 from backend.providers.fred import FREDProvider
 from backend.services.semantic_match_judge import ExecutionResultJudgment
 from backend.tests.utils import run
@@ -201,9 +202,9 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(has_parsing, f"Expected parsing step, got: {step_names}")
         self.assertTrue(has_fetching, f"Expected fetching step, got: {step_names}")
 
-    def test_process_query_oil_price_overrides_worldbank_to_fred(self) -> None:
+    def test_process_query_oil_price_uses_llm_selected_fred_provider(self) -> None:
         intent = ParsedIntent(
-            apiProvider="WorldBank",
+            apiProvider="FRED",
             indicators=["oil price"],
             parameters={"country": "1W"},
             clarificationNeeded=False,
@@ -230,9 +231,9 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.intent.apiProvider, "FRED")
         self.assertEqual(response.data[0].metadata.seriesId, "DCOILWTICO")
 
-    def test_process_query_brent_oil_price_selects_brent_series(self) -> None:
+    def test_process_query_brent_oil_price_uses_llm_selected_fred_provider(self) -> None:
         intent = ParsedIntent(
-            apiProvider="WorldBank",
+            apiProvider="FRED",
             indicators=["Brent oil price"],
             parameters={"country": "1W"},
             clarificationNeeded=False,
@@ -581,7 +582,9 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(params.get("indicator"), "UIS.PTRHC.2T3.QUALIFIED")
 
-    def test_resolve_indicator_for_fetch_uses_imf_public_ppi_fast_path(self) -> None:
+    def test_resolve_indicator_for_fetch_does_not_use_imf_ppi_shortcut(self) -> None:
+        from backend.services.indicator_resolution import resolve_indicator_for_fetch
+
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["Producer Price Index"],
@@ -590,47 +593,38 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="Brazil Producer Price Index from IMF",
         )
 
-        def _resolver_should_not_run():
-            raise AssertionError("legacy IMF resolver should not run for simple aggregate PPI")
+        class _Resolved:
+            code = "PPPI_ISIC31_IX"
+            confidence = 0.95
+            source = "database"
+            name = "Prices, Producer Price Index, ISIC Rev. 3.1, Index"
+            provider = "IMF"
+            metadata = {"indicator": name}
 
-        params = run(
-            self.service._resolve_indicator_for_fetch(  # pylint: disable=protected-access
-                "IMF",
-                intent,
-                dict(intent.parameters or {}),
+        class _Resolver:
+            lookup = None
+
+            def resolve(self, *args, **kwargs):
+                return _Resolved()
+
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=SimpleNamespace(code=None, needs_user_choice=False, options=[]))):
+            params = run(
+                resolve_indicator_for_fetch(
+                    self.service,
+                    "IMF",
+                    intent,
+                    dict(intent.parameters or {}),
+                    _get_indicator_resolver=lambda: _Resolver(),
+                )
             )
-        )
-        params_without_wrapper = run(
-            __import__(
-                "backend.services.indicator_resolution",
-                fromlist=["resolve_indicator_for_fetch"],
-            ).resolve_indicator_for_fetch(
-                self.service,
-                "IMF",
-                intent.model_copy(deep=True),
-                {"country": "BR"},
-                _get_indicator_resolver=_resolver_should_not_run,
-            )
-        )
 
-        self.assertEqual(params.get("indicator"), "PPPI_IX")
-        self.assertEqual(params_without_wrapper.get("indicator"), "PPPI_IX")
-        self.assertEqual(
-            params_without_wrapper.get("__imf_public_sdmx_fast_path"),
-            "Producer Price Index",
-        )
+        self.assertNotEqual(params.get("indicator"), "PPPI_IX")
+        self.assertEqual(params.get("indicator"), "PPPI_ISIC31_IX")
 
-    def test_resolve_indicator_for_fetch_does_not_map_detailed_imf_ppi_to_aggregate(self) -> None:
-        from backend.services.indicator_resolution import (
-            _resolve_imf_aggregate_indicator_fast_path,
-        )
+    def test_removed_imf_ppi_fast_path_symbol_is_absent(self) -> None:
+        import backend.services.indicator_resolution as indicator_resolution
 
-        self.assertIsNone(
-            _resolve_imf_aggregate_indicator_fast_path(
-                indicator_query="Producer Price Index",
-                original_query="Brazil Producer Price Index Mining and quarrying from IMF",
-            )
-        )
+        self.assertFalse(hasattr(indicator_resolution, "_resolve_imf_aggregate_indicator_fast_path"))
 
     def test_fetch_data_fails_fast_for_query_only_imf_public_surface_blocker(self) -> None:
         intent = ParsedIntent(
@@ -749,7 +743,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params.get("indicator"), "PCPI_CP_01_BY2010_IX")
         self.assertTrue(params.get("__exact_provider_code_match"))
 
-    def test_fetch_data_dispatches_simple_imf_ppi_code(self) -> None:
+    def test_fetch_data_no_longer_dispatches_imf_ppi_by_shortcut(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["Producer Price Index"],
@@ -757,29 +751,12 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="Brazil Producer Price Index from IMF",
         )
-        imf_series = sample_series_with(
-            source="IMF",
-            indicator="Producer Price Index",
-            series_id="PPPI_IX",
-            country="Brazil",
-        )
-
-        async def _fake_fetch_indicator(indicator, country="USA", start_year=None, end_year=None):
-            self.assertEqual(indicator, "PPPI_IX")
-            self.assertIn(country, {"BR", "BRA"})
-            return imf_series
 
         with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
-             patch.object(
-            self.service.imf_provider,
-            "fetch_indicator",
-            side_effect=_fake_fetch_indicator,
-        ):
-            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
-
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0].metadata.seriesId, "PPPI_IX")
+             patch.object(self.service.imf_provider, "fetch_indicator", side_effect=AssertionError("shortcut should not dispatch aggregate PPI")):
+            with self.assertRaises(DataNotAvailableError):
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
     def test_fetch_data_dispatches_exact_worldbank_title_without_default_window(self) -> None:
         exact_series = sample_series_with(
@@ -1773,7 +1750,7 @@ class QueryServiceTests(unittest.TestCase):
             ["Bachelor's Degree or Higher (5-year estimate) in Bristol city, VA"],
         )
 
-    def test_build_exact_indicator_title_intent_tags_generic_interest_rate_as_broad_concept(self) -> None:
+    def test_build_exact_indicator_title_intent_does_not_expand_generic_concept(self) -> None:
         lookup_results = [
             {
                 "code": "REAINTRATREARAT10Y",
@@ -1790,10 +1767,35 @@ class QueryServiceTests(unittest.TestCase):
                 "interest rate"
             )
 
-        self.assertIsNotNone(intent)
-        assert intent is not None
-        self.assertEqual(intent.parameters.get("__catalog_concept"), "interest rate")
-        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+        self.assertIsNone(intent)
+
+
+    def test_parse_and_route_drops_llm_invented_provider_code_before_routing(self) -> None:
+        parsed = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["HH_ALL"],
+            parameters={
+                "country": "CA",
+                "indicator": "HH_ALL",
+                "__semantic_indicator_label": "total private households in Canada in 2025",
+            },
+            clarificationNeeded=False,
+            originalQuery="total private households in Canada in 2025",
+        )
+
+        async def _select(intent, query):
+            self.assertEqual(intent.indicators, ["total private households in Canada"])
+            self.assertNotIn("indicator", intent.parameters)
+            return "STATSCAN"
+
+        with patch.object(self.service.openrouter, "parse_query", new=AsyncMock(return_value=parsed)), \
+             patch.object(self.service, "_select_routed_provider", new=AsyncMock(side_effect=_select)):
+            result = run(self.service.pipeline.parse_and_route("total private households in Canada in 2025"))
+
+        self.assertEqual(result.routed_provider, "STATSCAN")
+        self.assertEqual(result.intent.apiProvider, "STATSCAN")
+        self.assertEqual(result.intent.indicators, ["total private households in Canada"])
+        self.assertNotIn("indicator", result.intent.parameters)
 
     def test_apply_country_overrides_replaces_single_country_with_explicit_multi_country(self) -> None:
         intent = ParsedIntent(
@@ -2058,7 +2060,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(len(ranked[0].data), 1)
         self.assertEqual(ranked[0].data[0].date, "2023-01-01")
 
-    def test_apply_concept_provider_override_reroutes_unavailable_provider(self) -> None:
+    def test_apply_concept_provider_override_is_disabled_noop(self) -> None:
         intent = ParsedIntent(
             apiProvider="BIS",
             indicators=["WS_DSR"],
@@ -2066,65 +2068,10 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="gdp to debt ratio in china",
         )
+        params = dict(intent.parameters)
 
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="government_debt"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=False), \
-             patch("backend.services.catalog_service.get_best_provider", return_value=("IMF", "GGXWDG_NGDP", 0.95)):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "BIS",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "IMF")
-        self.assertEqual(intent.apiProvider, "IMF")
-        self.assertEqual(params.get("indicator"), "GGXWDG_NGDP")
-
-    def test_apply_concept_provider_override_reroutes_when_global_provider_is_low_confidence(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="WORLDBANK",
-            indicators=["producer price inflation"],
-            parameters={"countries": ["US", "DE"]},
-            clarificationNeeded=False,
-            originalQuery="producer price inflation trend in the us and germany",
-        )
-
-        def _mock_best_provider(concept, countries=None, preferred_provider=None):
-            if preferred_provider:
-                return ("WorldBank", "FP.WPI.TOTL.ZG", 0.70)
-            return ("OECD", "PPI", 0.92)
-
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="producer_price_inflation"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=_mock_best_provider):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "WORLDBANK",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "OECD")
-        self.assertEqual(intent.apiProvider, "OECD")
-        self.assertEqual(params.get("indicator"), "PPI")
-
-    def test_apply_concept_provider_override_respects_fallback_blocked_provider(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="BIS",
-            indicators=["real effective exchange rate"],
-            parameters={"countries": ["China", "India"]},
-            clarificationNeeded=False,
-            originalQuery="REER trend for China and India from 2012 to 2024",
-        )
-        params = {**intent.parameters, "__fallback_excluded_providers": ["IMF"]}
-
-        def _mock_best_provider(concept, countries=None, preferred_provider=None):
-            if preferred_provider:
-                return ("BIS", "WS_XRU", 0.40)
-            return ("IMF", "EREER", 0.92)
-
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="real_effective_exchange_rate"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=_mock_best_provider):
+        with patch("backend.services.catalog_service.find_concept_by_term") as find_concept, \
+             patch("backend.services.catalog_service.get_best_provider") as best_provider:
             provider, new_params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
                 "BIS",
                 intent,
@@ -2133,197 +2080,35 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(provider, "BIS")
         self.assertEqual(intent.apiProvider, "BIS")
-        self.assertNotEqual(new_params.get("indicator"), "EREER")
+        self.assertEqual(new_params, params)
+        find_concept.assert_not_called()
+        best_provider.assert_not_called()
 
-    def test_apply_concept_provider_override_prefers_distilled_indicator_concept(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="IMF",
-            indicators=["youth unemployment rate"],
-            parameters={"country": "Brazil"},
-            clarificationNeeded=False,
-            originalQuery="youth unemployment rate in Brazil",
-        )
-
-        def _mock_find_concept(term: str):
-            normalized = str(term or "").strip().lower()
-            if normalized == "youth unemployment rate in brazil":
-                return "unemployment"
-            if normalized == "youth unemployment rate":
-                return "youth_unemployment"
-            return None
-
-        def _mock_best_provider(concept, countries=None, preferred_provider=None):
-            if concept == "youth_unemployment":
-                if preferred_provider:
-                    return ("WorldBank", "JI.UEM.1524.ZS", 0.95)
-                return ("WorldBank", "JI.UEM.1524.ZS", 0.95)
-            if concept == "unemployment":
-                if preferred_provider:
-                    return ("IMF", "LUR", 0.90)
-                return ("IMF", "LUR", 0.90)
-            return (None, None, 0.0)
-
-        with patch.object(self.service, "_build_distilled_indicator_query", return_value="youth unemployment rate"), \
-             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="youth unemployment rate"), \
-             patch("backend.services.catalog_service.find_concept_by_term", side_effect=_mock_find_concept), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=False), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=_mock_best_provider):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "IMF",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "WORLDBANK")
-        self.assertEqual(intent.apiProvider, "WorldBank")
-        self.assertEqual(params.get("indicator"), "JI.UEM.1524.ZS")
-
-    def test_apply_concept_provider_override_injects_canonical_code_when_provider_already_matches(self) -> None:
+    def test_apply_catalog_availability_override_is_disabled_noop(self) -> None:
         intent = ParsedIntent(
             apiProvider="BIS",
-            indicators=["effective exchange rate"],
-            parameters={"country": "Japan"},
+            indicators=["households"],
+            parameters={"country": "Canada", "indicator": "17100159"},
             clarificationNeeded=False,
-            originalQuery="effective exchange rate in Japan",
+            originalQuery="number of households in Canada",
         )
+        params = dict(intent.parameters)
 
-        with patch.object(self.service, "_build_distilled_indicator_query", return_value="effective exchange rate"), \
-             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="effective exchange rate"), \
-             patch("backend.services.catalog_service.find_concept_by_term", return_value="effective_exchange_rate"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=[
-                 ("BIS", "WS_EER", 0.95),
-                 ("BIS", "WS_EER", 0.95),
-             ]):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
+        with patch("backend.services.catalog_service.find_concept_by_term") as find_concept, \
+             patch("backend.services.catalog_service.get_best_provider") as best_provider:
+            provider, new_params = self.service._apply_catalog_availability_override(  # pylint: disable=protected-access
                 "BIS",
                 intent,
-                dict(intent.parameters),
+                params,
+                set(),
             )
 
         self.assertEqual(provider, "BIS")
-        self.assertEqual(params.get("indicator"), "WS_EER")
+        self.assertEqual(new_params, params)
+        find_concept.assert_not_called()
+        best_provider.assert_not_called()
 
-    def test_apply_concept_provider_override_replaces_mismatched_explicit_code_with_canonical_code(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="BIS",
-            indicators=["credit to GDP ratio"],
-            parameters={
-                "country": "US",
-                "indicator": "WS_CREDIT_GAP",
-                "__semantic_provider_locked": True,
-            },
-            clarificationNeeded=False,
-            originalQuery="BIS credit to GDP ratio",
-        )
-
-        with patch.object(self.service, "_build_distilled_indicator_query", return_value="credit to GDP ratio"), \
-             patch.object(self.service, "_select_indicator_query_for_resolution", return_value="credit to GDP ratio"), \
-             patch("backend.services.catalog_service.find_concept_by_term", return_value="credit"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
-             patch("backend.services.catalog_service.is_indicator_code_for_concept", return_value=False), \
-             patch("backend.services.indicator_resolution.is_resolved_indicator_plausible", return_value=False), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=[
-                 ("BIS", "WS_TC", 0.95),
-                 ("BIS", "WS_TC", 0.95),
-             ]):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "BIS",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "BIS")
-        self.assertEqual(params.get("indicator"), "WS_TC")
-
-    def test_apply_concept_provider_override_skips_exact_fred_title_match(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="FRED",
-            indicators=["inflation"],
-            parameters={"country": "United States"},
-            clarificationNeeded=False,
-            originalQuery="US Housing Inventory: Price Increased Count Year-Over-Year in New Haven-Milford, CT (CBSA)",
-        )
-
-        with patch("backend.services.indicator_resolution.looks_like_exact_provider_title_match", return_value=True):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "FRED",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "FRED")
-        self.assertEqual(intent.apiProvider, "FRED")
-        self.assertNotIn("indicator", params)
-
-    def test_apply_concept_provider_override_injects_canonical_oecd_code_for_gdp_alias(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="OECD",
-            indicators=["GDP"],
-            parameters={"country": "Italy", "indicator": "GDP"},
-            clarificationNeeded=False,
-            originalQuery="Get Italy GDP from OECD",
-        )
-
-        def _mock_best_provider(concept, countries=None, preferred_provider=None):
-            if preferred_provider:
-                return ("OECD", "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE", 0.95)
-            return ("OECD", "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE", 0.95)
-
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="gdp"), \
-             patch("backend.services.catalog_service.is_provider_available", return_value=True), \
-             patch("backend.services.catalog_service.get_best_provider", side_effect=_mock_best_provider):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "OECD",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "OECD")
-        self.assertEqual(intent.apiProvider, "OECD")
-        self.assertEqual(params.get("indicator"), "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
-
-    def test_apply_concept_provider_override_preserves_comtrade_for_bilateral_exports(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="COMTRADE",
-            indicators=["dynamic"],
-            parameters={"reporter": "US", "partner": "CN", "flow": "EXPORT"},
-            clarificationNeeded=False,
-            originalQuery="US exports to China",
-        )
-
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="exports"):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "COMTRADE",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "COMTRADE")
-        self.assertEqual(intent.apiProvider, "COMTRADE")
-        self.assertNotIn("indicator", params)
-
-    def test_apply_concept_provider_override_preserves_comtrade_for_bilateral_trade_balance(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="COMTRADE",
-            indicators=["dynamic"],
-            parameters={"reporter": "US", "partner": "JP", "flow": "BALANCE"},
-            clarificationNeeded=False,
-            originalQuery="trade balance US and Japan",
-        )
-
-        with patch("backend.services.catalog_service.find_concept_by_term", return_value="trade_balance"):
-            provider, params = self.service._apply_concept_provider_override(  # pylint: disable=protected-access
-                "COMTRADE",
-                intent,
-                dict(intent.parameters),
-            )
-
-        self.assertEqual(provider, "COMTRADE")
-        self.assertEqual(intent.apiProvider, "COMTRADE")
-        self.assertNotIn("indicator", params)
-
-    def test_select_routed_provider_locks_catalog_override_before_semantic_reroute(self) -> None:
+    def test_select_routed_provider_does_not_apply_semantic_catalog_override(self) -> None:
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["research and development spending share of gdp"],
@@ -2338,15 +2123,15 @@ class QueryServiceTests(unittest.TestCase):
                 provider="OECD",
                 confidence=0.95,
                 match_type="indicator",
-                reasoning="keyword",
+                reasoning="router decision",
             )
         )
 
         with patch.object(
             self.service,
             "_apply_concept_provider_override",
-            return_value=("WORLDBANK", {"indicator": "GB.XPD.RSDV.GD.ZS"}),
-        ) as override_mock:
+            side_effect=AssertionError("semantic catalog override must not run"),
+        ):
             provider = run(
                 self.service._select_routed_provider(
                     intent,
@@ -2354,9 +2139,8 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(provider, "WORLDBANK")
-        self.assertEqual(intent.parameters.get("indicator"), "GB.XPD.RSDV.GD.ZS")
-        override_mock.assert_called_once()
+        self.assertEqual(provider, "OECD")
+        self.assertNotIn("indicator", intent.parameters)
 
     def test_select_routed_provider_honors_explicit_provider_request(self) -> None:
         intent = ParsedIntent(
@@ -2971,7 +2755,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(len(wb_options) >= 1 or len(options) >= 0,
                         "WorldBank age-variant option should pass plausibility")
 
-    def test_build_prefetch_indicator_choice_clarification_auto_switches_single_viable_option(self) -> None:
+    def test_build_prefetch_indicator_choice_clarification_clarifies_single_cross_provider_option(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["imports share of gdp"],
@@ -3004,10 +2788,11 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertIsNone(clarification)
-        self.assertEqual(intent.apiProvider, "WORLDBANK")
-        self.assertEqual(intent.indicators, ["NE.IMP.GNFS.ZS"])
-        self.assertEqual(intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
+        self.assertIsNotNone(clarification)
+        assert clarification is not None
+        self.assertTrue(clarification.clarificationNeeded)
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertNotIn("indicator", intent.parameters)
 
     def test_build_prefetch_indicator_choice_clarification_outcome_stage_clarifies_when_primary_and_alternative_are_both_executable(self) -> None:
         self.service.settings.use_outcome_decision_stage = True
@@ -3890,7 +3675,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "14100287")
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 
-    def test_decompose_and_aggregate_statscan_provinces_prefers_richer_semantic_product_candidate(self) -> None:
+    def test_decompose_and_aggregate_statscan_provinces_does_not_use_semantic_product_shortcut(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["14100330"],
@@ -3929,8 +3714,7 @@ class QueryServiceTests(unittest.TestCase):
                 return {"dimension": [{}, {}]}
             return {"dimension": []}
 
-        with patch.object(self.service, "_get_direct_provider_indicator_translation", return_value="14100287"), \
-             patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
+        with patch.object(self.service, "_apply_concept_provider_override", return_value=("STATSCAN", dict(intent.parameters or {}))), \
              patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_fake_resolve), \
              patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, side_effect=_fake_cube_metadata), \
              patch.object(self.service.statscan_provider, "fetch_multi_province_data", new_callable=AsyncMock, return_value=returned) as batch_fetch:
@@ -3944,9 +3728,9 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(len(data), 1)
         params = batch_fetch.await_args.args[0]
-        self.assertEqual(params["productId"], "14100287")
-        self.assertEqual(intent.parameters.get("indicator"), "14100287")
-        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+        self.assertEqual(params["productId"], "14100330")
+        self.assertNotEqual(intent.parameters.get("indicator"), "14100287")
+        self.assertNotEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 
     def test_decompose_and_aggregate_statscan_provinces_uses_date_derived_periods(self) -> None:
         intent = ParsedIntent(
@@ -5126,9 +4910,9 @@ class QueryServiceTests(unittest.TestCase):
         route_decision = RoutingDecision(
             provider="StatsCan",
             confidence=0.88,
-            match_type="catalog",
-            reasoning="Canada catalog match",
-            matched_pattern="catalog:unemployment:StatsCan",
+            match_type="country",
+            reasoning="Canada country match",
+            matched_pattern="country:CA",
         )
         fetched = [sample_series_with(
             source="Statistics Canada",
@@ -6380,7 +6164,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["14100287"],
-            parameters={"country": "Canada", "indicator": "14100287", "__catalog_concept": "employment"},
+            parameters={"country": "Canada", "indicator": "14100287"},
             clarificationNeeded=True,
             clarificationQuestions=[
                 "Do you want the employment rate (percentage of labor force employed) for Canada?",
@@ -6440,106 +6224,26 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(clarification.clarificationNeeded)
         self.assertIsNotNone(clarification.clarificationOptions)
 
-    def test_build_catalog_concept_clarification_for_employment(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-employment-broad")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
+    def test_catalog_concept_clarification_is_disabled(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["14100287"],
-            parameters={"country": "Canada", "__catalog_concept": "employment", "indicator": "14100287"},
+            parameters={"country": "Canada", "indicator": "14100287"},
             clarificationNeeded=False,
             originalQuery="employment in Canada",
         )
-        parse_result = ParseRouteResult(
+
+        from backend.services.indicator_clarification import build_catalog_concept_clarification
+
+        clarification = build_catalog_concept_clarification(
+            qs=self.service,
+            conversation_id="conv-employment-broad-disabled",
+            query="employment in Canada",
             intent=intent,
-            explicit_provider="STATSCAN",
-            routed_provider="STATSCAN",
-            validation_warning=None,
-        )
-        validation = ValidationResult(
-            is_multi_indicator=False,
-            is_valid=True,
-            validation_error=None,
-            suggestions=None,
-            is_confident=True,
-            confidence_reason=None,
+            processing_steps=None,
         )
 
-        with patch.object(
-            self.service,
-            "_build_prefetch_indicator_choice_clarification",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            clarification = run(
-                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
-                    conversation_id=conv_id,
-                    query="employment in Canada",
-                    parse_result=parse_result,
-                    validation=validation,
-                    processing_steps=None,
-                )
-            )
-
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        labels = [option.label for option in (clarification.clarificationOptions or [])]
-        self.assertIn("employment rate", labels)
-        self.assertIn("number employed", labels)
-        options_payload = clarification.clarificationOptions or []
-        employment_rate = next(option for option in options_payload if option.label == "employment rate")
-        self.assertEqual(employment_rate.provider, "OECD")
-        self.assertEqual(employment_rate.code, "DSD_LFS@DF_IALFS_EMP_WAP_Q")
-
-    def test_build_catalog_concept_clarification_for_interest_rate(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-interest-rate-broad")
-        conversation_manager.clear_pending_semantic_clarification(conv_id)
-        intent = ParsedIntent(
-            apiProvider="FRED",
-            indicators=["REAINTRATREARAT10Y"],
-            parameters={"__catalog_concept": "interest rate", "indicator": "REAINTRATREARAT10Y"},
-            clarificationNeeded=False,
-            originalQuery="interest rate",
-        )
-        parse_result = ParseRouteResult(
-            intent=intent,
-            explicit_provider="FRED",
-            routed_provider="FRED",
-            validation_warning=None,
-        )
-        validation = ValidationResult(
-            is_multi_indicator=False,
-            is_valid=True,
-            validation_error=None,
-            suggestions=None,
-            is_confident=True,
-            confidence_reason=None,
-        )
-
-        with patch.object(
-            self.service,
-            "_build_prefetch_indicator_choice_clarification",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            clarification = run(
-                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
-                    conversation_id=conv_id,
-                    query="interest rate",
-                    parse_result=parse_result,
-                    validation=validation,
-                    processing_steps=None,
-                )
-            )
-
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        labels = [option.label for option in (clarification.clarificationOptions or [])]
-        self.assertIn("policy rate", labels)
-        self.assertIn("long-term government bond yield", labels)
-        self.assertIn("real interest rate", labels)
+        self.assertIsNone(clarification)
 
     def test_post_parse_clarifies_missing_category_decomposition_entities(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-category-decomp-missing")
@@ -6601,34 +6305,40 @@ class QueryServiceTests(unittest.TestCase):
         assert pending is not None
         self.assertEqual(pending.get("kind"), "missing_decomposition_entities")
 
-    def test_process_query_generic_exact_title_interest_rate_returns_clarification(self) -> None:
-        lookup_results = [
-            {
-                "code": "REAINTRATREARAT10Y",
-                "provider": "FRED",
-                "name": "10-Year Real Interest Rate",
-            }
-        ]
+    def test_process_query_generic_exact_title_interest_rate_uses_llm_pipeline(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["interest rate"],
+            parameters={},
+            clarificationNeeded=False,
+            originalQuery="interest rate",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="FRED",
+            validation_warning=None,
+        )
 
-        with patch(
-            "backend.services.indicator_database.get_indicator_lookup",
-            return_value=Mock(search=Mock(return_value=lookup_results)),
-        ), patch.object(
+        with patch.object(
             self.service.pipeline,
             "parse_and_route",
             new_callable=AsyncMock,
-            side_effect=AssertionError("LLM parse should be skipped"),
-        ), patch.object(self.service, "_get_from_cache", return_value=None), patch.object(
+            return_value=parse_result,
+        ) as parse_mock, patch.object(
+            self.service.pipeline,
+            "validate_intent",
+            return_value=ValidationResult(is_multi_indicator=False, is_valid=True, validation_error=None, suggestions=None, is_confident=True, confidence_reason=None),
+        ), patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), patch.object(
             self.service,
             "_fetch_data",
-            side_effect=AssertionError("Fetch should not run before broad-concept clarification"),
+            new_callable=AsyncMock,
+            return_value=[sample_series()],
         ):
             response = run(self.service.process_query("interest rate"))
 
-        self.assertTrue(response.clarificationNeeded)
-        labels = [option.label for option in (response.clarificationOptions or [])]
-        self.assertIn("policy rate", labels)
-        self.assertIn("long-term government bond yield", labels)
+        parse_mock.assert_awaited_once()
+        self.assertIsNotNone(response)
 
     def test_process_query_includes_clarification_context_for_llm(self) -> None:
         """Phase 4: When a pending semantic clarification exists, the LLM receives
@@ -6794,7 +6504,49 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.intent.parameters.get("indicator"), "NE.IMP.GNFS.ZS")
         self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
-    def test_prefetch_clarification_allows_direct_worldbank_translation(self) -> None:
+
+    def test_prefetch_does_not_apply_single_cross_provider_fallback_option(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["total private households in Canada"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="total private households in Canada in 2025",
+        )
+
+        class _Resolver:
+            def resolve(self, *args, **kwargs):
+                return None
+
+        def _options(query, option_intent, max_options=4):
+            if option_intent.apiProvider == "BIS":
+                return ["[BIS] Total credit (HH_ALL)"]
+            return []
+
+        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch.object(self.service, "_get_fallback_providers", return_value=["BIS"]), \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=_options), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ):
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-no-cross-provider-auto-option",
+                    query="total private households in Canada in 2025",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(response)
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.indicators, ["total private households in Canada"])
+        self.assertNotIn("indicator", intent.parameters)
+
+    def test_prefetch_clarification_rejects_direct_worldbank_translation_shortcut(self) -> None:
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["imports as % of GDP"],
@@ -6817,22 +6569,112 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertIsNone(response)
-        self.assertEqual(
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIsNone(
             self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
                 "WORLDBANK",
                 "imports as % of GDP",
-            ),
-            "NE.IMP.GNFS.ZS",
+            )
         )
 
-    def test_get_direct_provider_indicator_translation_returns_canonical_oecd_gdp_dataflow(self) -> None:
-        self.assertEqual(
+    def test_prefetch_clarification_uses_statscan_selector_options_without_guessing(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["number of dwellings"],
+            parameters={"country": "CA", "startDate": "2021-01-01", "endDate": "2021-12-31"},
+            clarificationNeeded=False,
+            originalQuery="number of dwellings in Canada in 2021",
+        )
+        selector_result = SelectionResult(
+            source="user_choice",
+            options=[
+                {
+                    "code": "98100038",
+                    "name": "Dwellings occupied by usual residents and population in dwellings",
+                },
+                {
+                    "code": "98100001",
+                    "name": "Population and dwelling counts: Canada, provinces and territories",
+                },
+            ],
+        )
+
+        with patch("backend.services.query.get_indicator_resolver") as get_resolver, \
+             patch.object(self.service, "_get_fallback_providers", return_value=[]), \
+             patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=selector_result),
+             ):
+            get_resolver.return_value.resolve.return_value = None
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-statscan-selector-clarify",
+                    query="number of dwellings in Canada in 2021",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        self.assertEqual(len(response.clarificationOptions or []), 2)
+        self.assertNotIn("indicator", intent.parameters)
+
+    def test_prefetch_lets_statscan_selector_pick_without_legacy_fallback(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["unemployment rate"],
+            parameters={"country": "CA", "startDate": "2021-01-01", "endDate": "2021-12-31"},
+            clarificationNeeded=False,
+            originalQuery="unemployment rate in Canada in 2021",
+        )
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            AsyncMock(
+                return_value=SelectionResult(
+                    code="14100375",
+                    name="Employment and unemployment rate, annual",
+                    source="llm_pick",
+                )
+            ),
+        ) as select_mock, patch(
+            "backend.services.query.get_indicator_resolver",
+            side_effect=AssertionError("legacy resolver should not run before StatsCan selector"),
+        ), patch.object(
+            self.service,
+            "_collect_indicator_choice_options",
+            side_effect=AssertionError("cross-provider options should not be collected"),
+        ):
+            response = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-statscan-selector-direct",
+                    query="unemployment rate in Canada in 2021",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(response)
+        select_mock.assert_awaited_once()
+        self.assertEqual(select_mock.await_args.args[0], "unemployment rate")
+        self.assertEqual(intent.parameters["indicator"], "14100375")
+        self.assertEqual(intent.parameters["__semantic_indicator_label"], "unemployment rate")
+
+    def test_get_direct_provider_indicator_translation_is_disabled(self) -> None:
+        self.assertIsNone(
             self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
                 "OECD",
                 "GDP",
-            ),
-            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
+            )
         )
 
     def test_is_resolved_indicator_plausible_accepts_age_variant(self) -> None:
@@ -7584,7 +7426,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("may be wrong", joined)
         self.assertIn("exact indicator", joined)
 
-    def test_fetch_data_rejects_high_confidence_but_low_relevance_resolved_code(self) -> None:
+    def test_fetch_data_rejects_low_relevance_resolver_without_direct_translation_shortcut(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["imports share of gdp"],
@@ -7606,12 +7448,16 @@ class QueryServiceTests(unittest.TestCase):
                 return _Resolved()
 
         with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ), \
              patch.object(self.service, "_select_indicator_query_for_resolution", return_value="imports as % of GDP"), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "NE.IMP.GNFS.ZS")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "imports share of gdp")
 
     def test_fetch_data_prefers_resolver_over_fuzzy_translator(self) -> None:
         """Resolver (catalog/FTS5) runs first and wins over fuzzy translator.
@@ -7831,6 +7677,16 @@ class QueryServiceTests(unittest.TestCase):
         )
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(
+                     return_value=SelectionResult(
+                         code="EREER",
+                         name="Real effective exchange rate",
+                         source="llm_pick",
+                     )
+                 ),
+             ), \
              patch.object(self.service.bis_provider, "fetch_indicator", side_effect=AssertionError("should stay on IMF")), \
              patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as imf_fetch:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
@@ -7888,7 +7744,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["startDate"], "2006-01-01")
         self.assertEqual(params["endDate"], "2026-03-01")
 
-    def test_fetch_data_statscan_dimension_decomposition_falls_back_to_semantic_product_with_richer_axis(self) -> None:
+    def test_fetch_data_statscan_dimension_decomposition_does_not_fallback_to_semantic_product_shortcut(self) -> None:
         intent = ParsedIntent(
             apiProvider="StatsCan",
             indicators=["14100330"],
@@ -7928,23 +7784,18 @@ class QueryServiceTests(unittest.TestCase):
             return returned
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service, "_get_direct_provider_indicator_translation", return_value="14100287"), \
              patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, side_effect=_fake_fetch_multi_dimension) as fetch_multi_dim, \
-             patch.object(self.service.statscan_provider, "fetch_with_dimensions", new_callable=AsyncMock, side_effect=AssertionError("should not use scalar dimension fetch")):
+             patch.object(self.service.statscan_provider, "fetch_with_dimensions", new_callable=AsyncMock, return_value=returned[:1]):
             data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertEqual(len(data), 2)
-        self.assertEqual(fetch_multi_dim.await_count, 2)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(fetch_multi_dim.await_count, 1)
         first_params = fetch_multi_dim.await_args_list[0].args[0]
-        second_params = fetch_multi_dim.await_args_list[1].args[0]
         self.assertEqual(first_params["productId"], "14100330")
-        self.assertEqual(second_params["productId"], "14100287")
         self.assertEqual(first_params["periods"], 243)
-        self.assertEqual(second_params["periods"], 243)
         self.assertEqual(first_params["startDate"], "2006-01-01")
-        self.assertEqual(second_params["endDate"], "2026-03-01")
-        self.assertEqual(intent.parameters.get("indicator"), "14100287")
-        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+        self.assertNotEqual(intent.parameters.get("indicator"), "14100287")
+        self.assertNotEqual(intent.parameters.get("__statscan_product_id"), "14100287")
 
     def test_fetch_data_preserves_statscan_product_for_dimension_filter_follow_up(self) -> None:
         intent = ParsedIntent(
@@ -8143,7 +7994,7 @@ class QueryServiceTests(unittest.TestCase):
             provider = run(self.service._select_routed_provider(intent, "gdp growth germany"))  # pylint: disable=protected-access
         self.assertEqual(provider, "IMF")
 
-    def test_catalog_provider_reroute_remaps_indicator_code(self) -> None:
+    def test_catalog_provider_reroute_no_longer_remaps_indicator_code(self) -> None:
         intent = ParsedIntent(
             apiProvider="CoinGecko",
             indicators=["renewable energy share"],
@@ -8153,12 +8004,14 @@ class QueryServiceTests(unittest.TestCase):
         )
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as wb_fetch:
-            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+             patch.object(self.service.world_bank_provider, "fetch_indicator", side_effect=AssertionError("catalog reroute should not call WorldBank")):
+            try:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            except Exception:
+                pass
 
-        self.assertEqual(intent.apiProvider, "WorldBank")
-        self.assertEqual(intent.parameters.get("indicator"), "EG.FEC.RNEW.ZS")
-        self.assertEqual(wb_fetch.call_args.kwargs.get("indicator"), "EG.FEC.RNEW.ZS")
+        self.assertEqual(intent.apiProvider, "CoinGecko")
+        self.assertNotEqual(intent.parameters.get("indicator"), "EG.FEC.RNEW.ZS")
 
     def test_is_fallback_relevant_uses_country_resolver_aliases(self) -> None:
         series = sample_series()
@@ -8450,8 +8303,6 @@ class QueryServiceTests(unittest.TestCase):
             parameters={
                 "country": "BR",
                 "indicator": "NE.EXP.GNFS.ZS",
-                "__catalog_resolved": True,
-                "__catalog_concept": "exports_pct_gdp",
             },
             clarificationNeeded=False,
             originalQuery="exports as % of GDP for Brazil",
@@ -8482,8 +8333,6 @@ class QueryServiceTests(unittest.TestCase):
         # Provider-specific params must be removed
         self.assertNotIn("indicator", fallback_intent.parameters)
         self.assertNotIn("seriesId", fallback_intent.parameters)
-        # Stale catalog state must be cleared
-        self.assertNotIn("__catalog_resolved", fallback_intent.parameters)
 
     def test_country_coverage_does_not_expand_bilateral_comtrade_with_worldbank_fallback(self) -> None:
         intent = ParsedIntent(
@@ -8509,16 +8358,14 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNone(warning)
         fallback_mock.assert_not_called()
 
-    def test_try_with_fallback_uses_catalog_concept_for_resolution(self) -> None:
-        """When __catalog_concept is available, use it to resolve the fallback indicator."""
+    def test_try_with_fallback_does_not_depend_on_stored_catalog_concept(self) -> None:
+        """Fallback resolution should use current query/code evidence, not stored shortcut state."""
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["NY.GDP.MKTP.CD"],
             parameters={
                 "country": "US",
                 "indicator": "NY.GDP.MKTP.CD",
-                "__catalog_resolved": True,
-                "__catalog_concept": "gdp",
             },
             clarificationNeeded=False,
             originalQuery="GDP of the United States",
@@ -8768,16 +8615,15 @@ class QueryServiceTests(unittest.TestCase):
         assert response.data is not None
         self.assertEqual(response.data[0].metadata.seriesId, "prc_ppp_ind")
 
-    def test_resolve_concept_for_fallback_from_stored_param(self) -> None:
-        """_resolve_concept_for_fallback uses __catalog_concept when available."""
+    def test_resolve_concept_for_fallback_ignores_removed_stored_catalog_param(self) -> None:
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["NE.EXP.GNFS.ZS"],
-            parameters={"__catalog_concept": "exports_pct_gdp"},
+            parameters={},
             clarificationNeeded=False,
         )
         concept = self.service._resolve_concept_for_fallback(intent, "WORLDBANK")
-        self.assertEqual(concept, "exports_pct_gdp")
+        self.assertNotEqual(concept, "exports_pct_gdp")
 
     def test_resolve_concept_for_fallback_via_reverse_code_lookup(self) -> None:
         """_resolve_concept_for_fallback reverse-looks up provider codes in catalog."""

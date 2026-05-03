@@ -1,17 +1,18 @@
 """
-Indicator Selector — Simple two-step resolution for ALL 330K indicators.
+Indicator Selector — retrieval + LLM adjudication for ALL 330K indicators.
 
 Architecture (decided 2026-04-01):
-  Step 1: OpenAI embedding → find 20 nearest indicators
-  Step 2: LLM picks best match (multi-round if needed)
+  Step 1: FTS5 + embedding retrieval → find candidate indicators
+  Step 2: LLM picks, asks, or rejects the candidate set
 
-No catalog, no FTS5, no name matching. Just embedding + LLM.
-The embedding understands semantic meaning; the LLM understands context.
+No catalog injection or provider-code shortcut maps. Retrieval supplies the
+candidate evidence; the LLM adjudicates the user's requested measure.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -56,14 +57,23 @@ the same concept that the user might want. For example:
 - "unemployment" is NOT ambiguous: it means the total rate
 
 DECISION:
-- ALWAYS try to PICK one indicator. Most queries have an obvious default.
+- Try to PICK one indicator when the candidate list contains a semantically valid answer.
+- Use REJECT when NONE of the provided candidates answer the requested measure.
 - Only use ASK when the user's query EXPLICITLY asks about something that has
   fundamentally different measurement approaches (e.g., "health spending" could
   be % of GDP OR per capita — genuinely different numbers).
 - Single-word or broad queries like "GDP", "trade", "energy" should PICK the
   most standard version, NOT ask the user.
+- Do NOT REJECT just because the query is broad. REJECT only when all candidates
+  are clearly about different concepts, populations, geographies, frequencies,
+  or units than the user's requested measure.
 
-Reply with "PICK: <number>" (strongly preferred) or "ASK: <number>,<number>,..."
+Reply with one of:
+- "PICK: <number>" when a candidate answers the query.
+- "ASK: <number>,<number>,..." when the user must choose between genuinely
+  different measurement approaches.
+- "REJECT: <short reason>" and "SEARCH: <alternative search terms>" when no
+  candidate answers the requested measure.
 
 Defaults for broad queries:
 - "GDP" → GDP current US$ (most standard)
@@ -101,6 +111,10 @@ Selection rules:
 - Prefer ACTIVE (recent data) over DISCONTINUED/OBSOLETE series
 - Prefer NATIONAL/AGGREGATE over state/county/MSA/regional variants
 - Prefer TOTAL over demographic subsets (female, male, youth, elderly)
+- For direct count/number/total requests, prefer an indicator that measures the
+  requested entity count directly. Do not pick distribution, ratio, subset,
+  account-allocation, or breakdown tables unless the user explicitly asks for
+  that narrower measure.
 - Prefer SEASONALLY ADJUSTED over not adjusted (NSA)
 - Prefer modeled ILO estimates (SL.*) over Jobs Indicators (JI.*)
 - Prefer % of GDP over absolute values for cross-country comparison
@@ -116,11 +130,13 @@ FRED-specific rules for near-identical series:
 - "Total Private" is more general than "Construction" or other industry subsets
 - Prefer US Dollar denomination over other currencies unless user specifies
 
-When in doubt, PICK the most general — the user can always ask for a variant"""
+When in doubt between valid variants, PICK the most general — the user can
+always ask for a variant. When none are valid, REJECT and provide better SEARCH
+terms."""
 
 
 class IndicatorSelector:
-    """Two-step indicator resolution: embed → LLM pick."""
+    """Hybrid retrieval plus LLM indicator selection."""
 
     def __init__(self, settings: Optional[Settings] = None):
         self._settings = settings or _get_settings()
@@ -155,65 +171,72 @@ class IndicatorSelector:
             code = self._normalize_code(candidates[0][0], provider)
             return SelectionResult(code=code, name=candidates[0][1], source="single_match")
 
-        # Step 1.5: If top candidates have very similar scores, the embedding
-        # can't confidently distinguish them. Tell the LLM to ASK the user
-        # instead of guessing. This reduces overconfident wrong picks.
+        # Step 1.5: If top candidates have very similar scores, retrieval can't
+        # confidently distinguish them. Tell the LLM to ASK the user instead of
+        # guessing. This reduces overconfident wrong picks.
         # Threshold: if top 3+ candidates are within 0.03 cosine similarity,
         # they're too similar for automated selection.
-        candidates_are_ambiguous = False
-        if len(scores) >= 3 and scores[0] > 0:
-            score_spread = scores[0] - scores[2]  # gap between #1 and #3
-            if score_spread < 0.03:
-                candidates_are_ambiguous = True
-                logger.info(
-                    "🔍 Top candidates very similar (spread=%.4f < 0.03) — will prefer ASK",
-                    score_spread,
-                )
+        candidates_are_ambiguous = self._scores_are_ambiguous(scores)
+        if candidates_are_ambiguous:
+            logger.info(
+                "🔍 Top candidates very similar (spread=%.4f < 0.03) — will prefer ASK",
+                scores[0] - scores[2],
+            )
 
         # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
         llm_candidates = candidates[:20]
         result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous)
+
+        # Step 2.5: If the LLM says the whole candidate set is off-target,
+        # honor its alternative search terms with one bounded research retry.
+        if self._is_llm_rejection(result):
+            retry_query = str(getattr(result, "retry_query", "") or "").strip()
+            if retry_query and retry_query.lower() != query.lower():
+                logger.info(
+                    "🔎 LLM rejected candidate set for '%s'; retrying selector search with '%s'",
+                    query[:80],
+                    retry_query[:80],
+                )
+                retry_candidates, retry_scores = self._get_candidates_with_scores(retry_query, provider)
+                if retry_candidates:
+                    retry_ambiguous = self._scores_are_ambiguous(retry_scores)
+                    retry_result = await self._llm_pick(
+                        retry_query,
+                        retry_candidates[:20],
+                        provider,
+                        prefer_ask=retry_ambiguous,
+                    )
+                    if retry_result and (retry_result.code or retry_result.needs_user_choice):
+                        return retry_result
+                    if self._is_llm_rejection(retry_result):
+                        return retry_result
+            return result
 
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
             result = await self._llm_pick(query, candidates[:5], provider)
 
-        return result or SelectionResult(code=candidates[0][0], name=candidates[0][1], source="top_candidate")
+        if self._is_llm_rejection(result):
+            return result
 
-    def _get_catalog_candidates(
-        self, query: str, provider: str,
-    ) -> List[tuple[str, str]]:
-        """Retrieve catalog-defined codes for this query+provider.
+        fallback_code = self._normalize_code(candidates[0][0], provider)
+        return result or SelectionResult(code=fallback_code, name=candidates[0][1], source="top_candidate")
 
-        The catalog YAML files define canonical indicator codes for ~90+ concepts.
-        Injecting these as top candidates ensures the LLM always sees the
-        "authoritative" code alongside FTS5/embedding results.
-        """
-        try:
-            from . import catalog_service as cs
-            concept_name = cs.find_concept_by_term(query)
-            if not concept_name:
-                return []
-            concept_data = cs.get_concept(concept_name)
-            if not concept_data:
-                return []
-            # Get the provider-specific code from the concept
-            provider_entry = concept_data.get("providers", {}).get(provider)
-            if not provider_entry:
-                return []
-            primary = provider_entry.get("primary", {})
-            code = primary.get("code")
-            name = primary.get("name", "")
-            if code:
-                logger.debug(
-                    "📚 Catalog candidate for '%s' (%s): %s — %s",
-                    query, provider, code, name,
-                )
-                return [(code, f"{name} [catalog recommended]")]
-        except Exception as e:
-            logger.debug("Catalog candidate lookup failed: %s", e)
-        return []
+    @staticmethod
+    def _scores_are_ambiguous(scores: List[float]) -> bool:
+        if len(scores) >= 3 and all(score > 0 for score in scores[:3]):
+            first, second, third = scores[:3]
+            # FTS5 candidates and embedding candidates are merged by evidence
+            # source, so score order is not guaranteed. Only use the score-gap
+            # ambiguity signal when the first three scores are actually ordered.
+            if first >= second >= third:
+                return (first - third) < 0.03
+        return False
+
+    @staticmethod
+    def _is_llm_rejection(result: Optional["SelectionResult"]) -> bool:
+        return bool(result and getattr(result, "source", "") == "llm_reject")
 
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
@@ -231,13 +254,9 @@ class IndicatorSelector:
         codes that match query vocabulary; embeddings get semantic
         paraphrases.  The union (deduped) is passed to the LLM for selection.
 
-        Cycle 42 enhancement: Inject catalog-defined codes as top-priority
-        candidates.  The catalog has authoritative codes for ~90+ concepts
-        but wasn't being consulted during candidate generation.
+        Semantic matching comes from retrieval plus LLM adjudication, not forced
+        provider-code shortcuts.
         """
-        # 0. Catalog injection: if the catalog knows the canonical code
-        # for this query+provider, inject it as the top candidate.
-        catalog_candidates = self._get_catalog_candidates(query, provider)
 
         # 1. Run BOTH retrievals in parallel-ish (sequential but cheap)
         embedding_candidates: List[tuple[str, str]] = []
@@ -259,20 +278,12 @@ class IndicatorSelector:
         except Exception as e:
             logger.debug("FTS5 retrieval failed: %s", e)
 
-        # 2. Merge: catalog first, then FTS5, then embeddings.
-        # Catalog codes are authoritative (from curated YAML files).
-        # FTS5 results often contain canonical codes that embeddings miss.
-        # Embeddings provide semantic paraphrases for novel queries.
+        # 2. Merge: FTS5, then embeddings. FTS5 results often contain
+        # canonical lexical matches that embeddings miss. Embeddings provide
+        # semantic paraphrases for novel queries.
         seen_codes: set = set()
         merged_candidates: List[tuple[str, str]] = []
         merged_scores: List[float] = []
-
-        # Catalog candidates at the top (highest synthetic score)
-        for code, name in catalog_candidates:
-            if code not in seen_codes:
-                seen_codes.add(code)
-                merged_candidates.append((code, name))
-                merged_scores.append(0.95)  # High score signals "catalog recommended"
 
         if embedding_candidates or fts5_candidates:
             # Take top FTS5 (canonical lexical matches)
@@ -295,9 +306,6 @@ class IndicatorSelector:
 
             return merged_candidates, merged_scores
 
-        # Single-source fallback (catalog only or nothing)
-        if merged_candidates:
-            return merged_candidates, merged_scores
         return [], []
 
     def _get_candidates_fts5(
@@ -436,7 +444,10 @@ class IndicatorSelector:
             prompt += (
                 "\n\nIMPORTANT: The available indicators are VERY similar to each other. "
                 "Unless you are HIGHLY confident one is clearly the best match, "
-                "use ASK to let the user choose from the top 3-5 most relevant options."
+                "use ASK to let the user choose from the top 3-5 most relevant options. "
+                "Do not ASK merely because retrieval scores are close when one option is the "
+                "general/direct count or total and the alternatives are breakdowns, distributions, "
+                "sub-populations, or account tables that the user did not request."
             )
 
         settings = self._settings
@@ -467,47 +478,89 @@ class IndicatorSelector:
                 if not content:
                     return None
 
-                content_upper = content.upper()
-
-                # Parse PICK response
-                if "PICK" in content_upper:
-                    digits = "".join(c for c in content_upper.split("PICK")[-1] if c.isdigit())
-                    if digits:
-                        num = int(digits[:3]) - 1
-                        if 0 <= num < len(candidates):
-                            code, name = candidates[num]
-                            code = self._normalize_code(code, provider)
-                            logger.info("🎯 LLM picked: '%s' → %s (%s)", query[:40], code, name[:40])
-                            return SelectionResult(code=code, name=name, source="llm_pick")
-
-                # Parse ASK response
-                if "ASK" in content_upper:
-                    nums_str = content_upper.split("ASK")[-1]
-                    options_list = []
-                    for part in nums_str.replace(",", " ").split():
-                        digits = "".join(c for c in part if c.isdigit())
-                        if digits:
-                            idx = int(digits[:3]) - 1
-                            if 0 <= idx < len(candidates):
-                                code, name = candidates[idx]
-                                code = self._normalize_code(code, provider)
-                                if not any(o["code"] == code for o in options_list):
-                                    options_list.append({"code": code, "name": name})
-                    if options_list:
-                        logger.info("🔵 LLM asks user: '%s' → %d options", query[:40], len(options_list))
-                        return SelectionResult(code=None, source="user_choice", options=options_list[:10])
-
-                # Fallback: extract any number
-                digits = "".join(c for c in content if c.isdigit())
-                if digits:
-                    num = int(digits[:3]) - 1
-                    if 0 <= num < len(candidates):
-                        code, name = candidates[num]
-                        code = self._normalize_code(code, provider)
-                        return SelectionResult(code=code, name=name, source="llm_pick")
+                return self._parse_llm_response(content, candidates, provider, query)
 
         except Exception as e:
             logger.warning("LLM selection failed: %s", e)
+
+        return None
+
+    def _parse_llm_response(
+        self,
+        content: str,
+        candidates: List[tuple[str, str]],
+        provider: str,
+        query: str = "",
+    ) -> Optional["SelectionResult"]:
+        """Parse the selector LLM's control response.
+
+        The parser is intentionally mechanical: it extracts option numbers only
+        from explicit PICK/ASK/REJECT control lines so years, codes, or other
+        explanatory numbers cannot silently change the selected candidate.
+        """
+        lines = [line.strip() for line in str(content or "").splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        # Parse REJECT before PICK/ASK so rejection reasons containing "pick" do
+        # not get misinterpreted as a selection.
+        reject_line = next((line for line in lines if re.match(r"^REJECT\b", line, re.IGNORECASE)), "")
+        if reject_line:
+            search_line = next((line for line in lines if re.match(r"^SEARCH\b", line, re.IGNORECASE)), "")
+            rejection_reason = re.sub(r"^REJECT\s*[:\-]?\s*", "", reject_line, flags=re.IGNORECASE).strip()
+            retry_query = re.sub(r"^SEARCH\s*[:\-]?\s*", "", search_line, flags=re.IGNORECASE).strip()
+            logger.info(
+                "🚫 LLM rejected all candidates for '%s': %s",
+                query[:40],
+                rejection_reason[:120],
+            )
+            return SelectionResult(
+                code=None,
+                source="llm_reject",
+                rejection_reason=rejection_reason,
+                retry_query=retry_query,
+            )
+
+        pick_line = next((line for line in lines if re.search(r"\bPICK\b", line, re.IGNORECASE)), "")
+        if pick_line:
+            match = re.search(r"\bPICK\b\s*[:#\-]?\s*(\d{1,3})\b", pick_line, re.IGNORECASE)
+            if match:
+                num = int(match.group(1)) - 1
+                if 0 <= num < len(candidates):
+                    code, name = candidates[num]
+                    code = self._normalize_code(code, provider)
+                    logger.info("🎯 LLM picked: '%s' → %s (%s)", query[:40], code, name[:40])
+                    return SelectionResult(code=code, name=name, source="llm_pick")
+
+        ask_line = next((line for line in lines if re.search(r"\bASK\b", line, re.IGNORECASE)), "")
+        if ask_line:
+            match = re.search(r"\bASK\b\s*[:#\-]?\s*([0-9,\s]+)", ask_line, re.IGNORECASE)
+            number_text = match.group(1) if match else ""
+            options_list = []
+            for digits in re.findall(r"\d{1,3}", number_text):
+                idx = int(digits) - 1
+                if 0 <= idx < len(candidates):
+                    code, name = candidates[idx]
+                    code = self._normalize_code(code, provider)
+                    if not any(o["code"] == code for o in options_list):
+                        options_list.append({"code": code, "name": name})
+            if options_list:
+                logger.info("🔵 LLM asks user: '%s' → %d options", query[:40], len(options_list))
+                return SelectionResult(code=None, source="user_choice", options=options_list[:10])
+
+        # Conservative fallback for non-compliant but explicit responses such as
+        # "choose option 2". Do not extract arbitrary digits from explanations.
+        fallback = re.search(
+            r"(?:\b(?:choose|choice|option|indicator|number)\b|#)\s*[:#\-]?\s*(\d{1,3})\b",
+            content,
+            re.IGNORECASE,
+        )
+        if fallback:
+            num = int(fallback.group(1)) - 1
+            if 0 <= num < len(candidates):
+                code, name = candidates[num]
+                code = self._normalize_code(code, provider)
+                return SelectionResult(code=code, name=name, source="llm_pick")
 
         return None
 
@@ -528,17 +581,27 @@ class SelectionResult:
         name: Optional[str] = None,
         source: str = "unknown",
         options: Optional[List[Dict[str, str]]] = None,
+        rejection_reason: str = "",
+        retry_query: str = "",
     ):
         self.code = code
         self.name = name
         self.source = source
         self.options = options
+        self.rejection_reason = rejection_reason
+        self.retry_query = retry_query
 
     @property
     def needs_user_choice(self) -> bool:
         return self.source == "user_choice" and bool(self.options)
 
+    @property
+    def rejected_candidates(self) -> bool:
+        return self.source == "llm_reject"
+
     def __repr__(self) -> str:
         if self.needs_user_choice:
             return f"SelectionResult(user_choice, {len(self.options)} options)"
+        if self.rejected_candidates:
+            return f"SelectionResult(llm_reject, retry_query={self.retry_query!r})"
         return f"SelectionResult(code={self.code}, source={self.source})"

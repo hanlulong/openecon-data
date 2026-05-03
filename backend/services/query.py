@@ -79,16 +79,9 @@ from ..services.query_parsing import (
 )
 # SemanticClarifier removed in Phase 2 LLM refactor — the LLM prompt's
 # clarificationNeeded field + ambiguity policy now handles broad-concept
-
-
-_GENERIC_EXACT_TITLE_CONCEPTS = {
-    "employment",
-    "government debt",
-    "interest rate",
-}
+# detection.  See simplified_prompt.py.
 
 _RAW_QUERY_CACHE_HASH_PROVIDERS = {"STATSCAN", "STATISTICS CANADA"}
-# detection.  See simplified_prompt.py.
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -318,7 +311,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-04-26.1"
+    CACHE_KEY_VERSION = "2026-05-03.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -404,9 +397,7 @@ class QueryService:
 
     @staticmethod
     def _broad_exact_title_catalog_concept(query: str) -> Optional[str]:
-        normalized = re.sub(r"[^a-z0-9]+", " ", str(query or "").lower()).strip()
-        if normalized in _GENERIC_EXACT_TITLE_CONCEPTS:
-            return normalized
+        """Disabled compatibility shim for the old broad-concept shortcut."""
         return None
 
     def _build_explicit_provider_code_intent(self, query: str) -> Optional[ParsedIntent]:
@@ -483,7 +474,6 @@ class QueryService:
         return _ir_build_exact_indicator_title_intent(
             query,
             explicit_provider=self._detect_explicit_provider(query),
-            broad_concept=self._broad_exact_title_catalog_concept(query),
             countries=self._extract_countries_from_query(query),
             all_providers=list(ALL_PROVIDERS),
         )
@@ -591,17 +581,10 @@ class QueryService:
                 deterministic_decision.confidence,
                 deterministic_decision.match_type,
             )
-            # Short-circuit: catalog says no provider carries this concept
+            # Short-circuit: router can still report unsupported structural cases.
             if routed_provider == "NOT_AVAILABLE":
                 intent.apiProvider = "not_available"
                 return "NOT_AVAILABLE"
-            # When routing was decided by catalog or coverage preference
-            # (country-specific provider), mark the intent so downstream
-            # prefetch clarification trusts the resolution.
-            if deterministic_match_type in ("catalog", "country", "coverage"):
-                params = dict(intent.parameters or {})
-                params["__catalog_resolved"] = True
-                intent.parameters = params
         except Exception as exc:
             logger.warning(
                 "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
@@ -619,22 +602,6 @@ class QueryService:
         )
         if explicit_provider_requested:
             intent.apiProvider = explicit_provider_requested
-            # Still apply concept override to inject the correct indicator code
-            # (e.g., "GDP growth rate from IMF" → NGDP_RPCH) even though the
-            # provider is already locked by the user's explicit request.
-            params_before = dict(params)
-            _, params = self._apply_concept_provider_override(
-                explicit_provider_requested,
-                intent,
-                params,
-            )
-            intent.parameters = params
-            if params.get("indicator") != params_before.get("indicator"):
-                logger.info(
-                    "🧭 Concept code injected for explicit provider %s: %s",
-                    explicit_provider_requested,
-                    params.get("indicator"),
-                )
             return explicit_provider_requested
         if countries and len(countries) > 1 and not self._provider_covers_country_list(routed_provider, countries):
             logger.info(
@@ -645,26 +612,6 @@ class QueryService:
             routed_provider = "WORLDBANK"
             deterministic_match_type = "coverage_override"
             deterministic_confidence = min(deterministic_confidence or 0.0, 0.78)
-
-        params_before_override = dict(params)
-        routed_provider_before_override = routed_provider
-        routed_provider, params = self._apply_concept_provider_override(
-            routed_provider,
-            intent,
-            params,
-        )
-        routed_provider = normalize_provider_name(routed_provider)
-        intent.parameters = params
-        if (
-            routed_provider != routed_provider_before_override
-            or params.get("indicator") != params_before_override.get("indicator")
-        ):
-            logger.info(
-                "🧭 Catalog concept override locked provider selection: %s -> %s",
-                routed_provider_before_override,
-                routed_provider,
-            )
-            return routed_provider
 
         if self.semantic_provider_router:
             try:
@@ -692,15 +639,15 @@ class QueryService:
                 semantic_confidence = float(getattr(decision, "confidence", 0.0) or 0.0)
                 # Framework guardrail: preserve high-confidence deterministic decisions unless
                 # semantic routing is materially stronger. This prevents low-similarity
-                # semantic matches from overriding precise rule-based routing.
+                # semantic matches from overriding precise structural routing.
                 #
                 # Two tiers:
-                # - High-confidence structural (explicit, catalog, indicator): locked at 0.88+
+                # - High-confidence structural (explicit, indicator): locked at 0.88+
                 # - Membership-based structural (country, region): locked at 0.70+
                 #   Country/region routing is factual (Italy IS in EU → Eurostat),
                 #   so semantic overrides should only win with strong evidence.
                 if semantic_provider != routed_provider:
-                    _HIGH_CONF_TYPES = {"explicit", "us_only", "indicator", "catalog"}
+                    _HIGH_CONF_TYPES = {"explicit", "us_only", "indicator"}
                     _STRUCTURAL_TYPES = {"country", "region"}
                     deterministic_locked = (
                         (deterministic_confidence >= 0.88 and deterministic_match_type in _HIGH_CONF_TYPES)
@@ -3545,8 +3492,7 @@ class QueryService:
             fb_params["__fallback_excluded_providers"] = [primary_provider]
             # Remove provider-specific resolved indicator identifiers so fallback
             # providers can resolve indicator codes in their own namespace.
-            for key in ("indicator", "seriesId", "series_id", "code",
-                        "__catalog_resolved", "__catalog_concept"):
+            for key in ("indicator", "seriesId", "series_id", "code"):
                 fb_params.pop(key, None)
 
             # Resolve indicator for THIS specific fallback provider.
@@ -4391,7 +4337,7 @@ class QueryService:
                 # Framework: UnifiedRouter determines the provider (overrides LLM).
                 # The LLM may guess wrong (e.g., NOT_AVAILABLE for gold price,
                 # WorldBank for "from Eurostat"). UnifiedRouter is deterministic
-                # and handles explicit mentions, country context, and catalog concepts.
+                # and handles explicit mentions plus structural country context.
                 try:
                     router_decision = self.unified_router.route(
                         query=query,
@@ -4414,14 +4360,14 @@ class QueryService:
                             intent.apiProvider = routed
                             logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
                         # Country-specific provider guard: when the structural
-                        # router selects StatsCan for a Canada-scoped catalog /
-                        # country match, keep the execution pinned to StatsCan
+                        # router selects StatsCan for a Canada-scoped country
+                        # match, keep the execution pinned to StatsCan
                         # so downstream ambiguity stages do not drift to OECD or
                         # other broad providers for the same national-statistics
                         # request.
                         if (
                             routed == "STATSCAN"
-                            and router_decision.match_type in {"catalog", "country"}
+                            and router_decision.match_type == "country"
                         ):
                             if intent.parameters is None:
                                 intent.parameters = {}
@@ -6733,11 +6679,6 @@ class QueryService:
                 try:
                     resolved_provider = normalize_provider_name(intent.apiProvider)
                     resolved_params = dict(intent.parameters or {})
-                    resolved_provider, resolved_params = self._apply_concept_provider_override(
-                        resolved_provider,
-                        intent,
-                        resolved_params,
-                    )
                     intent.apiProvider = resolved_provider
                     intent.parameters = await self._resolve_indicator_for_fetch(
                         resolved_provider,
@@ -6777,16 +6718,10 @@ class QueryService:
                                 logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
 
                     candidate_product_ids: list[str] = []
-                    semantic_label = str((intent.parameters or {}).get("__semantic_indicator_label") or "").strip()
-                    semantic_candidate = (
-                        self._get_direct_provider_indicator_translation("STATSCAN", semantic_label)
-                        if semantic_label else None
-                    )
                     for candidate in [
                         product_id,
                         (intent.parameters or {}).get("__statscan_product_id"),
                         (intent.parameters or {}).get("indicator"),
-                        semantic_candidate,
                         *(intent.indicators or []),
                     ]:
                         extracted = self._extract_statscan_product_id(candidate)

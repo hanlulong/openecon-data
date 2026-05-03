@@ -554,15 +554,24 @@ describe('ChatPage', () => {
       expect(exampleHeader).toBeInTheDocument();
     });
 
-    it('sets input value when example query is clicked', async () => {
+    it('submits an example query when clicked', async () => {
       const user = userEvent.setup();
       renderChatPage();
 
-      const exampleButton = await screen.findByText(/US unemployment rate/i);
+      const [exampleButton] = await screen.findAllByRole('button', {
+        name: /US unemployment rate/i,
+      });
       await user.click(exampleButton);
 
-      const input = screen.getByPlaceholderText(/Ask about economic data/i) as HTMLInputElement;
-      expect(input.value).toContain('US unemployment');
+      await waitFor(() => {
+        expect(mocks.mockApi.queryStream).toHaveBeenCalledWith(
+          expect.stringContaining('US unemployment rate'),
+          undefined,
+          false,
+          expect.any(Object),
+          expect.any(Object),
+        );
+      });
     });
   });
 });
