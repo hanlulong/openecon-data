@@ -1564,6 +1564,8 @@ async def resolve_indicator_for_fetch(
                 candidate_indicator,
                 __semantic_indicator_label=candidate_indicator,
                 __exact_provider_code_match=True,
+                __semantic_authority="exact_user_input",
+                __decision_source="exact_code",
             )
             intent.parameters = params
             existing_indicator = candidate_indicator
@@ -1581,7 +1583,11 @@ async def resolve_indicator_for_fetch(
             provider,
             existing_indicator,
         )
-        params = _apply_indicator_with_semantic_label(existing_indicator)
+        params = _apply_indicator_with_semantic_label(
+            existing_indicator,
+            __semantic_authority="exact_user_input",
+            __decision_source="exact_code",
+        )
         intent.parameters = params
         return params
 
@@ -1625,7 +1631,11 @@ async def resolve_indicator_for_fetch(
                 provider,
                 existing_indicator,
             )
-            params = _apply_indicator_with_semantic_label(existing_indicator)
+            params = _apply_indicator_with_semantic_label(
+                existing_indicator,
+                __semantic_authority="exact_user_input",
+                __decision_source="exact_code",
+            )
             intent.parameters = params
             return params
         logger.info(
@@ -1706,7 +1716,12 @@ async def resolve_indicator_for_fetch(
                         "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
                         indicator_query, selection.code, selection.source,
                     )
-                    params = _apply_indicator_with_semantic_label(selection.code)
+                    params = _apply_indicator_with_semantic_label(
+                        selection.code,
+                        __semantic_authority="llm_adjudication",
+                        __decision_source="llm_pick",
+                        __indicator_selection_source=selection.source,
+                    )
                     if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
                         logger.info(
                             "🔎 Collapsing World Bank multi-indicator intent to selector-resolved indicator '%s'",
