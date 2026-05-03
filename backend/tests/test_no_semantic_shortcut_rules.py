@@ -248,13 +248,10 @@ def test_default_path_blocks_provider_internal_map_dispatch_without_authority() 
         asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
 
 
-def test_provider_internal_map_dispatch_legacy_escape_hatch_is_explicit() -> None:
-    async def _fetch_series(params: dict) -> dict:
-        return {"indicator": params["indicator"]}
-
+def test_provider_internal_map_dispatch_has_no_settings_escape_hatch() -> None:
     svc = SimpleNamespace(
         settings=SimpleNamespace(allow_legacy_provider_map_final_authority=True),
-        fred_provider=SimpleNamespace(fetch_series=_fetch_series),
+        fred_provider=SimpleNamespace(fetch_series=lambda _params: None),
     )
     intent = ParsedIntent(
         apiProvider="FRED",
@@ -271,9 +268,8 @@ def test_provider_internal_map_dispatch_legacy_escape_hatch_is_explicit() -> Non
         provider_request={"series_id": "mortgage rate"},
     )
 
-    result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
-
-    assert result == [{"indicator": "mortgage rate"}]
+    with pytest.raises(DataNotAvailableError, match="blocked provider-internal map dispatch"):
+        asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
 
 
 def test_promoted_path_allows_exact_provider_code_dispatch_as_mechanical_authority() -> None:

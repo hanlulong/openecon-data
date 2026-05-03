@@ -78,9 +78,6 @@ class QueryServiceTests(unittest.TestCase):
         self.service.settings.use_outcome_decision_stage = False
         self.service.settings.use_post_fetch_semantic_judge = False
         self.service.settings.use_staged_state_commit = False
-        self.service.settings.allow_legacy_indicator_resolver_final_authority = False
-        self.service.settings.allow_legacy_provider_map_final_authority = False
-        self.service.settings.allow_legacy_catalog_fallback_final_authority = False
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -7530,15 +7527,8 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "imports share of gdp")
 
-    def test_fetch_data_prefers_resolver_over_fuzzy_translator(self) -> None:
-        """The legacy resolver compatibility hatch preserves old resolver behavior.
-
-        In the default no-shortcut path, selector no-decision must not fall
-        through to catalog/translator final authority. This test locks the
-        rollback behavior behind explicit compatibility flags only.
-        """
-        self.service.settings.allow_legacy_indicator_resolver_final_authority = True
-        self.service.settings.allow_legacy_provider_map_final_authority = True
+    def test_fetch_data_blocks_legacy_resolver_after_selector_unavailable(self) -> None:
+        """Selector failure must fail closed instead of using resolver shortcuts."""
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["GDP"],
@@ -7565,17 +7555,12 @@ class QueryServiceTests(unittest.TestCase):
              patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
-            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            with self.assertRaises(DataNotAvailableError):
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        # Legacy resolver's catalog result wins when IndicatorSelector unavailable
-        self.assertEqual(
-            fetch_mock.call_args.kwargs.get("indicator"),
-            "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE",
-        )
+        fetch_mock.assert_not_called()
 
-    def test_fetch_data_rejects_implausible_imf_selector_pick_and_uses_resolver(self) -> None:
-        self.service.settings.allow_legacy_indicator_resolver_final_authority = True
-        self.service.settings.allow_legacy_provider_map_final_authority = True
+    def test_fetch_data_rejects_implausible_imf_selector_pick_without_resolver_fallback(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=[
@@ -7623,14 +7608,10 @@ class QueryServiceTests(unittest.TestCase):
              patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
-            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            with self.assertRaises(DataNotAvailableError):
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        indicator_arg = fetch_mock.await_args.kwargs.get("indicator")
-        self.assertNotEqual(indicator_arg, "BCA_NGDPD")
-        self.assertTrue(
-            indicator_arg == "BXIPIR_BP6_EUR" or "primary income" in str(indicator_arg).lower(),
-            indicator_arg,
-        )
+        fetch_mock.assert_not_awaited()
 
     def test_fetch_data_fails_closed_for_unsupported_imf_fiscal_public_surface(self) -> None:
         intent = ParsedIntent(
@@ -8697,29 +8678,6 @@ class QueryServiceTests(unittest.TestCase):
         assert response.data is not None
         self.assertEqual(response.data[0].metadata.seriesId, "prc_ppp_ind")
 
-    def test_resolve_concept_for_fallback_ignores_removed_stored_catalog_param(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="WORLDBANK",
-            indicators=["NE.EXP.GNFS.ZS"],
-            parameters={},
-            clarificationNeeded=False,
-        )
-        concept = self.service._resolve_concept_for_fallback(intent, "WORLDBANK")
-        self.assertNotEqual(concept, "exports_pct_gdp")
-
-    def test_resolve_concept_for_fallback_via_reverse_code_lookup(self) -> None:
-        """_resolve_concept_for_fallback reverse-looks up provider codes in catalog."""
-        intent = ParsedIntent(
-            apiProvider="IMF",
-            indicators=["EREER"],
-            parameters={"indicator": "EREER"},
-            clarificationNeeded=False,
-            originalQuery="real effective exchange rate",
-        )
-        concept = self.service._resolve_concept_for_fallback(intent, "IMF")
-        # Should find real_effective_exchange_rate or similar from catalog
-        self.assertIsNotNone(concept)
-
     def test_default_path_fallback_skips_catalog_concept_code_mapping(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -8729,18 +8687,6 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="gdp growth in France",
         )
         observed: dict[str, Any] = {}
-
-        def fake_resolve_indicator_for_fallback_provider(
-            concept_name: str | None,
-            fallback_provider: str,
-            semantic_query: str,
-            countries: list | None,
-        ) -> list[str]:
-            observed["concept_name"] = concept_name
-            observed["fallback_provider"] = fallback_provider
-            observed["semantic_query"] = semantic_query
-            observed["countries"] = countries
-            return [semantic_query]
 
         async def fake_fetch_data(fallback_intent: ParsedIntent) -> list[NormalizedData]:
             observed["fallback_intent"] = fallback_intent
@@ -8754,14 +8700,6 @@ class QueryServiceTests(unittest.TestCase):
             ]
 
         with patch.object(
-            self.service,
-            "_resolve_concept_for_fallback",
-            side_effect=AssertionError("default path must not use catalog concept fallback"),
-        ), patch.object(
-            self.service,
-            "_resolve_indicator_for_fallback_provider",
-            side_effect=fake_resolve_indicator_for_fallback_provider,
-        ), patch.object(
             self.service,
             "_get_fallback_providers",
             return_value=["WORLDBANK"],
@@ -8782,9 +8720,9 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(len(result), 1)
-        self.assertIsNone(observed["concept_name"])
-        self.assertEqual(observed["fallback_provider"], "WORLDBANK")
+        self.assertEqual(observed["fallback_intent"].apiProvider, "WORLDBANK")
         self.assertNotIn("NY.GDP", observed["fallback_intent"].indicators[0])
+        self.assertEqual(observed["fallback_intent"].indicators[0], "gdp growth")
 
     def test_select_indicator_query_prefers_original_query_over_provider_code(self) -> None:
         """_select_indicator_query_for_resolution should not return provider codes."""

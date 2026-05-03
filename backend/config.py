@@ -107,21 +107,6 @@ class Settings(BaseSettings):
         alias="USE_STAGED_STATE_COMMIT",
         description="Commit conversation state only after verification succeeds on the new path"
     )
-    allow_legacy_indicator_resolver_final_authority: bool = Field(
-        default=False,
-        alias="ALLOW_LEGACY_INDICATOR_RESOLVER_FINAL_AUTHORITY",
-        description="Compatibility escape hatch: allow legacy resolver/catalog/translator paths to provide final indicator authority"
-    )
-    allow_legacy_provider_map_final_authority: bool = Field(
-        default=False,
-        alias="ALLOW_LEGACY_PROVIDER_MAP_FINAL_AUTHORITY",
-        description="Compatibility escape hatch: allow provider-internal semantic maps to dispatch without exact/LLM/post-fetch authority"
-    )
-    allow_legacy_catalog_fallback_final_authority: bool = Field(
-        default=False,
-        alias="ALLOW_LEGACY_CATALOG_FALLBACK_FINAL_AUTHORITY",
-        description="Compatibility escape hatch: allow cross-provider catalog concept fallback to map directly to provider codes"
-    )
     indicator_rrf_k: int = Field(
         default=60,
         alias="INDICATOR_RRF_K",

@@ -3451,36 +3451,14 @@ class QueryService:
             original_concept=original_concept,
         )
 
-    def _resolve_concept_for_fallback(
-        self,
-        intent: ParsedIntent,
-        primary_provider: str,
-    ) -> Optional[str]:
-        """Delegates to :func:`query_helpers.resolve_concept_for_fallback`."""
-        from .query_helpers import resolve_concept_for_fallback as _qh_concept
-        return _qh_concept(self, intent, primary_provider)
-
-    def _resolve_indicator_for_fallback_provider(
-        self,
-        concept_name: Optional[str],
-        fallback_provider: str,
-        semantic_query: str,
-        countries: Optional[list],
-    ) -> list[str]:
-        """Delegates to :func:`query_helpers.resolve_indicator_for_fallback_provider`."""
-        from .query_helpers import resolve_indicator_for_fallback_provider as _qh_fallback
-        return _qh_fallback(concept_name, fallback_provider, semantic_query, countries)
-
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):
         """
         Try to fetch data from fallback providers when primary fails.
 
-        Uses concept names (not provider-specific codes) for cross-provider
-        indicator resolution. When falling back from provider A to provider B:
-        1. Resolve the catalog concept from the original query/indicator
-        2. Look up the correct indicator code for provider B via catalog
-        3. Fall back to human-readable query text if catalog lookup fails
-        4. NEVER pass provider A's codes (e.g., NE.EXP.GNFS.ZS) to provider B
+        Uses human-readable query text (not provider-specific codes) for
+        cross-provider indicator resolution. When falling back from provider A
+        to provider B, provider B must resolve candidates in its own namespace;
+        catalog concept-to-code mappings are not allowed to choose final codes.
 
         Args:
             intent: The parsed intent
@@ -3508,17 +3486,9 @@ class QueryService:
             )
             raise primary_error
 
-        # Resolve the concept name for cross-provider fallback only on the
-        # legacy path.  On the default no-shortcut path, catalog concepts are
-        # candidate evidence at most; final fallback provider codes must be
-        # chosen by the provider's own retrieval + LLM adjudication flow.
-        if bool(getattr(self.settings, "allow_legacy_catalog_fallback_final_authority", False)):
-            concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
-        else:
-            concept_name = None
-            logger.info(
-                "🔄 Cross-provider fallback uses semantic query, not catalog code mapping"
-            )
+        logger.info(
+            "🔄 Cross-provider fallback uses semantic query, not catalog code mapping"
+        )
 
         # Use semantic indicator query (or original query) for smarter fallbacks.
         # This is the human-readable phrase, never a provider-specific code.
@@ -3540,8 +3510,8 @@ class QueryService:
             raise primary_error
 
         logger.info(
-            "🔄 Cross-provider fallback: concept=%s, semantic_query='%s', providers=%s",
-            concept_name, indicator, fallback_providers,
+            "🔄 Cross-provider fallback: semantic_query='%s', providers=%s",
+            indicator, fallback_providers,
         )
 
         last_error = primary_error
@@ -3555,13 +3525,10 @@ class QueryService:
             for key in ("indicator", "seriesId", "series_id", "code"):
                 fb_params.pop(key, None)
 
-            # Resolve indicator for THIS specific fallback provider.
-            fb_indicators = self._resolve_indicator_for_fallback_provider(
-                concept_name,
-                fallback_provider,
-                indicator or "",
-                target_countries,
-            )
+            # Keep fallback indicator evidence provider-neutral. The fallback
+            # provider's own retrieval + LLM adjudication must choose any
+            # provider-native code.
+            fb_indicators = [indicator] if indicator else []
             if not fb_indicators:
                 fb_indicator_query = self._select_indicator_query_for_resolution(intent)
                 if fb_indicator_query:
@@ -3592,8 +3559,10 @@ class QueryService:
             try:
                 result = await self._fetch_data(fb_intent)
                 if result and self._is_fallback_relevant(
-                    intent.indicators, result, target_countries, intent.originalQuery,
-                    original_concept=concept_name,
+                    intent.indicators,
+                    result,
+                    target_countries,
+                    intent.originalQuery,
                 ):
                     logger.info(f"✅ Fallback to {fallback_provider} succeeded")
                     return result

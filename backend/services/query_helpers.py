@@ -615,69 +615,6 @@ async def maybe_improve_country_coverage(
     return best_data, warning_message or None
 
 
-def resolve_concept_for_fallback(
-    svc: "QueryService",
-    intent: ParsedIntent,
-    primary_provider: str,
-) -> Optional[str]:
-    """Resolve a catalog concept name from the intent for cross-provider fallback.
-
-    Checks catalog evidence from the current code/query only.  It does not
-    consume stored shortcut state from prior semantic overrides.
-
-    Returns:
-        Catalog concept name (e.g., ``"exports_pct_gdp"``) or ``None``.
-    """
-    try:
-        from .catalog_service import find_concept_by_term, find_concepts_by_code
-
-        # Reverse lookup: provider code -> concept
-        for ind in (intent.indicators or []):
-            ind_str = str(ind or "").strip()
-            if ind_str and svc._looks_like_provider_indicator_code(primary_provider, ind_str):
-                concepts = find_concepts_by_code(primary_provider, ind_str)
-                if concepts:
-                    logger.debug(
-                        "Fallback concept via reverse code lookup (%s/%s): %s",
-                        primary_provider, ind_str, concepts[0],
-                    )
-                    return concepts[0]
-
-        # Also check the 'indicator' parameter which may hold the resolved code
-        param_indicator = str((intent.parameters or {}).get("indicator", "")).strip()
-        if param_indicator and svc._looks_like_provider_indicator_code(
-            primary_provider, param_indicator
-        ):
-            concepts = find_concepts_by_code(primary_provider, param_indicator)
-            if concepts:
-                logger.debug(
-                    "Fallback concept via param indicator reverse lookup (%s/%s): %s",
-                    primary_provider, param_indicator, concepts[0],
-                )
-                return concepts[0]
-
-        # 3. Forward lookup: original query text -> concept
-        original_query = str(intent.originalQuery or "").strip()
-        if original_query:
-            concept = find_concept_by_term(original_query)
-            if concept:
-                logger.debug("Fallback concept via query text: %s", concept)
-                return concept
-
-            # Try distilled query
-            distilled = svc._build_distilled_indicator_query(original_query)
-            if distilled:
-                concept = find_concept_by_term(distilled)
-                if concept:
-                    logger.debug("Fallback concept via distilled query: %s", concept)
-                    return concept
-
-    except Exception as exc:
-        logger.debug("Concept resolution for fallback failed: %s", exc)
-
-    return None
-
-
 def add_provider_transparency(
     svc: "QueryService",
     result: QueryResponse,
@@ -823,42 +760,6 @@ def maybe_expand_multi_concept_intent(
         params.get("countries"),
     )
     return True
-
-
-def resolve_indicator_for_fallback_provider(
-    concept_name: Optional[str],
-    fallback_provider: str,
-    semantic_query: str,
-    countries: Optional[list],
-) -> list[str]:
-    """Resolve the indicator for a specific fallback provider.
-
-    Uses the catalog concept to get the correct provider-specific code.
-    Falls back to the semantic query string when catalog lookup fails.
-    """
-    if concept_name:
-        try:
-            from .catalog_service import get_best_provider
-
-            provider_name, code, confidence = get_best_provider(
-                concept_name,
-                countries,
-                preferred_provider=fallback_provider,
-            )
-            provider_norm = normalize_provider_name(provider_name or "")
-            if provider_norm == fallback_provider and code and confidence >= 0.5:
-                logger.info(
-                    "📋 Fallback indicator resolved via catalog: concept='%s' -> %s/%s (conf=%.2f)",
-                    concept_name, fallback_provider, code, confidence,
-                )
-                return [code]
-        except Exception as exc:
-            logger.debug("Catalog fallback indicator resolution failed: %s", exc)
-
-    # Fall back to semantic query string
-    if semantic_query:
-        return [semantic_query]
-    return []
 
 
 def build_intent_from_semantic_clarification(

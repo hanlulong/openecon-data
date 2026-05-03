@@ -106,19 +106,6 @@ _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS = {
 }
 
 
-def _provider_maps_require_authority(svc: Any) -> bool:
-    """Return whether provider maps require final semantic authority.
-
-    The no-shortcut contract is now the default.  A compatibility escape hatch
-    exists only for deliberate rollback of legacy provider maps; feature flags
-    no longer have to be enabled before this guard applies.
-    """
-    settings = getattr(svc, "settings", None)
-    return not bool(
-        getattr(settings, "allow_legacy_provider_map_final_authority", False)
-    )
-
-
 def _has_provider_map_authority(params: dict) -> bool:
     """Return whether provider-internal maps may be used as API mechanics.
 
@@ -138,7 +125,6 @@ def _has_provider_map_authority(params: dict) -> bool:
 
 
 def _assert_provider_map_authority(
-    svc: Any,
     provider: str,
     intent: ParsedIntent,
     params: dict,
@@ -147,10 +133,7 @@ def _assert_provider_map_authority(
 
     The default no-shortcut path must have explicit/LLM/post-fetch authority
     before dispatching to providers known to contain natural-language maps.
-    A disabled compatibility hatch exists only for deliberate rollback.
     """
-    if not _provider_maps_require_authority(svc):
-        return
     if provider not in _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS:
         return
     if _has_provider_map_authority(params):
@@ -970,7 +953,7 @@ async def fetch_from_provider_dispatch(
     """
     provider = _normalize_provider_name(execution_plan.provider)
     params = dict(execution_plan.params or {})
-    _assert_provider_map_authority(svc, provider, intent, params)
+    _assert_provider_map_authority(provider, intent, params)
 
     if provider == "FRED":
         fred_request = dict(execution_plan.provider_request or {})
@@ -2204,7 +2187,7 @@ async def fetch_data(
         # PHASE B: Resolve indicator code via unified resolution pipeline
         params = await svc._resolve_indicator_for_fetch(provider, intent, params)
 
-    _assert_provider_map_authority(svc, provider, intent, params)
+    _assert_provider_map_authority(provider, intent, params)
 
     internal_param_keys = {
         "__fallback_excluded_providers",

@@ -154,17 +154,9 @@ class IndicatorResolutionTests(unittest.TestCase):
         self.assertEqual(params.get("indicator"), "number of households")
         self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
-    def test_legacy_resolver_final_authority_requires_explicit_escape_hatch(self) -> None:
-        class _LegacyResolved:
-            code = "LEGACY_CODE"
-            name = "Legacy shortcut"
-            source = "legacy"
-            confidence = 1.0
-            metadata = {}
-
-        class _LegacyResolver:
-            def resolve(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
-                return _LegacyResolved()
+    def test_legacy_resolver_final_authority_has_no_settings_escape_hatch(self) -> None:
+        def legacy_resolver_should_not_run():
+            raise AssertionError("legacy resolver must not provide final authority")
 
         svc = SimpleNamespace(
             settings=SimpleNamespace(allow_legacy_indicator_resolver_final_authority=True),
@@ -194,11 +186,61 @@ class IndicatorResolutionTests(unittest.TestCase):
                     "STATSCAN",
                     intent,
                     dict(intent.parameters or {}),
-                    _get_indicator_resolver=lambda: _LegacyResolver(),
+                    _get_indicator_resolver=legacy_resolver_should_not_run,
                 )
             )
 
-        self.assertEqual(params.get("indicator"), "LEGACY_CODE")
+        self.assertEqual(params.get("indicator"), "legacy shortcut in Canada")
+        self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
+
+    def test_implausible_selector_pick_skips_legacy_resolver(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(),
+            statscan_provider=SimpleNamespace(
+                VECTOR_MAPPINGS={},
+                COORDINATE_PRODUCT_MAPPINGS={},
+            ),
+            _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
+            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["number of households"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="number of households in Canada",
+        )
+
+        def legacy_resolver_should_not_run():
+            raise AssertionError("implausible LLM pick must not fall through to legacy resolver")
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code="42100012",
+                    name="Number of children in Canada",
+                    source="llm_pick",
+                )
+            ),
+        ), patch(
+            "backend.services.indicator_resolution.is_resolved_indicator_plausible",
+            return_value=False,
+        ):
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "STATSCAN",
+                    intent,
+                    dict(intent.parameters or {}),
+                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                )
+            )
+
+        self.assertEqual(params.get("indicator"), "number of households")
+        self.assertEqual(params.get("__indicator_selection_status"), "llm_pick")
+        self.assertEqual(params.get("__indicator_rejection_reason"), "implausible_llm_pick")
 
     def test_provider_lock_does_not_force_noisy_query_for_provider_code(self) -> None:
         svc = SimpleNamespace(

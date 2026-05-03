@@ -33,13 +33,6 @@ from ..services.relevance_scorer import (
 logger = logging.getLogger(__name__)
 
 
-def _requires_llm_indicator_authority(svc: Any) -> bool:
-    """Return whether legacy resolver shortcuts are disabled as final authority."""
-    settings = getattr(svc, "settings", None)
-    return not bool(
-        getattr(settings, "allow_legacy_indicator_resolver_final_authority", False)
-    )
-
 # Pre-compiled regex patterns used by this module
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
@@ -1713,6 +1706,8 @@ async def resolve_indicator_for_fetch(
                         selection.code,
                         selection_name or "<missing-name>",
                     )
+                    selector_without_final_authority = True
+                    selector_rejection_reason = "implausible_llm_pick"
                 else:
                     logger.info(
                         "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
@@ -1749,12 +1744,11 @@ async def resolve_indicator_for_fetch(
             selector_source = "selector_unavailable"
 
         if (
-            _requires_llm_indicator_authority(svc)
-            and selector_attempted
+            selector_attempted
             and selector_without_final_authority
         ):
             logger.info(
-                "🚫 Skipping legacy indicator resolver on outcome-decision path after selector source=%s",
+                "🚫 Skipping legacy indicator resolver on no-shortcut path after selector source=%s",
                 selector_source or "unknown",
             )
             params = _apply_indicator_with_semantic_label(indicator_query)
