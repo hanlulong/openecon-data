@@ -32,6 +32,12 @@ from ..services.relevance_scorer import (
 
 logger = logging.getLogger(__name__)
 
+
+def _requires_llm_indicator_authority(svc: Any) -> bool:
+    """Return whether legacy resolver shortcuts are disabled as final authority."""
+    settings = getattr(svc, "settings", None)
+    return bool(getattr(settings, "use_outcome_decision_stage", False))
+
 # Pre-compiled regex patterns used by this module
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
@@ -1667,10 +1673,19 @@ async def resolve_indicator_for_fetch(
             exact_title_query,
         )
     else:
+        selector_attempted = False
+        selector_without_final_authority = False
+        selector_source = ""
+        selector_rejection_reason = ""
+        selector_retry_query = ""
         try:
             from .indicator_selector import IndicatorSelector
             selector = IndicatorSelector()
+            selector_attempted = True
             selection = await selector.select(selector_query, provider)
+            selector_source = str(getattr(selection, "source", "") or "")
+            selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
+            selector_retry_query = str(getattr(selection, "retry_query", "") or "")
             if selection.code:
                 selection_name = str(getattr(selection, "name", "") or "")
                 if not is_resolved_indicator_plausible(
@@ -1707,9 +1722,32 @@ async def resolve_indicator_for_fetch(
                 )
                 params = {**params, "__indicator_options": selection.options}
                 intent.parameters = params
-                # Don't return -- fall through to legacy resolver as backup
+                selector_without_final_authority = True
+            elif not selection.code:
+                selector_without_final_authority = True
         except Exception as e:
             logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
+            selector_attempted = True
+            selector_without_final_authority = True
+            selector_source = "selector_unavailable"
+
+        if (
+            _requires_llm_indicator_authority(svc)
+            and selector_attempted
+            and selector_without_final_authority
+        ):
+            logger.info(
+                "🚫 Skipping legacy indicator resolver on outcome-decision path after selector source=%s",
+                selector_source or "unknown",
+            )
+            params = _apply_indicator_with_semantic_label(indicator_query)
+            params["__indicator_selection_status"] = selector_source or "no_decision"
+            if selector_rejection_reason:
+                params["__indicator_rejection_reason"] = selector_rejection_reason
+            if selector_retry_query:
+                params["__indicator_retry_query"] = selector_retry_query
+            intent.parameters = params
+            return params
 
     # Path 2: Legacy IndicatorResolver (catalog + database FTS + vector search)
     resolved = _resolver().resolve(

@@ -9,6 +9,7 @@ from backend.services.indicator_selector import (
     IndicatorSelector,
     SelectionResult,
 )
+from backend.tests.fixtures.indicator_selector_llm_fixtures import LLM_SELECTOR_FIXTURES
 
 
 def test_selector_prompt_prefers_direct_counts_over_breakdowns() -> None:
@@ -98,6 +99,38 @@ def test_parse_llm_response_accepts_explicit_choice_fallback() -> None:
     assert result.code == "CODE2"
 
 
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_source", "expected_code"),
+    [
+        ("pick", "llm_pick", "CODE2"),
+        ("ask", "user_choice", None),
+        ("reject_search", "llm_reject", None),
+        ("undecided", None, None),
+    ],
+)
+def test_deterministic_llm_selector_fixtures(
+    fixture_name: str,
+    expected_source: str | None,
+    expected_code: str | None,
+) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    result = selector._parse_llm_response(  # pylint: disable=protected-access
+        LLM_SELECTOR_FIXTURES[fixture_name],
+        [("CODE1", "First"), ("CODE2", "Second"), ("CODE3", "Third")],
+        "STATSCAN",
+        "requested measure",
+    )
+
+    if expected_source is None:
+        assert result is None
+        return
+
+    assert result is not None
+    assert result.source == expected_source
+    assert result.code == expected_code
+
+
 def test_score_ambiguity_requires_ordered_score_evidence() -> None:
     assert IndicatorSelector._scores_are_ambiguous([0.88, 0.87, 0.86])
     assert not IndicatorSelector._scores_are_ambiguous([0.55, 0.88, 0.87])
@@ -152,3 +185,44 @@ async def test_select_researches_with_llm_retry_query_when_candidates_are_reject
         "number of households",
         "number of private households total households household size",
     ]
+
+
+@pytest.mark.asyncio
+async def test_select_refuses_top_candidate_when_llm_is_undecided(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+        return [
+            ("42100012", "Number of children in Canada"),
+            ("36100126", "Property income of households, Canada"),
+        ], [0.76, 0.70]
+
+    async def undecided_llm(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", fake_candidates)
+    monkeypatch.setattr(selector, "_llm_pick", undecided_llm)
+
+    result = await selector.select("number of households", "STATSCAN")
+
+    assert result.code is None
+    assert result.source == "no_decision"
+
+
+@pytest.mark.asyncio
+async def test_select_single_candidate_still_requires_llm_authority(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+        return [("17100159", "Estimates of the number of private households by size")], [0.91]
+
+    async def undecided_llm(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", fake_candidates)
+    monkeypatch.setattr(selector, "_llm_pick", undecided_llm)
+
+    result = await selector.select("number of households", "STATSCAN")
+
+    assert result.code is None
+    assert result.source == "no_decision"

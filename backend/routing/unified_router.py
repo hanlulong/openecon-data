@@ -5,15 +5,15 @@ The LLM now handles semantic routing (indicator detection, crypto vs.
 fiscal classification, US-only indicators, etc.) via the provider capability
 matrix in the prompt.
 
-This router retains only STRUCTURAL routing:
+This router retains only final-authority STRUCTURAL routing:
 1. Explicit provider mention ("from FRED", "using IMF")
 2. Exchange rate detection (ExchangeRate-API + BIS for REER/NEER)
 3. Bilateral trade detection (Comtrade is the ONLY bilateral trade provider)
-4. Country-based defaults (structural membership: EU→Eurostat, US→FRED)
-5. LLM provider choice (trust the LLM for everything else)
+4. HS commodity-code trade detection (Comtrade)
+5. LLM provider choice (trust the LLM for semantic provider selection)
 
-A lightweight CoinGecko guard (_correct_coingecko) prevents fiscal queries
-from landing on the crypto-only provider.
+Country, region, and broad-topic coverage hints are exposed as candidate
+metadata only; they must not override the LLM as final provider authority.
 
 Usage:
     from backend.routing import UnifiedRouter
@@ -83,11 +83,12 @@ def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
 
 
 def _correct_coingecko(provider: str, query: str, indicators: List[str]) -> Tuple[str, Optional[str]]:
-    """If CoinGecko was chosen for a non-crypto query, redirect to IMF.
+    """Reject impossible CoinGecko choices without choosing a semantic replacement.
 
     Returns (corrected_provider, reason_or_None).
-    This is a lightweight structural guard — CoinGecko only serves crypto data,
-    so fiscal/macro queries that land here are obvious misroutes.
+    This is a lightweight provider-contract guard: CoinGecko only serves crypto
+    assets.  It may reject CoinGecko for obvious non-crypto macro/fiscal queries,
+    but it must not decide the replacement provider by keyword.
     """
     if provider.upper() != "COINGECKO":
         return provider, None
@@ -109,9 +110,9 @@ def _correct_coingecko(provider: str, query: str, indicators: List[str]) -> Tupl
     )
 
     if _FISCAL.search(combined) and not _CRYPTO.search(combined):
-        reason = "CoinGecko corrected to IMF: query has fiscal keywords but no crypto"
+        reason = "CoinGecko rejected: query has macro/fiscal terms but no crypto asset"
         logger.warning(f"  {reason}")
-        return "IMF", reason
+        return "", reason
 
     return provider, None
 
@@ -123,29 +124,37 @@ class RoutingDecision:
     confidence: float
     fallbacks: List[str] = field(default_factory=list)
     reasoning: str = ""
-    match_type: str = "default"  # explicit, indicator, country, region, llm, default
+    match_type: str = "default"  # explicit, structural, llm, default
     matched_pattern: Optional[str] = None
+    decision_source: str = "default"
+    semantic_authority: str = "none"
+    final_authority: bool = False
+    candidate_providers: List[str] = field(default_factory=list)
+
+    @property
+    def can_override_llm_provider(self) -> bool:
+        """Whether QueryService may replace the LLM provider with this route."""
+        return self.final_authority and self.decision_source in {
+            "explicit_provider",
+            "mechanical_structure",
+        }
 
 
 class UnifiedRouter:
     """
     Single entry point for all provider routing decisions.
 
-    After LLM-refactor, this router handles only structural routing:
+    After the no-shortcut migration, this router handles only final-authority
+    structural routing:
     1. Explicit provider mention (highest confidence)
     2. Exchange rate → ExchangeRate-API / BIS for REER
-    3. Bilateral trade → Comtrade (only bilateral trade provider)
-    4. Canadian queries → StatsCan (only Canada-specific provider)
-    5. Regional group routing (EU countries → Eurostat, etc.)
-    6. Country-based routing (US → FRED, EU → Eurostat, etc.)
-    7. Multi-country routing
-    8. LLM provider choice (trust the LLM for semantic decisions)
-    9. Default → WorldBank
+    3. HS commodity-code and bilateral trade → Comtrade
+    4. LLM provider choice (trust the LLM for semantic decisions)
+    5. Default → WorldBank when no provider evidence exists
 
-    Semantic routing (US-only indicators, crypto detection, indicator
-    classification) is handled by the LLM via the provider capability
-    matrix in the prompt.  The _correct_coingecko() guard remains as
-    a lightweight structural safeguard.
+    Country, regional, and domain coverage hints are candidate metadata only.
+    They are not allowed to mutate final provider selection unless a later
+    LLM/evidence stage makes an explicit decision.
     """
 
     # Fallback chains when primary provider fails.
@@ -204,6 +213,12 @@ class UnifiedRouter:
         indicators = indicators or []
         countries = countries or []
         query_lower = query.lower()
+        coverage_candidates = self._coverage_candidates(
+            query=query,
+            query_lower=query_lower,
+            country=country,
+            countries=countries,
+        )
 
         # Fallback geography extraction when parser omits country information.
         if not country and not countries:
@@ -212,6 +227,12 @@ class UnifiedRouter:
                 country = detected_countries[0]
             elif len(detected_countries) > 1:
                 countries = detected_countries
+            coverage_candidates = self._coverage_candidates(
+                query=query,
+                query_lower=query_lower,
+                country=country,
+                countries=countries,
+            )
 
         # 1. Explicit provider mention (ABSOLUTE HIGHEST)
         explicit_match = detect_explicit_provider_match(query)
@@ -223,6 +244,10 @@ class UnifiedRouter:
                 match_type="explicit",
                 matched_pattern=matched_kw,
                 reasoning=f"Explicit mention of '{matched_kw}' requests {provider_name}",
+                decision_source="explicit_provider",
+                semantic_authority="exact_user_input",
+                final_authority=True,
+                candidate_providers=coverage_candidates,
             )
 
         # 2. Exchange rate → ExchangeRate-API / BIS for REER/NEER
@@ -235,16 +260,22 @@ class UnifiedRouter:
                 return self._create_decision(
                     provider="BIS",
                     confidence=0.90,
-                    match_type="indicator",
+                    match_type="structural",
                     matched_pattern="effective exchange rate",
                     reasoning="Effective exchange rates (REER/NEER) are best sourced from BIS",
+                    decision_source="mechanical_structure",
+                    final_authority=True,
+                    candidate_providers=coverage_candidates,
                 )
             return self._create_decision(
                 provider="ExchangeRate",
                 confidence=0.90,
-                match_type="indicator",
+                match_type="structural",
                 matched_pattern="exchange rate",
                 reasoning="Exchange rate query routed to ExchangeRate-API",
+                decision_source="mechanical_structure",
+                final_authority=True,
+                candidate_providers=coverage_candidates,
             )
 
         # 2b. HS commodity code + trade verb → Comtrade (structural: HS codes are Comtrade-specific)
@@ -254,9 +285,12 @@ class UnifiedRouter:
             return self._create_decision(
                 provider="Comtrade",
                 confidence=0.92,
-                match_type="indicator",
+                match_type="structural",
                 matched_pattern=f"HS code: {matched_code}",
                 reasoning=f"Query contains HS commodity code ({matched_code}), routed to Comtrade",
+                decision_source="mechanical_structure",
+                final_authority=True,
+                candidate_providers=coverage_candidates,
             )
 
         # 3. Bilateral trade → Comtrade (structural: only bilateral trade provider)
@@ -264,89 +298,48 @@ class UnifiedRouter:
             return self._create_decision(
                 provider="Comtrade",
                 confidence=0.88,
-                match_type="indicator",
+                match_type="structural",
                 matched_pattern="bilateral trade",
                 reasoning="Bilateral trade query routed to Comtrade",
+                decision_source="mechanical_structure",
+                final_authority=True,
+                candidate_providers=coverage_candidates,
             )
 
-        # 4. Canadian queries (structural: StatsCan is the only Canada-specific provider)
-        if CountryResolver.is_canadian_region(query):
-            return self._handle_canadian_query(query, indicators, country)
-
-        # 5. Structural specialty-provider cues that should override broad regional defaults.
-        if self._is_fred_structural_query(query_lower):
-            return self._create_decision(
-                provider="FRED",
-                confidence=0.88,
-                match_type="indicator",
-                matched_pattern="US monetary / FRED structural cue",
-                reasoning="US-specific monetary query routed to FRED",
-            )
-
-        if self._is_non_bilateral_trade_flow_query(query_lower):
-            return self._create_decision(
-                provider="Comtrade",
-                confidence=0.82,
-                match_type="indicator",
-                matched_pattern="unilateral goods trade flow",
-                reasoning="Goods import/export flow query routed to Comtrade",
-            )
-
-        if self._is_property_market_query(query_lower):
-            return self._create_decision(
-                provider="BIS",
-                confidence=0.84,
-                match_type="indicator",
-                matched_pattern="property / housing market",
-                reasoning="Property or housing price query routed to BIS",
-            )
-
-        if self._is_imf_macro_query(query_lower):
-            return self._create_decision(
-                provider="IMF",
-                confidence=0.82,
-                match_type="indicator",
-                matched_pattern="IMF macro aggregate / forecast",
-                reasoning="Macro aggregate / projection query routed to IMF",
-            )
-
-        # 6. Regional group routing (EU countries, OECD countries, etc.)
-        regional_decision = self._route_by_regional_group(query_lower)
-        if regional_decision:
-            return regional_decision
-
-        # 7. Country-based routing
-        country_decision = self._route_by_country(country, countries, query_lower, indicators)
-        if country_decision:
-            return country_decision
-
-        # 8. Multi-country with non-OECD → WorldBank
-        if countries and len(countries) > 1:
-            has_non_oecd = any(CountryResolver.is_non_oecd_major(c) for c in countries)
-            if has_non_oecd:
-                return self._create_decision(
-                    provider="WorldBank",
-                    confidence=0.75,
-                    match_type="country",
-                    reasoning="Multi-country query with non-OECD countries → WorldBank",
-                )
-
-        # 9. Trust LLM's provider choice
-        if llm_provider and llm_provider != self.DEFAULT_PROVIDER:
+        # 4. Trust LLM's provider choice for semantic provider decisions.
+        if llm_provider and llm_provider.upper() not in {"NOT_AVAILABLE", "NONE", "UNKNOWN"}:
             corrected, reason = _correct_coingecko(llm_provider, query, indicators)
+            if corrected:
+                return self._create_decision(
+                    provider=corrected,
+                    confidence=0.60,
+                    match_type="llm",
+                    reasoning=reason or f"Using LLM suggested provider: {llm_provider}",
+                    decision_source="llm_provider",
+                    semantic_authority="llm_adjudication",
+                    final_authority=True,
+                    candidate_providers=coverage_candidates,
+                )
             return self._create_decision(
-                provider=corrected,
-                confidence=0.60,
-                match_type="llm",
-                reasoning=reason or f"Using LLM suggested provider: {llm_provider}",
+                provider=self.DEFAULT_PROVIDER,
+                confidence=0.35,
+                match_type="default",
+                reasoning=reason or "LLM provider rejected by provider contract; no semantic replacement chosen",
+                decision_source="unsupported",
+                final_authority=False,
+                candidate_providers=coverage_candidates,
             )
 
-        # 11. Default
+        # 5. Default.  Coverage candidates may be present but are not final
+        # semantic provider authority.
         return self._create_decision(
             provider=self.DEFAULT_PROVIDER,
             confidence=0.50,
             match_type="default",
-            reasoning=f"No specific routing rules matched, using default: {self.DEFAULT_PROVIDER}",
+            reasoning=f"No explicit or mechanical provider route matched, using default: {self.DEFAULT_PROVIDER}",
+            decision_source="default",
+            final_authority=False,
+            candidate_providers=coverage_candidates,
         )
 
     def route_with_intent(self, intent: Any, original_query: str) -> RoutingDecision:
@@ -396,6 +389,10 @@ class UnifiedRouter:
         match_type: str = "default",
         matched_pattern: Optional[str] = None,
         reasoning: str = "",
+        decision_source: str = "default",
+        semantic_authority: str = "none",
+        final_authority: bool = False,
+        candidate_providers: Optional[List[str]] = None,
     ) -> RoutingDecision:
         """Create a RoutingDecision with fallbacks."""
         fallbacks = self.get_fallbacks(provider)
@@ -411,6 +408,10 @@ class UnifiedRouter:
             reasoning=reasoning,
             match_type=match_type,
             matched_pattern=matched_pattern,
+            decision_source=decision_source,
+            semantic_authority=semantic_authority,
+            final_authority=final_authority,
+            candidate_providers=candidate_providers or [],
         )
 
     @staticmethod
@@ -453,17 +454,6 @@ class UnifiedRouter:
         return any(pattern in combined for pattern in exchange_patterns)
 
     @staticmethod
-    def _is_fred_structural_query(query_lower: str) -> bool:
-        """Detect strongly US/FRED-specific monetary terms."""
-        fred_terms = [
-            "federal funds",
-            "fed funds",
-            "fomc rate",
-            "st louis fed",
-        ]
-        return any(term in query_lower for term in fred_terms)
-
-    @staticmethod
     def _is_aggregate_trade_indicator(query_lower: str) -> bool:
         """Detect aggregate/macro trade indicators that belong to WorldBank/IMF, not Comtrade.
 
@@ -485,59 +475,6 @@ class UnifiedRouter:
             r"\b(?:merchandise)\s+(?:imports?|exports?)\s+(?:as\s+)?(?:share|%|percent)\b",
         ]
         return any(re.search(pat, query_lower) for pat in aggregate_patterns)
-
-    @classmethod
-    def _is_non_bilateral_trade_flow_query(cls, query_lower: str) -> bool:
-        """Detect unilateral goods trade-flow queries that belong to Comtrade."""
-        if cls._is_aggregate_trade_indicator(query_lower):
-            return False
-        if "trade balance" in query_lower or "current account" in query_lower:
-            return False
-        if not any(term in query_lower for term in ["import", "imports", "export", "exports"]):
-            return False
-
-        trade_flow_terms = [
-            "semiconductor", "chip", "chips", "pharmaceutical", "pharmaceuticals",
-            "agricultural", "agriculture", "electronics", "electronic",
-            "auto parts", "textile", "textiles", "petroleum", "oil",
-            "steel", "mineral", "minerals", "soybean", "soybeans",
-            "commodity", "commodities", "goods",
-        ]
-        return any(term in query_lower for term in trade_flow_terms)
-
-    @staticmethod
-    def _is_property_market_query(query_lower: str) -> bool:
-        """Detect property/house/real-estate price queries routed to BIS."""
-        property_terms = [
-            "residential property",
-            "property prices",
-            "real estate prices",
-            "real estate market",
-            "house prices",
-            "housing market index",
-            "property price index",
-            "housing price index",
-        ]
-        return any(term in query_lower for term in property_terms)
-
-    @staticmethod
-    def _is_imf_macro_query(query_lower: str) -> bool:
-        """Detect global/group macro aggregate and forecast queries best suited for IMF."""
-        forecast_terms = ["forecast", "forecasts", "projection", "projections"]
-        macro_terms = [
-            "inflation", "gdp growth", "economic growth", "current account",
-            "fiscal deficit", "government debt", "commodity price index",
-            "trade volume", "world economic outlook",
-        ]
-        macro_group_terms = [
-            "global", "world", "advanced economies", "emerging markets",
-            "developing economies", "g20", "emerging economies",
-        ]
-
-        has_macro = any(term in query_lower for term in macro_terms)
-        if has_macro and any(term in query_lower for term in forecast_terms):
-            return True
-        return has_macro and any(term in query_lower for term in macro_group_terms)
 
     def _is_bilateral_trade_query(self, query_lower: str, query: str) -> bool:
         """Detect bilateral trade queries (exports from X to Y, trade between X and Y).
@@ -573,210 +510,93 @@ class UnifiedRouter:
 
         return False
 
-    def _handle_canadian_query(
+    def _coverage_candidates(
         self,
+        *,
         query: str,
-        indicators: List[str],
-        country: Optional[str],
-    ) -> RoutingDecision:
-        """Handle Canadian-specific routing (structural: StatsCan is Canada-only).
-
-        Routing priority for Canada queries:
-        1. Property market → BIS (structural: BIS has cross-country property data)
-        2. Bilateral trade → Comtrade (structural: only bilateral trade provider)
-        3. Non-bilateral trade → StatsCan
-        4. Development-only indicators (no StatsCan coverage) → WorldBank
-        5. Default → StatsCan
-        """
-        query_lower = query.lower()
-        indicators_str = " ".join(indicators).lower()
-        combined = f"{query_lower} {indicators_str}"
-
-        # Property market → BIS (structural: BIS has cross-country property data)
-        if any(term in combined for term in [
-            "residential property", "property prices", "real estate market", "real estate prices",
-        ]):
-            return self._create_decision(
-                provider="BIS",
-                confidence=0.86,
-                match_type="indicator",
-                matched_pattern="canada property market",
-                reasoning="Canadian residential/property market query routed to BIS",
-            )
-
-        # Trade queries
-        is_trade = any(term in combined for term in ["import", "export", "trade"])
-        if is_trade:
-            # Bilateral trade → Comtrade
-            if self._is_bilateral_trade_query(query_lower, query):
-                return self._create_decision(
-                    provider="Comtrade",
-                    confidence=0.90,
-                    match_type="indicator",
-                    matched_pattern="Canadian bilateral trade",
-                    reasoning="Canadian bilateral trade → Comtrade",
-                )
-            # Non-bilateral Canadian trade → StatsCan
-            return self._create_decision(
-                provider="StatsCan",
-                confidence=0.85,
-                match_type="indicator",
-                matched_pattern="Canadian trade",
-                reasoning="Canadian trade (no partner) → StatsCan",
-            )
-
-        # Development-only indicators unlikely to be in StatsCan — route to
-        # WorldBank. These are structural: StatsCan is a national statistics
-        # office and does not track global development metrics.
-        _DEVELOPMENT_ONLY = [
-            "life expectancy", "fertility", "mortality",
-            "co2", "emissions", "forest", "renewable energy",
-            "literacy", "poverty",
-        ]
-        if any(term in combined for term in _DEVELOPMENT_ONLY):
-            return self._create_decision(
-                provider="WorldBank",
-                confidence=0.80,
-                match_type="indicator",
-                matched_pattern="Canada development indicator",
-                reasoning="Canadian query with development indicator → WorldBank",
-            )
-
-        # Default for Canadian queries → StatsCan
-        return self._create_decision(
-            provider="StatsCan",
-            confidence=0.85,
-            match_type="country",
-            matched_pattern="Canada",
-            reasoning="Canadian query routed to StatsCan",
-        )
-
-    def _route_by_regional_group(self, query_lower: str) -> Optional[RoutingDecision]:
-        """Route queries that mention specific regional/country groups."""
-        # Eurostat for EU group queries
-        eu_group_terms = [
-            "european countries", "eu countries", "eu member states",
-            "eurozone countries", "across eu", "european union countries",
-        ]
-        if any(term in query_lower for term in eu_group_terms):
-            return self._create_decision(
-                provider="Eurostat",
-                confidence=0.80,
-                match_type="region",
-                matched_pattern="EU country group",
-                reasoning="Query about EU/European countries routed to Eurostat",
-            )
-
-        # Bare "EU" or "Europe"/"European"/"Eurozone" as region indicator → Eurostat
-        # "EU employment rate", "European inflation", "Eurozone GDP growth"
-        if re.search(r"\beu\b", query_lower) or re.search(r"\beuro(?:pe|pean|zone)\b", query_lower):
-            return self._create_decision(
-                provider="Eurostat",
-                confidence=0.80,
-                match_type="region",
-                matched_pattern="EU/Europe region",
-                reasoning="Query mentions EU/Europe region, routed to Eurostat",
-            )
-
-        # OECD for OECD group queries
-        oecd_group_terms = [
-            "oecd countries", "oecd members", "oecd area", "oecd nations",
-            "across oecd", "all oecd countries", "oecd member countries",
-            "g7 countries", "g7 nations",
-        ]
-        if any(term in query_lower for term in oecd_group_terms):
-            return self._create_decision(
-                provider="OECD",
-                confidence=0.80,
-                match_type="region",
-                matched_pattern="OECD country group",
-                reasoning="Query about OECD countries/members routed to OECD",
-            )
-
-        # WorldBank for developing/emerging/regional group queries
-        wb_group_terms = [
-            "developing countries", "emerging markets", "emerging economies",
-            "low-income countries", "middle-income countries",
-            "asian countries", "latin american countries", "african countries",
-            "south america", "sub-saharan africa", "g20 countries",
-        ]
-        if any(term in query_lower for term in wb_group_terms):
-            return self._create_decision(
-                provider="WorldBank",
-                confidence=0.80,
-                match_type="region",
-                matched_pattern="development/regional group",
-                reasoning="Query about developing/regional country group routed to WorldBank",
-            )
-
-        # StatsCan for Canadian provincial queries
-        statscan_group_terms = [
-            "all provinces", "canadian provinces", "each province",
-            "by province", "provincial data",
-        ]
-        if any(term in query_lower for term in statscan_group_terms):
-            return self._create_decision(
-                provider="StatsCan",
-                confidence=0.80,
-                match_type="region",
-                matched_pattern="Canadian provinces",
-                reasoning="Query about Canadian provinces routed to StatsCan",
-            )
-
-        return None
-
-    def _route_by_country(
-        self,
+        query_lower: str,
         country: Optional[str],
         countries: Optional[List[str]],
-        query_lower: str,
-        indicators: List[str],
-    ) -> Optional[RoutingDecision]:
-        """Route based on country membership (structural)."""
-        if not country:
-            return None
+    ) -> List[str]:
+        """Return non-authoritative provider coverage hints.
 
-        # US → FRED
-        if CountryResolver.is_us(country):
-            return self._create_decision(
-                provider="FRED",
-                confidence=0.80,
-                match_type="country",
-                matched_pattern="United States",
-                reasoning="US query routed to FRED",
-            )
+        These hints are intentionally weak evidence.  They help downstream
+        candidate/evidence stages know where to search, but they never select
+        the final provider on their own.
+        """
+        candidates: list[str] = []
 
-        # Non-OECD major economies → WorldBank
-        if CountryResolver.is_non_oecd_major(country):
-            return self._create_decision(
-                provider="WorldBank",
-                confidence=0.75,
-                match_type="country",
-                matched_pattern=country,
-                reasoning=f"Non-OECD major economy ({country}) → WorldBank",
-            )
+        def add(provider: str) -> None:
+            if provider not in candidates:
+                candidates.append(provider)
 
-        # EU members → Eurostat
-        if CountryResolver.is_eu_member(country):
-            return self._create_decision(
-                provider="Eurostat",
-                confidence=0.75,
-                match_type="country",
-                matched_pattern=country,
-                reasoning=f"EU member ({country}) → Eurostat",
-            )
+        if CountryResolver.is_canadian_region(query):
+            add("StatsCan")
 
-        # OECD non-EU → WorldBank for standard indicators (OECD resolution unreliable)
-        if CountryResolver.is_oecd_non_eu(country):
-            return self._create_decision(
-                provider="WorldBank",
-                confidence=0.70,
-                match_type="country",
-                matched_pattern=country,
-                reasoning=f"OECD non-EU country ({country}) → WorldBank (broader coverage)",
-            )
+        fred_terms = ("federal funds", "fed funds", "fomc rate", "st louis fed")
+        if any(term in query_lower for term in fred_terms):
+            add("FRED")
 
-        return None
+        trade_flow_terms = (
+            "semiconductor", "chip", "chips", "pharmaceutical", "pharmaceuticals",
+            "agricultural", "agriculture", "electronics", "electronic",
+            "auto parts", "textile", "textiles", "petroleum", "oil",
+            "steel", "mineral", "minerals", "soybean", "soybeans",
+            "commodity", "commodities", "goods",
+        )
+        has_trade_flow = (
+            not self._is_aggregate_trade_indicator(query_lower)
+            and "trade balance" not in query_lower
+            and "current account" not in query_lower
+            and any(term in query_lower for term in ("import", "imports", "export", "exports"))
+            and any(term in query_lower for term in trade_flow_terms)
+        )
+        if has_trade_flow:
+            add("Comtrade")
+
+        property_terms = (
+            "residential property", "property prices", "real estate prices",
+            "real estate market", "house prices", "housing market index",
+            "property price index", "housing price index",
+        )
+        if any(term in query_lower for term in property_terms):
+            add("BIS")
+
+        forecast_terms = ("forecast", "forecasts", "projection", "projections")
+        macro_terms = (
+            "inflation", "gdp growth", "economic growth", "current account",
+            "fiscal deficit", "government debt", "commodity price index",
+            "trade volume", "world economic outlook",
+        )
+        macro_group_terms = (
+            "global", "world", "advanced economies", "emerging markets",
+            "developing economies", "g20", "emerging economies",
+        )
+        has_macro = any(term in query_lower for term in macro_terms)
+        if has_macro or any(term in query_lower for term in forecast_terms) or any(
+            term in query_lower for term in macro_group_terms
+        ):
+            add("IMF")
+
+        if country and CountryResolver.is_us(country):
+            add("FRED")
+        if country and CountryResolver.is_eu_member(country):
+            add("Eurostat")
+        if country and CountryResolver.is_non_oecd_major(country):
+            add("WorldBank")
+        if countries and any(CountryResolver.is_non_oecd_major(c) for c in countries):
+            add("WorldBank")
+
+        if re.search(r"\beu\b", query_lower) or re.search(r"\beuro(?:pe|pean|zone)\b", query_lower):
+            add("Eurostat")
+        if "oecd" in query_lower or "g7" in query_lower:
+            add("OECD")
+        if any(term in query_lower for term in ["developing countries", "emerging markets", "g20 countries"]):
+            add("WorldBank")
+        if any(term in query_lower for term in ["all provinces", "canadian provinces", "each province", "by province", "provincial data"]):
+            add("StatsCan")
+
+        return candidates
 
 
 # ==========================================================================
@@ -799,7 +619,7 @@ def detect_explicit_provider(query: str) -> Optional[str]:
 def correct_coingecko_misrouting(provider: str, query: str, indicators: list) -> str:
     """Compatibility function matching ProviderRouter.correct_coingecko_misrouting() signature."""
     corrected, _reason = _correct_coingecko(provider, query, indicators)
-    return corrected
+    return corrected or "NOT_AVAILABLE"
 
 
 def validate_routing(provider: str, original_query: str, intent: Any) -> Optional[str]:

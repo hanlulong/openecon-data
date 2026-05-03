@@ -66,6 +66,50 @@ class IndicatorResolutionTests(unittest.TestCase):
         select_mock.assert_awaited_once()
         self.assertEqual(select_mock.await_args.args[0], "number of households")
 
+    def test_new_path_skips_legacy_resolver_when_selector_has_no_decision(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(use_outcome_decision_stage=True),
+            statscan_provider=SimpleNamespace(
+                VECTOR_MAPPINGS={},
+                COORDINATE_PRODUCT_MAPPINGS={},
+            ),
+            _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
+            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["number of households"],
+            parameters={"country": "CA"},
+            clarificationNeeded=False,
+            originalQuery="number of households in Canada",
+        )
+
+        def legacy_resolver_should_not_run():
+            raise AssertionError("legacy resolver must not provide final authority on new path")
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code=None,
+                    source="no_decision",
+                )
+            ),
+        ):
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "STATSCAN",
+                    intent,
+                    dict(intent.parameters or {}),
+                    _get_indicator_resolver=legacy_resolver_should_not_run,
+                )
+            )
+
+        self.assertEqual(params.get("indicator"), "number of households")
+        self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
+
     def test_provider_lock_does_not_force_noisy_query_for_provider_code(self) -> None:
         svc = SimpleNamespace(
             _looks_like_provider_indicator_code=lambda provider, indicator: (

@@ -4359,7 +4359,7 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(intent)
         assert intent is not None
-        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
         self.assertEqual(intent.indicators, ["number employed"])
         self.assertEqual(intent.parameters.get("country"), "CA")
 
@@ -4884,7 +4884,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
         self.assertEqual(fetched_intent.parameters.get("__statscan_product_id"), "14100287")
 
-    def test_process_query_locks_statscan_for_canada_scoped_structural_route(self) -> None:
+    def test_process_query_does_not_lock_statscan_for_candidate_only_canada_route(self) -> None:
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["unemployment rate"],
@@ -4910,9 +4910,12 @@ class QueryServiceTests(unittest.TestCase):
         route_decision = RoutingDecision(
             provider="StatsCan",
             confidence=0.88,
-            match_type="country",
-            reasoning="Canada country match",
+            match_type="default",
+            reasoning="Canada coverage candidate",
             matched_pattern="country:CA",
+            candidate_providers=["StatsCan"],
+            final_authority=False,
+            decision_source="candidate_generation",
         )
         fetched = [sample_series_with(
             source="Statistics Canada",
@@ -4939,8 +4942,8 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.error)
         fetch_mock.assert_awaited_once()
         fetched_intent = fetch_mock.await_args.args[0]
-        self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
-        self.assertTrue(fetched_intent.parameters.get("__semantic_provider_locked"))
+        self.assertEqual(fetched_intent.apiProvider, "OECD")
+        self.assertFalse(fetched_intent.parameters.get("__semantic_provider_locked"))
 
     def test_process_query_persists_answer_members_after_direct_standard_success(self) -> None:
         self.service.settings.use_staged_state_commit = True
@@ -7933,7 +7936,7 @@ class QueryServiceTests(unittest.TestCase):
         provider = run(self.service._select_routed_provider(intent, "government debt in china"))  # pylint: disable=protected-access
         self.assertEqual(provider, "IMF")
 
-    def test_select_routed_provider_keeps_high_confidence_deterministic_match(self) -> None:
+    def test_select_routed_provider_does_not_lock_candidate_only_deterministic_match(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["gdp to debt ratio"],
@@ -7947,7 +7950,7 @@ class QueryServiceTests(unittest.TestCase):
                     provider="IMF",
                     confidence=0.90,
                     fallbacks=["WorldBank", "BIS"],
-                    reasoning="deterministic macro debt rule",
+                    reasoning="candidate-only macro debt evidence",
                     match_type="indicator",
                 )
 
@@ -7966,9 +7969,9 @@ class QueryServiceTests(unittest.TestCase):
         self.service.hybrid_router = None
 
         provider = run(self.service._select_routed_provider(intent, "gdp to debt ratio in china"))  # pylint: disable=protected-access
-        self.assertEqual(provider, "IMF")
+        self.assertEqual(provider, "BIS")
 
-    def test_select_routed_provider_uses_unified_router_baseline(self) -> None:
+    def test_select_routed_provider_keeps_llm_provider_for_candidate_only_router_baseline(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["gdp growth"],
@@ -7982,7 +7985,7 @@ class QueryServiceTests(unittest.TestCase):
                     provider="IMF",
                     confidence=0.9,
                     fallbacks=["WorldBank"],
-                    reasoning="unified baseline",
+                    reasoning="candidate-only unified baseline",
                     match_type="indicator",
                 )
 
@@ -7992,7 +7995,7 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch("backend.services.query.unified_route_provider", side_effect=AssertionError("legacy baseline should not run")):
             provider = run(self.service._select_routed_provider(intent, "gdp growth germany"))  # pylint: disable=protected-access
-        self.assertEqual(provider, "IMF")
+        self.assertEqual(provider, "WORLDBANK")
 
     def test_catalog_provider_reroute_no_longer_remaps_indicator_code(self) -> None:
         intent = ParsedIntent(

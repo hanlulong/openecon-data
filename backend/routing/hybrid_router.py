@@ -94,6 +94,8 @@ class HybridRouter:
             scores[normalized] = scores.get(normalized, 0.0) + value
 
         boost(baseline.provider, 100.0)
+        for idx, provider in enumerate(getattr(baseline, "candidate_providers", []) or []):
+            boost(provider, max(0.0, 55.0 - (idx * 5.0)))
         for idx, fb in enumerate(baseline.fallbacks):
             boost(fb, max(0.0, 60.0 - (idx * 7.0)))
 

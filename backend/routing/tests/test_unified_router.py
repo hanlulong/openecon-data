@@ -167,7 +167,7 @@ class TestExplicitProviderDetection:
         corrected, reason = _correct_coingecko(
             "CoinGecko", "government deficit forecast", ["fiscal deficit"]
         )
-        assert corrected == "IMF"
+        assert corrected == ""
         assert reason is not None
 
         corrected, reason = _correct_coingecko(
@@ -273,28 +273,35 @@ class TestUnifiedRouter:
         assert decision.provider == "WorldBank"
 
     def test_unilateral_goods_trade_routes_to_comtrade(self, router):
-        """Goods export/import flows without a partner still use Comtrade."""
+        """Unilateral goods flows are semantic provider choices, not structural routes."""
         decision = router.route("Japan semiconductor exports 2020-2023")
-        assert decision.provider == "Comtrade"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_us_trade_balance_no_partner_routes_to_fred(self, router):
-        """US trade balance without partner uses FRED."""
+        """US trade balance without partner does not force FRED without LLM evidence."""
         decision = router.route("US trade balance history")
-        assert decision.provider == "FRED"
+        assert decision.provider == "WorldBank"
+        assert "FRED" in decision.candidate_providers
+        assert decision.final_authority is False
 
     # ==========================================================================
     # Country-Based Routing Tests
     # ==========================================================================
 
     def test_us_query_routes_to_fred(self, router):
-        """US economic queries use FRED."""
+        """US scope is a coverage hint, not final provider authority."""
         decision = router.route("US GDP growth", country="US")
-        assert decision.provider == "FRED"
+        assert decision.provider == "WorldBank"
+        assert "FRED" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_canada_query_routes_to_statscan(self, router):
-        """Canadian queries use StatsCan."""
+        """Canadian scope is a coverage hint, not final provider authority."""
         decision = router.route("Canada unemployment rate")
-        assert decision.provider == "StatsCan"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_eu_country_routes_to_eurostat_or_catalog(self, router):
         """EU country queries use Eurostat (country routing) or catalog provider.
@@ -311,9 +318,10 @@ class TestUnifiedRouter:
         assert decision.provider == "WorldBank"
 
     def test_non_oecd_with_imf_indicator_routes_to_imf(self, router):
-        """Non-OECD with debt indicator uses IMF."""
+        """Debt wording alone cannot force IMF without LLM/evidence."""
         decision = router.route("China government debt", country="China", indicators=["government debt"])
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     # ==========================================================================
     # Exchange Rate Tests
@@ -363,73 +371,87 @@ class TestUnifiedRouter:
     # ==========================================================================
 
     def test_property_prices_route_to_bis(self, router):
-        """Property price queries use BIS."""
+        """Property price keywords do not force BIS without LLM/evidence."""
         decision = router.route("Property prices in Australia")
-        assert decision.provider == "BIS"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_house_prices_route_to_bis(self, router):
-        """House price queries use BIS."""
+        """House price keywords do not force BIS without LLM/evidence."""
         decision = router.route("House prices in Tokyo")
-        assert decision.provider == "BIS"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_real_estate_prices_route_to_bis(self, router):
-        """Real estate market price queries use BIS."""
+        """Real estate keywords do not force BIS without LLM/evidence."""
         decision = router.route("US residential property prices 2018-2024")
-        assert decision.provider == "BIS"
+        assert decision.provider == "WorldBank"
+        assert "FRED" in decision.candidate_providers
+        assert decision.final_authority is False
 
     # ==========================================================================
     # Fiscal/IMF Tests
     # ==========================================================================
 
     def test_government_debt_routes_to_imf(self, router):
-        """Government debt queries use IMF."""
+        """Government debt wording does not force IMF without LLM/evidence."""
         decision = router.route("Government debt to GDP ratio", indicators=["government debt"])
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_fiscal_deficit_routes_to_imf(self, router):
-        """Fiscal deficit queries use IMF."""
+        """Fiscal deficit wording does not force IMF without LLM/evidence."""
         decision = router.route("Fiscal deficit forecast")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_global_forecast_routes_to_imf(self, router):
-        """Global macro forecast queries use IMF."""
+        """Global macro forecast wording does not force IMF without LLM/evidence."""
         decision = router.route("Global inflation forecast 2024-2026")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_macro_group_queries_route_to_imf(self, router):
-        """Broad macro aggregate group queries use IMF."""
+        """Broad macro group wording does not force IMF without LLM/evidence."""
         decision = router.route("Emerging markets current account balance 2018-2023")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_global_commodity_price_index_routes_to_imf(self, router):
-        """Global commodity price index queries use IMF."""
+        """Commodity price wording does not force IMF without LLM/evidence."""
         decision = router.route("Global commodity price index 2019-2024")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_oil_price_routes_to_fred_via_catalog(self, router):
-        """Generic oil spot-price queries should prefer FRED crude-price series."""
+        """Generic oil price does not force FRED without LLM/evidence."""
         decision = router.route("oil price")
-        assert decision.provider == "FRED"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_brent_oil_price_routes_to_fred_via_catalog(self, router):
-        """Brent-specific oil price queries should route to FRED."""
+        """Brent oil price does not force FRED without LLM/evidence."""
         decision = router.route("Brent oil price")
-        assert decision.provider == "FRED"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_wti_oil_price_routes_to_fred_via_catalog(self, router):
-        """WTI-specific oil price queries should route to FRED."""
+        """WTI oil price does not force FRED without LLM/evidence."""
         decision = router.route("WTI oil price")
-        assert decision.provider == "FRED"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_budget_balance_routes_to_imf(self, router):
-        """Budget balance queries use IMF."""
+        """Budget balance wording does not force IMF without LLM/evidence."""
         decision = router.route("Government budget balance")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     def test_gdp_to_debt_ratio_routes_to_imf(self, router):
-        """Debt-to-GDP phrasing variants route to IMF (not BIS debt-service)."""
+        """Debt-to-GDP phrasing does not force IMF without LLM/evidence."""
         decision = router.route("GDP to debt ratio in China")
-        assert decision.provider == "IMF"
+        assert decision.provider == "WorldBank"
+        assert decision.final_authority is False
 
     # ==========================================================================
     # Development Indicator Tests
@@ -492,31 +514,41 @@ class TestUnifiedRouter:
         assert decision.provider == "Comtrade"
 
     def test_canada_trade_balance_routes_to_statscan(self, router):
-        """Canadian trade balance uses StatsCan."""
+        """Canadian trade balance only contributes StatsCan as coverage evidence."""
         decision = router.route("Canada trade balance")
-        assert decision.provider == "StatsCan"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_canada_exports_no_partner_routes_to_statscan(self, router):
-        """Canadian exports (no partner) uses StatsCan."""
+        """Canadian exports without partner do not force StatsCan."""
         decision = router.route("Canada total exports")
-        assert decision.provider == "StatsCan"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_canada_gdp_routes_to_statscan(self, router):
-        """Canadian GDP uses StatsCan (catalog-driven: StatsCan has GDP for CA)."""
+        """Canadian GDP does not force StatsCan without LLM/evidence."""
         decision = router.route("Canada GDP")
-        assert decision.provider == "StatsCan"
-        assert decision.match_type == "catalog"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.match_type == "default"
+        assert decision.final_authority is False
 
     def test_canada_cpi_monthly_routes_to_statscan(self, router):
-        """Canadian CPI uses StatsCan (catalog-driven: StatsCan has inflation for CA)."""
+        """Canadian CPI does not force StatsCan without LLM/evidence."""
         decision = router.route("Canada CPI monthly")
-        assert decision.provider == "StatsCan"
-        assert decision.match_type == "catalog"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.match_type == "default"
+        assert decision.final_authority is False
 
     def test_canada_inflation_routes_to_statscan(self, router):
-        """Canadian inflation rate uses StatsCan."""
+        """Canadian inflation does not force StatsCan without LLM/evidence."""
         decision = router.route("Canada inflation rate")
-        assert decision.provider == "StatsCan"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_canada_gdp_growth_routes_to_canada_capable_provider(self, router):
         """Canada GDP growth may resolve to StatsCan or a global macro provider."""
@@ -524,9 +556,11 @@ class TestUnifiedRouter:
         assert decision.provider in ("StatsCan", "WorldBank", "IMF")
 
     def test_canada_population_routes_to_statscan(self, router):
-        """Canadian population uses StatsCan (catalog: StatsCan has population for CA)."""
+        """Canadian population does not force StatsCan without LLM/evidence."""
         decision = router.route("Canada population")
-        assert decision.provider == "StatsCan"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_canada_life_expectancy_routes_to_worldbank(self, router):
         """Canada life expectancy: StatsCan not available, uses WorldBank."""
@@ -534,9 +568,11 @@ class TestUnifiedRouter:
         assert decision.provider == "WorldBank"
 
     def test_canada_residential_property_routes_to_bis(self, router):
-        """Canadian residential property market queries use BIS."""
+        """Canadian property keywords do not force BIS without LLM/evidence."""
         decision = router.route("Canada residential property prices 2015-2024")
-        assert decision.provider == "BIS"
+        assert decision.provider == "WorldBank"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.final_authority is False
 
     def test_goods_exports_without_partner_route_to_valid_provider(self, router):
         """Goods export flow queries without explicit partner route to a trade-capable provider.
@@ -571,6 +607,46 @@ class TestUnifiedRouter:
         """
         decision = router.route("Italy government debt 2015-2023")
         assert decision.provider in ("Eurostat", "IMF", "WorldBank")
+
+    def test_broad_semantic_keywords_defer_to_llm_provider(self, router):
+        """Property/macro keywords must not override the LLM provider choice."""
+        cases = [
+            ("Property prices in Australia", "BIS"),
+            ("Fiscal deficit forecast", "IMF"),
+            ("oil price", "FRED"),
+            ("Canada unemployment rate", "StatsCan"),
+        ]
+
+        for query, llm_provider in cases:
+            decision = router.route(query, llm_provider=llm_provider)
+            assert decision.provider == llm_provider
+            assert decision.match_type == "llm"
+            assert decision.semantic_authority == "llm_adjudication"
+            assert decision.final_authority is True
+
+    def test_country_scope_is_candidate_metadata_not_final_authority(self, router):
+        """Country coverage hints must not mutate the final provider by themselves."""
+        decision = router.route(
+            "number of households in Canada",
+            country="CA",
+            llm_provider="WorldBank",
+        )
+
+        assert decision.provider == "WorldBank"
+        assert decision.match_type == "llm"
+        assert "StatsCan" in decision.candidate_providers
+        assert decision.semantic_authority == "llm_adjudication"
+        assert decision.can_override_llm_provider is False
+
+    def test_explicit_and_mechanical_routes_can_override_llm_provider(self, router):
+        """Only exact user/provider structure can override a weaker LLM provider."""
+        explicit = router.route("GDP from FRED", llm_provider="WorldBank")
+        assert explicit.provider == "FRED"
+        assert explicit.can_override_llm_provider is True
+
+        hs = router.route("China imports of HS 8542", llm_provider="WorldBank")
+        assert hs.provider == "Comtrade"
+        assert hs.can_override_llm_provider is True
 
     # ==========================================================================
     # Fallback Tests
@@ -610,9 +686,10 @@ class TestRoutingDecisionConfidence:
         assert decision.confidence >= 0.5
 
     def test_keyword_match_medium_confidence(self, router):
-        """Keyword matches have medium-high confidence."""
+        """Keyword-only matches remain low-confidence defaults."""
         decision = router.route("Life expectancy trends")
-        assert decision.confidence >= 0.7
+        assert decision.confidence <= 0.6
+        assert decision.final_authority is False
 
     def test_default_provider_low_confidence(self, router):
         """Default provider has lower confidence."""
@@ -633,8 +710,8 @@ class TestProductionQueries:
 
     # Economic indicators
     ECONOMIC_QUERIES = [
-        ("US GDP growth last 5 years", "FRED"),
-        ("Germany unemployment rate", "Eurostat"),
+        ("US GDP growth last 5 years", "WorldBank"),
+        ("Germany unemployment rate", "WorldBank"),
         ("Japan inflation rate", "WorldBank"),  # Catalog: inflation → WorldBank; OECD non-EU defaults to WB
         ("China GDP growth", "WorldBank"),
         ("Brazil inflation rate", "WorldBank"),
@@ -646,7 +723,7 @@ class TestProductionQueries:
         ("Germany imports from France", "Comtrade"),
         ("Trade deficit between US and Mexico", "Comtrade"),
         ("Exports as % of GDP for Germany", "WorldBank"),
-        ("US trade balance history", "FRED"),
+        ("US trade balance history", "WorldBank"),
         # Aggregate trade indicators (% of GDP) must NOT route to Comtrade
         ("Import share of GDP in China and US", "WorldBank"),
         ("Imports of goods and services as % of GDP for India and Indonesia", "WorldBank"),
@@ -667,8 +744,8 @@ class TestProductionQueries:
     # without llm_provider, they fall through to catalog/country/default.
     FINANCIAL_QUERIES = [
         ("USD to EUR exchange rate", "ExchangeRate"),
-        ("Government debt to GDP ratio", "IMF"),
-        ("House prices in Australia", "BIS"),
+        ("Government debt to GDP ratio", "WorldBank"),
+        ("House prices in Australia", "WorldBank"),
     ]
 
     @pytest.mark.parametrize("query,expected_provider", ECONOMIC_QUERIES)
@@ -732,7 +809,7 @@ class TestHSCodeRouting:
         """HS code routing should have match_type='indicator'."""
         decision = router.route("China imports of HS 8542")
         assert decision.provider == "Comtrade"
-        assert decision.match_type == "indicator"
+        assert decision.match_type == "structural"
 
     def test_hs_code_with_hyphen(self, router):
         """HS codes with hyphen separator are recognized."""

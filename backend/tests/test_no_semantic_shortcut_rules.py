@@ -10,6 +10,11 @@ from backend.services.indicator_resolution import (
     apply_concept_provider_override,
 )
 from backend.services.query import QueryService
+from backend.tests.semantic_shortcut_audit import (
+    REVIEWED_PHASE0_FINDINGS,
+    iter_scan_paths,
+    scan_semantic_shortcuts,
+)
 
 
 RUNTIME_FILES = [
@@ -117,3 +122,85 @@ def test_runtime_matching_files_do_not_contain_forced_catalog_or_translation_mar
                 offenders.append(f"{path}:{marker}")
 
     assert offenders == []
+
+
+def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> None:
+    scanned = {path.as_posix() for path in iter_scan_paths()}
+
+    required = {
+        "backend/routing/unified_router.py",
+        "backend/routing/hybrid_router.py",
+        "backend/routing/semantic_provider_router.py",
+        "backend/services/indicator_resolution.py",
+        "backend/services/indicator_resolver.py",
+        "backend/services/indicator_selector.py",
+        "backend/services/indicator_translator.py",
+        "backend/services/query.py",
+        "backend/services/query_helpers.py",
+        "backend/services/query_parsing.py",
+        "backend/services/relevance_scorer.py",
+        "backend/services/statscan_metadata.py",
+        "backend/providers/statscan.py",
+        "backend/providers/oecd.py",
+        "backend/providers/eurostat.py",
+        "backend/providers/imf.py",
+        "backend/providers/bis.py",
+        "backend/providers/fred.py",
+    }
+
+    assert required <= scanned
+
+
+def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
+    findings = scan_semantic_shortcuts()
+
+    assert findings, "expanded scanner should report the reviewed Phase 0 rule surfaces"
+    assert all(finding.classification for finding in findings)
+    assert all(finding.rationale for finding in findings)
+
+    found_ids = {finding.pattern_id for finding in findings}
+    assert {
+        "unified_router_provider_candidate_metadata",
+        "legacy_resolver_catalog_translator_authority",
+        "universal_indicator_translator_map",
+        "statscan_semantic_product_maps",
+    } <= found_ids
+
+
+def test_no_unreviewed_banned_semantic_final_authority_findings() -> None:
+    findings = scan_semantic_shortcuts()
+
+    unreviewed = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}"
+        for finding in findings
+        if finding.classification == "banned_semantic_final_authority"
+        and finding.review_key not in REVIEWED_PHASE0_FINDINGS
+    ]
+
+    assert unreviewed == []
+
+
+def test_unified_router_has_no_banned_provider_final_authority_findings() -> None:
+    findings = scan_semantic_shortcuts()
+
+    unified_banned = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.path.as_posix() == "backend/routing/unified_router.py"
+        and finding.classification == "banned_semantic_final_authority"
+    ]
+
+    assert unified_banned == []
+
+
+def test_indicator_selector_has_no_top_candidate_final_authority_fallback() -> None:
+    findings = scan_semantic_shortcuts()
+
+    selector_banned = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.path.as_posix() == "backend/services/indicator_selector.py"
+        and finding.pattern_id == "indicator_selector_top_candidate_fallback"
+    ]
+
+    assert selector_banned == []

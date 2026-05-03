@@ -167,10 +167,6 @@ class IndicatorSelector:
         if not candidates:
             return SelectionResult(code=None, source="no_candidates")
 
-        if len(candidates) == 1:
-            code = self._normalize_code(candidates[0][0], provider)
-            return SelectionResult(code=code, name=candidates[0][1], source="single_match")
-
         # Step 1.5: If top candidates have very similar scores, retrieval can't
         # confidently distinguish them. Tell the LLM to ASK the user instead of
         # guessing. This reduces overconfident wrong picks.
@@ -220,8 +216,14 @@ class IndicatorSelector:
         if self._is_llm_rejection(result):
             return result
 
-        fallback_code = self._normalize_code(candidates[0][0], provider)
-        return result or SelectionResult(code=fallback_code, name=candidates[0][1], source="top_candidate")
+        if result and (result.code or result.needs_user_choice):
+            return result
+
+        logger.info(
+            "🔵 IndicatorSelector made no final selection for '%s'; refusing top-candidate fallback",
+            query[:80],
+        )
+        return SelectionResult(code=None, source="no_decision")
 
     @staticmethod
     def _scores_are_ambiguous(scores: List[float]) -> bool:

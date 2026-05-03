@@ -560,7 +560,8 @@ class QueryService:
         params = intent.parameters or {}
         raw_countries = params.get("countries")
         countries = raw_countries if isinstance(raw_countries, list) else []
-        routed_provider = normalize_provider_name(intent.apiProvider or "")
+        llm_provider = normalize_provider_name(intent.apiProvider or "")
+        routed_provider = llm_provider
         deterministic_confidence = 0.0
         deterministic_match_type = "legacy"
         deterministic_decision = None
@@ -572,19 +573,25 @@ class QueryService:
                 countries=countries,
                 llm_provider=intent.apiProvider,
             )
-            routed_provider = normalize_provider_name(deterministic_decision.provider)
+            deterministic_provider = normalize_provider_name(deterministic_decision.provider)
             deterministic_confidence = float(deterministic_decision.confidence or 0.0)
             deterministic_match_type = str(deterministic_decision.match_type or "deterministic").lower()
             logger.info(
                 "🧭 UnifiedRouter baseline: %s (conf=%.2f, type=%s)",
-                routed_provider,
+                deterministic_provider,
                 deterministic_decision.confidence,
                 deterministic_decision.match_type,
             )
             # Short-circuit: router can still report unsupported structural cases.
-            if routed_provider == "NOT_AVAILABLE":
+            if deterministic_provider == "NOT_AVAILABLE":
                 intent.apiProvider = "not_available"
                 return "NOT_AVAILABLE"
+            if getattr(deterministic_decision, "can_override_llm_provider", False):
+                routed_provider = deterministic_provider
+            elif getattr(deterministic_decision, "decision_source", "") == "llm_provider":
+                routed_provider = deterministic_provider
+            elif llm_provider in ("", "NONE", "UNKNOWN"):
+                routed_provider = deterministic_provider
         except Exception as exc:
             logger.warning(
                 "UnifiedRouter baseline failed, falling back to legacy deterministic router: %s",
@@ -597,6 +604,9 @@ class QueryService:
             query,
             intent.indicators,
         )
+        if routed_provider == "NOT_AVAILABLE":
+            intent.apiProvider = "not_available"
+            return "NOT_AVAILABLE"
         explicit_provider_requested = normalize_provider_name(
             self._detect_explicit_provider(query or intent.originalQuery or "") or ""
         )
@@ -650,8 +660,11 @@ class QueryService:
                     _HIGH_CONF_TYPES = {"explicit", "us_only", "indicator"}
                     _STRUCTURAL_TYPES = {"country", "region"}
                     deterministic_locked = (
-                        (deterministic_confidence >= 0.88 and deterministic_match_type in _HIGH_CONF_TYPES)
-                        or (deterministic_confidence >= 0.70 and deterministic_match_type in _STRUCTURAL_TYPES)
+                        getattr(deterministic_decision, "can_override_llm_provider", False)
+                        and (
+                            (deterministic_confidence >= 0.88 and deterministic_match_type in _HIGH_CONF_TYPES)
+                            or (deterministic_confidence >= 0.70 and deterministic_match_type in _STRUCTURAL_TYPES)
+                        )
                     )
                     semantic_materially_stronger = semantic_confidence >= (deterministic_confidence + 0.10)
                     if deterministic_locked and not semantic_materially_stronger:
@@ -3965,7 +3978,11 @@ class QueryService:
                                 country=_delta_intent.parameters.get("country"),
                                 countries=_delta_intent.parameters.get("countries"),
                             )
-                            if _delta_routing and _delta_routing.provider:
+                            if (
+                                _delta_routing
+                                and _delta_routing.provider
+                                and getattr(_delta_routing, "can_override_llm_provider", False)
+                            ):
                                 _delta_intent.apiProvider = normalize_provider_name(_delta_routing.provider)
                         except Exception as _route_err:
                             logger.debug("Delta routing failed: %s", _route_err)
@@ -4349,25 +4366,36 @@ class QueryService:
                     if router_decision and router_decision.provider:
                         routed = normalize_provider_name(router_decision.provider)
                         llm_prov = normalize_provider_name(intent.apiProvider or "")
-                        if routed != llm_prov:
+                        may_override_llm = bool(
+                            getattr(router_decision, "can_override_llm_provider", False)
+                        )
+                        llm_missing = llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", "")
+                        if routed != llm_prov and may_override_llm:
                             logger.info(
-                                "🎯 UnifiedRouter override: LLM=%s → Router=%s (type=%s, conf=%.2f)",
+                                "🎯 UnifiedRouter structural override: LLM=%s → Router=%s (type=%s, conf=%.2f)",
                                 intent.apiProvider, routed, router_decision.match_type, router_decision.confidence,
                             )
                             intent.apiProvider = routed
-                        # Fix NOT_AVAILABLE — LLM says not available but router found a provider
-                        if llm_prov in ("NOT_AVAILABLE", "NONE", "UNKNOWN", ""):
+                        elif routed != llm_prov and not may_override_llm:
+                            logger.info(
+                                "🧭 UnifiedRouter candidate only: keeping LLM provider=%s; router=%s source=%s candidates=%s",
+                                intent.apiProvider,
+                                routed,
+                                getattr(router_decision, "decision_source", router_decision.match_type),
+                                getattr(router_decision, "candidate_providers", []),
+                            )
+                        # Fix NOT_AVAILABLE only when the router has explicit or
+                        # mechanical final authority. Candidate/coverage hints
+                        # must not become a semantic provider override.
+                        if llm_missing and may_override_llm:
                             intent.apiProvider = routed
                             logger.info("🔧 Fixed NOT_AVAILABLE: router found %s", routed)
-                        # Country-specific provider guard: when the structural
-                        # router selects StatsCan for a Canada-scoped country
-                        # match, keep the execution pinned to StatsCan
-                        # so downstream ambiguity stages do not drift to OECD or
-                        # other broad providers for the same national-statistics
-                        # request.
+                        # Provider locks are allowed only for explicit/mechanical
+                        # final authority. Country/region coverage candidates
+                        # are intentionally non-authoritative.
                         if (
                             routed == "STATSCAN"
-                            and router_decision.match_type == "country"
+                            and may_override_llm
                         ):
                             if intent.parameters is None:
                                 intent.parameters = {}
