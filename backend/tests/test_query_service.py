@@ -78,6 +78,9 @@ class QueryServiceTests(unittest.TestCase):
         self.service.settings.use_outcome_decision_stage = False
         self.service.settings.use_post_fetch_semantic_judge = False
         self.service.settings.use_staged_state_commit = False
+        self.service.settings.allow_legacy_indicator_resolver_final_authority = False
+        self.service.settings.allow_legacy_provider_map_final_authority = False
+        self.service.settings.allow_legacy_catalog_fallback_final_authority = False
 
     def test_process_query_returns_data(self) -> None:
         intent = ParsedIntent(
@@ -252,6 +255,16 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 new=AsyncMock(
+                     return_value=SelectionResult(
+                         code="DCOILBRENTEU",
+                         name="Crude Oil Prices: Brent - Europe",
+                         source="llm_pick",
+                     )
+                 ),
+             ), \
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
@@ -527,17 +540,16 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="US 10-year government bond yield from 2000 to 2024",
         )
 
-        class _Resolved:
-            code = "DGS10"
-            confidence = 0.95
-            source = "catalog"
-
-        class _Resolver:
-            def resolve(self, query, provider=None, **kwargs):
-                return _Resolved()
-
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
-             patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code="DGS10",
+                    name="Market Yield on U.S. Treasury Securities at 10-Year Constant Maturity",
+                    source="llm_pick",
+                )
+            ),
+        ), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
@@ -621,7 +633,9 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertNotEqual(params.get("indicator"), "PPPI_IX")
-        self.assertEqual(params.get("indicator"), "PPPI_ISIC31_IX")
+        self.assertNotEqual(params.get("indicator"), "PPPI_ISIC31_IX")
+        self.assertEqual(params.get("indicator"), "Producer Price Index")
+        self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
     def test_removed_imf_ppi_fast_path_symbol_is_absent(self) -> None:
         import backend.services.indicator_resolution as indicator_resolution
@@ -3623,6 +3637,7 @@ class QueryServiceTests(unittest.TestCase):
                 "indicator": "17100024",
                 "__statscan_product_id": "14100287",
                 "__semantic_indicator_label": "employment rate",
+                "__semantic_authority": "post_fetch_semantic_judge",
             },
             clarificationNeeded=False,
             needsDecomposition=True,
@@ -3686,6 +3701,7 @@ class QueryServiceTests(unittest.TestCase):
                 "indicator": "14100330",
                 "__statscan_product_id": "14100330",
                 "__semantic_indicator_label": "employment rate",
+                "__semantic_authority": "post_fetch_semantic_judge",
             },
             clarificationNeeded=False,
             needsDecomposition=True,
@@ -4046,7 +4062,13 @@ class QueryServiceTests(unittest.TestCase):
         )
         assert execution_plan is not None
 
-        resolved_params = {"country": "US", "seriesId": "GDP", "indicator": "GDP"}
+        resolved_params = {
+            "country": "US",
+            "seriesId": "GDP",
+            "indicator": "GDP",
+            "__semantic_authority": "llm_adjudication",
+            "__decision_source": "llm_pick",
+        }
 
         with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
@@ -4084,8 +4106,28 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_apply_concept_provider_override", return_value=("EUROSTAT", dict(intent.parameters or {}))), \
-             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
-             patch.object(self.service, "_apply_catalog_availability_override", return_value=("EUROSTAT", dict(intent.parameters or {}))), \
+             patch.object(
+                 self.service,
+                 "_resolve_indicator_for_fetch",
+                 new_callable=AsyncMock,
+                 return_value={
+                     **dict(intent.parameters or {}),
+                     "__semantic_authority": "llm_adjudication",
+                     "__decision_source": "llm_pick",
+                 },
+             ), \
+             patch.object(
+                 self.service,
+                 "_apply_catalog_availability_override",
+                 return_value=(
+                     "EUROSTAT",
+                     {
+                         **dict(intent.parameters or {}),
+                         "__semantic_authority": "llm_adjudication",
+                         "__decision_source": "llm_pick",
+                     },
+                 ),
+             ), \
              patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
              patch.object(self.service.eurostat_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
@@ -4122,8 +4164,32 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_apply_concept_provider_override", return_value=("FRED", dict(intent.parameters or {}))), \
-             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value={"country": "US", "seriesId": "GDP", "indicator": "GDP"}), \
-             patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", {"country": "US", "seriesId": "GDP", "indicator": "GDP"})), \
+             patch.object(
+                 self.service,
+                 "_resolve_indicator_for_fetch",
+                 new_callable=AsyncMock,
+                 return_value={
+                     "country": "US",
+                     "seriesId": "GDP",
+                     "indicator": "GDP",
+                     "__semantic_authority": "llm_adjudication",
+                     "__decision_source": "llm_pick",
+                 },
+             ), \
+             patch.object(
+                 self.service,
+                 "_apply_catalog_availability_override",
+                 return_value=(
+                     "FRED",
+                     {
+                         "country": "US",
+                         "seriesId": "GDP",
+                         "indicator": "GDP",
+                         "__semantic_authority": "llm_adjudication",
+                         "__decision_source": "llm_pick",
+                     },
+                 ),
+             ), \
              patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
              patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
@@ -7465,11 +7531,14 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "imports share of gdp")
 
     def test_fetch_data_prefers_resolver_over_fuzzy_translator(self) -> None:
-        """Resolver (catalog/FTS5) runs first and wins over fuzzy translator.
+        """The legacy resolver compatibility hatch preserves old resolver behavior.
 
-        When the resolver returns a high-confidence, plausible result,
-        it is used directly — the fuzzy translator is not consulted.
+        In the default no-shortcut path, selector no-decision must not fall
+        through to catalog/translator final authority. This test locks the
+        rollback behavior behind explicit compatibility flags only.
         """
+        self.service.settings.allow_legacy_indicator_resolver_final_authority = True
+        self.service.settings.allow_legacy_provider_map_final_authority = True
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["GDP"],
@@ -7505,6 +7574,8 @@ class QueryServiceTests(unittest.TestCase):
         )
 
     def test_fetch_data_rejects_implausible_imf_selector_pick_and_uses_resolver(self) -> None:
+        self.service.settings.allow_legacy_indicator_resolver_final_authority = True
+        self.service.settings.allow_legacy_provider_map_final_authority = True
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=[
@@ -7711,6 +7782,7 @@ class QueryServiceTests(unittest.TestCase):
                 "__statscan_product_id": "14100287",
                 "__statscan_decomposition_axis": "Age group",
                 "__semantic_indicator_label": "employment rate",
+                "__semantic_authority": "post_fetch_semantic_judge",
                 "startDate": "2006-01-01",
                 "endDate": "2026-03-01",
             },
@@ -7759,6 +7831,7 @@ class QueryServiceTests(unittest.TestCase):
                 "__statscan_product_id": "14100330",
                 "__statscan_decomposition_axis": "Age group",
                 "__semantic_indicator_label": "employment rate",
+                "__semantic_authority": "post_fetch_semantic_judge",
                 "startDate": "2006-01-01",
                 "endDate": "2026-03-01",
             },
@@ -7812,6 +7885,7 @@ class QueryServiceTests(unittest.TestCase):
                 "__dimensions": {"Geography": "Ontario"},
                 "__statscan_product_id": "14100330",
                 "__semantic_indicator_label": "employment rate",
+                "__semantic_authority": "post_fetch_semantic_judge",
             },
             clarificationNeeded=False,
             originalQuery="Show only Ontario",
@@ -8646,10 +8720,7 @@ class QueryServiceTests(unittest.TestCase):
         # Should find real_effective_exchange_rate or similar from catalog
         self.assertIsNotNone(concept)
 
-    def test_promoted_path_fallback_skips_catalog_concept_code_mapping(self) -> None:
-        self.service.settings.use_outcome_decision_stage = True
-        self.service.settings.use_post_fetch_semantic_judge = True
-        self.service.settings.use_staged_state_commit = True
+    def test_default_path_fallback_skips_catalog_concept_code_mapping(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["gdp growth"],
@@ -8685,7 +8756,7 @@ class QueryServiceTests(unittest.TestCase):
         with patch.object(
             self.service,
             "_resolve_concept_for_fallback",
-            side_effect=AssertionError("promoted path must not use catalog concept fallback"),
+            side_effect=AssertionError("default path must not use catalog concept fallback"),
         ), patch.object(
             self.service,
             "_resolve_indicator_for_fallback_provider",

@@ -3509,20 +3509,16 @@ class QueryService:
             raise primary_error
 
         # Resolve the concept name for cross-provider fallback only on the
-        # legacy path.  On the promoted semantic path, catalog concepts are
+        # legacy path.  On the default no-shortcut path, catalog concepts are
         # candidate evidence at most; final fallback provider codes must be
         # chosen by the provider's own retrieval + LLM adjudication flow.
-        if (
-            bool(getattr(self.settings, "use_outcome_decision_stage", False))
-            and self._use_post_fetch_semantic_judge()
-            and self._use_staged_state_commit()
-        ):
+        if bool(getattr(self.settings, "allow_legacy_catalog_fallback_final_authority", False)):
+            concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
+        else:
             concept_name = None
             logger.info(
-                "🔄 Promoted semantic path: cross-provider fallback uses semantic query, not catalog code mapping"
+                "🔄 Cross-provider fallback uses semantic query, not catalog code mapping"
             )
-        else:
-            concept_name = self._resolve_concept_for_fallback(intent, primary_provider)
 
         # Use semantic indicator query (or original query) for smarter fallbacks.
         # This is the human-readable phrase, never a provider-specific code.

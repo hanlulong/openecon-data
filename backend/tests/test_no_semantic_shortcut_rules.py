@@ -224,13 +224,9 @@ def test_optional_router_modes_have_no_legacy_disabled_bypass_findings() -> None
     assert legacy_disabled == []
 
 
-def test_promoted_path_blocks_provider_internal_map_dispatch_without_authority() -> None:
+def test_default_path_blocks_provider_internal_map_dispatch_without_authority() -> None:
     svc = SimpleNamespace(
-        settings=SimpleNamespace(
-            use_outcome_decision_stage=True,
-            use_post_fetch_semantic_judge=True,
-            use_staged_state_commit=True,
-        ),
+        settings=SimpleNamespace(),
         fred_provider=SimpleNamespace(fetch_series=lambda _params: None),
     )
     intent = ParsedIntent(
@@ -250,6 +246,34 @@ def test_promoted_path_blocks_provider_internal_map_dispatch_without_authority()
 
     with pytest.raises(DataNotAvailableError, match="blocked provider-internal map dispatch"):
         asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
+
+
+def test_provider_internal_map_dispatch_legacy_escape_hatch_is_explicit() -> None:
+    async def _fetch_series(params: dict) -> dict:
+        return {"indicator": params["indicator"]}
+
+    svc = SimpleNamespace(
+        settings=SimpleNamespace(allow_legacy_provider_map_final_authority=True),
+        fred_provider=SimpleNamespace(fetch_series=_fetch_series),
+    )
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["mortgage rate"],
+        parameters={"indicator": "mortgage rate"},
+        clarificationNeeded=False,
+        originalQuery="mortgage rate in the US",
+    )
+    plan = ExecutionPlan(
+        provider="FRED",
+        candidate_id="FRED:MORTGAGE_RATE",
+        fetch_strategy="provider_dispatch",
+        params={"indicator": "mortgage rate"},
+        provider_request={"series_id": "mortgage rate"},
+    )
+
+    result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
+
+    assert result == [{"indicator": "mortgage rate"}]
 
 
 def test_promoted_path_allows_exact_provider_code_dispatch_as_mechanical_authority() -> None:

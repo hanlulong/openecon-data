@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.config import Settings
 from backend.services import llm as llm_module
 
@@ -27,3 +29,33 @@ def test_create_llm_provider_uses_openrouter_defaults(monkeypatch):
 
     assert isinstance(provider, llm_module.OpenRouterProvider)
     assert provider.model == "openai/gpt-4o-mini"
+
+
+def test_no_shortcut_legacy_escape_hatches_default_off():
+    settings = Settings(
+        _env_file=None,
+        JWT_SECRET="test-secret",
+        OPENROUTER_API_KEY="test-openrouter-key",
+    )
+
+    assert settings.allow_legacy_indicator_resolver_final_authority is False
+    assert settings.allow_legacy_provider_map_final_authority is False
+    assert settings.allow_legacy_catalog_fallback_final_authority is False
+
+
+def test_env_example_keeps_rule_shortcut_rollback_flags_off():
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    values = {}
+    for raw_line in env_example.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+
+    assert values["USE_HYBRID_ROUTER"] == "false"
+    assert values["USE_SEMANTIC_PROVIDER_ROUTER"] == "false"
+    assert values["USE_LITELLM_ROUTER_FALLBACK"] == "false"
+    assert values["ALLOW_LEGACY_INDICATOR_RESOLVER_FINAL_AUTHORITY"] == "false"
+    assert values["ALLOW_LEGACY_PROVIDER_MAP_FINAL_AUTHORITY"] == "false"
+    assert values["ALLOW_LEGACY_CATALOG_FALLBACK_FINAL_AUTHORITY"] == "false"

@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 def _requires_llm_indicator_authority(svc: Any) -> bool:
     """Return whether legacy resolver shortcuts are disabled as final authority."""
     settings = getattr(svc, "settings", None)
-    return bool(getattr(settings, "use_outcome_decision_stage", False))
+    return not bool(
+        getattr(settings, "allow_legacy_indicator_resolver_final_authority", False)
+    )
 
 # Pre-compiled regex patterns used by this module
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
@@ -1824,7 +1826,14 @@ async def resolve_indicator_for_fetch(
 
     # Apply best result or fall back to raw query
     if accepted_resolved and resolved:
-        params = _apply_indicator_with_semantic_label(resolved.code)
+        authority_markers = {}
+        if provider and looks_like_exact_provider_title_match(exact_title_query, provider):
+            authority_markers = {
+                "__semantic_authority": "exact_user_input",
+                "__decision_source": "exact_title",
+                "__exact_indicator_title_match": True,
+            }
+        params = _apply_indicator_with_semantic_label(resolved.code, **authority_markers)
         if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
             logger.info(
                 "🔎 Collapsing World Bank multi-indicator intent to resolved indicator '%s' after semantic override",
