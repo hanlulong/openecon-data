@@ -36,19 +36,8 @@ class _Lookup:
         return self.mapping.get(normalized, [])
 
 
-def test_imf_resolve_indicator_uses_local_catalog_variants_when_metadata_search_is_empty() -> None:
+def test_imf_resolve_indicator_does_not_finalize_from_local_catalog_variants() -> None:
     query = "US Current Account Services Credit Balance of Payments Goods and Services Royalties and License Fees from IMF"
-
-    class _Metadata:
-        async def discover_indicator(self, provider: str, indicator_name: str, search_results):
-            self.provider = provider
-            self.indicator_name = indicator_name
-            self.search_results = search_results
-            return {
-                "code": search_results[0]["code"],
-                "name": search_results[0]["name"],
-                "confidence": 0.92,
-            }
 
     lookup = _Lookup(
         {
@@ -62,20 +51,18 @@ def test_imf_resolve_indicator_uses_local_catalog_variants_when_metadata_search_
         }
     )
 
-    metadata = _Metadata()
-    provider = IMFProvider(metadata_search_service=metadata)
+    provider = IMFProvider(metadata_search_service=None)
 
     with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
-        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        try:
+            run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected local catalog candidates to require metadata/LLM adjudication")
 
-    assert code == "BXSRL_USD"
-    assert label is not None
-    assert metadata.provider == "IMF"
-    assert metadata.indicator_name == query
-    assert metadata.search_results[0]["code"] == "BXSRL_USD"
 
-
-def test_imf_resolve_indicator_uses_local_catalog_without_metadata_service() -> None:
+def test_imf_resolve_indicator_fails_closed_without_metadata_service() -> None:
     query = "Germany Employment Employment Rate Percent Labor Markets Mining and quarrying from IMF"
     provider = IMFProvider(metadata_search_service=None)
 
@@ -92,24 +79,26 @@ def test_imf_resolve_indicator_uses_local_catalog_without_metadata_service() -> 
     )
 
     with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
-        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        try:
+            run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected local catalog candidates to require metadata adjudication")
 
-    assert code == "LER_ISIC31_C_PT"
-    assert label is not None
-    assert "employment" in label.lower()
 
-
-def test_imf_resolve_indicator_keeps_generic_queries_on_translator_path() -> None:
+def test_imf_resolve_indicator_rejects_generic_query_without_metadata() -> None:
     provider = IMFProvider(metadata_search_service=None)
 
-    code, label = run(provider._resolve_indicator_code("GDP growth rate"))  # pylint: disable=protected-access
+    try:
+        run(provider._resolve_indicator_code("GDP growth rate"))  # pylint: disable=protected-access
+    except DataNotAvailableError:
+        pass
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected generic IMF phrases to fail without metadata adjudication")
 
-    assert code == "NGDP_RPCH"
-    assert label is not None
-    assert "gdp" in label.lower()
 
-
-def test_imf_local_catalog_prefers_real_variant_for_real_query() -> None:
+def test_imf_local_catalog_real_variant_requires_metadata_adjudication() -> None:
     query = "Germany Real Gross Value Added Miscellaneous machinery and equipment manufacturing from IMF"
     provider = IMFProvider(metadata_search_service=None)
 
@@ -131,14 +120,15 @@ def test_imf_local_catalog_prefers_real_variant_for_real_query() -> None:
     )
 
     with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
-        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        try:
+            run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected local catalog ranking to require metadata adjudication")
 
-    assert code == "NGDPVA_R_ISIC4_C28_XDC"
-    assert label is not None
-    assert "real" in label.lower()
 
-
-def test_imf_local_catalog_keeps_earlier_candidate_when_no_stronger_signal_exists() -> None:
+def test_imf_local_catalog_ordering_requires_metadata_adjudication() -> None:
     query = "US Current Account Services Credit Balance of Payments Goods and Services Royalties and License Fees from IMF"
     provider = IMFProvider(metadata_search_service=None)
 
@@ -160,13 +150,15 @@ def test_imf_local_catalog_keeps_earlier_candidate_when_no_stronger_signal_exist
     )
 
     with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
-        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        try:
+            run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected local catalog ordering to require metadata adjudication")
 
-    assert code == "BXSRL_USD"
-    assert label is not None
 
-
-def test_imf_local_catalog_penalizes_wrong_country_prefixed_candidates() -> None:
+def test_imf_local_catalog_country_prefixed_candidates_require_metadata() -> None:
     query = "US Current Account Services Balance of Payments Goods and Services Insurance and pension services from IMF"
     provider = IMFProvider(metadata_search_service=None)
 
@@ -188,10 +180,12 @@ def test_imf_local_catalog_penalizes_wrong_country_prefixed_candidates() -> None
     )
 
     with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
-        code, label = run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
-
-    assert code == "BMS_BP6_USD"
-    assert label is not None
+        try:
+            run(provider._resolve_indicator_code(query))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected country-prefixed local candidates to require metadata adjudication")
 
 
 def test_imf_execution_family_classifier_marks_indicator_codes_non_datamapper() -> None:

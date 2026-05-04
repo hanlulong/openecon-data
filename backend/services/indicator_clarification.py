@@ -745,10 +745,17 @@ def provider_can_execute_indicator_option(
         return False
 
     if provider_upper == "IMF":
-        return bool(
-            qs.imf_provider._indicator_code(code_text)
-            or (option_label and qs.imf_provider._indicator_code(option_label))
+        entry = qs.imf_provider._indicator_catalog_entry(code_text)
+        if not entry:
+            return False
+        exact_code = str(entry.get("code") or code_text).strip().upper()
+        has_namespace = (
+            "_" in exact_code
+            or "." in exact_code
+            or any(ch.isdigit() for ch in exact_code)
         )
+        is_weo_short_code = str(entry.get("category") or "").strip().upper() == "WEO"
+        return bool(has_namespace or is_weo_short_code)
 
     return True
 

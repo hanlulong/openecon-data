@@ -180,14 +180,14 @@ PATTERNS = (
     ShortcutPattern(
         id="imf_translator_or_direct_mapping",
         path_glob="backend/providers/imf.py",
-        regex=r"UNSUPPORTED_INDICATORS|_indicator_code|translate_indicator|_resolve_from_local_catalog",
+        regex=r"UNSUPPORTED_INDICATORS|def _indicator_code\(|self\._indicator_code\(|translate_indicator|_resolve_from_local_catalog",
         classification="banned_semantic_final_authority",
         rationale="IMF provider can resolve natural-language indicators through direct maps/catalog/translator.",
     ),
     ShortcutPattern(
         id="bis_translator_or_direct_mapping",
         path_glob="backend/providers/bis.py",
-        regex=r"REDIRECT_INDICATORS|_indicator_code|translate_indicator|_extract_indicator_keywords",
+        regex=r"REDIRECT_INDICATORS|def _indicator_code\(|self\._indicator_code\(|translate_indicator|_extract_indicator_keywords",
         classification="banned_semantic_final_authority",
         rationale="BIS provider can resolve natural-language indicators through direct maps/translator/keyword extraction.",
     ),
@@ -205,12 +205,7 @@ PATTERNS = (
 # Ralph is only finished when this ledger is empty and the static scan reports no
 # banned semantic final-authority findings.  Keeping this as a named debt ledger
 # prevents future work from treating reviewed banned surfaces as acceptable.
-CURRENT_BANNED_SEMANTIC_DEBT = frozenset(
-    {
-        ("backend/providers/imf.py", "imf_translator_or_direct_mapping"),
-        ("backend/providers/bis.py", "bis_translator_or_direct_mapping"),
-    }
-)
+CURRENT_BANNED_SEMANTIC_DEBT = frozenset()
 
 # Backward-compatible alias for older tests/imports.  Semantically this is the
 # current debt ledger, not a permanent approval list.

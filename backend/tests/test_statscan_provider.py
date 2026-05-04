@@ -192,6 +192,29 @@ def test_select_default_member_id_avoids_statistical_difference_characteristic(s
     assert member == 1
 
 
+def test_extract_dimension_modifiers_ignores_exact_table_title_token_overlap(statscan_provider):
+    metadata = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Commodities and commodity groups",
+                "member": [
+                    {"memberId": 2, "memberNameEn": "All-items"},
+                    {"memberId": 299, "memberNameEn": "Core Consumer Price Index (CPI) (Bank of Canada definition)"},
+                ],
+            },
+        ]
+    }
+
+    modifiers = statscan_provider.extract_dimension_modifiers(
+        "Canada annual Consumer Price Index (CPI) 2001 basket content from Statistics Canada",
+        "Consumer Price Index (CPI), 2001 basket content, annual",
+        "18100009",
+        metadata,
+    )
+
+    assert modifiers == {}
+
+
 @pytest.mark.asyncio
 async def test_fetch_multi_province_data_rejects_explicit_unsupported_geography_for_product(statscan_provider):
     with pytest.raises(ValueError, match="does not expose geography 'Yukon'"):

@@ -42,22 +42,6 @@ class BISProvider(BaseProvider):
         "XM",  # Euro Area
     })
 
-    # Indicators that BIS doesn't have - redirect to other providers
-    # These trigger helpful error messages with alternative data sources
-    REDIRECT_INDICATORS: Dict[str, str] = {
-        "PRODUCTIVITY": "OECD or WorldBank",
-        "LABOR_PRODUCTIVITY": "OECD or WorldBank",
-        "LABOUR_PRODUCTIVITY": "OECD or WorldBank",
-        "OUTPUT_PER_WORKER": "OECD or WorldBank",
-        "GDP_PER_WORKER": "OECD or WorldBank",
-        "WORKER_PRODUCTIVITY": "OECD or WorldBank",
-        "PRODUCTIVITY_GROWTH": "OECD or WorldBank",
-        "LABOR_PRODUCTIVITY_GROWTH": "OECD or WorldBank",
-        "UNIT_LABOR_COST": "OECD or Eurostat",
-        "UNIT_LABOUR_COST": "OECD or Eurostat",
-        "ULC": "OECD or Eurostat",
-    }
-
     # Country code mappings (BIS uses ISO 2-letter codes)
     # Comprehensive mappings for common country names to ISO 3166-1 alpha-2 codes
     COUNTRY_MAPPINGS: Dict[str, str] = {
@@ -351,15 +335,6 @@ class BISProvider(BaseProvider):
             end_year=params.get("end_year"),
             frequency=params.get("frequency", "M"),
         )
-
-    def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Disabled natural-language-to-code mapping hook.
-
-        Exact BIS dataflow codes are handled mechanically in
-        _resolve_indicator_code(); natural-language discovery must use provider
-        metadata search or upstream IndicatorSelector authority.
-        """
-        return None
 
     def _country_code(self, country: str) -> str:
         """Get BIS country code (ISO 2-letter) from common country name.
@@ -895,109 +870,12 @@ class BISProvider(BaseProvider):
 
         return results
 
-    def _extract_indicator_keywords(self, indicator: str) -> str:
-        """
-        Extract core indicator keywords from phrases containing institution/country names.
-
-        Examples:
-            "Reserve Bank of Australia cash rate" → "cash rate"
-            "European Central Bank deposit facility rate" → "deposit facility rate"
-            "Bank of Japan policy rate" → "policy rate"
-            "Federal Reserve interest rate" → "interest rate"
-        """
-        if not indicator:
-            return indicator
-
-        indicator_lower = indicator.lower()
-
-        # Common central bank/institution patterns to remove
-        institution_patterns = [
-            "reserve bank of australia", "rba",
-            "european central bank", "ecb",
-            "bank of japan", "boj",
-            "bank of england", "boe",
-            "federal reserve", "fed",
-            "bank of canada", "boc",
-            "swiss national bank", "snb",
-            "reserve bank of india", "rbi",
-            "people's bank of china", "pboc",
-            "bank of korea", "bok",
-            "central bank of",
-            "bank of",
-        ]
-
-        # Country patterns that often precede rate names
-        country_patterns = [
-            "australia", "australian",
-            "european", "europe",
-            "japan", "japanese",
-            "uk", "united kingdom", "british",
-            "us", "usa", "united states", "american",
-            "canada", "canadian",
-            "switzerland", "swiss",
-            "india", "indian",
-            "china", "chinese",
-            "korea", "korean",
-            "germany", "german",
-            "france", "french",
-        ]
-
-        result = indicator_lower
-
-        # Remove institution patterns
-        for pattern in institution_patterns:
-            if pattern in result:
-                result = result.replace(pattern, "").strip()
-
-        # Remove country patterns (but be careful not to remove from indicator names)
-        for pattern in country_patterns:
-            # Only remove if it's at the start or followed by space
-            if result.startswith(pattern + " "):
-                result = result[len(pattern):].strip()
-            elif result.startswith(pattern + "'s "):
-                result = result[len(pattern) + 3:].strip()
-
-        # Clean up any leftover artifacts
-        result = " ".join(result.split())  # Normalize whitespace
-
-        # If we stripped too much, return original
-        if len(result) < 3:
-            return indicator
-
-        return result
-
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:
         """Resolve BIS indicator code through mechanical codes or metadata search."""
-        # Step 0: Check if indicator should be redirected to another provider
-        indicator_key = indicator.upper().replace(" ", "_")
-        if indicator_key in self.REDIRECT_INDICATORS:
-            suggested_provider = self.REDIRECT_INDICATORS[indicator_key]
-            raise DataNotAvailableError(
-                f"BIS doesn't have {indicator} data. "
-                f"For productivity and labor cost data, try: "
-                f"• OECD (best for OECD countries): Has comprehensive productivity databases "
-                f"• WorldBank (global coverage): Use indicator SL.GDP.PCAP.EM.KD (GDP per person employed) "
-                f"• FRED (US only): Use series OPHNFB (Nonfarm Business Sector Labor Productivity)"
-            )
-
-        # Step 1: Try direct mapping
-        mapped = self._indicator_code(indicator)
-        if mapped:
-            return mapped, indicator
-
-        # Step 2: Allow users to supply raw BIS dataflow codes directly (e.g. WS_CBPOL)
-        # BIS dataflow codes always start with "WS_"
+        # Step 1: Allow users/upstream selectors to supply raw BIS dataflow
+        # codes directly. This is mechanical provider-native passthrough.
         if indicator and indicator.upper().startswith("WS_"):
             return indicator.upper(), None
-
-        # Step 3: For verbose natural-language phrases, derive a shorter
-        # provider-metadata search phrase. This is candidate retrieval input,
-        # not a direct concept-to-code translation.
-        extracted_indicator = self._extract_indicator_keywords(indicator)
-        search_indicators = [indicator]
-        if extracted_indicator != indicator.lower():
-            logger.info("BIS: Extracted metadata search phrase '%s' from '%s'", extracted_indicator, indicator)
-            search_indicators.append(extracted_indicator)
 
         if not self.metadata_search:
             raise DataNotAvailableError(
@@ -1005,14 +883,10 @@ class BISProvider(BaseProvider):
             )
 
         # Use hierarchical search: SDMX first, then BIS REST API
-        search_results = []
-        for search_indicator in search_indicators:
-            search_results = await self.metadata_search.search_with_sdmx_fallback(
-                provider="BIS",
-                indicator=search_indicator,
-            )
-            if search_results:
-                break
+        search_results = await self.metadata_search.search_with_sdmx_fallback(
+            provider="BIS",
+            indicator=indicator,
+        )
         if not search_results:
             raise DataNotAvailableError(
                 f"BIS indicator '{indicator}' not found. Try a different description (e.g., 'policy rate')."

@@ -2740,10 +2740,13 @@ class StatsCanProvider(BaseProvider):
         if not cube_metadata or not query_text:
             return {}
 
+        def normalized_words(text: str) -> set[str]:
+            return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+
         query_lower = query_text.lower()
         query_lower = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", query_lower)
         # Remove the base indicator words from the query to avoid false positives
-        indicator_words = set(base_indicator.lower().replace("_", " ").split())
+        indicator_words = normalized_words(base_indicator.replace("_", " "))
 
         # Also remove common filler words
         filler_words = {
@@ -2848,7 +2851,7 @@ class StatsCanProvider(BaseProvider):
                 if member_name_lower == indicator_normalized or indicator_normalized == member_name_lower.rstrip("s"):
                     continue
                 # Also skip if the member name consists entirely of indicator words
-                member_name_words = set(member_name_lower.replace(",", "").split())
+                member_name_words = normalized_words(member_name_lower)
                 if member_name_words and member_name_words.issubset(indicator_words):
                     continue
 
@@ -2875,7 +2878,7 @@ class StatsCanProvider(BaseProvider):
                     # Guard: if the matched phrase is mostly noise/indicator words,
                     # this is not a real modifier (e.g., "consumer price index" is
                     # just the CPI indicator name, not a CPI sub-category).
-                    match_words = set(member_name_lower.replace(",", "").split())
+                    match_words = normalized_words(member_name_lower)
                     non_noise_match_words = match_words - noise_words - {"and", "or", "the", "of", "to"}
                     if not non_noise_match_words:
                         continue  # match is entirely noise/indicator words
@@ -2889,12 +2892,12 @@ class StatsCanProvider(BaseProvider):
 
                 # Strategy 2: check if individual significant words from member name
                 # appear as query words (not just substrings)
-                member_words = set(member_name_lower.replace(",", "").split())
+                member_words = normalized_words(member_name_lower)
                 significant_member_words = member_words - noise_words - {"and", "or", "the", "of", "to"}
                 if not significant_member_words:
                     continue
 
-                query_words = set(query_lower.replace(",", "").split())
+                query_words = normalized_words(query_lower)
 
                 for mw in significant_member_words:
                     if len(mw) < 3:

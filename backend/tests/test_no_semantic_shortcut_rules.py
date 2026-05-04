@@ -168,7 +168,7 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
     found_ids = {finding.pattern_id for finding in findings}
     assert {
         "unified_router_provider_candidate_metadata",
-        "imf_translator_or_direct_mapping",
+        "query_parsing_cue_inference",
     } <= found_ids
 
 
@@ -259,12 +259,18 @@ def test_current_banned_semantic_debt_ledger_matches_scan() -> None:
 
 
 def test_final_completion_requires_empty_banned_semantic_debt_ledger() -> None:
-    """Document the final gate without forcing Phase 0 to finish all provider debt."""
+    """Final gate: no banned semantic final-authority findings remain."""
 
-    assert CURRENT_BANNED_SEMANTIC_DEBT, (
-        "When this ledger becomes empty, replace this test with a hard assertion "
-        "that scan_semantic_shortcuts() has zero banned_semantic_final_authority findings."
-    )
+    findings = scan_semantic_shortcuts()
+
+    banned = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.classification == "banned_semantic_final_authority"
+    ]
+
+    assert CURRENT_BANNED_SEMANTIC_DEBT == frozenset()
+    assert banned == []
 
 
 def test_unified_router_has_no_banned_provider_final_authority_findings() -> None:

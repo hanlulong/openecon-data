@@ -1637,35 +1637,22 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(DataNotAvailableError):
             run(provider._resolve_indicator_code("GDP"))
 
-    def test_imf_fetch_batch_uses_alternative_code_when_primary_missing(self) -> None:
+    def test_imf_fetch_batch_does_not_swap_to_alternative_code_when_primary_missing(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
         responses = [
             MockAsyncResponse({"values": {}}),
-            MockAsyncResponse(
-                {
-                    "values": {
-                        "PPPIA_IX": {
-                            "USA": {"2020": 100.0, "2021": 103.5},
-                            "DEU": {"2020": 99.1, "2021": 102.0},
-                        }
-                    }
-                }
-            ),
         ]
 
         with patch.object(provider, "_resolve_indicator_code", return_value=("PPI", "Producer Price Index")), \
-             patch.object(provider, "_get_alternative_indicator_codes", return_value=["PPPIA_IX"]), \
              patch("backend.providers.imf.get_http_client", return_value=MockAsyncClient(responses)):
-            result = run(
-                provider.fetch_batch_indicator(
-                    indicator="producer price inflation",
-                    countries=["USA", "DEU"],
+            with self.assertRaises(DataNotAvailableError):
+                run(
+                    provider.fetch_batch_indicator(
+                        indicator="producer price inflation",
+                        countries=["USA", "DEU"],
+                    )
                 )
-            )
-
-        self.assertEqual(len(result), 2)
-        self.assertTrue(all(series.metadata.seriesId == "PPPIA_IX" for series in result))
 
     def test_imf_fetch_batch_retries_on_invalid_json_body(self) -> None:
         provider = IMFProvider(metadata_search_service=None)

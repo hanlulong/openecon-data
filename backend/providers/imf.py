@@ -43,43 +43,6 @@ class IMFProvider(BaseProvider):
     SDMX_STRUCTURE_BASE_URL = "https://api.imf.org/external/sdmx/2.1/dataflow/IMF.STA"
     _DATAFLOW_STRUCTURE_CACHE: Dict[str, Dict[str, Any]] = {}
 
-    # Indicators NOT available in DataMapper API
-    # These will trigger clarification responses
-    UNSUPPORTED_INDICATORS = {
-        "PRODUCTIVITY_GROWTH",
-        "PRODUCTIVITY",
-        "PENSION_SUSTAINABILITY",
-        "PENSION",
-        "RETIREMENT",
-        "SOCIAL_SECURITY",
-        # Trade volume indicators (not in DataMapper, available in WEO database)
-        "TRADE_VOLUME",
-        "TRADE_VOLUME_GROWTH",
-        "EXPORT_VOLUME",
-        "EXPORT_VOLUME_GROWTH",
-        "IMPORT_VOLUME",
-        "IMPORT_VOLUME_GROWTH",
-        "WORLD_TRADE_VOLUME",
-        "WORLD_TRADE_GROWTH",
-        # Commodity price indicators (not in DataMapper, available in PCPS database)
-        "COMMODITY_PRICE",
-        "COMMODITY_PRICE_INDEX",
-        "COMMODITY_INDEX",
-        "COMMODITY_PRICES",
-        "PRIMARY_COMMODITY_PRICE",
-        "PRIMARY_COMMODITY_PRICE_INDEX",
-        "GLOBAL_COMMODITY_PRICE_INDEX",
-        "GLOBAL_COMMODITY_INDEX",
-        # Foreign exchange reserves (in IFS database, not DataMapper API)
-        "FX_RESERVES",
-        "FOREIGN_EXCHANGE_RESERVES",
-        "RESERVES",
-        "TOTAL_RESERVES",
-        "CURRENCY_RESERVES",
-        "INTERNATIONAL_RESERVES",
-        "FOREX_RESERVES",
-    }
-
     # FALLBACK Regional/group mappings (map region name to list of country codes)
     # NOTE: CountryResolver (backend/routing/country_resolver.py) is the PRIMARY source.
     # This dict is only used as fallback for IMF-specific regions not in CountryResolver.
@@ -516,15 +479,6 @@ class IMFProvider(BaseProvider):
         # All retries exhausted
         raise last_error
 
-    def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Disabled natural-language-to-code mapping hook.
-
-        Exact IMF codes are handled mechanically in _resolve_indicator_code();
-        natural-language discovery must use provider metadata search, local
-        provider catalog evidence, or upstream IndicatorSelector authority.
-        """
-        return None
-
     @staticmethod
     def _looks_like_imf_code(indicator: str) -> bool:
         """Heuristic check for IMF code-like indicator strings."""
@@ -765,36 +719,14 @@ class IMFProvider(BaseProvider):
                 f"Error: {e}. The IMF API may be temporarily unavailable."
             ) from e
 
-        # Extract data for the indicator
+        # Extract data for the already-resolved indicator. Do not swap to
+        # another code here from the original natural-language query; a
+        # different executable code must come from exact input or upstream
+        # adjudication before fetch.
         if "values" not in payload or indicator_code not in payload["values"]:
-            alternative_codes = self._get_alternative_indicator_codes(
-                indicator=indicator,
-                primary_code=indicator_code,
-                requested_country_codes=country_codes,
+            raise DataNotAvailableError(
+                f"IMF indicator {indicator_code} not found in response"
             )
-            for alternative_code in alternative_codes:
-                alt_url = f"{self.base_url}/{alternative_code}"
-                try:
-                    alt_response = await self._retry_request(alt_url, max_retries=2, initial_delay=0.6)
-                    alt_payload = alt_response.json()
-                except Exception:
-                    continue
-
-                if "values" in alt_payload and alternative_code in alt_payload["values"]:
-                    logger.info(
-                        "IMF indicator fallback resolved %s -> %s for query '%s'",
-                        indicator_code,
-                        alternative_code,
-                        indicator,
-                    )
-                    indicator_code = alternative_code
-                    indicator_label = self._friendly_indicator_label(indicator, alternative_code)
-                    payload = alt_payload
-                    break
-            else:
-                raise DataNotAvailableError(
-                    f"IMF indicator {indicator_code} not found in response"
-                )
 
         all_country_data = payload["values"][indicator_code]
 
@@ -969,129 +901,6 @@ class IMFProvider(BaseProvider):
             ]
 
         return data
-
-    def _get_alternative_indicator_codes(
-        self,
-        indicator: str,
-        primary_code: str,
-        requested_country_codes: Optional[List[str]] = None,
-        limit: int = 8,
-    ) -> List[str]:
-        """
-        Find alternative IMF indicator codes when the primary candidate is unavailable.
-
-        This is a general framework fallback:
-        - prefers provider-native codes from indicator lookup search
-        - de-prioritizes country-prefixed series for multi-country queries
-        - keeps producer-price queries in the producer-price family
-        """
-        requested_country_codes = [str(code or "").upper() for code in (requested_country_codes or []) if code]
-        primary_upper = str(primary_code or "").upper().strip()
-
-        seed_codes: List[str] = []
-        if primary_upper:
-            seed_codes.append(primary_upper)
-            if ":" in primary_upper:
-                seed_codes.append(primary_upper.split(":", 1)[1])
-
-        try:
-            from ..services.indicator_database import get_indicator_lookup
-
-            lookup = get_indicator_lookup()
-            search_results = lookup.search(indicator, provider="IMF", limit=20)
-        except Exception as exc:
-            logger.debug("IMF alternative indicator lookup failed: %s", exc)
-            search_results = []
-
-        producer_price_query = any(
-            token in str(indicator or "").lower()
-            for token in ("producer", "ppi", "wholesale")
-        )
-
-        preferred: List[str] = []
-        secondary: List[str] = []
-        seen: set[str] = set()
-
-        def _record(code_value: Optional[str]) -> None:
-            code = str(code_value or "").upper().strip()
-            if not code or code in seen or code in seed_codes:
-                return
-
-            country_prefix = re.match(r"^([A-Z]{3})_", code)
-            if country_prefix and requested_country_codes:
-                if country_prefix.group(1) not in requested_country_codes:
-                    return
-
-            seen.add(code)
-            if producer_price_query and not any(token in code for token in ("PPI", "PPPI", "PWPI")):
-                secondary.append(code)
-                return
-
-            preferred.append(code)
-
-        for seed in seed_codes[1:]:
-            _record(seed)
-        for candidate in search_results:
-            _record(candidate.get("code"))
-
-        if producer_price_query:
-            # For producer-price requests, fail closed rather than silently
-            # drifting to consumer-price substitutes.
-            return preferred[:limit]
-
-        return (preferred + secondary)[:limit]
-
-    def _search_local_indicator_catalog(
-        self,
-        indicator: str,
-        *,
-        limit: int = 12,
-    ) -> List[Dict[str, Any]]:
-        """Search the local IMF indicator catalog using normalized query variants.
-
-        This is a bounded recovery path for long-tail IMF titles that the
-        DataMapper metadata endpoint may not surface well. It searches the
-        repo-local indicator database with country/provider wrappers stripped
-        and preserves ranked, deduplicated candidates for downstream selection.
-        """
-        try:
-            from ..services.indicator_database import get_indicator_lookup
-            from ..services.indicator_resolution import exact_title_search_inputs
-
-            lookup = get_indicator_lookup()
-            search_queries = exact_title_search_inputs(indicator, "IMF")
-        except Exception as exc:
-            logger.debug("IMF local catalog search unavailable for '%s': %s", indicator, exc)
-            return []
-
-        seen: set[str] = set()
-        candidates: list[dict[str, Any]] = []
-        for query_text in search_queries:
-            try:
-                results = lookup.search(query_text, provider="IMF", limit=limit)
-            except Exception as exc:
-                logger.debug("IMF local catalog lookup failed for '%s': %s", query_text, exc)
-                continue
-
-            for result in results:
-                code = str(result.get("code") or "").strip().upper()
-                name = str(result.get("name") or "").strip()
-                if not code or not name or code in seen:
-                    continue
-                seen.add(code)
-                candidates.append(
-                    {
-                        "code": code,
-                        "id": code,
-                        "name": name,
-                        "description": str(result.get("description") or name),
-                        "source": "LOCAL_IMF_CATALOG",
-                    }
-                )
-                if len(candidates) >= limit:
-                    return candidates
-
-        return candidates
 
     def _indicator_catalog_entry(self, indicator_code: str) -> Optional[Dict[str, Any]]:
         """Return the local IMF indicator catalog entry for a code when available."""
@@ -2424,143 +2233,9 @@ class IMFProvider(BaseProvider):
             f"{dataset_suffix}"
         )
 
-    async def _resolve_from_local_catalog(
-        self,
-        indicator: str,
-    ) -> Optional[tuple[str, Optional[str]]]:
-        """Resolve an IMF indicator via the local indicator catalog."""
-        local_catalog_results = self._search_local_indicator_catalog(indicator)
-        if not local_catalog_results:
-            return None
-
-        logger.info(
-            "IMF: local catalog fallback found %d candidates for '%s'",
-            len(local_catalog_results),
-            indicator,
-        )
-        if self.metadata_search:
-            discovery = await self.metadata_search.discover_indicator(
-                provider="IMF",
-                indicator_name=indicator,
-                search_results=local_catalog_results,
-            )
-            if discovery and discovery.get("ambiguous"):
-                options = discovery.get("options", [])
-                options_text = "\n".join([
-                    f"  • {opt['name']}" for opt in options[:5]
-                ])
-                raise DataNotAvailableError(
-                    f"Your query '{indicator}' matches multiple datasets. Please be more specific:\n{options_text}\n\n"
-                    f"Try specifying the exact metric you need."
-                )
-            if discovery and discovery.get("code"):
-                code = str(discovery["code"]).strip()
-                return code, discovery.get("name")
-
-        indicator_lower = str(indicator or "").lower()
-        query_country_codes: set[str] = set()
-        try:
-            from ..routing.country_resolver import CountryResolver
-
-            for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-                alias_text = str(alias).strip()
-                if not alias_text:
-                    continue
-                if re.search(
-                    rf"(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])",
-                    indicator_lower,
-                    flags=re.IGNORECASE,
-                ):
-                    iso2 = CountryResolver.normalize(alias_text)
-                    iso3 = CountryResolver.to_iso3(iso2) if iso2 else None
-                    if iso3:
-                        query_country_codes.add(iso3)
-        except Exception as exc:
-            logger.debug("IMF local catalog country extraction skipped for '%s': %s", indicator, exc)
-
-        def _local_rank(index: int, candidate: dict[str, Any]) -> tuple[int, int]:
-            code = str(candidate.get("code") or "").upper()
-            name = str(candidate.get("name") or "").lower()
-            score = 0
-            country_prefix = re.match(r"^([A-Z]{3})_", code)
-            if country_prefix and query_country_codes:
-                try:
-                    from ..routing.country_resolver import CountryResolver
-
-                    prefix = country_prefix.group(1)
-                    if CountryResolver.to_iso2(prefix):
-                        if prefix in query_country_codes:
-                            score += 2
-                        else:
-                            score -= 3
-                except Exception:
-                    pass
-            if " real " in f" {indicator_lower} ":
-                if " real " in f" {name} " or "_R_" in code:
-                    score += 3
-                elif " nominal " in f" {name} ":
-                    score -= 1
-            if " nominal " in f" {indicator_lower} ":
-                if " nominal " in f" {name} ":
-                    score += 3
-                if " real " in f" {name} " or "_R_" in code:
-                    score -= 1
-            return score, -index
-
-        top_local = max(
-            enumerate(local_catalog_results),
-            key=lambda item: _local_rank(item[0], item[1]),
-        )[1]
-        return top_local["code"], top_local.get("name")
-
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:
         """Resolve IMF indicator code through mechanical codes or metadata search."""
-        # Step 0: Check if indicator is explicitly unsupported
-        indicator_key = indicator.upper().replace(" ", "_")
-        if indicator_key in self.UNSUPPORTED_INDICATORS:
-            # Provide helpful error message based on indicator type
-            if any(kw in indicator_key for kw in ["TRADE_VOLUME", "TRADE_GROWTH", "EXPORT_VOLUME", "IMPORT_VOLUME"]):
-                raise DataNotAvailableError(
-                    f"Trade volume indicators are not available in the IMF DataMapper API. "
-                    f"These indicators are published in the IMF World Economic Outlook (WEO) database, "
-                    f"which is not accessible via the DataMapper API. "
-                    f"Try using alternative data sources like OECD, World Bank, or UN Comtrade for trade volume data."
-                )
-            elif any(kw in indicator_key for kw in ["COMMODITY_PRICE", "COMMODITY_INDEX"]):
-                raise DataNotAvailableError(
-                    f"Commodity spot prices (gold, silver, oil, etc.) are not available through our current data providers. "
-                    f"The IMF PCPS database has commodity prices but uses an SDMX API that is not currently accessible. "
-                    f"For commodity price indices (not spot prices), try: "
-                    f"• FRED: 'Producer Price Index All Commodities' (PPIACO) "
-                    f"• For real-time gold/silver prices, consider dedicated services like kitco.com or goldprice.org"
-                )
-            elif any(kw in indicator_key for kw in ["PRODUCTIVITY", "OUTPUT_PER_WORKER", "GDP_PER_WORKER"]):
-                raise DataNotAvailableError(
-                    f"Labor productivity data is not available in the IMF DataMapper API. "
-                    f"For productivity data, use: "
-                    f"• OECD (best for OECD countries): Has comprehensive productivity databases "
-                    f"• WorldBank (global coverage): Use indicator SL.GDP.PCAP.EM.KD (GDP per person employed) "
-                    f"• FRED (US only): Use series OPHNFB (Nonfarm Business Sector Labor Productivity)"
-                )
-            elif any(kw in indicator_key for kw in ["RESERVES", "FX_RESERVES", "FOREX"]):
-                raise DataNotAvailableError(
-                    f"Foreign exchange reserves data is not available in the IMF DataMapper API. "
-                    f"This data is in the IMF International Financial Statistics (IFS) database. "
-                    f"For reserves data, use WorldBank with indicator FI.RES.TOTL.CD (Total reserves including gold)."
-                )
-            else:
-                raise DataNotAvailableError(
-                    f"IMF indicator '{indicator}' is not available in the DataMapper API. "
-                    f"This data may be available through other IMF databases (WEO, PCPS, BOP) "
-                    f"or alternative providers."
-                )
-
-        # Step 1: Try direct mapping
-        mapped = self._indicator_code(indicator)
-        if mapped:
-            return mapped, self._friendly_indicator_label(indicator, mapped)
-
-        # Step 1.5: If the caller already supplied an exact IMF code that exists
+        # Step 1: If the caller already supplied an exact IMF code that exists
         # in the local indicator catalog, trust it directly. This preserves
         # explicit provider-code queries without re-running metadata discovery,
         # while still failing closed for fake codes because they will miss the
@@ -2597,22 +2272,13 @@ class IMFProvider(BaseProvider):
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
                 return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
 
-        indicator_text = str(indicator or "").strip()
-        prioritize_local_catalog = (
-            not self._looks_like_imf_code(indicator_text)
-            and len(indicator_text.split()) >= 5
-        )
-        if prioritize_local_catalog:
-            local_resolution = await self._resolve_from_local_catalog(indicator)
-            if local_resolution:
-                return local_resolution
-
-        # Step 2: Prefer local/provider metadata recovery only for specific long-tail
-        # titles.  Short fuzzy phrases can produce misleading FTS matches
-        # (e.g. "custom imf" -> "Customs Revenues"), so when a live metadata
-        # search service is available we let that provider-specific discovery
-        # path arbitrate short phrases before falling back to local FTS.
+        # Step 2: Resolve natural-language indicators through provider metadata search only.
         if self.metadata_search:
+            if not hasattr(self.metadata_search, "search_with_sdmx_fallback"):
+                raise DataNotAvailableError(
+                    f"IMF indicator '{indicator}' not found. Try refining your query or consult IMF DataMapper for available indicators."
+                )
+
             # Use hierarchical search: SDMX first, then IMF DataMapper API.
             search_results = await self.metadata_search.search_with_sdmx_fallback(
                 provider="IMF",
