@@ -16,7 +16,7 @@ from backend.services.indicator_resolution import (
 )
 from backend.services.query import QueryService
 from backend.tests.semantic_shortcut_audit import (
-    REVIEWED_PHASE0_FINDINGS,
+    CURRENT_BANNED_SEMANTIC_DEBT,
     iter_scan_paths,
     scan_semantic_shortcuts,
 )
@@ -233,17 +233,38 @@ def test_tests_do_not_patch_retired_resolver_shims() -> None:
     assert offenders == []
 
 
-def test_no_unreviewed_banned_semantic_final_authority_findings() -> None:
+def test_no_new_banned_semantic_final_authority_findings_outside_debt_ledger() -> None:
     findings = scan_semantic_shortcuts()
 
-    unreviewed = [
+    untracked = [
         f"{finding.path}:{finding.pattern_id}:{finding.line_number}"
         for finding in findings
         if finding.classification == "banned_semantic_final_authority"
-        and finding.review_key not in REVIEWED_PHASE0_FINDINGS
+        and finding.review_key not in CURRENT_BANNED_SEMANTIC_DEBT
     ]
 
-    assert unreviewed == []
+    assert untracked == []
+
+
+def test_current_banned_semantic_debt_ledger_matches_scan() -> None:
+    findings = scan_semantic_shortcuts()
+
+    actual_debt_keys = {
+        finding.review_key
+        for finding in findings
+        if finding.classification == "banned_semantic_final_authority"
+    }
+
+    assert actual_debt_keys == CURRENT_BANNED_SEMANTIC_DEBT
+
+
+def test_final_completion_requires_empty_banned_semantic_debt_ledger() -> None:
+    """Document the final gate without forcing Phase 0 to finish all provider debt."""
+
+    assert CURRENT_BANNED_SEMANTIC_DEBT, (
+        "When this ledger becomes empty, replace this test with a hard assertion "
+        "that scan_semantic_shortcuts() has zero banned_semantic_final_authority findings."
+    )
 
 
 def test_unified_router_has_no_banned_provider_final_authority_findings() -> None:

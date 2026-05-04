@@ -201,20 +201,24 @@ PATTERNS = (
 )
 
 
-REVIEWED_PHASE0_FINDINGS = frozenset(
-    (Path(pattern.path_glob).as_posix(), pattern.id)
-    for pattern in PATTERNS
-    if "*" not in pattern.path_glob
-) | frozenset(
+# Current banned findings that are known debt, not a completion allowlist.
+# Ralph is only finished when this ledger is empty and the static scan reports no
+# banned semantic final-authority findings.  Keeping this as a named debt ledger
+# prevents future work from treating reviewed banned surfaces as acceptable.
+CURRENT_BANNED_SEMANTIC_DEBT = frozenset(
     {
         ("backend/providers/statscan.py", "statscan_semantic_product_maps"),
+        ("backend/services/statscan_metadata.py", "statscan_known_products"),
         ("backend/providers/oecd.py", "oecd_semantic_aliases"),
         ("backend/providers/eurostat.py", "eurostat_dataset_mappings"),
         ("backend/providers/imf.py", "imf_translator_or_direct_mapping"),
         ("backend/providers/bis.py", "bis_translator_or_direct_mapping"),
-        ("backend/providers/fred.py", "fred_rate_transform_keywords"),
     }
 )
+
+# Backward-compatible alias for older tests/imports.  Semantically this is the
+# current debt ledger, not a permanent approval list.
+REVIEWED_PHASE0_FINDINGS = CURRENT_BANNED_SEMANTIC_DEBT
 
 
 def iter_scan_paths(root: Path = Path(".")) -> list[Path]:
