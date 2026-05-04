@@ -6484,20 +6484,13 @@ class QueryService:
                 if 'categorical_breakdown' in analysis.get('complexity_factors', []):
                     logger.info(f"🔍 Categorical query detected, attempting dynamic metadata discovery...")
 
-                    # Extract indicator terms directly from the query.
-                    # The metadata service's discover_for_query handles resolution
-                    # via its own KNOWN_PRODUCTS lookup + API search fallback.
-                    # No hardcoded keyword-to-indicator mapping needed here.
+                    # Extract indicator text directly from the query.  Product
+                    # discovery must use metadata search; provider-local known
+                    # product maps are intentionally unavailable on the
+                    # no-shortcut path.
                     query_lower = query.lower()
-                    query_words = set(query_lower.split())
                     metadata_service = get_statscan_metadata_service()
-                    known_keys = {k.lower() for k in metadata_service.KNOWN_PRODUCTS}
-                    indicator_found = None
-                    # Match multi-word known keys first, then single words
-                    for key in sorted(known_keys, key=len, reverse=True):
-                        if key in query_lower:
-                            indicator_found = key
-                            break
+                    indicator_found = query_lower.strip()
 
                     if indicator_found:
                         try:
