@@ -21,16 +21,13 @@ from backend.utils.retry import DataNotAvailableError
 
 
 class ProviderTests(unittest.TestCase):
-    def test_oecd_lookup_terms_prioritize_semantic_alias_for_short_code(self) -> None:
+    def test_oecd_lookup_terms_do_not_expand_short_code_semantically(self) -> None:
         provider = OECDProvider()
         terms = provider._build_indicator_lookup_terms("PPI")  # pylint: disable=protected-access
 
-        self.assertTrue(terms)
-        self.assertIn("ppi", [term.lower() for term in terms])
-        self.assertTrue(any("producer" in term.lower() for term in terms))
-        self.assertNotEqual(terms[0].upper(), "PPI")
+        self.assertEqual(terms, ["PPI"])
 
-    def test_oecd_local_catalog_prefers_producer_price_flow_for_ppi_query(self) -> None:
+    def test_oecd_local_catalog_does_not_finalize_ppi_query(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
         catalog = {
             "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE_CPC": {
@@ -46,9 +43,8 @@ class ProviderTests(unittest.TestCase):
         }
 
         with patch.object(OECDProvider, "_load_dataflows_catalog", return_value=catalog):
-            _, dataflow, _ = run(provider._resolve_indicator("PPI"))  # pylint: disable=protected-access
-
-        self.assertEqual(dataflow, "DSD_PRICES@DF_PPI")
+            with self.assertRaises(DataNotAvailableError):
+                run(provider._resolve_indicator("PPI"))  # pylint: disable=protected-access
 
     def test_oecd_resolve_indicator_keeps_explicit_dataflow_id(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
@@ -164,14 +160,11 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_GOV@DF_GOV_PF_2025")
         self.assertEqual(version, "1.0")
 
-    def test_oecd_resolve_indicator_uses_canonical_gdp_dataflow(self) -> None:
+    def test_oecd_resolve_indicator_does_not_use_canonical_gdp_shortcut(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
 
-        agency, dataflow, version = run(provider._resolve_indicator("GDP"))  # pylint: disable=protected-access
-
-        self.assertEqual(agency, "OECD.SDD.NAD")
-        self.assertEqual(dataflow, "DSD_NAMAIN10@DF_TABLE1_EXPENDITURE")
-        self.assertEqual(version, "1.0")
+        with self.assertRaises(DataNotAvailableError):
+            run(provider._resolve_indicator("GDP"))  # pylint: disable=protected-access
 
     def test_oecd_resolve_indicator_expands_partial_dataflow_prefix(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
@@ -1773,8 +1766,6 @@ class ProviderTests(unittest.TestCase):
 
         metadata_stub = StubMetadata()
         provider = EurostatProvider(metadata_search_service=metadata_stub)
-        self.addCleanup(lambda: provider.DATASET_MAPPINGS.pop("CUSTOM EUROSTAT", None))
-
         # JSON-stat 2.0 format response (what Eurostat actually returns)
         responses = [
             MockAsyncResponse(
@@ -1877,7 +1868,7 @@ class ProviderTests(unittest.TestCase):
     def test_eurostat_resolve_accepts_uppercase_table_code_with_digits(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)
 
-        dataset_code, dataset_label = run(provider._resolve_dataset_code("TEC00118"))
+        dataset_code, dataset_label = run(provider._resolve_dataset("TEC00118"))
 
         self.assertEqual(dataset_code, "tec00118")
         self.assertIsNone(dataset_label)
@@ -1935,14 +1926,14 @@ class ProviderTests(unittest.TestCase):
         _, params = client.calls[0]
         self.assertNotIn("na_item", params)
 
-    def test_oecd_resolve_indicator_expands_catalog_code_alias(self) -> None:
+    def test_oecd_resolve_indicator_uses_metadata_for_short_code(self) -> None:
         class StubMetadata:
             def __init__(self):
                 self.search_terms = []
 
             async def search_with_sdmx_fallback(self, provider: str, indicator: str):
                 self.search_terms.append(indicator)
-                if indicator.lower() != "long-term interest rates":
+                if indicator.upper() != "IRLT":
                     return []
                 return [{"code": "DSD_IRLT@DF_IRLT", "name": "Long-term interest rates", "agency": "OECD.SDD.TPS"}]
 
@@ -1962,8 +1953,8 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(agency, "OECD.SDD.TPS")
         self.assertEqual(dataflow, "DSD_IRLT@DF_IRLT")
         self.assertEqual(version, "1.0")
-        self.assertIn("IRLT", [term.upper() for term in provider._build_indicator_lookup_terms("IRLT")])  # pylint: disable=protected-access
-        self.assertTrue(any(term.lower() == "long-term interest rates" for term in metadata_stub.search_terms))
+        self.assertEqual(provider._build_indicator_lookup_terms("IRLT"), ["IRLT"])  # pylint: disable=protected-access
+        self.assertEqual(metadata_stub.search_terms, ["IRLT"])
 
     def test_oecd_fetch_multi_country_skips_aggregate_for_explicit_country_comparison(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

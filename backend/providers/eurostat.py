@@ -23,159 +23,6 @@ logger = logging.getLogger(__name__)
 class EurostatProvider(BaseProvider):
     """Eurostat Statistics API provider for EU economic data using SDMX 3.0 endpoints."""
 
-    # Indicator name -> dataset code mappings (for quick lookup)
-    # This mapping only contains Eurostat-native indicator names. Cross-provider
-    # semantic translation is intentionally not performed inside the provider.
-    DATASET_MAPPINGS: Dict[str, str] = {
-        # National Accounts
-        "GDP": "nama_10_gdp",
-        "GDP_GROWTH": "nama_10_gdp",
-        "GDP GROWTH": "nama_10_gdp",
-        "GDP_GROWTH_RATE": "nama_10_gdp",
-        "GDP_PER_CAPITA": "nama_10_pc",
-        "GDP PER CAPITA": "nama_10_pc",
-        "GROSS_DOMESTIC_PRODUCT": "nama_10_gdp",
-        "GROSS DOMESTIC PRODUCT": "nama_10_gdp",
-        "REAL_GDP": "nama_10_gdp",
-        "REAL GDP": "nama_10_gdp",
-        "NOMINAL_GDP": "nama_10_gdp",
-        "NOMINAL GDP": "nama_10_gdp",
-
-        # Labor Market
-        "UNEMPLOYMENT": "une_rt_a",
-        "UNEMPLOYMENT_RATE": "une_rt_a",
-        "UNEMPLOYMENT RATE": "une_rt_a",
-        "JOBLESS_RATE": "une_rt_a",
-        "JOBLESS RATE": "une_rt_a",
-        # Note: tipslm80 is "percentage point change" - NOT the actual rate!
-        # Use une_rt_a (standard unemployment rate) with AGE=Y_LT25 for youth unemployment RATE
-        "YOUTH_UNEMPLOYMENT": "une_rt_a",
-        "YOUTH UNEMPLOYMENT": "une_rt_a",
-        "YOUTH_UNEMPLOYMENT_RATE": "une_rt_a",
-        "YOUTH UNEMPLOYMENT RATE": "une_rt_a",
-        "YOUTH_UNEMPLOYMENT_CHANGE": "tipslm80",  # Percentage point change version
-        "EMPLOYMENT_RATE": "lfsi_emp_a",
-        "EMPLOYMENT RATE": "lfsi_emp_a",
-
-        # Prices - Headline Inflation (all items including food and energy)
-        "INFLATION": "prc_hicp_aind",
-        "CPI": "prc_hicp_aind",
-        "HICP": "prc_hicp_aind",
-        "HEADLINE_INFLATION": "prc_hicp_aind",
-        "HEADLINE INFLATION": "prc_hicp_aind",
-        "HEADLINE_CPI": "prc_hicp_aind",
-        "CONSUMER_PRICES": "prc_hicp_manr",
-        "CONSUMER PRICES": "prc_hicp_manr",
-        "PRICE_INDEX": "prc_hicp_midx",
-
-        # Prices - Core Inflation (EXCLUDING food and energy)
-        # CRITICAL: Core inflation uses CP00XEF COICOP code, not CP00
-        "CORE_INFLATION": "prc_hicp_aind_core",  # Special marker for core
-        "CORE INFLATION": "prc_hicp_aind_core",
-        "CORE_CPI": "prc_hicp_aind_core",
-        "CORE CPI": "prc_hicp_aind_core",
-        "UNDERLYING_INFLATION": "prc_hicp_aind_core",
-        "UNDERLYING INFLATION": "prc_hicp_aind_core",
-        "CPI_EX_FOOD_ENERGY": "prc_hicp_aind_core",
-        "HICP_EXCLUDING_FOOD": "prc_hicp_aind_core",
-        "HICP EXCLUDING FOOD": "prc_hicp_aind_core",
-
-        # House Prices
-        "HOUSE_PRICES": "prc_hpi_a",
-        "HOUSE PRICES": "prc_hpi_a",
-        "HOUSING_PRICES": "prc_hpi_a",
-        "PROPERTY_PRICES": "prc_hpi_a",
-
-        # Trade
-        "TRADE": "ext_lt_maineu",
-        "TRADE_BALANCE": "ext_lt_maineu",  # Use ext_lt_maineu with indic_et=MIO_BAL_VAL
-        "TRADE BALANCE": "ext_lt_maineu",  # Use ext_lt_maineu with indic_et=MIO_BAL_VAL
-        "EXPORTS": "ext_lt_maineu",
-        "IMPORTS": "ext_lt_maineu",
-
-        # Population
-        "POPULATION": "demo_pjan",
-
-        # Government Finance
-        "GOVERNMENT_DEFICIT": "gov_10dd_edpt1",
-        "GOVERNMENT DEFICIT": "gov_10dd_edpt1",
-        "DEFICIT": "gov_10dd_edpt1",
-        "GOVERNMENT_DEBT": "gov_10q_ggdebt",
-        "GOVERNMENT DEBT": "gov_10q_ggdebt",
-        "DEBT": "gov_10q_ggdebt",
-
-        # Industry
-        "INDUSTRIAL_PRODUCTION": "sts_inpr_a",
-        "INDUSTRIAL PRODUCTION": "sts_inpr_a",
-        "PRODUCTION": "sts_inpr_a",
-
-        # Retail
-        "RETAIL_TRADE": "sts_trtu_a",
-        "RETAIL TRADE": "sts_trtu_a",
-        "RETAIL": "sts_trtu_a",
-        "RETAIL_TRADE_VOLUME": "sts_trtu_a",
-
-        # Labor Costs
-        "LABOR_COST": "lc_lci_r2_a",
-        "LABOR COST": "lc_lci_r2_a",
-        "LABOR_COST_INDEX": "lc_lci_r2_a",
-        "LABOUR_COST": "lc_lci_r2_a",
-
-        # Energy
-        "ENERGY_CONSUMPTION": "nrg_bal_c",
-        "ENERGY CONSUMPTION": "nrg_bal_c",
-        "ENERGY_BALANCE": "nrg_bal_c",
-        "ENERGY BALANCE": "nrg_bal_c",
-        "FINAL_ENERGY_CONSUMPTION": "nrg_bal_c",
-        "PRIMARY_ENERGY_CONSUMPTION": "nrg_bal_c",
-
-        # Labor Productivity (nama_10_lp_ulc dataset)
-        # Critical mappings to prevent false positives from metadata search
-        "PRODUCTIVITY": "nama_10_lp_ulc",  # Labour productivity and unit labour costs
-        "LABOR_PRODUCTIVITY": "nama_10_lp_ulc",
-        "LABOUR_PRODUCTIVITY": "nama_10_lp_ulc",
-        "LABOR PRODUCTIVITY": "nama_10_lp_ulc",
-        "LABOUR PRODUCTIVITY": "nama_10_lp_ulc",
-        "GDP_PER_HOUR": "nama_10_lp_ulc",
-        "GDP PER HOUR": "nama_10_lp_ulc",
-        "GDP_PER_WORKER": "nama_10_lp_ulc",
-        "GDP PER WORKER": "nama_10_lp_ulc",
-        "PRODUCTIVITY_GROWTH": "nama_10_lp_ulc",
-        "PRODUCTIVITY GROWTH": "nama_10_lp_ulc",
-        "OUTPUT_PER_HOUR": "nama_10_lp_ulc",
-        "OUTPUT PER HOUR": "nama_10_lp_ulc",
-        "WORKER_PRODUCTIVITY": "nama_10_lp_ulc",
-        "WORKER PRODUCTIVITY": "nama_10_lp_ulc",
-
-        # Unit Labor Cost
-        "UNIT_LABOR_COST": "nama_10_lp_ulc",
-        "UNIT LABOR COST": "nama_10_lp_ulc",
-        "UNIT_LABOUR_COST": "nama_10_lp_ulc",
-        "UNIT LABOUR COST": "nama_10_lp_ulc",
-        "ULC": "nama_10_lp_ulc",
-
-        # INFRASTRUCTURE FIX: Interest Rates - EI_MFIR_M dataset
-        # Contains: day-to-day rates, 3-month rates, government bond yields (1y, 5y, 10y)
-        "INTEREST_RATE": "EI_MFIR_M",
-        "INTEREST RATE": "EI_MFIR_M",
-        "INTEREST_RATES": "EI_MFIR_M",
-        "INTEREST RATES": "EI_MFIR_M",
-        "REAL_INTEREST_RATE": "EI_MFIR_M",
-        "REAL INTEREST RATE": "EI_MFIR_M",
-        "NOMINAL_INTEREST_RATE": "EI_MFIR_M",
-        "NOMINAL INTEREST RATE": "EI_MFIR_M",
-        "LONG_TERM_INTEREST_RATE": "EI_MFIR_M",
-        "LONG TERM INTEREST RATE": "EI_MFIR_M",
-        "GOVERNMENT_BOND_YIELD": "EI_MFIR_M",
-        "GOVERNMENT BOND YIELD": "EI_MFIR_M",
-        "BOND_YIELD": "EI_MFIR_M",
-        "BOND YIELD": "EI_MFIR_M",
-        "10_YEAR_BOND": "EI_MFIR_M",
-        "10 YEAR BOND": "EI_MFIR_M",
-        "MONEY_MARKET_RATE": "EI_MFIR_M",
-        "MONEY MARKET RATE": "EI_MFIR_M",
-    }
-
     COUNTRY_MAPPINGS: Dict[str, str] = {
         # All 27 EU Member States (as of 2020)
         "GERMANY": "DE",
@@ -237,7 +84,6 @@ class EurostatProvider(BaseProvider):
 
         # === Prices and Inflation ===
         "prc_hicp_aind": {"coicop": "CP00", "unit": "RCH_A_AVG"},  # HICP inflation - HEADLINE (all items, annual avg rate of change %)
-        "prc_hicp_aind_core": {"coicop": "TOT_X_NRG_FOOD"},  # HICP inflation - CORE (excluding energy, food)
         "prc_hicp_manr": {"coicop": "CP00"},  # HICP monthly - headline
         "prc_hicp_midx": {"coicop": "CP00"},  # HICP index - headline
         # PPP price-level datasets expose many analytical categories and forcing a
@@ -340,17 +186,8 @@ class EurostatProvider(BaseProvider):
 
         If start_year and end_year are not specified, defaults to last 5 years of data.
         """
-        dataset_code, dataset_label = await self._resolve_dataset_code(indicator)
+        dataset_code, dataset_label = await self._resolve_dataset(indicator)
         country_code = self._country_code(country)
-
-        # Handle special marker codes (e.g., prc_hicp_aind_core for core inflation)
-        # These use the same underlying dataset but with different filter parameters
-        # The actual API dataset code is the base name without the marker suffix
-        original_dataset_code = dataset_code  # Keep for COICOP lookup
-        if dataset_code.endswith("_core"):
-            # Core inflation: strip _core suffix for API call, but COICOP filter will be applied from DATASET_DEFAULT_FILTERS
-            dataset_code = dataset_code.replace("_core", "")
-            logger.info(f"🔧 Core inflation detected: using {dataset_code} with core COICOP filter")
 
         # Use JSON-stat API endpoint (statistics/1.0) instead of SDMX
         # This is more reliable and doesn't have the 406 Not Acceptable errors
@@ -379,21 +216,10 @@ class EurostatProvider(BaseProvider):
         current_year = datetime.now(timezone.utc).year
         query_params["sinceTimePeriod"] = str(start_year or (current_year - 5))
 
-        # Add static defaults for this dataset (e.g., age, sex, indicator codes)
-        # Use original_dataset_code to get correct filters for special marker codes (e.g., _core)
-        static_defaults = self.DATASET_DEFAULT_FILTERS.get(original_dataset_code, {})
-        if not static_defaults:
-            # Fallback to base dataset code if marker code not found
-            static_defaults = self.DATASET_DEFAULT_FILTERS.get(dataset_code, {})
+        # Add mechanical defaults for an already-selected provider-native dataset.
+        static_defaults = self.DATASET_DEFAULT_FILTERS.get(dataset_code, {})
         for key, value in static_defaults.items():
             query_params[key] = value
-
-        # CRITICAL: Indicator-specific filter overrides
-        # Youth unemployment queries need AGE=Y15-24 (15 to 24 years) instead of Y15-74
-        indicator_upper = indicator.upper()
-        if "YOUTH" in indicator_upper and dataset_code in ["une_rt_a", "une_rt_m"]:
-            query_params["age"] = "Y15-24"  # 15 to 24 years old (youth unemployment)
-            logger.info(f"🔧 Applied youth unemployment filter: AGE=Y15-24")
 
         # Use shared HTTP client pool for better performance
         client = get_http_client()
@@ -483,29 +309,21 @@ class EurostatProvider(BaseProvider):
 
         return NormalizedData(metadata=metadata, data=data_points)
 
-    def _dataset_code(self, indicator: str) -> Optional[str]:
-        return self.DATASET_MAPPINGS.get(indicator.upper())
-
-    async def _resolve_dataset_code(self, indicator: str) -> tuple[str, Optional[str]]:
-        """Resolve Eurostat dataset code through mechanical codes or metadata search."""
-        # Step 1: Try direct mapping
-        mapped = self._dataset_code(indicator)
-        if mapped:
-            return mapped, self._dataset_labels.get(mapped)
-
-        # Step 2: Allow users to supply raw Eurostat dataset/table codes directly.
-        # Accept lowercase SDMX-style IDs (e.g., "prc_hicp_aind") and uppercase
-        # table IDs with digits (e.g., "TEC00118").
+    async def _resolve_dataset(self, indicator: str) -> tuple[str, Optional[str]]:
+        """Resolve Eurostat dataset ID through exact codes or metadata search."""
+        # Step 1: Allow users/upstream selectors to supply raw Eurostat dataset/table
+        # codes directly.  This is mechanical provider-native passthrough, not
+        # natural-language semantic authority.
         normalized_indicator = str(indicator or "").strip()
         if normalized_indicator and " " not in normalized_indicator:
             candidate_code = normalized_indicator.lower()
             if re.fullmatch(r"[a-z0-9_]{4,}", candidate_code):
-                looks_like_dataset_code = (
+                looks_like_dataset_id = (
                     "_" in candidate_code
                     or any(ch.isdigit() for ch in normalized_indicator)
                     or normalized_indicator.isupper()
                 )
-                if looks_like_dataset_code:
+                if looks_like_dataset_id and not candidate_code.endswith("_core"):
                     return candidate_code, self._dataset_labels.get(candidate_code)
 
         if not self.metadata_search:
@@ -513,7 +331,7 @@ class EurostatProvider(BaseProvider):
                 f"Eurostat dataset for '{indicator}' not recognized. Provide the dataset code (e.g., nama_10_gdp) or enable metadata discovery."
             )
 
-        # Use hierarchical search: SDMX first, then Eurostat REST API
+        # Use hierarchical search: SDMX first, then Eurostat REST API.
         search_results = await self.metadata_search.search_with_sdmx_fallback(
             provider="Eurostat",
             indicator=indicator,
@@ -541,9 +359,8 @@ class EurostatProvider(BaseProvider):
             )
 
         if discovery and discovery.get("code"):
-            code = discovery["code"]
+            code = str(discovery["code"]).strip()
             label = discovery.get("name")
-            self.DATASET_MAPPINGS[indicator.upper()] = code
             if label:
                 self._dataset_labels[code] = label
             return code, label
