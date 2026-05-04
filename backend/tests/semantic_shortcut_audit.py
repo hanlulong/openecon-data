@@ -207,7 +207,6 @@ PATTERNS = (
 # prevents future work from treating reviewed banned surfaces as acceptable.
 CURRENT_BANNED_SEMANTIC_DEBT = frozenset(
     {
-        ("backend/providers/statscan.py", "statscan_semantic_product_maps"),
         ("backend/providers/oecd.py", "oecd_semantic_aliases"),
         ("backend/providers/eurostat.py", "eurostat_dataset_mappings"),
         ("backend/providers/imf.py", "imf_translator_or_direct_mapping"),

@@ -1521,13 +1521,13 @@ Output the query_type and any changed fields as JSON."""
         if product_id:
             product_id = statscan._normalize_metadata_product_id(product_id)
         else:
-            # Check if this indicator is known (has a vector or coordinate mapping)
-            _vec = statscan.VECTOR_MAPPINGS.get(indicator_key)
-            _coord = statscan.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
-            if _coord:
-                product_id = statscan._normalize_metadata_product_id(_coord[0])
-            elif _vec is not None:
-                _cached = statscan.PRODUCT_ID_CACHE.get(_vec)
+            # Only derive a product from exact provider-native IDs, never from
+            # natural-language indicator aliases.
+            digits = "".join(ch for ch in str(state.indicator or "") if ch.isdigit())
+            if len(digits) in {8, 10}:
+                product_id = statscan._normalize_metadata_product_id(digits)
+            elif len(digits) >= 7:
+                _cached = statscan.PRODUCT_ID_CACHE.get(int(digits))
                 if _cached:
                     product_id = statscan._normalize_metadata_product_id(_cached)
 

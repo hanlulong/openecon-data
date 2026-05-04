@@ -125,7 +125,7 @@ def test_select_default_member_id_handles_underscored_indicator(statscan_provide
         dim for dim in metadata["dimension"] if dim["dimensionNameEn"] == "Labour force characteristics"
     )
 
-    # With underscored indicator (as comes from VECTOR_MAPPINGS keys)
+    # With underscored indicator labels, match the provider member exactly.
     member_underscored = statscan_provider._select_default_member_id(
         labour_dimension["dimensionNameEn"],
         labour_dimension["member"],
@@ -658,6 +658,7 @@ class TestFetchWithDimensionsCoordinates:
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"geography": "Ontario"},
+            product_id="14100287",
         )
 
         assert result is not None
@@ -705,6 +706,7 @@ class TestFetchWithDimensionsCoordinates:
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"gender": "Men+"},
+            product_id="14100287",
         )
 
         assert result is not None
@@ -751,6 +753,7 @@ class TestFetchWithDimensionsCoordinates:
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"geography": "Ontario", "gender": "Women+", "age": "15 to 24 years"},
+            product_id="14100287",
         )
 
         assert result is not None
@@ -798,6 +801,7 @@ class TestFetchWithDimensionsCoordinates:
         await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"geography": "Alberta"},
+            product_id="14100287",
         )
 
         coord = captured_requests[0][0]["coordinate"]
@@ -837,6 +841,7 @@ class TestFetchWithDimensionsCoordinates:
         await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"geography": "Ontario"},
+            product_id="14100287",
         )
 
         coord = captured_requests[0][0]["coordinate"]
@@ -886,6 +891,7 @@ class TestFetchWithDimensionsCoordinates:
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
             modifiers={"geography": "Ontario"},
+            product_id="14100287",
         )
 
         # Indicator name should mention Ontario

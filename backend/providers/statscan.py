@@ -42,154 +42,6 @@ class StatsCanProvider(BaseProvider):
     No API key required for basic access.
     """
 
-    # Verified core indicators only (other indicators discovered via metadata search)
-    # These vector IDs have been manually verified to be correct (2025-11-21)
-    # All other indicators are discovered dynamically to avoid incorrect mappings
-    VECTOR_MAPPINGS: Dict[str, int] = {
-        # Core economic indicators (manually verified - July 2025)
-        "GDP": 65201210,  # GDP at basic prices, all industries, seasonally adjusted annual rate, chained 2017 dollars
-        "GDP_ALL_INDUSTRIES": 65201210,  # Alias for total GDP
-        "UNEMPLOYMENT": 2062815,  # Unemployment rate, both sexes, 15 years and over
-        "UNEMPLOYMENT_RATE": 2062815,
-        "INFLATION": 41690973,  # CPI, all-items, year-over-year percentage change
-        "INFLATION_RATE": 41690973,  # Alias for INFLATION
-        "CPI": 41690914,  # CPI, all-items index (2002=100)
-        "CONSUMER_PRICE_INDEX": 41690914,  # Alias for CPI
-        "PRICE_INDEX": 41690914,  # Alias for CPI
-        # Combined CPI/inflation aliases (LLM may parse as combined term)
-        "CPI_INFLATION": 41690973,  # CPI year-over-year percentage change
-        "CPI_INFLATION_RATE": 41690973,  # Same as above
-        "CPI_RATE": 41690973,  # Alias
-        "INFLATION_CPI": 41690973,  # Alias
-        "CONSUMER_PRICE_INFLATION": 41690973,  # Alias
-        "POPULATION": 1,  # Population estimates, quarterly (verified 2025-11)
-
-        # GDP by Industry breakdowns (verified 2025-11-29)
-        # Product 36100434: GDP at basic prices, by industry, monthly
-        "GDP_GOODS_PRODUCING": 65201211,  # Goods-producing industries
-        "GDP_GOODS": 65201211,  # Alias
-        "GDP_GOODS_SECTOR": 65201211,  # Alias
-        "GDP_SERVICES_PRODUCING": 65201212,  # Services-producing industries
-        "GDP_SERVICES": 65201212,  # Alias
-        "GDP_SERVICE_SECTOR": 65201212,  # Alias
-        "GDP_BUSINESS_SECTOR": 65201213,  # Business sector industries
-        "GDP_NON_BUSINESS_SECTOR": 65201214,  # Non-business sector industries
-        "GDP_INDUSTRIAL_PRODUCTION": 65201217,  # Industrial production
-        "GDP_MANUFACTURING": 65201219,  # Manufacturing
-        "GDP_DURABLE_MANUFACTURING": 65201220,  # Durable manufacturing industries
-        "GDP_NON_DURABLE_MANUFACTURING": 65201218,  # Non-durable manufacturing industries
-        # GDP by industry aggregate (Product 36100402 - annual provincial GDP by industry)
-        "GDP_BY_INDUSTRY": 65201211,  # Default to goods-producing as starting point
-        "GDP_INDUSTRY": 65201211,  # Alias
-        # NOTE: removed duplicate GDP_ALL_INDUSTRIES key here (line 59 above is canonical:
-        # vector 65201210 = GDP at basic prices, all industries, SA, chained 2017 dollars).
-        # The previous duplicate at this line silently overrode the canonical entry.
-
-        # Housing (subject 34 - Construction)
-        "HOUSING_STARTS": 52300157,  # Housing starts (all areas), Canada and provinces, monthly (units: thousands) - CMHC data
-        "HOUSING_STARTS_ALL_AREAS": 52300157,  # Housing starts (all areas), monthly
-        "HOUSING_STARTS_CENTRES_10K": 52299896,  # Housing starts (centres 10k+), monthly
-
-        # Housing Price Index - USE COORDINATE-BASED QUERY (vector is deprecated)
-        # Set to None to trigger coordinate-based fetch via COORDINATE_PRODUCT_MAPPINGS
-        "HOUSING_PRICE_INDEX": None,  # Use coordinate query (product 18100205)
-        "NEW_HOUSING_PRICE_INDEX": None,  # Use coordinate query
-        "NHPI": None,  # Use coordinate query
-        "HOUSE_PRICE_INDEX": None,  # Use coordinate query
-
-        # Immigration (Product 17100040 - Components of international migration, quarterly)
-        # Use coordinate-based query
-        "IMMIGRATION": None,  # Use coordinate query (product 17100040)
-        "IMMIGRANTS": None,  # Use coordinate query
-        "PERMANENT_RESIDENTS": None,  # Use coordinate query
-        "IMMIGRATION_STATISTICS": None,  # Use coordinate query
-        "INTERNATIONAL_MIGRATION": None,  # Use coordinate query
-
-        # Retail Trade (Product 2010005602 - Monthly retail trade sales by industry)
-        # This is the current active table (replaces deprecated 20100008)
-        # For total retail (all industries), need to use coordinate-based query or discover vector
-        # Vector 7631665 = Retail trade, Canada, unadjusted (from older table)
-        "RETAIL_SALES": 7631665,  # Retail trade sales, Canada, total (may need dynamic discovery)
-        "RETAIL_TRADE": 7631665,  # Alias
-        "RETAIL_SALES_BY_SECTOR": None,  # Requires coordinate-based query with product 2010005602
-
-        # Employment (Product 1410028702 - Labour force characteristics by age group, monthly)
-        # Vector 2062816 = Employment, both sexes, 15 years and over, total
-        "EMPLOYMENT": 2062816,  # Employment, both sexes, 15+ years, monthly
-        "EMPLOYED": 2062816,  # Alias
-        "EMPLOYMENT_BY_AGE": None,  # Requires coordinate-based query with product 1410028702
-
-        # Merchandise Trade (Product 12100011 - International merchandise trade, monthly)
-        # NOTE: Vectors 38226270, 38226235, 38226238 may need verification
-        # Using dynamic discovery as fallback
-        "TRADE_BALANCE": None,  # Use dynamic discovery (product 1210001101)
-        "MERCHANDISE_TRADE_BALANCE": None,  # Use dynamic discovery
-        "MERCHANDISE_TRADE": None,  # Use dynamic discovery
-        "EXPORTS": 38226235,  # Domestic exports, monthly (keep for backward compatibility)
-        "IMPORTS": 38226238,  # Imports, monthly (keep for backward compatibility)
-
-        # Interest Rates - StatsCan doesn't publish policy rates (that's Bank of Canada)
-        # However, they do have lending rates in Product 10100122
-        # For now, mark as requiring dynamic discovery
-        # "INTEREST_RATE": Will need to use dynamic discovery or recommend Bank of Canada data
-
-        # Note: Retail by sector, Employment by age/industry, and other dimensional indicators
-        # require coordinate-based queries (fetch_categorical_data or fetch_dynamic_data)
-
-        # Labor Productivity (Table 36-10-0480-01: Labour productivity and related measures)
-        # NOTE: Vector IDs need verification - using dynamic discovery for now
-        # These are added to prevent false positives from metadata search
-        "PRODUCTIVITY": None,  # Use dynamic discovery - Labour productivity, business sector
-        "LABOR_PRODUCTIVITY": None,  # Use dynamic discovery
-        "LABOUR_PRODUCTIVITY": None,  # UK/Canadian spelling
-        "OUTPUT_PER_HOUR": None,  # Use dynamic discovery
-        "PRODUCTIVITY_GROWTH": None,  # Use dynamic discovery - Labour productivity growth rate
-        "LABOR_PRODUCTIVITY_GROWTH": None,  # Use dynamic discovery
-        "LABOUR_PRODUCTIVITY_GROWTH": None,  # UK/Canadian spelling
-        "MULTIFACTOR_PRODUCTIVITY": None,  # Use dynamic discovery
-        "TOTAL_FACTOR_PRODUCTIVITY": None,  # Use dynamic discovery
-        "TFP": None,  # Use dynamic discovery
-        "UNIT_LABOR_COST": None,  # Use dynamic discovery
-        "UNIT_LABOUR_COST": None,  # UK/Canadian spelling
-        "ULC": None,  # Use dynamic discovery
-    }
-
-    # Coordinate-based product mappings for indicators that don't have vector IDs
-    # Format: indicator_name -> (product_id, default_coordinate, description)
-    # Coordinates are 10 dimensions separated by dots (e.g., "1.1.0.0.0.0.0.0.0.0")
-    # Member ID 1 typically means "Total", "Canada", or "All"
-    COORDINATE_PRODUCT_MAPPINGS: Dict[str, tuple] = {
-        # Housing Price Index (Product 18100205 - New housing price index, monthly)
-        # Dimension 0: Geography (1=Canada), Dimension 1: Index type (1=Total house and land)
-        "HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "New housing price index"),
-        "NEW_HOUSING_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "New housing price index"),
-        "NHPI": ("18100205", "1.1.0.0.0.0.0.0.0.0", "New housing price index"),
-        "HOUSE_PRICE_INDEX": ("18100205", "1.1.0.0.0.0.0.0.0.0", "New housing price index"),
-
-        # Immigration (Product 17100040 - Components of international migration, quarterly)
-        # Dimension 0: Geography (1=Canada), Dimension 1: Component (1=Immigrants)
-        "IMMIGRATION": ("17100040", "1.1.0.0.0.0.0.0.0.0", "International migration - Immigrants"),
-        "IMMIGRANTS": ("17100040", "1.1.0.0.0.0.0.0.0.0", "International migration - Immigrants"),
-        "PERMANENT_RESIDENTS": ("17100040", "1.1.0.0.0.0.0.0.0.0", "International migration - Immigrants"),
-        "IMMIGRATION_STATISTICS": ("17100040", "1.1.0.0.0.0.0.0.0.0", "International migration - Immigrants"),
-        "INTERNATIONAL_MIGRATION": ("17100040", "1.1.0.0.0.0.0.0.0.0", "International migration"),
-
-        # Employment by age (Product 14100017 - Labour force characteristics by gender and age)
-        # Dimension 0: Geography (1=Canada), Dimension 1: Labour force characteristic (3=Employment)
-        # Dimension 2: Gender (1=Both sexes), Dimension 3: Age group (1=15+ years or all ages)
-        "EMPLOYMENT_BY_AGE": ("14100017", "1.3.1.1.0.0.0.0.0.0", "Employment by age group"),
-        "LABOUR_FORCE_BY_AGE": ("14100017", "1.3.1.1.0.0.0.0.0.0", "Labour force by age group"),
-        "LABOR_FORCE_BY_AGE": ("14100017", "1.3.1.1.0.0.0.0.0.0", "Labour force by age group"),
-
-        # Merchandise trade balance (Product 12100011 - International merchandise trade)
-        # Dimensions: Geography(1=Canada), Trade(1=Import/2=Export/3=Balance), Basis(1=Customs/2=BOP),
-        #             Seasonal(1=Unadj/2=Adj), Partners(1=All countries)
-        # Note: Balance of Payments (2) with Seasonal adjustment (2) has data
-        "TRADE_BALANCE": ("12100011", "1.3.2.2.1.0.0.0.0.0", "Merchandise trade balance"),
-        "MERCHANDISE_TRADE_BALANCE": ("12100011", "1.3.2.2.1.0.0.0.0.0", "Merchandise trade balance"),
-        "MERCHANDISE_TRADE": ("12100011", "1.2.2.2.1.0.0.0.0.0", "Merchandise exports"),
-    }
-
     # Runtime cache for vector ID -> product ID mappings (populated by metadata search)
     # This cache is built dynamically when indicators are discovered via metadata search
     # Pre-populated with common indicators to avoid slow API resolution (2025-11-21)
@@ -840,38 +692,27 @@ class StatsCanProvider(BaseProvider):
         """
         Get vector ID from indicator name or direct vector ID.
 
-        If indicator not in hardcoded mappings, uses metadata search service
-        to intelligently discover the correct vector ID. Falls back to dynamic
-        WDS discovery if LLM-based selection doesn't find a confident match.
+        Natural-language indicator names are resolved only through provider
+        metadata discovery.  Exact vector IDs may be supplied directly by the
+        user or by an upstream LLM/evidence selection step.
         """
         if vector_id:
             return vector_id
         if not indicator:
             raise ValueError("Vector ID or indicator is required")
 
-        # Try hardcoded mappings first (fast path)
-        key = indicator.upper().replace(" ", "_").replace("-", "_")
-        mapped = self.VECTOR_MAPPINGS.get(key)
-        if mapped:
-            logger.info(f"✅ Using hardcoded mapping for '{indicator}': vector {mapped}")
-            return mapped
-
         # Check if indicator is a numeric string (LLM sometimes returns vector ID directly)
         indicator_stripped = indicator.strip()
         if indicator_stripped.isdigit():
             vector_id_int = int(indicator_stripped)
-            # Validate it's a known vector ID by checking if it's in our mappings values
-            if vector_id_int in self.VECTOR_MAPPINGS.values():
-                logger.info(f"✅ Using numeric indicator as vector ID: {vector_id_int}")
-                return vector_id_int
-            # Even if not in mappings, if it's an 8-digit number it's likely a valid vector ID
+            # Provider-native vector IDs are exact mechanical inputs.
             if len(indicator_stripped) >= 7:
-                logger.info(f"⚠️ Using unverified numeric vector ID: {vector_id_int}")
+                logger.info(f"✅ Using exact numeric vector ID: {vector_id_int}")
                 return vector_id_int
 
-        # If not in hardcoded mappings, try intelligent metadata search (SDMX-first)
+        # If not an exact vector, try intelligent metadata search (SDMX-first)
         if self.metadata_search:
-            logger.info(f"🔍 Indicator '{indicator}' not in hardcoded mappings, searching metadata (SDMX-first)...")
+            logger.info(f"🔍 Searching Statistics Canada metadata for '{indicator}' (SDMX-first)...")
 
             try:
                 # Search metadata catalog (SDMX first, then StatsCan API)
@@ -917,10 +758,8 @@ class StatsCanProvider(BaseProvider):
                                 f"Using dynamic discovery..."
                             )
                         else:
-                            # Numeric vector ID - cache and return
-                            vector_id_int = int(discovered_id)
-                            self.VECTOR_MAPPINGS[key] = vector_id_int
-                            return vector_id_int
+                            # Numeric vector ID selected by metadata/LLM evidence.
+                            return int(discovered_id)
                     else:
                         logger.warning(
                             f"⚠️ Low confidence match for '{indicator}' (confidence: {discovery.get('confidence', 0) if discovery else 0}). "
@@ -930,14 +769,10 @@ class StatsCanProvider(BaseProvider):
             except Exception as e:
                 logger.warning(f"Error during SDMX metadata search: {e}. Falling back to WDS discovery...")
 
-        # Fall back to dynamic WDS discovery
-        logger.info(f"📡 Falling back to WDS dynamic discovery for '{indicator}'")
         raise DataNotAvailableError(
             f"Cannot determine vector ID for '{indicator}' with confidence. "
-            f"Please note: Some Statistics Canada indicators like EMPLOYMENT and RETAIL_SALES "
-            f"are available but require provincial/temporal context. "
-            f"Try: GDP, UNEMPLOYMENT, INFLATION, CPI, HOUSING_STARTS. "
-            f"Or try a different provider like WorldBank or IMF."
+            f"Provide an exact Statistics Canada vector ID or product/table ID, "
+            f"or enable metadata discovery with LLM/evidence adjudication."
         )
 
     def _resolve_geography(self, geography: Optional[str]) -> int:
@@ -1417,24 +1252,23 @@ class StatsCanProvider(BaseProvider):
             # No breakdown specified, use regular fetch
             return await self.fetch_series(params)
 
-        # Get the base indicator's vector ID to find the product
-        indicator_upper = indicator.upper().replace(" ", "_")
-        base_vector = self.VECTOR_MAPPINGS.get(indicator_upper)
-
-        if not base_vector:
-            raise DataNotAvailableError(
-                f"Indicator '{indicator}' not found. Available: GDP, UNEMPLOYMENT, CPI, INFLATION, etc."
-            )
-
-        # Get product ID for this indicator
-        product_id = self.PRODUCT_ID_CACHE.get(base_vector)
-        if not product_id:
+        product_id = self._normalize_metadata_product_id(params.get("productId"))
+        vector_id = params.get("vectorId")
+        if not product_id and vector_id:
             try:
-                product_id = await self._get_product_id_from_vector(base_vector)
-            except Exception:
-                raise DataNotAvailableError(
-                    f"Could not determine product for indicator '{indicator}'"
+                product_id = self._normalize_metadata_product_id(
+                    await self._get_product_id_from_vector(int(vector_id))
                 )
+            except Exception:
+                product_id = None
+        if not product_id and str(indicator or "").strip().isdigit():
+            product_id = self._normalize_metadata_product_id(indicator)
+
+        if not product_id:
+            raise DataNotAvailableError(
+                "StatsCan breakdown queries require an exact productId/table ID "
+                "or vectorId selected upstream by metadata/LLM evidence."
+            )
 
         # Normalize product ID to 8 digits (API requirement)
         # 10-digit IDs like 3610043401 need to be converted to 8-digit: 36100434
@@ -1622,14 +1456,17 @@ class StatsCanProvider(BaseProvider):
     async def fetch_by_coordinate(
         self, params: Dict[str, any]
     ) -> NormalizedData:
-        """Fetch data using coordinate-based query for indicators without vector IDs.
+        """Fetch data using an explicit StatsCan product/coordinate query.
 
-        This method uses the COORDINATE_PRODUCT_MAPPINGS to find the correct product
-        and coordinate for indicators that require dimensional queries.
+        Product and coordinate are provider-native execution parameters.  This
+        method intentionally does not map natural-language indicator names to
+        products or coordinates.
 
         Args:
             params: Dictionary containing:
-                - indicator: Indicator name (must be in COORDINATE_PRODUCT_MAPPINGS)
+                - productId: Exact StatsCan product/table ID
+                - coordinate: Exact WDS coordinate
+                - indicator: Optional display label
                 - periods: Number of recent periods to fetch (default: 240)
                 - startDate, endDate: Optional date range filters
 
@@ -1637,21 +1474,19 @@ class StatsCanProvider(BaseProvider):
             NormalizedData object with metadata and data points
         """
         indicator = params.get("indicator", "")
-        indicator_key = indicator.upper().replace(" ", "_")
         periods = params.get("periods", 240)
         start_date = params.get("startDate")
         end_date = params.get("endDate")
 
-        # Look up in coordinate mappings
-        mapping = self.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
-        if not mapping:
+        product_id = self._normalize_metadata_product_id(params.get("productId"))
+        coordinate = str(params.get("coordinate") or "").strip()
+        if not product_id or not coordinate:
             raise DataNotAvailableError(
-                f"No coordinate mapping found for '{indicator}'. "
-                f"Available: {', '.join(list(self.COORDINATE_PRODUCT_MAPPINGS.keys())[:10])}..."
+                "StatsCan coordinate fetch requires exact productId and coordinate."
             )
 
-        product_id, coordinate, description = mapping
-        logger.info(f"📊 Using coordinate-based query for {indicator}: product={product_id}, coord={coordinate}")
+        description = str(params.get("indicatorLabel") or indicator or f"{product_id}:{coordinate}")
+        logger.info(f"📊 Using exact coordinate query for {description}: product={product_id}, coord={coordinate}")
 
         # Use shared HTTP client pool for better performance
         client = get_http_client()
@@ -1723,8 +1558,9 @@ class StatsCanProvider(BaseProvider):
 
         Args:
             params: Dictionary containing:
-                - indicator: Common indicator name (e.g., "GDP", "UNEMPLOYMENT")
+                - indicator: Natural-language label or exact vector ID
                 - vectorId: Direct vector ID (optional, overrides indicator)
+                - productId + coordinate: Direct coordinate query
                 - periods: Number of recent periods to fetch (default: 120 for 10 years monthly)
 
         Returns:
@@ -1733,18 +1569,9 @@ class StatsCanProvider(BaseProvider):
         indicator = params.get("indicator")
         indicator_key = indicator.upper().replace(" ", "_").replace("-", "_") if indicator else None
 
-        # Priority 1: Check if this indicator requires coordinate-based query
-        if indicator_key and indicator_key in self.COORDINATE_PRODUCT_MAPPINGS:
-            logger.info(f"🔄 Routing {indicator} to coordinate-based query")
+        if params.get("productId") and params.get("coordinate"):
+            logger.info("🔄 Routing exact StatsCan product/coordinate request")
             return await self.fetch_by_coordinate(params)
-
-        # Priority 2: Check if indicator has a vector ID (not None)
-        if indicator_key and indicator_key in self.VECTOR_MAPPINGS:
-            vector_id = self.VECTOR_MAPPINGS.get(indicator_key)
-            if vector_id is None:
-                # Vector is explicitly None - use dynamic discovery instead
-                logger.info(f"🔍 {indicator} has None vector - using dynamic discovery")
-                return await self.fetch_dynamic_data(params)
 
         target_vector = await self._vector_id(
             indicator,
@@ -1780,11 +1607,7 @@ class StatsCanProvider(BaseProvider):
 
         # Get indicator name from parameters or use vector ID
         indicator_name = params.get("indicator", f"Vector {target_vector}")
-        if indicator_name in self.VECTOR_MAPPINGS:
-            # Use the mapped name
-            series_title = f"Canadian {indicator_name}"
-        else:
-            series_title = f"Vector {target_vector}"
+        series_title = str(indicator_name or f"Vector {target_vector}")
 
         # Determine frequency and unit from first data point
         freq_code = vector_data[0].get("frequencyCode", 6)
@@ -1890,7 +1713,7 @@ class StatsCanProvider(BaseProvider):
 
         This is a helper method to find vector IDs for indicators.
         Uses the WDS getAllCubesListLite endpoint to dynamically discover
-        available tables without relying on hardcoded mappings.
+        available tables without relying on provider-local semantic maps.
 
         Alternate search terms must be supplied by retrieval/LLM retry rather
         than provider-local semantic synonym maps.
@@ -2303,20 +2126,6 @@ class StatsCanProvider(BaseProvider):
         search_term = display_indicator.lower().replace("_", " ")
         logger.info(f"📊 Search term: '{search_term}' (normalized from '{indicator}')")
 
-        # --- Defense-in-depth: before treating a numeric indicator as a product ID,
-        # check if the human-readable display_indicator matches a known vector or
-        # coordinate mapping.  This catches cases where the LLM puts a table ID
-        # in params.indicator while the semantic name is in indicatorLabel.
-        if display_indicator and display_indicator != indicator:
-            display_key = display_indicator.upper().replace(" ", "_").replace("-", "_")
-            if display_key in self.VECTOR_MAPPINGS or display_key in self.COORDINATE_PRODUCT_MAPPINGS:
-                logger.info(
-                    f"Redirecting numeric indicator '{indicator}' -> known mapping "
-                    f"'{display_key}' (from display label '{display_indicator}')"
-                )
-                redirect_params = {**params, "indicator": display_key}
-                return await self.fetch_series(redirect_params)
-
         exact_product_id = self._normalize_metadata_product_id(indicator)
         indicator_digits = "".join(ch for ch in str(indicator or "") if ch.isdigit())
         if exact_product_id and indicator_digits and len(indicator_digits) in {8, 10}:
@@ -2712,6 +2521,7 @@ class StatsCanProvider(BaseProvider):
         end_year: Optional[int] = None,
         periods: int = 240,
         indicator_label: Optional[str] = None,
+        product_id: Optional[str] = None,
     ) -> NormalizedData:
         """Fetch data with specific dimension values discovered from table metadata.
 
@@ -2721,9 +2531,7 @@ class StatsCanProvider(BaseProvider):
         list is searched for a match.
 
         Args:
-            base_indicator: Vector mapping key (e.g., "UNEMPLOYMENT_RATE", "CPI",
-                            "EMPLOYMENT").  Must resolve to a known vector or
-                            coordinate-based indicator so we can find the product ID.
+            base_indicator: Display label or exact StatsCan product/vector ID.
             modifiers: Mapping of *dimension hint* -> *search term*.
                        The hint is a loose keyword used to identify the right
                        dimension (e.g., "geography", "sex", "age", "product",
@@ -2738,32 +2546,31 @@ class StatsCanProvider(BaseProvider):
         Returns:
             NormalizedData with the dimension-filtered data.
         """
-        indicator_key = base_indicator.upper().replace(" ", "_").replace("-", "_")
-
-        # 1. Resolve product ID from VECTOR_MAPPINGS or COORDINATE_PRODUCT_MAPPINGS
-        product_id: Optional[str] = None
-        vector_id: Optional[int] = self.VECTOR_MAPPINGS.get(indicator_key)
-        coord_mapping = self.COORDINATE_PRODUCT_MAPPINGS.get(indicator_key)
-
-        if coord_mapping:
-            product_id = self._normalize_metadata_product_id(coord_mapping[0])
-        elif vector_id is not None:
-            cached_pid = self.PRODUCT_ID_CACHE.get(vector_id)
-            if cached_pid:
-                product_id = self._normalize_metadata_product_id(cached_pid)
+        # 1. Resolve product ID from exact upstream evidence only.
+        resolved_product_id: Optional[str] = self._normalize_metadata_product_id(product_id)
+        if not resolved_product_id and str(base_indicator or "").strip().isdigit():
+            candidate = str(base_indicator).strip()
+            if len(candidate) in {8, 10}:
+                resolved_product_id = self._normalize_metadata_product_id(candidate)
             else:
-                try:
-                    product_id = self._normalize_metadata_product_id(
-                        await self._get_product_id_from_vector(vector_id)
-                    )
-                except Exception:
-                    product_id = None
-
-        if not product_id:
+                vector_id = int(candidate)
+                cached_pid = self.PRODUCT_ID_CACHE.get(vector_id)
+                if cached_pid:
+                    resolved_product_id = self._normalize_metadata_product_id(cached_pid)
+                else:
+                    try:
+                        resolved_product_id = self._normalize_metadata_product_id(
+                            await self._get_product_id_from_vector(vector_id)
+                        )
+                    except Exception:
+                        resolved_product_id = None
+        if not resolved_product_id:
             raise DataNotAvailableError(
                 f"Cannot determine Statistics Canada product for '{base_indicator}'. "
-                f"Dimension modifiers require a known base indicator."
+                f"Dimension modifiers require an exact productId/table ID or vectorId "
+                f"selected upstream by metadata/LLM evidence."
             )
+        product_id = resolved_product_id
 
         # 2. Fetch metadata for the product
         metadata = await self._get_cube_metadata(product_id)
@@ -2937,15 +2744,6 @@ class StatsCanProvider(BaseProvider):
         query_lower = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", query_lower)
         # Remove the base indicator words from the query to avoid false positives
         indicator_words = set(base_indicator.lower().replace("_", " ").split())
-
-        # Also include words from all VECTOR_MAPPINGS keys that map to the
-        # same vector ID, so "consumer price index" is noise when base is "CPI".
-        indicator_key = base_indicator.upper().replace(" ", "_").replace("-", "_")
-        _base_vector = self.VECTOR_MAPPINGS.get(indicator_key)
-        if _base_vector is not None:
-            for alias_key, alias_vec in self.VECTOR_MAPPINGS.items():
-                if alias_vec == _base_vector:
-                    indicator_words |= set(alias_key.lower().replace("_", " ").split())
 
         # Also remove common filler words
         filler_words = {

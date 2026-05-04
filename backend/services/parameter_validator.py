@@ -150,7 +150,7 @@ class ParameterValidator:
         """Validate StatsCan query parameters.
 
         NOTE: More lenient validation. StatsCan provider can:
-        - Map indicator names to vector IDs via VECTOR_MAPPINGS
+        - Map indicator names to vector IDs via _SELECTED_VECTOR_CODES
         - Discover unknown indicators via metadata search (SDMX-first)
         - Try unknown vectors as-is (API will validate)
 

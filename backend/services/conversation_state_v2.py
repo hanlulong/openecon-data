@@ -1087,45 +1087,14 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     elif decomposition_from_dimensions:
         decomposition = decomposition_from_dimensions
 
-    # Infer base_indicator (vector mapping key) from the indicator name.
-    # For StatsCan, the indicator resolved by the catalog is often the vector
-    # key (e.g., "UNEMPLOYMENT_RATE", "CPI", "GDP"). Check if it matches a
-    # known VECTOR_MAPPINGS or COORDINATE_PRODUCT_MAPPINGS key.
+    # Preserve an upstream-selected base indicator label for dimension
+    # follow-ups.  Do not infer this from provider-local semantic maps.
     base_indicator: Optional[str] = None
     if indicator:
-        _key = indicator.upper().replace(" ", "_").replace("-", "_")
-        # Check if this is already a vector key (e.g., from catalog resolution)
-        try:
-            from ..providers.statscan import StatsCanProvider
-            if (_key in StatsCanProvider.VECTOR_MAPPINGS
-                    or _key in StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS):
-                base_indicator = _key
-            # Framework fix: if _key is a numeric table/product ID (e.g., "14100287"),
-            # reverse-lookup through PRODUCT_ID_CACHE to find the vector mapping key.
-            # This ensures base_indicator is set for dimension follow-ups.
-            # Prefer the longest (most specific) key, e.g., "UNEMPLOYMENT_RATE" over
-            # "UNEMPLOYMENT", since longer names carry more semantic precision for
-            # downstream coordinate building.
-            elif _key.isdigit():
-                _numeric_id = int(_key)
-                _cached_product = StatsCanProvider.PRODUCT_ID_CACHE.get(_numeric_id)
-                if _cached_product:
-                    _normalized_product = StatsCanProvider._normalize_metadata_product_id(_cached_product)
-                    _candidates = []
-                    for _vec_key, _vec_id in StatsCanProvider.VECTOR_MAPPINGS.items():
-                        if _vec_id is None:
-                            continue
-                        _vec_product = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec_id)
-                        if _vec_product and StatsCanProvider._normalize_metadata_product_id(_vec_product) == _normalized_product:
-                            _candidates.append(_vec_key)
-                    if _candidates:
-                        # Prefer the longest key (most specific, e.g., UNEMPLOYMENT_RATE > UNEMPLOYMENT)
-                        base_indicator = max(_candidates, key=len)
-        except Exception:
-            pass
-        # Also check if the params had __base_indicator from a prior delta path
-        if not base_indicator and params.get("__base_indicator"):
-            base_indicator = params["__base_indicator"]
+        if params.get("__base_indicator"):
+            base_indicator = str(params["__base_indicator"])
+        elif params.get("__semantic_indicator_label"):
+            base_indicator = str(params["__semantic_indicator_label"])
 
     # Pre-resolve StatsCan product ID and cube metadata for dimension follow-ups.
     # Also try to read the provider's in-memory cube metadata cache (populated
@@ -1134,17 +1103,21 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     statscan_cube_metadata_val: Optional[Dict[str, Any]] = None
     if explicit_statscan_product:
         statscan_product_id = explicit_statscan_product_digits
-    if base_indicator:
+    if not statscan_product_id:
         try:
             from ..providers.statscan import StatsCanProvider
-            _vec = StatsCanProvider.VECTOR_MAPPINGS.get(base_indicator)
-            _coord = StatsCanProvider.COORDINATE_PRODUCT_MAPPINGS.get(base_indicator)
-            if _coord:
-                statscan_product_id = str(_coord[0])[:8]
-            elif _vec is not None:
-                _cached_pid = StatsCanProvider.PRODUCT_ID_CACHE.get(_vec)
+            indicator_digits = "".join(ch for ch in str(indicator or "") if ch.isdigit())
+            if len(indicator_digits) in {8, 10}:
+                statscan_product_id = StatsCanProvider._normalize_metadata_product_id(indicator_digits)
+            elif len(indicator_digits) >= 7:
+                _cached_pid = StatsCanProvider.PRODUCT_ID_CACHE.get(int(indicator_digits))
                 if _cached_pid:
-                    statscan_product_id = str(_cached_pid)[:8]
+                    statscan_product_id = StatsCanProvider._normalize_metadata_product_id(_cached_pid)
+        except Exception:
+            pass
+    if statscan_product_id:
+        try:
+            from ..providers.statscan import StatsCanProvider
             # Try reading cube metadata from:
             # 1. Provider's in-memory cache (populated during fetch)
             # 2. Local metadata service file cache (always available)

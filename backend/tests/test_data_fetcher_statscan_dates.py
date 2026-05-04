@@ -33,8 +33,6 @@ def _sample_statscan_series() -> NormalizedData:
 class StatsCanDateDispatchTests(unittest.TestCase):
     def test_dynamic_dispatch_preserves_requested_start_and_end_dates(self) -> None:
         statscan_provider = SimpleNamespace(
-            VECTOR_MAPPINGS={},
-            COORDINATE_PRODUCT_MAPPINGS={},
             PRODUCT_ID_CACHE={},
             fetch_dynamic_data=AsyncMock(return_value=_sample_statscan_series()),
             fetch_series=AsyncMock(side_effect=AssertionError("dynamic path should not use vector fetch")),

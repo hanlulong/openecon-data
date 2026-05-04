@@ -6707,35 +6707,25 @@ class QueryService:
                     )
 
                     # Resolve indicator to a product ID for the batch method.
-                    # Check COORDINATE_PRODUCT_MAPPINGS first (handles CPI, housing,
-                    # immigration, labour force), then fall back to _vector_id.
+                    # Prefer product evidence saved from the selected StatsCan
+                    # candidate/execution state. If absent, exact vector IDs may
+                    # be converted mechanically through provider metadata.
                     indicator_name = intent.indicators[0] if intent.indicators else "Population"
                     product_id = self._infer_statscan_product_id_for_followup(conversation_id, intent)
                     if product_id:
                         logger.info("Decomposition: using follow-up product %s from saved StatsCan execution state", product_id)
                     else:
-                        _indicator_key = indicator_name.upper().replace(" ", "_").replace("-", "_")
-                        _coord = self.statscan_provider.COORDINATE_PRODUCT_MAPPINGS.get(_indicator_key)
-                        if _coord:
-                            # Use product ID from coordinate mapping
-                            product_id = self.statscan_provider._normalize_metadata_product_id(_coord[0])
-                            logger.info("Decomposition: using COORDINATE_PRODUCT_MAPPINGS for %s → product %s", _indicator_key, product_id)
+                        _vec_id = await self.statscan_provider._vector_id(
+                            str(intent.parameters.get("indicator") or indicator_name),
+                            intent.parameters.get("vectorId")
+                        )
+                        _cached_pid = self.statscan_provider.PRODUCT_ID_CACHE.get(_vec_id)
+                        if _cached_pid:
+                            product_id = self.statscan_provider._normalize_metadata_product_id(_cached_pid)
+                            logger.info("Decomposition: exact/discovered vector %s → product %s", _vec_id, product_id)
                         else:
-                            # Fall back to vector ID → product ID resolution.
-                            # _vector_id returns a vector ID (e.g., 2062815).
-                            # fetch_multi_province_data needs a product ID (e.g., 14100287).
-                            # Use PRODUCT_ID_CACHE to map vector → product.
-                            _vec_id = await self.statscan_provider._vector_id(
-                                indicator_name,
-                                intent.parameters.get("vectorId")
-                            )
-                            _cached_pid = self.statscan_provider.PRODUCT_ID_CACHE.get(_vec_id)
-                            if _cached_pid:
-                                product_id = self.statscan_provider._normalize_metadata_product_id(_cached_pid)
-                                logger.info("Decomposition: vector %s → product %s", _vec_id, product_id)
-                            else:
-                                product_id = str(_vec_id)
-                                logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
+                            product_id = str(_vec_id)
+                            logger.warning("Decomposition: no product ID for vector %s, using as-is", _vec_id)
 
                     candidate_product_ids: list[str] = []
                     for candidate in [

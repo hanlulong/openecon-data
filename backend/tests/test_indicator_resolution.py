@@ -28,8 +28,6 @@ class IndicatorResolutionTests(unittest.TestCase):
     def test_statscan_selector_uses_distilled_indicator_phrase_not_full_query(self) -> None:
         svc = SimpleNamespace(
             statscan_provider=SimpleNamespace(
-                VECTOR_MAPPINGS={},
-                COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
@@ -69,8 +67,6 @@ class IndicatorResolutionTests(unittest.TestCase):
         svc = SimpleNamespace(
             settings=SimpleNamespace(use_outcome_decision_stage=True),
             statscan_provider=SimpleNamespace(
-                VECTOR_MAPPINGS={},
-                COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
@@ -108,8 +104,6 @@ class IndicatorResolutionTests(unittest.TestCase):
         svc = SimpleNamespace(
             settings=SimpleNamespace(),
             statscan_provider=SimpleNamespace(
-                VECTOR_MAPPINGS={},
-                COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
@@ -147,8 +141,6 @@ class IndicatorResolutionTests(unittest.TestCase):
         svc = SimpleNamespace(
             settings=SimpleNamespace(allow_retired_indicator_shortcut_final_authority=True),
             statscan_provider=SimpleNamespace(
-                VECTOR_MAPPINGS={},
-                COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
@@ -181,8 +173,6 @@ class IndicatorResolutionTests(unittest.TestCase):
         svc = SimpleNamespace(
             settings=SimpleNamespace(),
             statscan_provider=SimpleNamespace(
-                VECTOR_MAPPINGS={},
-                COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,

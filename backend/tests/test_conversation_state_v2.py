@@ -1348,9 +1348,6 @@ class TestDeltaExtractorDimensionModifier:
             mock_qs = MagicMock()
             mock_statscan = MagicMock()
 
-            # Set up the mappings
-            mock_statscan.VECTOR_MAPPINGS = vector_mappings or {}
-            mock_statscan.COORDINATE_PRODUCT_MAPPINGS = coord_mappings or {}
             mock_statscan.PRODUCT_ID_CACHE = product_id_cache or {}
             mock_statscan._normalize_metadata_product_id = (
                 lambda pid: "".join(ch for ch in str(pid) if ch.isdigit())[:8]

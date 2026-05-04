@@ -168,7 +168,7 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
     found_ids = {finding.pattern_id for finding in findings}
     assert {
         "unified_router_provider_candidate_metadata",
-        "statscan_semantic_product_maps",
+        "imf_translator_or_direct_mapping",
     } <= found_ids
 
 
