@@ -67,7 +67,7 @@ async def test_search_vectors_falls_back_to_local_catalog(monkeypatch, statscan_
     results = await statscan_provider.search_vectors("employment", limit=5)
 
     assert results
-    assert any(result["productId"] == "14100287" for result in results[:3])
+    assert any("employment" in result["title"].lower() for result in results[:3])
 
 
 def test_select_default_member_id_prefers_employment_series(statscan_provider):
@@ -519,10 +519,10 @@ class TestExtractDimensionModifiers:
         assert modifiers.get("geography") == "ONTARIO" or modifiers.get("geography") == "Ontario"
 
     def test_extract_gender_male(self, statscan_provider):
-        """'male' in query should match the Gender/Sex dimension via alias expansion."""
+        """Exact provider member 'Men+' should match the Gender/Sex dimension mechanically."""
         metadata = _get_labour_metadata(statscan_provider)
         modifiers = statscan_provider.extract_dimension_modifiers(
-            query_text="unemployment rate male Canada",
+            query_text="unemployment rate Men+ Canada",
             base_indicator="UNEMPLOYMENT_RATE",
             product_id="14100287",
             cube_metadata=metadata,
@@ -532,10 +532,10 @@ class TestExtractDimensionModifiers:
         assert len(gender_keys) > 0, f"Expected gender modifier, got: {modifiers}"
 
     def test_extract_gender_female(self, statscan_provider):
-        """'female' in query should match the Gender/Sex dimension via alias expansion."""
+        """Exact provider member 'Women+' should match the Gender/Sex dimension mechanically."""
         metadata = _get_labour_metadata(statscan_provider)
         modifiers = statscan_provider.extract_dimension_modifiers(
-            query_text="employment rate female Canada",
+            query_text="employment rate Women+ Canada",
             base_indicator="EMPLOYMENT",
             product_id="14100287",
             cube_metadata=metadata,
@@ -544,10 +544,10 @@ class TestExtractDimensionModifiers:
         assert len(gender_keys) > 0, f"Expected gender modifier, got: {modifiers}"
 
     def test_extract_age_youth(self, statscan_provider):
-        """'youth' in query should match the Age group dimension via alias expansion."""
+        """Exact provider age member should match the Age group dimension mechanically."""
         metadata = _get_labour_metadata(statscan_provider)
         modifiers = statscan_provider.extract_dimension_modifiers(
-            query_text="unemployment rate youth Canada",
+            query_text="unemployment rate 15 to 24 years Canada",
             base_indicator="UNEMPLOYMENT_RATE",
             product_id="14100287",
             cube_metadata=metadata,
@@ -570,7 +570,7 @@ class TestExtractDimensionModifiers:
         """Multiple modifiers should be extracted simultaneously."""
         metadata = _get_labour_metadata(statscan_provider)
         modifiers = statscan_provider.extract_dimension_modifiers(
-            query_text="unemployment rate female Ontario Canada",
+            query_text="unemployment rate Women+ Ontario Canada",
             base_indicator="UNEMPLOYMENT_RATE",
             product_id="14100287",
             cube_metadata=metadata,
@@ -704,7 +704,7 @@ class TestFetchWithDimensionsCoordinates:
 
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
-            modifiers={"gender": "male"},
+            modifiers={"gender": "Men+"},
         )
 
         assert result is not None
@@ -750,7 +750,7 @@ class TestFetchWithDimensionsCoordinates:
 
         result = await statscan_provider.fetch_with_dimensions(
             base_indicator="UNEMPLOYMENT_RATE",
-            modifiers={"geography": "Ontario", "gender": "female", "age": "youth"},
+            modifiers={"geography": "Ontario", "gender": "Women+", "age": "15 to 24 years"},
         )
 
         assert result is not None

@@ -24,22 +24,6 @@ class StatsCanMetadataService:
         self._local_cache_file = Path(__file__).parent.parent / 'data' / 'statscan_metadata_cache.json'
         self._local_cache = self._load_local_cache()
 
-        # Known product IDs for common indicators
-        self.KNOWN_PRODUCTS = {
-            'Labour Force': '14100287',  # Labour Force Survey - unemployment by demographics
-            'labour force': '14100287',
-            'unemployment': '14100287',
-            'employment': '14100287',
-            'Population': '17100005',  # Population estimates by age and gender
-            'population': '17100005',
-            'GDP': '36100402',  # GDP by industry
-            'gdp': '36100402',
-            'Immigration': '17100040',  # Permanent residents by category
-            'immigration': '17100040',
-            'Wages': '14100063',  # Average hourly and weekly earnings
-            'wages': '14100063',
-        }
-
     async def discover_product_for_indicator(self, indicator_name: str) -> Optional[str]:
         """
         Search for a product ID matching the given indicator.
@@ -50,13 +34,7 @@ class StatsCanMetadataService:
         Returns:
             Product ID string (e.g., "14100287") or None if not found
         """
-        # Try known products first (much faster and more reliable)
-        if indicator_name in self.KNOWN_PRODUCTS:
-            product_id = self.KNOWN_PRODUCTS[indicator_name]
-            logger.info(f"📍 Using known product {product_id} for '{indicator_name}'")
-            return product_id
-
-        # Fallback to API search (slower, may timeout)
+        # Search provider metadata instead of relying on curated semantic product maps.
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(f"{self.base_url}/getAllCubesListLite")

@@ -17,6 +17,20 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
+_DIMENSION_MEMBER_VALUE_ALIASES: Dict[str, List[str]] = {
+    # Mechanical normalization after a StatsCan product/table is already
+    # selected.  These aliases map common user-facing dimension values to the
+    # provider's own member labels; they must not select a product/vector/table.
+    "male": ["men+", "men", "male"],
+    "males": ["men+", "men", "male"],
+    "men": ["men+", "men", "male"],
+    "female": ["women+", "women", "female"],
+    "females": ["women+", "women", "female"],
+    "women": ["women+", "women", "female"],
+    "youth": ["15 to 24 years", "15-24", "15 to 24", "youth"],
+    "young": ["15 to 24 years", "15-24", "15 to 24"],
+}
+
 
 class StatsCanProvider(BaseProvider):
     """Statistics Canada Web Data Service (WDS) provider.
@@ -27,29 +41,6 @@ class StatsCanProvider(BaseProvider):
 
     No API key required for basic access.
     """
-
-    # Keyword synonyms for better search matching
-    # Maps indicator keywords to alternative search terms
-    KEYWORD_SYNONYMS: Dict[str, List[str]] = {
-        'HOUSING_PRICE': ['housing price index', 'new housing price', 'NHPI', 'house price'],
-        'HOUSING_PRICE_INDEX': ['housing price index', 'new housing price', 'NHPI'],
-        'BUILDING_PERMITS': ['building permits', 'construction permits', 'building authorization'],
-        'RETAIL_SALES': ['retail trade', 'retail sales', 'retail commodity'],
-        'MANUFACTURING_SALES': ['manufacturing sales', 'manufacturing shipments'],
-        'EMPLOYMENT': ['employment', 'labour force', 'jobs', 'working'],
-        'EMPLOYMENT_BY_AGE': ['employment by age', 'labour force by age', 'employment age group'],
-        'GDP_BY_INDUSTRY': ['gdp by industry', 'gdp industry', 'economic output by sector', 'sector gdp'],
-        'GDP_INDUSTRY': ['gdp by industry', 'industry gdp', 'sector output'],
-        'EXPORTS': ['exports', 'international trade', 'merchandise exports'],
-        'IMPORTS': ['imports', 'international trade', 'merchandise imports'],
-        'IMMIGRATION': ['immigration', 'immigrants', 'permanent residents', 'international migration'],
-        'TRADE_BALANCE': ['trade balance', 'merchandise trade', 'international trade', 'trade surplus', 'trade deficit'],
-        'AGRICULTURE': ['agriculture', 'farming', 'crop', 'livestock'],
-        'FISHING': ['fishing', 'fisheries', 'aquaculture', 'seafood'],
-        'FORESTRY': ['forestry', 'logging', 'timber', 'wood'],
-        'OIL': ['oil', 'crude', 'petroleum', 'energy'],
-        'CONSTRUCTION': ['construction', 'building', 'engineering'],
-    }
 
     # Verified core indicators only (other indicators discovered via metadata search)
     # These vector IDs have been manually verified to be correct (2025-11-21)
@@ -482,39 +473,6 @@ class StatsCanProvider(BaseProvider):
                 normalized[key] = raw_value
         return normalized
 
-    # Common aliases mapping user-friendly terms to terms that appear in StatsCan metadata.
-    # Used by _find_member_id_by_keywords to expand search terms before matching.
-    MEMBER_KEYWORD_ALIASES: Dict[str, List[str]] = {
-        "youth": ["15 to 24 years", "15 to 24"],
-        "young": ["15 to 24 years", "15 to 24"],
-        "female": ["females", "women+", "women"],
-        "females": ["women+", "women"],
-        "women": ["females", "women+"],
-        "woman": ["females", "women+"],
-        "male": ["males", "men+", "men"],
-        "males": ["men+", "men"],
-        "men": ["males", "men+"],
-        "man": ["males", "men+"],
-        "senior": ["65 years and over", "65 years and older"],
-        "seniors": ["65 years and over", "65 years and older"],
-        "elderly": ["65 years and over", "65 years and older"],
-        "working age": ["25 to 54 years", "25 to 54"],
-        "prime age": ["25 to 54 years", "25 to 54"],
-        "core age": ["25 to 54 years", "25 to 54"],
-        "teenager": ["15 to 19 years", "15 to 19"],
-        "teenagers": ["15 to 19 years", "15 to 19"],
-        "teen": ["15 to 19 years", "15 to 19"],
-        "child": ["0 to 14 years", "0 to 4 years"],
-        "children": ["0 to 14 years", "0 to 4 years"],
-        "infant": ["0 to 4 years"],
-        "infants": ["0 to 4 years"],
-        "all": ["total", "both sexes", "all ages"],
-        "both": ["both sexes", "total"],
-        "bc": ["british columbia"],
-        "pei": ["prince edward island"],
-        "nwt": ["northwest territories"],
-    }
-
     def _find_member_id_by_keywords(self, members: List[Dict[str, Any]], keywords: List[str]) -> Optional[int]:
         """Find the best matching member ID using exact-first keyword scoring.
 
@@ -527,13 +485,10 @@ class StatsCanProvider(BaseProvider):
         if not normalized_keywords:
             return None
 
-        # Expand keywords with aliases
         expanded_keywords = list(normalized_keywords)
         for kw in normalized_keywords:
-            aliases = self.MEMBER_KEYWORD_ALIASES.get(kw, [])
-            for alias in aliases:
-                if alias.lower() not in expanded_keywords:
-                    expanded_keywords.append(alias.lower())
+            expanded_keywords.extend(_DIMENSION_MEMBER_VALUE_ALIASES.get(kw, []))
+        expanded_keywords = list(dict.fromkeys(expanded_keywords))
 
         for member in members:
             member_name = self._extract_member_name(member)
@@ -1937,8 +1892,8 @@ class StatsCanProvider(BaseProvider):
         Uses the WDS getAllCubesListLite endpoint to dynamically discover
         available tables without relying on hardcoded mappings.
 
-        Supports synonym expansion for better matching (e.g., "HOUSING_PRICE"
-        matches "housing price index", "new housing price", "NHPI").
+        Alternate search terms must be supplied by retrieval/LLM retry rather
+        than provider-local semantic synonym maps.
 
         Args:
             keyword: Search term (e.g., "unemployment", "GDP", "employment")
@@ -1947,17 +1902,10 @@ class StatsCanProvider(BaseProvider):
         Returns:
             List of matching cubes with productId and titles
         """
-        # Build search terms (original keyword + synonyms)
-        keyword_upper = keyword.upper().replace(" ", "_")
+        # Search with the user/selector-provided text only.  Do not expand with
+        # curated semantic synonyms; alternate terms must come from retrieval or
+        # LLM reject/search, not provider shortcut maps.
         search_terms = [keyword.lower()]
-
-        if keyword_upper in self.KEYWORD_SYNONYMS:
-            synonyms = self.KEYWORD_SYNONYMS[keyword_upper]
-            search_terms.extend([s.lower() for s in synonyms])
-            logger.info(f"   Expanded search with synonyms: {synonyms}")
-
-        # Preserve order while avoiding duplicate terms from synonym expansion.
-        search_terms = list(dict.fromkeys(search_terms))
 
         def cube_relevance_score(cube: Dict[str, Any]) -> float:
             title = str(cube.get("title", "")).lower()
@@ -2007,7 +1955,8 @@ class StatsCanProvider(BaseProvider):
         for product_id, metadata in local_catalog.items():
             title = str(metadata.get("cubeTitleEn", ""))
             title_lower = title.lower()
-            if not any(term in title_lower for term in search_terms):
+            metadata_score = self._score_cube_metadata_relevance(metadata, search_terms)
+            if not any(term in title_lower for term in search_terms) and metadata_score <= 0:
                 continue
 
             archived = "1" if "inactive" in title_lower else "2"
@@ -3060,6 +3009,26 @@ class StatsCanProvider(BaseProvider):
                     best_dim_hint = "geography"
                     break
 
+            if any(kw in dim_name_lower for kw in ["gender", "sex", "age"]):
+                for alias in sorted(_DIMENSION_MEMBER_VALUE_ALIASES, key=len, reverse=True):
+                    pattern = r'(?<![a-z0-9])' + re.escape(alias) + r'(?![a-z0-9])'
+                    if not re.search(pattern, query_lower):
+                        continue
+                    member_id = self._find_member_id_by_keywords(members, [alias])
+                    if member_id is None:
+                        continue
+                    member_name = alias
+                    for member in members:
+                        if member.get("memberId") == member_id:
+                            member_name = self._extract_member_name(member) or alias
+                            break
+                    score = 900 + len(alias)
+                    if score > best_match_score:
+                        best_match_score = score
+                        best_match_term = member_name
+                        best_dim_hint = "age" if "age" in dim_name_lower else "gender"
+                    break
+
             for member in members:
                 member_name = self._extract_member_name(member)
                 if not member_name:
@@ -3139,21 +3108,6 @@ class StatsCanProvider(BaseProvider):
                             best_match_term = member_name
                             best_dim_hint = dim_name_lower.split()[0]
 
-                # Strategy 3: check aliases from MEMBER_KEYWORD_ALIASES
-                # Use word-boundary matching to avoid "men" matching inside "employment"
-                for alias_key, alias_values in self.MEMBER_KEYWORD_ALIASES.items():
-                    if alias_key in query_words:
-                        for alias_val in alias_values:
-                            alias_val_lower = alias_val.lower()
-                            # Use word-boundary-aware matching
-                            alias_pattern = r'(?<![a-z])' + re.escape(alias_val_lower) + r'(?![a-z])'
-                            if re.search(alias_pattern, member_name_lower):
-                                score = 80 + len(alias_key)
-                                if score > best_match_score:
-                                    best_match_score = score
-                                    best_match_term = alias_key  # Use the alias key as search term for _find_member_id_by_keywords
-                                    best_dim_hint = dim_name_lower.split()[0]
-                                break
 
             if best_match_term and best_dim_hint:
                 modifiers[best_dim_hint] = best_match_term
