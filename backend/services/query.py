@@ -42,8 +42,6 @@ from ..routing.unified_router import (
     route_provider as unified_route_provider,
     correct_coingecko_misrouting as unified_correct_coingecko_misrouting,
 )
-from ..services.indicator_translator import IndicatorTranslator
-from ..services.indicator_resolver import get_indicator_resolver
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
 from ..routing.country_resolver import CountryResolver
 from ..routing.unified_router import UnifiedRouter
@@ -154,7 +152,6 @@ from ..services.indicator_clarification import (
     apply_indicator_option_to_intent as _ic_apply_indicator_option_to_intent,
     provider_can_execute_indicator_option as _ic_provider_can_execute_indicator_option,
     build_no_reliable_indicator_match_response as _ic_build_no_reliable_indicator_match_response,
-    get_direct_provider_indicator_translation as _ic_get_direct_provider_indicator_translation,
     collect_indicator_choice_options as _ic_collect_indicator_choice_options,
     infer_query_concept_groups as _ic_infer_query_concept_groups,
     build_multi_concept_query_clarification as _ic_build_multi_concept_query_clarification,
@@ -353,7 +350,6 @@ class QueryService:
 
         # Semantic provider router (default): semantic-router + LiteLLM fallback.
         self.semantic_provider_router: Optional[SemanticProviderRouter] = None
-        self.indicator_translator = IndicatorTranslator()
         if self.settings.use_semantic_provider_router:
             self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
             logger.info("🧭 SemanticProviderRouter enabled (USE_SEMANTIC_PROVIDER_ROUTER=true)")
@@ -992,14 +988,6 @@ class QueryService:
     ) -> QueryResponse:
         """Delegates to :func:`indicator_clarification.build_no_reliable_indicator_match_response`."""
         return _ic_build_no_reliable_indicator_match_response(conversation_id, intent, query, self, processing_steps)
-
-    def _get_direct_provider_indicator_translation(
-        self,
-        provider: str,
-        indicator_query: str,
-    ) -> Optional[str]:
-        """Delegates to :func:`indicator_clarification.get_direct_provider_indicator_translation`."""
-        return _ic_get_direct_provider_indicator_translation(self, provider, indicator_query)
 
     def _collect_indicator_choice_options(
         self,

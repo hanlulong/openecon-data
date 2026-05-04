@@ -139,9 +139,8 @@ def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> N
         "backend/routing/hybrid_router.py",
         "backend/routing/semantic_provider_router.py",
         "backend/services/indicator_resolution.py",
-        "backend/services/indicator_resolver.py",
         "backend/services/indicator_selector.py",
-        "backend/services/indicator_translator.py",
+        "backend/services/indicator_clarification.py",
         "backend/services/query.py",
         "backend/services/query_helpers.py",
         "backend/services/provider_fallback.py",
@@ -169,10 +168,45 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
     found_ids = {finding.pattern_id for finding in findings}
     assert {
         "unified_router_provider_candidate_metadata",
-        "legacy_resolver_catalog_translator_authority",
-        "universal_indicator_translator_map",
         "statscan_semantic_product_maps",
     } <= found_ids
+
+
+def test_legacy_resolver_and_translator_modules_are_removed() -> None:
+    retired_paths = [
+        Path("backend/services/indicator_resolver.py"),
+        Path("backend/services/indicator_translator.py"),
+    ]
+
+    assert [path.as_posix() for path in retired_paths if path.exists()] == []
+
+
+def test_runtime_code_does_not_import_retired_resolver_or_translator() -> None:
+    forbidden = (
+        "indicator_resolver",
+        "indicator_translator",
+        "IndicatorResolver",
+        "IndicatorTranslator",
+        "get_indicator_resolver",
+        "get_indicator_translator",
+        "translate_indicator",
+    )
+    scanned = [
+        *Path("backend/services").glob("*.py"),
+        *Path("backend/providers").glob("*.py"),
+        *Path("backend/routing").glob("*.py"),
+    ]
+
+    offenders: list[str] = []
+    for path in scanned:
+        if path.name in {"semantic_shortcut_audit.py"}:
+            continue
+        text = path.read_text()
+        for marker in forbidden:
+            if marker in text:
+                offenders.append(f"{path}:{marker}")
+
+    assert offenders == []
 
 
 def test_no_unreviewed_banned_semantic_final_authority_findings() -> None:
@@ -199,6 +233,19 @@ def test_unified_router_has_no_banned_provider_final_authority_findings() -> Non
     ]
 
     assert unified_banned == []
+
+
+def test_indicator_clarification_has_no_legacy_resolver_option_authority() -> None:
+    findings = scan_semantic_shortcuts()
+
+    clarification_banned = [
+        f"{finding.path}:{finding.pattern_id}:{finding.line_number}:{finding.line}"
+        for finding in findings
+        if finding.path.as_posix() == "backend/services/indicator_clarification.py"
+        and finding.pattern_id == "indicator_clarification_legacy_resolver_options"
+    ]
+
+    assert clarification_banned == []
 
 
 def test_provider_fallback_has_no_legacy_resolver_or_catalog_provider_choice() -> None:

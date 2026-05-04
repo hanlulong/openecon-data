@@ -11,7 +11,6 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client, effective_timeout
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
-from ..services.indicator_translator import get_indicator_translator
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -25,8 +24,8 @@ class EurostatProvider(BaseProvider):
     """Eurostat Statistics API provider for EU economic data using SDMX 3.0 endpoints."""
 
     # Indicator name -> dataset code mappings (for quick lookup)
-    # NOTE: IMF-style codes (NGDP, LUR, etc.) are handled by IndicatorTranslator
-    # This mapping only contains Eurostat-native indicator names
+    # This mapping only contains Eurostat-native indicator names. Cross-provider
+    # semantic translation is intentionally not performed inside the provider.
     DATASET_MAPPINGS: Dict[str, str] = {
         # National Accounts
         "GDP": "nama_10_gdp",
@@ -488,7 +487,7 @@ class EurostatProvider(BaseProvider):
         return self.DATASET_MAPPINGS.get(indicator.upper())
 
     async def _resolve_dataset_code(self, indicator: str) -> tuple[str, Optional[str]]:
-        """Resolve Eurostat dataset code through hardcoded mappings, translator, or metadata search."""
+        """Resolve Eurostat dataset code through mechanical codes or metadata search."""
         # Step 1: Try direct mapping
         mapped = self._dataset_code(indicator)
         if mapped:
@@ -508,16 +507,6 @@ class EurostatProvider(BaseProvider):
                 )
                 if looks_like_dataset_code:
                     return candidate_code, self._dataset_labels.get(candidate_code)
-
-        # Step 3: Try cross-provider indicator translator (handles IMF codes like NGDP, LUR, etc.)
-        translator = get_indicator_translator()
-        translated_code, concept_name = translator.translate_indicator(indicator, "EUROSTAT")
-        if translated_code:
-            translated_code = str(translated_code).strip()
-            if re.fullmatch(r"[A-Za-z0-9_]+", translated_code):
-                translated_code = translated_code.lower()
-            logger.info(f"Eurostat: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
-            return translated_code, concept_name
 
         if not self.metadata_search:
             raise DataNotAvailableError(

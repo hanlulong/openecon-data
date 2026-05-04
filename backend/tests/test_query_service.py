@@ -317,7 +317,7 @@ class QueryServiceTests(unittest.TestCase):
             def resolve(self, query, provider=None, **kwargs):
                 return _Resolved()
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.world_bank_provider, "fetch_indicator", return_value=[sample_series()]) as fetch_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
@@ -384,7 +384,7 @@ class QueryServiceTests(unittest.TestCase):
 
         fake_indicator_selector.IndicatorSelector = _ShouldNotBeUsed
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch("backend.services.indicator_resolution.looks_like_exact_provider_title_match", return_value=True), \
              patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
@@ -2294,7 +2294,7 @@ class QueryServiceTests(unittest.TestCase):
                 key = (provider or "").upper()
                 return mapping.get(key)
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.object(self.service, "_get_fallback_providers", return_value=["IMF", "WORLDBANK"]):
             clarification = self.service._build_uncertain_result_clarification(  # pylint: disable=protected-access
                 conversation_id="conv-1",
@@ -2354,7 +2354,7 @@ class QueryServiceTests(unittest.TestCase):
         )
         with patch.object(self.service, "_needs_indicator_clarification", return_value=True), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=[current_option]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = self.service._build_uncertain_result_clarification(  # pylint: disable=protected-access
                 conversation_id="conv-clar-canonical-filter",
                 query=intent.originalQuery,
@@ -2579,7 +2579,7 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
              patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -2624,7 +2624,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-duplicate-labels",
@@ -2656,7 +2656,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("options should not be collected")), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-strong-primary",
@@ -2693,7 +2693,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-large-country-set",
@@ -2753,7 +2753,7 @@ class QueryServiceTests(unittest.TestCase):
                 )
             return None
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(side_effect=_resolve))):
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(side_effect=_resolve))):
             options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
                 "compare employment rate across G20 member countries",
                 intent,
@@ -2787,7 +2787,10 @@ class QueryServiceTests(unittest.TestCase):
             self.service,
             "_collect_indicator_choice_options",
             return_value=["[WorldBank] Imports of goods and services (% of GDP) (NE.IMP.GNFS.ZS)"],
-        ), patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+        ), patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            AsyncMock(return_value=SelectionResult(source="no_candidates")),
+        ):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-auto-switch",
@@ -2835,7 +2838,10 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_indicator_resolution_threshold", return_value=0.5), \
              patch.object(self.service, "_score_resolved_indicator_relevance", return_value=0.9), \
              patch.object(self.service, "_minimum_resolved_relevance_threshold", return_value=0.1), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -2882,7 +2888,10 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_indicator_resolution_threshold", return_value=0.5), \
              patch.object(self.service, "_score_resolved_indicator_relevance", return_value=0.9), \
              patch.object(self.service, "_minimum_resolved_relevance_threshold", return_value=0.1), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-cross-provider-primary",
@@ -2915,7 +2924,10 @@ class QueryServiceTests(unittest.TestCase):
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
              patch.object(self.service, "_judge_resolved_indicator_match", new=AsyncMock(return_value=False)), \
              patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=None))):
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -4330,7 +4342,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             clarification = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-prefetch-no-reliable-match",
@@ -6589,7 +6601,7 @@ class QueryServiceTests(unittest.TestCase):
                 return ["[BIS] Total credit (HH_ALL)"]
             return []
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.object(self.service, "_get_fallback_providers", return_value=["BIS"]), \
              patch.object(self.service, "_collect_indicator_choice_options", side_effect=_options), \
              patch(
@@ -6607,7 +6619,10 @@ class QueryServiceTests(unittest.TestCase):
                 )
             )
 
-        self.assertIsNone(response)
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertTrue(response.clarificationNeeded)
+        self.assertIn("without guessing", " ".join(response.clarificationQuestions or []))
         self.assertEqual(intent.apiProvider, "STATSCAN")
         self.assertEqual(intent.indicators, ["total private households in Canada"])
         self.assertNotIn("indicator", intent.parameters)
@@ -6621,9 +6636,11 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="imports share of gdp in china",
         )
 
-        with patch("backend.services.query.get_indicator_resolver") as get_resolver, \
-             patch.object(self.service, "_collect_indicator_choice_options", return_value=[]):
-            get_resolver.return_value.resolve.return_value = None
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector.select",
+                 AsyncMock(return_value=SelectionResult(source="no_candidates")),
+             ):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-direct-translation",
@@ -6638,12 +6655,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(response)
         assert response is not None
         self.assertTrue(response.clarificationNeeded)
-        self.assertIsNone(
-            self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
-                "WORLDBANK",
-                "imports as % of GDP",
-            )
-        )
+        self.assertFalse(hasattr(self.service, "_get_direct_provider_indicator_translation"))
 
     def test_prefetch_clarification_uses_statscan_selector_options_without_guessing(self) -> None:
         intent = ParsedIntent(
@@ -6667,14 +6679,12 @@ class QueryServiceTests(unittest.TestCase):
             ],
         )
 
-        with patch("backend.services.query.get_indicator_resolver") as get_resolver, \
-             patch.object(self.service, "_get_fallback_providers", return_value=[]), \
+        with patch.object(self.service, "_get_fallback_providers", return_value=[]), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
              patch(
                  "backend.services.indicator_selector.IndicatorSelector.select",
                  AsyncMock(return_value=selector_result),
              ):
-            get_resolver.return_value.resolve.return_value = None
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id="conv-statscan-selector-clarify",
@@ -6710,10 +6720,7 @@ class QueryServiceTests(unittest.TestCase):
                     source="llm_pick",
                 )
             ),
-        ) as select_mock, patch(
-            "backend.services.query.get_indicator_resolver",
-            side_effect=AssertionError("legacy resolver should not run before StatsCan selector"),
-        ), patch.object(
+        ) as select_mock, patch.object(
             self.service,
             "_collect_indicator_choice_options",
             side_effect=AssertionError("cross-provider options should not be collected"),
@@ -6735,13 +6742,8 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters["indicator"], "14100375")
         self.assertEqual(intent.parameters["__semantic_indicator_label"], "unemployment rate")
 
-    def test_get_direct_provider_indicator_translation_is_disabled(self) -> None:
-        self.assertIsNone(
-            self.service._get_direct_provider_indicator_translation(  # pylint: disable=protected-access
-                "OECD",
-                "GDP",
-            )
-        )
+    def test_direct_provider_indicator_translation_surface_is_removed(self) -> None:
+        self.assertFalse(hasattr(self.service, "_get_direct_provider_indicator_translation"))
 
     def test_is_resolved_indicator_plausible_accepts_age_variant(self) -> None:
         """Age-demographic variant indicators are now accepted as plausible.
@@ -6799,7 +6801,7 @@ class QueryServiceTests(unittest.TestCase):
         with patch.object(self.service.pipeline, "parse_and_route", AsyncMock(return_value=parse_result)), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
              patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
              patch.object(self.service, "_fetch_data", side_effect=AssertionError("fetch should not run")):
             response = run(self.service.process_query("gdp to debt ratio in china", conversation_id=conv_id))
 
@@ -6851,7 +6853,7 @@ class QueryServiceTests(unittest.TestCase):
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=options), \
              patch.object(self.service, "_filter_viable_indicator_choice_options", AsyncMock(return_value=options)), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))), \
              patch.object(self.service, "_execute_with_langgraph", new_callable=AsyncMock, side_effect=AssertionError("agent should not run")):
             response = run(
                 self.service._execute_with_orchestrator(  # pylint: disable=protected-access
@@ -6891,7 +6893,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -6929,7 +6931,7 @@ class QueryServiceTests(unittest.TestCase):
             metadata = {}
 
         with patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=_Resolved()))):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=_Resolved()))):
             response = run(
                 self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
                     conversation_id=conv_id,
@@ -7107,7 +7109,7 @@ class QueryServiceTests(unittest.TestCase):
             )
         ]
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=Mock(resolve=Mock(return_value=None))):
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=Mock(resolve=Mock(return_value=None))):
             needs = self.service._needs_indicator_clarification(  # pylint: disable=protected-access
                 query=intent.originalQuery,
                 data=aligned_series,
@@ -7260,27 +7262,22 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="gdp to debt ratio in china and uk",
         )
 
-        class _Resolved:
-            def __init__(self, provider: str, code: str, name: str, confidence: float):
-                self.provider = provider
-                self.code = code
-                self.name = name
-                self.confidence = confidence
-                self.source = "catalog"
-
         captured_queries = []
 
-        class _Resolver:
-            def resolve(self, query, provider=None, **kwargs):
-                captured_queries.append(str(query))
-                mapping = {
-                    "IMF": _Resolved("IMF", "GGXWDG_NGDP", "General government gross debt (% of GDP)", 0.95),
-                    "WORLDBANK": _Resolved("WORLDBANK", "GC.DOD.TOTL.GD.ZS", "Central government debt, total (% of GDP)", 0.92),
-                }
-                return mapping.get((provider or "").upper())
+        def _candidate_search(_self, query, provider, top_k=50):  # noqa: ANN001
+            captured_queries.append(str(query))
+            mapping = {
+                "IMF": ([ ("GGXWDG_NGDP", "General government gross debt (% of GDP)") ], [0.95]),
+                "WORLDBANK": ([ ("GC.DOD.TOTL.GD.ZS", "Central government debt, total (% of GDP)") ], [0.92]),
+            }
+            return mapping.get(str(provider or "").upper(), ([], []))
 
         with patch.object(self.service, "_select_indicator_query_for_resolution", return_value="GDP (current US$)"), \
-             patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+             patch(
+                 "backend.services.indicator_selector.IndicatorSelector._get_candidates_with_scores",
+                 autospec=True,
+                 side_effect=_candidate_search,
+             ), \
              patch.object(self.service, "_get_fallback_providers", return_value=["IMF"]):
             options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
                 query="gdp to debt ratio in china and uk",
@@ -7302,25 +7299,19 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="producer price inflation trend in the us and germany",
         )
 
-        class _Resolved:
-            def __init__(self, provider: str, code: str, name: str, confidence: float):
-                self.provider = provider
-                self.code = code
-                self.name = name
-                self.confidence = confidence
-                self.source = "catalog"
+        def _candidate_search(_self, query, provider, top_k=50):  # noqa: ANN001
+            mapping = {
+                "OECD": ([ ("PPI", "Producer Price Index") ], [0.92]),
+                "WORLDBANK": ([ ("FP.WPI.TOTL.ZG", "Producer price inflation") ], [0.85]),
+                "FRED": ([ ("PPIACO", "Producer Price Index by Commodity") ], [0.95]),
+            }
+            return mapping.get(str(provider or "").upper(), ([], []))
 
-        class _Resolver:
-            def resolve(self, query, provider=None, **kwargs):
-                mapping = {
-                    "OECD": _Resolved("OECD", "PPI", "Producer Price Index", 0.92),
-                    "WORLDBANK": _Resolved("WORLDBANK", "FP.WPI.TOTL.ZG", "Producer price inflation", 0.85),
-                    "FRED": _Resolved("FRED", "PPIACO", "Producer Price Index by Commodity", 0.95),
-                }
-                return mapping.get((provider or "").upper())
-
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
-             patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK", "FRED"]):
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector._get_candidates_with_scores",
+            autospec=True,
+            side_effect=_candidate_search,
+        ), patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK", "FRED"]):
             options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
                 query=intent.originalQuery,
                 intent=intent,
@@ -7341,23 +7332,16 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="debt service ratio in china",
         )
 
-        class _Resolved:
-            def __init__(self, provider: str, code: str, name: str, confidence: float):
-                self.provider = provider
-                self.code = code
-                self.name = name
-                self.confidence = confidence
-                self.source = "database"
-                self.metadata = {"description": ""}
+        def _candidate_search(_self, query, provider, top_k=50):  # noqa: ANN001
+            if str(provider or "").upper() == "BIS":
+                return ([ ("WS_DSR", "WS_DSR") ], [0.9])
+            return ([], [])
 
-        class _Resolver:
-            def resolve(self, query, provider=None, **kwargs):
-                if (provider or "").upper() == "BIS":
-                    return _Resolved("BIS", "WS_DSR", "WS_DSR", 0.9)
-                return None
-
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
-             patch.object(self.service, "_get_fallback_providers", return_value=[]), \
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector._get_candidates_with_scores",
+            autospec=True,
+            side_effect=_candidate_search,
+        ), patch.object(self.service, "_get_fallback_providers", return_value=[]), \
              patch.object(self.service.bis_provider, "_lookup_dataflow_info", return_value=("Debt service ratios", "Debt service ratios")):
             options = self.service._collect_indicator_choice_options(  # pylint: disable=protected-access
                 query=intent.originalQuery,
@@ -7477,7 +7461,7 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_needs_indicator_clarification", return_value=True), \
              patch.object(self.service, "_collect_indicator_choice_options", return_value=[]), \
-             patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()):
+             patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()):
             clarification = self.service._build_uncertain_result_clarification(  # pylint: disable=protected-access
                 conversation_id="conv-severe-mismatch",
                 query="import share of gdp in china and us",
@@ -7513,7 +7497,7 @@ class QueryServiceTests(unittest.TestCase):
             def resolve(self, *args, **kwargs):
                 return _Resolved()
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch(
                  "backend.services.indicator_selector.IndicatorSelector.select",
                  AsyncMock(return_value=SelectionResult(source="no_candidates")),
@@ -7549,7 +7533,7 @@ class QueryServiceTests(unittest.TestCase):
                 return _Resolved()
 
         # Mock IndicatorSelector to raise ImportError (falls through to legacy resolver)
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
@@ -7602,7 +7586,7 @@ class QueryServiceTests(unittest.TestCase):
         from backend.services.indicator_selector import SelectionResult as _SelectionResult
         fake_indicator_selector.SelectionResult = _SelectionResult
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
@@ -7638,7 +7622,7 @@ class QueryServiceTests(unittest.TestCase):
             def resolve(self, *args, **kwargs):
                 return _Resolved()
 
-        with patch("backend.services.query.get_indicator_resolver", return_value=_Resolver()), \
+        with patch("backend.services.query.get_indicator_resolver", create=True, return_value=_Resolver()), \
              patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(
@@ -8771,11 +8755,8 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params.get("baseCurrency"), "USD")
         self.assertEqual(params.get("targetCurrency"), "CHF")
 
-    def test_get_fallback_providers_does_not_use_legacy_resolver_or_catalog(self) -> None:
+    def test_get_fallback_providers_does_not_use_catalog_semantic_shortcuts(self) -> None:
         with patch(
-            "backend.services.indicator_resolver.get_indicator_resolver",
-            side_effect=AssertionError("legacy resolver must not choose fallback providers"),
-        ), patch(
             "backend.services.catalog_service.get_fallback_providers",
             side_effect=AssertionError("catalog fallback must not choose fallback providers"),
         ):

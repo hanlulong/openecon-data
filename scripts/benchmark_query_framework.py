@@ -4,7 +4,8 @@ Framework benchmark runner for OpenEcon query intelligence.
 
 Measures two core dimensions:
 1. Routing accuracy (query -> provider) using deterministic router.
-2. Series matching accuracy (query + provider -> indicator selection quality) using IndicatorResolver.
+2. Series retrieval quality (query + provider -> candidate indicator evidence)
+   using IndicatorSelector retrieval.
 
 Design goals:
 - Deterministic and local (no API calls required).
@@ -35,7 +36,7 @@ from backend.services.catalog_service import (  # noqa: E402
     get_indicator_codes,
     load_catalog,
 )
-from backend.services.indicator_resolver import get_indicator_resolver  # noqa: E402
+from backend.services.indicator_selector import IndicatorSelector  # noqa: E402
 
 
 @dataclass
@@ -369,20 +370,24 @@ def run_routing_benchmark(cases: List[RoutingCase]) -> Dict[str, Any]:
 
 
 def run_series_benchmark(cases: List[SeriesCase], strict_code_match: bool = False) -> Dict[str, Any]:
-    resolver = get_indicator_resolver()
+    selector = IndicatorSelector()
     concept_profiles = build_concept_profiles(load_catalog())
     results: List[SeriesResult] = []
     term_type_totals: Dict[str, Dict[str, int]] = {"primary": {"total": 0, "passed": 0}, "secondary": {"total": 0, "passed": 0}}
     reason_totals: Dict[str, int] = {"exact_code": 0, "concept_match": 0, "failed": 0}
 
     for case in cases:
-        resolved = resolver.resolve(case.query, provider=case.provider, use_cache=False)
-        predicted_code = resolved.code if resolved else None
-        predicted_provider = resolved.provider if resolved else None
-        predicted_name = resolved.name if resolved else None
-        confidence = resolved.confidence if resolved else None
-        source = resolved.source if resolved else None
-        provider_match = normalize_provider(predicted_provider or "") == normalize_provider(case.provider)
+        candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
+            case.query,
+            case.provider,
+            top_k=10,
+        )
+        predicted_code = candidates[0][0] if candidates else None
+        predicted_provider = case.provider if candidates else None
+        predicted_name = candidates[0][1] if candidates else None
+        confidence = scores[0] if scores else None
+        source = "selector_retrieval_top1" if candidates else None
+        provider_match = bool(candidates)
 
         expected_code_set = {normalize_code(c) for c in case.expected_codes if c}
         predicted_code_norm = normalize_code(predicted_code)
@@ -392,7 +397,6 @@ def run_series_benchmark(cases: List[SeriesCase], strict_code_match: bool = Fals
             [
                 str(predicted_name or ""),
                 str(predicted_code or ""),
-                str((resolved.metadata or {}).get("description", "") if resolved else ""),
             ]
         ).strip()
         predicted_concept, concept_score = infer_best_concept(predicted_text, concept_profiles)

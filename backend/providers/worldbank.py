@@ -1036,12 +1036,12 @@ class WorldBankProvider(BaseProvider):
         2. Exact provider-native title match from local metadata -- mechanical
         3. Metadata search (SDMX + WB REST API + LLM) -- bounded network I/O
 
-        The legacy universal IndicatorResolver/catalog/translator path is not
-        used as final semantic authority here.
+        Retired universal semantic shortcut modules are not used as final
+        semantic authority here.
         """
         # Short-circuit: if indicator is already a valid WorldBank code
         # (dotted WDI forms and public REST codes with underscores/digits),
-        # return it directly without re-resolving through the resolver.
+        # return it directly without re-running semantic selection.
         # This prevents double-resolution where an already-correct code
         # gets re-resolved to a different (wrong) indicator.
         if self._looks_like_worldbank_indicator_code(indicator):

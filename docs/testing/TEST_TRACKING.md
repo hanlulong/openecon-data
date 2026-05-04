@@ -1,3 +1,5 @@
+> **Historical note**: This file records older test/fix attempts. References to retired resolver/translator modules are historical and must not be used as implementation guidance. Current fixes must use retrieval, LLM adjudication, metadata discovery, and fail-closed behavior.
+
 # openecon-data Test Tracking
 
 ## Latest Test Results: December 28, 2025 - Session 10 (Country-Aware Fallbacks)
@@ -33,7 +35,7 @@ Major infrastructure improvements: country-aware fallback validation and smart p
 **Problem:** Static fallback chains (StatsCan → WorldBank → OECD) didn't include providers that have specific indicators.
 
 **Fix Applied:**
-- `_get_fallback_providers()` now uses IndicatorResolver (330K+ indicators)
+- `_get_fallback_providers()` now uses retired resolver module (330K+ indicators)
 - Searches all providers to find which ones have the requested indicator
 - Ranks fallbacks by confidence score
 - Combined with country validation ensures correct data
@@ -149,7 +151,7 @@ This session ran a comprehensive 100-query test suite with NEW unique queries fo
 
 ---
 
-#### Fix 2: Consumer Credit Concept (`indicator_translator.py`, `fred.py`)
+#### Fix 2: Consumer Credit Concept (`retired translator module`, `fred.py`)
 
 **Problem:** "Consumer credit outstanding US" returned no data - system confused consumer credit with household debt.
 
@@ -165,7 +167,7 @@ This session ran a comprehensive 100-query test suite with NEW unique queries fo
 
 ---
 
-#### Fix 3: Eurostat Interest Rate Support (`eurostat.py`, `indicator_translator.py`)
+#### Fix 3: Eurostat Interest Rate Support (`eurostat.py`, `retired translator module`)
 
 **Problem:** "Real interest rate Germany" failed - Eurostat EI_MFIR_M dataset not found.
 
@@ -177,7 +179,7 @@ This session ran a comprehensive 100-query test suite with NEW unique queries fo
 - Added 17 interest rate mappings to Eurostat DATASET_MAPPINGS
 - Added EI_MFIR_M default filters (MF-LTGBY-RT for long-term government bond yields)
 - Fixed case-insensitive frequency detection for monthly datasets
-- Added Eurostat to interest_rate providers in IndicatorTranslator
+- Added Eurostat to interest_rate providers in retired translator module
 
 **Result:** Real interest rate Germany now returns 71 data points
 
@@ -198,17 +200,17 @@ This session ran a comprehensive 100-query test suite with NEW unique queries fo
 
 ---
 
-#### Fix 5: Indicator Resolution Priority (`indicator_resolver.py`)
+#### Fix 5: Indicator Resolution Priority (`retired resolver module`)
 
 **Problem:** FTS5 database search returned discontinued series (M10092USM144NNBR) before checking curated mappings.
 
 **Root Cause:** Resolution priority was:
 1. Exact code match
 2. FTS5 search (returns discontinued series with 0.8 confidence)
-3. IndicatorTranslator (skipped because 0.8 >= 0.7)
+3. retired translator module (skipped because 0.8 >= 0.7)
 
 **Fix Applied:**
-- Moved IndicatorTranslator check BEFORE FTS5 database search
+- Moved retired translator module check BEFORE FTS5 database search
 - Curated universal concepts now take priority over raw database matches
 
 **Result:** Consumer credit now correctly resolves to TOTALSL (current series)
@@ -452,11 +454,11 @@ providers:
 - "Household debt to GDP ratio UK" → IMF (5 data points)
 - "Household debt South Korea" → Correct routing to household-specific indicators
 
-#### Fix 3: BIS Policy Rate Synonyms (indicator_translator.py)
+#### Fix 3: BIS Policy Rate Synonyms (retired translator module)
 
 **Problem:** "deposit facility rate" and "cash rate" queries failed to find BIS central bank policy rates.
 
-**Root Cause:** IndicatorTranslator's interest_rate concept lacked these common policy rate synonyms.
+**Root Cause:** retired translator module's interest_rate concept lacked these common policy rate synonyms.
 
 **Fix Applied:**
 ```python
@@ -590,7 +592,7 @@ All 5 verification queries passed after infrastructure fixes:
 
 ### Infrastructure Fixes Applied
 
-#### Fix 1: Indicator Translation Fuzzy Threshold (indicator_translator.py)
+#### Fix 1: Indicator Translation Fuzzy Threshold (retired translator module)
 - Changed fuzzy matching threshold from 0.7 to 0.85 for short queries (<15 chars)
 - Prevents "M2 Growth" incorrectly matching "GDP Growth" (73.7% similarity)
 

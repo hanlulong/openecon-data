@@ -303,7 +303,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(params["endPeriod"], "2019")
 
     def test_fred_series_id_explicit_codes_passthrough(self) -> None:
-        """Test that explicit FRED series codes pass through directly without resolver."""
+        """Test that explicit FRED series codes pass through directly."""
         provider = FREDProvider(api_key="test-key")
 
         # Short alphanumeric codes that look like FRED series IDs pass through directly
@@ -314,16 +314,12 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(result, code,
                     f"Explicit code '{code}' should pass through directly")
 
-    def test_fred_series_id_rejects_natural_language_without_legacy_resolver(self) -> None:
-        """Natural language must use async metadata discovery, not legacy resolver."""
+    def test_fred_series_id_rejects_natural_language_without_shortcut_fallback(self) -> None:
+        """Natural language must use async metadata discovery, not retired shortcuts."""
         provider = FREDProvider(api_key="test-key")
 
-        with patch(
-            "backend.services.indicator_resolver.get_indicator_resolver",
-            side_effect=AssertionError("legacy resolver must not run"),
-        ):
-            with self.assertRaises(DataNotAvailableError):
-                provider._series_id("GDP growth", None)
+        with self.assertRaises(DataNotAvailableError):
+            provider._series_id("GDP growth", None)
 
     def test_fred_series_id_explicit_override(self) -> None:
         """Test that explicit series IDs override indicator names."""
@@ -1290,15 +1286,13 @@ class ProviderTests(unittest.TestCase):
                     }
                 return None
 
-        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()), \
-             patch("backend.providers.imf.get_indicator_translator") as translator_factory:
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
             code, label = run(provider._resolve_indicator_code("HKG_CPI_PCPI_HEG_L_PCH_YOY_PT"))
 
         self.assertEqual(code, "HKG_CPI_PCPI_HEG_L_PCH_YOY_PT")
         self.assertIsNotNone(label)
-        translator_factory.assert_not_called()
 
-    def test_imf_short_non_weo_catalog_code_does_not_bypass_translator(self) -> None:
+    def test_imf_short_non_weo_catalog_code_fails_closed_without_translator(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
         class _Lookup:
@@ -1311,16 +1305,9 @@ class ProviderTests(unittest.TestCase):
                     }
                 return None
 
-        translator = MagicMock()
-        translator.translate_indicator.return_value = ("NGDP_RPCH", "Real GDP growth")
-
-        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()), \
-             patch("backend.providers.imf.get_indicator_translator", return_value=translator):
-            code, label = run(provider._resolve_indicator_code("ABC"))
-
-        self.assertEqual(code, "NGDP_RPCH")
-        self.assertEqual(label, "Real GDP growth")
-        translator.translate_indicator.assert_called_once_with("ABC", "IMF")
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            with self.assertRaises(DataNotAvailableError):
+                run(provider._resolve_indicator_code("ABC"))
 
     def test_imf_non_datamapper_trade_code_uses_public_sdmx_v21(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
@@ -1651,15 +1638,11 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(first["time_dimension_ids"], ["TIME_PERIOD"])
         self.assertIn("dataflow/IMF.STA/BOP/latest", first["structureUrl"])
 
-    def test_imf_gdp_resolves_to_level_code_not_growth(self) -> None:
+    def test_imf_short_natural_language_phrase_fails_closed_without_metadata_search(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
-        code, label = run(provider._resolve_indicator_code("GDP"))
-
-        self.assertEqual(code, "NGDPD")
-        self.assertIsNotNone(label)
-        assert label is not None
-        self.assertIn("gdp", label.lower())
+        with self.assertRaises(DataNotAvailableError):
+            run(provider._resolve_indicator_code("GDP"))
 
     def test_imf_fetch_batch_uses_alternative_code_when_primary_missing(self) -> None:
         provider = IMFProvider(metadata_search_service=None)

@@ -119,7 +119,7 @@ def get_fallback_providers(
 
     Uses provider relationship fallbacks only. The optional indicator argument is
     retained for API compatibility and cache separation, but it must not trigger
-    legacy resolver/catalog semantic provider selection.
+    retired concept-shortcut semantic provider selection.
 
     Args:
         primary_provider: The primary provider that failed.

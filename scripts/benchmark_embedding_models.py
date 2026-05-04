@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Benchmark embedding models on OpenEcon metadata retrieval and resolver behavior.
+Benchmark embedding models on OpenEcon metadata retrieval behavior.
 
 This script compares:
 - raw vector retrieval without provider filtering
 - vector retrieval with provider filtering
-- end-to-end IndicatorResolver behavior with provider specified
+- selector-style provider-filtered top-candidate evidence
 
 Usage:
     OPENAI_API_KEY=... backend/.venv/bin/python scripts/benchmark_embedding_models.py
@@ -18,7 +18,7 @@ import logging
 import shutil
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
@@ -28,7 +28,6 @@ sys.path.insert(0, str(backend_dir.parent))
 
 from backend.embedding_utils import resolve_embedding_dimensions
 from backend.services.faiss_vector_search import FAISSVectorSearch, VectorSearchResult
-from backend.services.indicator_resolver import IndicatorResolver
 from scripts.rebuild_faiss_index import load_indicators_from_json
 
 logging.basicConfig(
@@ -43,16 +42,6 @@ MODELS = [
     "text-embedding-3-small",
     "text-embedding-3-large",
 ]
-
-PROVIDER_CANONICAL = {
-    "FRED": "FRED",
-    "WORLDBANK": "WorldBank",
-    "IMF": "IMF",
-    "EUROSTAT": "Eurostat",
-    "OECD": "OECD",
-    "STATSCAN": "StatsCan",
-    "BIS": "BIS",
-}
 
 CASES = [
     {"query": "us jobless rate", "provider": "FRED", "terms": ["unemployment"]},
@@ -104,10 +93,6 @@ def normalize_provider(provider: str | None) -> str:
     return str(provider or "").strip().replace(" ", "").replace("_", "").replace("-", "").upper()
 
 
-def canonical_provider(provider_key: str) -> str:
-    return PROVIDER_CANONICAL.get(provider_key, provider_key)
-
-
 def safe_model_name(model_name: str) -> str:
     return model_name.replace("/", "__")
 
@@ -129,7 +114,7 @@ def result_text(result: Any) -> str:
 
 
 class SearchAdapter:
-    """Adapter exposing the subset of VectorSearchService used by IndicatorResolver."""
+    """Adapter exposing the provider-filtered search used by selector retrieval."""
 
     def __init__(self, backend: FAISSVectorSearch):
         self.backend = backend
@@ -236,16 +221,11 @@ def benchmark_vector_mode(
     }
 
 
-def benchmark_resolver_mode(
+def benchmark_selector_retrieval_mode(
     search_adapter: SearchAdapter,
     cases: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    resolver = IndicatorResolver()
-    resolver._vector_search_service = search_adapter
-    resolver._vector_search_checked = True
-
     success_hits = 0
-    source_counts: Counter[str] = Counter()
     latencies_ms: list[float] = []
     by_provider: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "success_hits": 0})
     failures: list[dict[str, Any]] = []
@@ -254,14 +234,14 @@ def benchmark_resolver_mode(
         provider_stats = by_provider[case["provider"]]
         provider_stats["count"] += 1
         start = time.time()
-        result = resolver.resolve(
-            case["query"],
-            provider=canonical_provider(case["provider"]),
-            use_cache=False,
+        results = search_adapter.search(
+            query=case["query"],
+            limit=5,
+            where={"provider": case["provider"]},
         )
         latencies_ms.append((time.time() - start) * 1000)
 
-        if result is None:
+        if not results:
             failures.append({
                 "query": case["query"],
                 "provider": case["provider"],
@@ -269,7 +249,7 @@ def benchmark_resolver_mode(
             })
             continue
 
-        source_counts[result.source] += 1
+        result = results[0]
         matches_provider = normalize_provider(result.provider) == case["provider"]
         matches_terms = text_matches_terms(result_text(result), case["terms"])
         success = int(matches_provider and matches_terms)
@@ -284,8 +264,6 @@ def benchmark_resolver_mode(
                     "provider": result.provider,
                     "code": result.code,
                     "name": result.name,
-                    "source": result.source,
-                    "confidence": result.confidence,
                 },
             })
 
@@ -303,7 +281,6 @@ def benchmark_resolver_mode(
             "median": median(latencies_ms) if latencies_ms else 0.0,
             "max": max(latencies_ms) if latencies_ms else 0.0,
         },
-        "source_counts": dict(source_counts),
         "provider_breakdown": provider_breakdown,
         "failures": failures[:12],
     }
@@ -338,7 +315,7 @@ def benchmark_model(model_name: str, indicators: list[dict[str, Any]]) -> dict[s
         "embedding_dim": backend.embedding_dim,
         "vector_unfiltered": benchmark_vector_mode(search_adapter, CASES, filtered=False),
         "vector_filtered": benchmark_vector_mode(search_adapter, CASES, filtered=True),
-        "resolver": benchmark_resolver_mode(search_adapter, CASES),
+        "selector_retrieval": benchmark_selector_retrieval_mode(search_adapter, CASES),
     }
 
 
@@ -362,11 +339,11 @@ def main() -> int:
 
     for model_name, info in results["models"].items():
         logger.info(
-            "%s | index %.1fs | vector filtered top1 %.1f%% | resolver %.1f%%",
+            "%s | index %.1fs | vector filtered top1 %.1f%% | selector retrieval %.1f%%",
             model_name,
             info["index_time_s"],
             info["vector_filtered"]["top1_relevance"]["rate"] * 100,
-            info["resolver"]["success"]["rate"] * 100,
+            info["selector_retrieval"]["success"]["rate"] * 100,
         )
 
     return 0

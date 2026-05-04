@@ -365,7 +365,6 @@ def decide_prefetch_outcome(
     candidates: List[CandidateEvidence],
     primary_accepted: bool,
     primary_candidate_id: Optional[str] = None,
-    direct_translation_available: bool = False,
 ) -> OutcomeDecision:
     """Make an explicit prefetch direct/clarify/unsupported decision.
 
@@ -395,9 +394,9 @@ def decide_prefetch_outcome(
     if len(executable_options) == 1 and not primary_accepted:
         selected = executable_options[0]
         return OutcomeDecision(
-            outcome="direct_answer",
-            reason="single_executable_candidate",
-            confidence=0.75,
+            outcome="unsupported",
+            reason="single_candidate_without_final_authority",
+            confidence=0.9,
             selected_candidate_id=selected.candidate_id,
             clarification_option_limit=clarification_limit,
             verification_expectations=selected.verification_expectations,
@@ -411,15 +410,6 @@ def decide_prefetch_outcome(
             selected_candidate_id=primary_candidate.candidate_id,
             clarification_option_limit=clarification_limit,
             verification_expectations=primary_candidate.verification_expectations,
-        )
-
-    if direct_translation_available:
-        return OutcomeDecision(
-            outcome="direct_answer",
-            reason="direct_translation_available",
-            confidence=0.7,
-            clarification_option_limit=clarification_limit,
-            verification_expectations=["indicator_identity", "provider_executable"],
         )
 
     if len(option_candidates) >= 2:

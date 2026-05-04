@@ -115,11 +115,11 @@ Use this script:
 ### What It Measures
 
 1. **Routing accuracy**: query text -> provider selection (`UnifiedRouter`)
-2. **Series matching accuracy**: query + provider -> indicator selection quality (`IndicatorResolver`)
+2. **Series retrieval quality**: query + provider -> candidate indicator evidence (`IndicatorSelector` retrieval)
 
-Series scoring defaults to **concept-aware mode**:
-- Passes exact catalog code matches
-- Also passes semantically correct same-concept matches for the same provider
+Series scoring defaults to **concept-aware retrieval mode**:
+- Passes exact expected code matches in the top retrieved candidate
+- Also passes top candidates whose label matches the same concept for the same provider
 
 Use strict mode to require exact code-only matching.
 

@@ -32,7 +32,6 @@ class IndicatorResolutionTests(unittest.TestCase):
                 COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
-            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
         )
         intent = ParsedIntent(
@@ -66,7 +65,7 @@ class IndicatorResolutionTests(unittest.TestCase):
         select_mock.assert_awaited_once()
         self.assertEqual(select_mock.await_args.args[0], "number of households")
 
-    def test_new_path_skips_legacy_resolver_when_selector_has_no_decision(self) -> None:
+    def test_new_path_fails_closed_when_selector_has_no_decision(self) -> None:
         svc = SimpleNamespace(
             settings=SimpleNamespace(use_outcome_decision_stage=True),
             statscan_provider=SimpleNamespace(
@@ -74,7 +73,6 @@ class IndicatorResolutionTests(unittest.TestCase):
                 COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
-            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
         )
         intent = ParsedIntent(
@@ -84,9 +82,6 @@ class IndicatorResolutionTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="number of households in Canada",
         )
-
-        def legacy_resolver_should_not_run():
-            raise AssertionError("legacy resolver must not provide final authority on new path")
 
         with patch(
             "backend.services.indicator_selector.IndicatorSelector.select",
@@ -109,7 +104,7 @@ class IndicatorResolutionTests(unittest.TestCase):
         self.assertEqual(params.get("indicator"), "number of households")
         self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
-    def test_default_path_skips_legacy_resolver_when_selector_has_no_decision(self) -> None:
+    def test_default_path_fails_closed_when_selector_has_no_decision(self) -> None:
         svc = SimpleNamespace(
             settings=SimpleNamespace(),
             statscan_provider=SimpleNamespace(
@@ -117,7 +112,6 @@ class IndicatorResolutionTests(unittest.TestCase):
                 COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
-            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
         )
         intent = ParsedIntent(
@@ -127,9 +121,6 @@ class IndicatorResolutionTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="number of households in Canada",
         )
-
-        def legacy_resolver_should_not_run():
-            raise AssertionError("legacy resolver must not provide final authority by default")
 
         with patch(
             "backend.services.indicator_selector.IndicatorSelector.select",
@@ -152,26 +143,22 @@ class IndicatorResolutionTests(unittest.TestCase):
         self.assertEqual(params.get("indicator"), "number of households")
         self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
-    def test_legacy_resolver_final_authority_has_no_settings_escape_hatch(self) -> None:
-        def legacy_resolver_should_not_run():
-            raise AssertionError("legacy resolver must not provide final authority")
-
+    def test_retired_shortcut_final_authority_has_no_settings_escape_hatch(self) -> None:
         svc = SimpleNamespace(
-            settings=SimpleNamespace(allow_legacy_indicator_resolver_final_authority=True),
+            settings=SimpleNamespace(allow_retired_indicator_shortcut_final_authority=True),
             statscan_provider=SimpleNamespace(
                 VECTOR_MAPPINGS={},
                 COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
-            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
         )
         intent = ParsedIntent(
             apiProvider="STATSCAN",
-            indicators=["legacy shortcut"],
+            indicators=["retired shortcut"],
             parameters={"country": "CA"},
             clarificationNeeded=False,
-            originalQuery="legacy shortcut in Canada",
+            originalQuery="retired shortcut in Canada",
         )
 
         with patch(
@@ -187,10 +174,10 @@ class IndicatorResolutionTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(params.get("indicator"), "legacy shortcut in Canada")
+        self.assertEqual(params.get("indicator"), "retired shortcut")
         self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
-    def test_implausible_selector_pick_skips_legacy_resolver(self) -> None:
+    def test_implausible_selector_pick_skips_retired_fallback(self) -> None:
         svc = SimpleNamespace(
             settings=SimpleNamespace(),
             statscan_provider=SimpleNamespace(
@@ -198,7 +185,6 @@ class IndicatorResolutionTests(unittest.TestCase):
                 COORDINATE_PRODUCT_MAPPINGS={},
             ),
             _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
-            _get_direct_provider_indicator_translation=lambda **_kwargs: None,
             _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
         )
         intent = ParsedIntent(
@@ -208,9 +194,6 @@ class IndicatorResolutionTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="number of households in Canada",
         )
-
-        def legacy_resolver_should_not_run():
-            raise AssertionError("implausible LLM pick must not fall through to legacy resolver")
 
         with patch(
             "backend.services.indicator_selector.IndicatorSelector.select",

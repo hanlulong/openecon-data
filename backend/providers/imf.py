@@ -17,7 +17,6 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client, get_http1_client, effective_timeout
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
-from ..services.indicator_translator import get_indicator_translator
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -518,14 +517,12 @@ class IMFProvider(BaseProvider):
         raise last_error
 
     def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Validate raw IMF code via indicator translator/database lookup.
+        """Disabled natural-language-to-code mapping hook.
 
-        Static INDICATOR_MAPPINGS have been removed in favour of the indicator
-        database (330K+ entries) and the cross-provider IndicatorTranslator.
-        This method now only returns a code when the translator can confirm it.
+        Exact IMF codes are handled mechanically in _resolve_indicator_code();
+        natural-language discovery must use provider metadata search, local
+        provider catalog evidence, or upstream IndicatorSelector authority.
         """
-        # Delegate entirely to the translator — it knows every valid IMF code
-        # via the universal concept table and the indicators.db FTS5 index.
         return None
 
     @staticmethod
@@ -2517,7 +2514,7 @@ class IMFProvider(BaseProvider):
         return top_local["code"], top_local.get("name")
 
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:
-        """Resolve IMF indicator code through hardcoded mappings, translator, or metadata search."""
+        """Resolve IMF indicator code through mechanical codes or metadata search."""
         # Step 0: Check if indicator is explicitly unsupported
         indicator_key = indicator.upper().replace(" ", "_")
         if indicator_key in self.UNSUPPORTED_INDICATORS:
@@ -2610,18 +2607,7 @@ class IMFProvider(BaseProvider):
             if local_resolution:
                 return local_resolution
 
-        # Step 2: Try cross-provider indicator translator after exact-code
-        # catalog lookup.  Translator fuzzy matching is useful for user phrases,
-        # but it must not collapse explicit long-tail provider codes such as
-        # HKG_CPI_* to broad DataMapper proxies like PCPIPCH.
-        translator = get_indicator_translator()
-        translated_code, concept_name = translator.translate_indicator(indicator, "IMF")
-        if translated_code:
-            logger.info(f"IMF: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
-            label_hint = concept_name or indicator
-            return translated_code, self._friendly_indicator_label(label_hint, translated_code)
-
-        # Step 3: Prefer local catalog recovery only for specific long-tail
+        # Step 2: Prefer local/provider metadata recovery only for specific long-tail
         # titles.  Short fuzzy phrases can produce misleading FTS matches
         # (e.g. "custom imf" -> "Customs Revenues"), so when a live metadata
         # search service is available we let that provider-specific discovery
@@ -2653,14 +2639,6 @@ class IMFProvider(BaseProvider):
                 if discovery and discovery.get("code"):
                     code = discovery["code"]
                     return code, discovery.get("name")
-
-        # Step 4: Try the local indicator catalog with normalized query variants.
-        # This is especially important for long-tail IMF component titles where
-        # DataMapper metadata search often returns zero exact keyword matches,
-        # but the local catalog still has provider-native series entries.
-        local_resolution = await self._resolve_from_local_catalog(indicator)
-        if local_resolution:
-            return local_resolution
 
         # Note: We used to allow raw IMF codes without validation (if uppercase + underscore),
         # but this led to errors when LLMs generated fake codes like "CORPORATE_DEBT".

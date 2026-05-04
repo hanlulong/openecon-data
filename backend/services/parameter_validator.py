@@ -33,7 +33,7 @@ class ParameterValidator:
         "COIN GECKO": 1,
     }
 
-    # Example indicator names for error messages (actual resolution via IndicatorResolver)
+    # Example indicator names for error messages (actual resolution via selector/provider metadata)
     FRED_EXAMPLE_INDICATORS = ['GDP', 'Unemployment', 'Inflation', 'Retail Sales', 'Housing Starts']
     STATSCAN_EXAMPLE_INDICATORS = ['GDP', 'Unemployment', 'Inflation', 'CPI', 'Population']
 
@@ -121,7 +121,7 @@ class ParameterValidator:
         """Validate FRED query parameters.
 
         NOTE: This is now more lenient. FRED provider can:
-        - Resolve indicators via IndicatorResolver (FTS5 database, 330K+ series)
+        - Resolve indicators via retrieval + LLM adjudication/provider metadata
         - Try unknown indicators as-is (may work if valid FRED code)
         - Dynamic FRED API search as fallback
 

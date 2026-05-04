@@ -16,11 +16,14 @@ Users ask questions like "female youth unemployment in Nigeria" — the system m
 | FTS5 keyword search (BM25) | 30% | Fails on vocabulary mismatch |
 | FAISS MiniLM-L6 embeddings | 0% | Model too generic for economic terms |
 | OpenAI text-embedding-3-small | 80% | Understands semantic meaning |
-| Catalog concepts (86 curated) | 95% | Perfect for common queries only |
-| **Catalog + OpenAI embed + LLM** | **96-100%** | **Final architecture** |
+| Catalog concepts (historical) | 95% | Good for common queries, but rule-based as final authority |
+| **Retrieval candidates + LLM adjudication** | **target path** | **Current architecture** |
 
 ### Decision
-Use a multi-stage pipeline: catalog for common concepts, OpenAI embeddings for the 330K long tail, and LLM for final variant selection.
+Use retrieval to assemble provider-local candidate evidence from the 330K catalog
+and let LLM adjudication make the semantic decision. Exact provider-native codes
+and exact provider-native titles remain mechanical passthrough; catalog/concept
+shortcuts do not act as final authority.
 
 ## Pipeline (IndicatorSelector)
 
@@ -28,35 +31,29 @@ Use a multi-stage pipeline: catalog for common concepts, OpenAI embeddings for t
 User Query: "female youth unemployment in Nigeria"
          │
          ▼
-Stage 1: CATALOG CONCEPT MATCH
-  → find_concept_by_term("female youth unemployment") → "unemployment"
-  → get_indicator_code("unemployment", "WorldBank") → SL.UEM.TOTL.ZS
-  → Get 63 variants in unemployment family
+Stage 1: PROVIDER-LOCAL CANDIDATE RETRIEVAL
+  → FTS5 + embedding retrieval returns WorldBank candidate evidence
+  → Candidate names/codes/metadata are shown to the LLM selector
   → LLM picks: SL.UEM.1524.FE.ZS ✅
          │
-         ▼ (only if catalog has no match)
-Stage 1.5: DIRECT NAME MATCH (SQL LIKE)
-  → WHERE LOWER(name) LIKE '%maternal mortality ratio%'
-  → Exact match: SH.STA.MMRT ✅
+         ▼ (if LLM rejects all candidates)
+Stage 2: BOUNDED ALTERNATE SEARCH
+  → LLM returns REJECT + SEARCH terms
+  → Retrieval retries once with the alternate search phrase
+  → LLM picks, asks, or rejects again
          │
-         ▼ (only if name match has no results)
-Stage 2: OPENAI EMBEDDING SEARCH
-  → Embed query → find 20 nearest indicators by cosine similarity
-  → LLM picks best from 20 candidates
-         │
-         ▼ (only if embeddings unavailable)
-Stage 3: FTS5 OR SEARCH (fallback)
-  → Traditional keyword search as last resort
+         ▼ (if still unresolved)
+Stage 3: NO DECISION / CLARIFICATION / PROVIDER FAIL-CLOSED
+  → No top-candidate fallback is allowed
 ```
 
 ## Key Files
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `backend/services/indicator_selector.py` | Main resolution service | ~350 |
+| `backend/services/indicator_selector.py` | Retrieval + LLM adjudication service | ~350 |
 | `backend/services/embedding_retrieval.py` | OpenAI embedding search | ~215 |
-| `backend/services/indicator_resolver.py` | Legacy resolver (still in production pipeline) | ~1,960 |
-| `backend/catalog/concepts/*.yaml` | 86 curated concept definitions | ~3,500 |
+| `backend/services/indicator_resolution.py` | Fetch-time authority/provenance gate | ~1,900 |
 | `backend/data/openai_embeddings/` | Pre-built embedding index (not in git) | 584MB |
 
 ## Building the Embedding Index
@@ -84,9 +81,8 @@ The LLM understands that:
 
 | Component | Cost per query |
 |-----------|---------------|
-| Catalog lookup | Free (local) |
-| Name match | Free (SQL) |
-| Embedding search | ~$0.0001 (1 API call) |
+| FTS5 retrieval | Free (local) |
+| Embedding search | ~$0.0001 when remote embeddings are used |
 | LLM selection | ~$0.001 (1 API call) |
 | **Total** | **~$0.001** |
 
@@ -96,16 +92,17 @@ All 10 providers: FRED (139K), IMF (115K), WorldBank (29K), CoinGecko (19K), Com
 
 ## Integration Status
 
-**INTEGRATED** (2026-04-01): The IndicatorSelector is wired into `query.py`'s
-`_resolve_indicator_for_fetch()` as the PRIMARY resolution path. The legacy
-`indicator_resolver.py` serves as fallback when embeddings are unavailable.
+**UPDATED** (2026-05): `IndicatorSelector` is the semantic selector. The retired
+resolver/translator shortcut modules have been removed from runtime and from the
+codebase; unresolved selector output now fails closed or asks for clarification
+instead of falling back to catalog/translator rules.
 
 ```python
-# In query.py _resolve_indicator_for_fetch():
+# In indicator_resolution.resolve_indicator_for_fetch():
 selection = await IndicatorSelector().select(indicator_query, provider)
 if selection.code:
-    return selection.code  # Embed → LLM picked the indicator
-# else: fall through to legacy IndicatorResolver
+    return selection.code  # Retrieval → LLM picked the indicator
+# else: keep provider-neutral text / clarification; no shortcut fallback
 ```
 
 ## Routing Architecture (Updated 2026-04)
@@ -123,9 +120,10 @@ Query routing now uses **LLM-based routing via UnifiedRouter** (`backend/routing
 | Component | Status | Lines |
 |-----------|--------|-------|
 | ChromaDB code in vector_search.py | REMOVED | -165 |
-| indicator_selector.py | SIMPLIFIED to embed->LLM | 220 |
+| indicator_selector.py | ACTIVE retrieval + LLM selector | ~350 |
 | embedding_retrieval.py | ACTIVE | 215 |
-| Old 4-stage selector code | REPLACED with 2-step | -280 |
+| retired resolver/translator shortcut modules | REMOVED | -2,900+ |
+| Old catalog/translator final-authority path | REPLACED with fail-closed selector contract | - |
 | semantic_provider_router.py | DEPRECATED (still in `backend/routing/`) | 473 |
 | provider_router.py | REMOVED | was 988 |
 | keyword_matcher.py | REMOVED | was 520 |

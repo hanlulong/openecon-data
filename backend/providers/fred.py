@@ -329,8 +329,8 @@ class FREDProvider(BaseProvider):
         2. Raw FRED code detection (short alphanumeric strings)
         3. Provider metadata discovery (local FRED metadata index, then FRED API search)
 
-        This keeps provider code/title passthrough mechanical while avoiding the
-        legacy universal resolver/translator as final semantic authority.
+        This keeps provider code/title passthrough mechanical while avoiding
+        retired universal semantic shortcuts as final authority.
 
         Args:
             indicator: Natural language indicator name
@@ -382,7 +382,7 @@ class FREDProvider(BaseProvider):
 
         Tries explicit series_id / raw code detection only. Natural-language
         discovery is async metadata search in fetch_series(); this synchronous
-        compatibility method must not invoke the legacy resolver/translator.
+        compatibility method must not invoke retired semantic shortcuts.
         """
         series, _ = self._series_id_with_transform(indicator, series_id)
         if series is not None:
@@ -474,7 +474,7 @@ class FREDProvider(BaseProvider):
     async def fetch_series(
         self, params: Dict[str, Any]
     ) -> NormalizedData:
-        # Use async resolver with dynamic search fallback (GENERAL solution)
+        # Use async metadata discovery with dynamic search fallback.
         target_series, transformation = await self._resolve_series_id_async(
             params.get("indicator"), params.get("seriesId")
         )

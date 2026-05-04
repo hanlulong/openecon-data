@@ -1575,6 +1575,27 @@ async def resolve_indicator_for_fetch(
         intent.parameters = params
         return params
 
+    if has_explicit_code and str(params.get("__semantic_authority") or "") == "llm_adjudication":
+        semantic_query = (
+            str(params.get("__semantic_indicator_label") or "").strip()
+            or _effective_original_query(intent)
+            or str(intent.indicators[0] if intent.indicators else existing_indicator)
+        )
+        if is_resolved_indicator_plausible(
+            svc=svc,
+            provider=provider,
+            indicator_query=semantic_query,
+            resolved_code=existing_indicator,
+            resolved_name=str(params.get("__semantic_indicator_label") or ""),
+        ):
+            params = _apply_indicator_with_semantic_label(
+                existing_indicator,
+                __semantic_authority="llm_adjudication",
+                __decision_source=str(params.get("__decision_source") or "llm_pick"),
+            )
+            intent.parameters = params
+            return params
+
     if has_explicit_code:
         plausibility_query = select_indicator_query_for_resolution(svc, intent)
         if not plausibility_query:
@@ -1630,7 +1651,7 @@ async def resolve_indicator_for_fetch(
         )
         has_explicit_code = False
 
-    # Dynamic resolution (IndicatorSelector -> resolver -> raw query)
+    # Dynamic resolution (IndicatorSelector -> provider-neutral raw query)
     indicator_query = select_indicator_query_for_resolution(svc, intent)
     if not indicator_query and intent.indicators:
         indicator_query = str(intent.indicators[0] or "").strip()
@@ -1747,7 +1768,7 @@ async def resolve_indicator_for_fetch(
             elif not selection.code:
                 selector_without_final_authority = True
         except Exception as e:
-            logger.debug("IndicatorSelector unavailable, using legacy resolver: %s", e)
+            logger.debug("IndicatorSelector unavailable; failing closed without retired fallback: %s", e)
             selector_attempted = True
             selector_without_final_authority = True
             selector_source = "selector_unavailable"
@@ -1757,7 +1778,7 @@ async def resolve_indicator_for_fetch(
             and selector_without_final_authority
         ):
             logger.info(
-                "🚫 Skipping legacy indicator resolver on no-shortcut path after selector source=%s",
+                "🚫 Skipping retired indicator fallback on no-shortcut path after selector source=%s",
                 selector_source or "unknown",
             )
             params = _apply_indicator_with_semantic_label(indicator_query)
@@ -1771,7 +1792,7 @@ async def resolve_indicator_for_fetch(
 
     # No selector final authority. Keep provider-neutral semantic text and let
     # provider retrieval fail closed or ask for clarification; do not invoke the
-    # legacy catalog/translator resolver as final authority.
+    # retired catalog/translator shortcuts as final authority.
     params = _apply_indicator_with_semantic_label(indicator_query)
     params.setdefault("__indicator_selection_status", "no_decision")
 

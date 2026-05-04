@@ -1,9 +1,9 @@
 """Static audit helpers for semantic shortcut rule surfaces.
 
-The Phase 0 scanner is deliberately conservative: it tracks known high-risk
-semantic-authority surfaces and requires every match to be classified.  Existing
-reviewed offenders are allowed during Phase 0 so Ralph can remove them in later
-phases without breaking the baseline guardrail.
+The scanner is deliberately conservative: it tracks known high-risk
+semantic-authority surfaces and requires every match to be classified.  Deleted
+legacy resolver/translator modules are intentionally absent from the scan scope;
+tests assert that no runtime code imports those retired surfaces.
 """
 
 from __future__ import annotations
@@ -52,9 +52,8 @@ class ShortcutFinding:
 SCAN_GLOBS = (
     "backend/routing/*.py",
     "backend/services/indicator_resolution.py",
-    "backend/services/indicator_resolver.py",
     "backend/services/indicator_selector.py",
-    "backend/services/indicator_translator.py",
+    "backend/services/indicator_clarification.py",
     "backend/services/query.py",
     "backend/services/query_helpers.py",
     "backend/services/provider_fallback.py",
@@ -95,13 +94,6 @@ PATTERNS = (
         rationale="Hybrid router provider descriptions are candidate context for LLM adjudication, not hidden keyword-to-provider rules.",
     ),
     ShortcutPattern(
-        id="legacy_resolver_catalog_translator_authority",
-        path_glob="backend/services/indicator_resolver.py",
-        regex=r"IndicatorTranslator|CatalogService|catalog_fallback|_score_concept_alignment|get_best_provider|get_indicator_code",
-        classification="banned_semantic_final_authority",
-        rationale="Legacy resolver can still use translator/catalog/concept scoring as final indicator authority.",
-    ),
-    ShortcutPattern(
         id="indicator_resolution_legacy_fallback",
         path_glob="backend/services/indicator_resolution.py",
         regex=r"Legacy IndicatorResolver|_resolver\(\)\.resolve|fall through to legacy resolver",
@@ -109,11 +101,11 @@ PATTERNS = (
         rationale="Indicator resolution still falls through to legacy resolver after selector failure.",
     ),
     ShortcutPattern(
-        id="universal_indicator_translator_map",
-        path_glob="backend/services/indicator_translator.py",
-        regex=r"UNIVERSAL_CONCEPTS|translate_indicator|_fuzzy_match_concept|IMF_CODE_TO_CONCEPT",
+        id="indicator_clarification_legacy_resolver_options",
+        path_glob="backend/services/indicator_clarification.py",
+        regex=r"get_indicator_resolver|IndicatorResolver|indicator_resolver|resolver\.resolve",
         classification="banned_semantic_final_authority",
-        rationale="Universal concept mappings can directly translate natural language to provider codes.",
+        rationale="Clarification/recovery options must come from selector candidate evidence, not legacy resolver/catalog authority.",
     ),
     ShortcutPattern(
         id="indicator_selector_top_candidate_fallback",

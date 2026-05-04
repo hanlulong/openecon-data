@@ -10,7 +10,6 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
-from ..services.indicator_translator import get_indicator_translator
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -354,11 +353,11 @@ class BISProvider(BaseProvider):
         )
 
     def _indicator_code(self, indicator: str) -> Optional[str]:
-        """Validate BIS dataflow code via indicator translator/database lookup.
+        """Disabled natural-language-to-code mapping hook.
 
-        Static INDICATOR_MAPPINGS have been removed in favour of the indicator
-        database (330K+ entries) and the cross-provider IndicatorTranslator.
-        This method now delegates entirely to the translator.
+        Exact BIS dataflow codes are handled mechanically in
+        _resolve_indicator_code(); natural-language discovery must use provider
+        metadata search or upstream IndicatorSelector authority.
         """
         return None
 
@@ -968,7 +967,7 @@ class BISProvider(BaseProvider):
         return result
 
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:
-        """Resolve BIS indicator code through hardcoded mappings, translator, or metadata search."""
+        """Resolve BIS indicator code through mechanical codes or metadata search."""
         # Step 0: Check if indicator should be redirected to another provider
         indicator_key = indicator.upper().replace(" ", "_")
         if indicator_key in self.REDIRECT_INDICATORS:
@@ -991,23 +990,14 @@ class BISProvider(BaseProvider):
         if indicator and indicator.upper().startswith("WS_"):
             return indicator.upper(), None
 
-        # Step 3: Try cross-provider indicator translator (handles IMF codes, common names, etc.)
-        translator = get_indicator_translator()
-
-        # First try with original indicator
-        translated_code, concept_name = translator.translate_indicator(indicator, "BIS")
-        if translated_code:
-            logger.info(f"BIS: Translated '{indicator}' to '{translated_code}' via concept '{concept_name}'")
-            return translated_code, concept_name
-
-        # Step 3b: Extract keywords from long phrases (e.g., "Reserve Bank of Australia cash rate" → "cash rate")
+        # Step 3: For verbose natural-language phrases, derive a shorter
+        # provider-metadata search phrase. This is candidate retrieval input,
+        # not a direct concept-to-code translation.
         extracted_indicator = self._extract_indicator_keywords(indicator)
+        search_indicators = [indicator]
         if extracted_indicator != indicator.lower():
-            logger.info(f"BIS: Extracted '{extracted_indicator}' from '{indicator}'")
-            translated_code, concept_name = translator.translate_indicator(extracted_indicator, "BIS")
-            if translated_code:
-                logger.info(f"BIS: Translated extracted '{extracted_indicator}' to '{translated_code}' via concept '{concept_name}'")
-                return translated_code, concept_name
+            logger.info("BIS: Extracted metadata search phrase '%s' from '%s'", extracted_indicator, indicator)
+            search_indicators.append(extracted_indicator)
 
         if not self.metadata_search:
             raise DataNotAvailableError(
@@ -1015,10 +1005,14 @@ class BISProvider(BaseProvider):
             )
 
         # Use hierarchical search: SDMX first, then BIS REST API
-        search_results = await self.metadata_search.search_with_sdmx_fallback(
-            provider="BIS",
-            indicator=indicator,
-        )
+        search_results = []
+        for search_indicator in search_indicators:
+            search_results = await self.metadata_search.search_with_sdmx_fallback(
+                provider="BIS",
+                indicator=search_indicator,
+            )
+            if search_results:
+                break
         if not search_results:
             raise DataNotAvailableError(
                 f"BIS indicator '{indicator}' not found. Try a different description (e.g., 'policy rate')."

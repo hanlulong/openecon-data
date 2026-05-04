@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..models import (
@@ -32,8 +33,6 @@ from ..routing.country_resolver import CountryResolver
 from ..services.conversation import conversation_manager
 # Explicit candidate-evidence / decision scaffolding for Phase 1.
 from ..services.candidate_evidence_builder import CandidateEvidenceBuilder, build_candidate_id
-# get_indicator_resolver is imported lazily within functions to allow
-# test patches at backend.services.query.get_indicator_resolver to take effect.
 from ..services.parameter_validator import ParameterValidator
 from ..services.relevance_scorer import (
     extract_indicator_cues as _extract_indicator_cues,
@@ -602,8 +601,6 @@ async def maybe_recover_from_uncertain_match(
     primary_provider = normalize_provider_name(intent.apiProvider or "")
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(intent.originalQuery or "") or "")
 
-    from ..services import query as _qmod
-    resolver = _qmod.get_indicator_resolver()
     candidate_keys: set[tuple[str, str]] = set()
     candidate_ordered: List[tuple[str, str]] = []
 
@@ -617,31 +614,6 @@ async def maybe_recover_from_uncertain_match(
             return
         candidate_keys.add(key)
         candidate_ordered.append((provider_norm, code_norm))
-
-    try:
-        direct = resolver.resolve(
-            indicator_query,
-            provider=primary_provider or None,
-            country=target_country,
-            countries=target_countries or None,
-            use_cache=False,
-        )
-        if direct and getattr(direct, "code", None):
-            _add_candidate(getattr(direct, "provider", primary_provider), getattr(direct, "code", ""))
-    except Exception:
-        pass
-
-    try:
-        broad = resolver.resolve(
-            indicator_query,
-            country=target_country,
-            countries=target_countries or None,
-            use_cache=False,
-        )
-        if broad and getattr(broad, "code", None):
-            _add_candidate(getattr(broad, "provider", primary_provider), getattr(broad, "code", ""))
-    except Exception:
-        pass
 
     for option in qs._collect_indicator_choice_options(query, intent, max_options=4):
         parsed = parse_indicator_option(option)
@@ -820,20 +792,6 @@ def build_no_reliable_indicator_match_response(
     )
 
 
-def get_direct_provider_indicator_translation(
-    qs: Any,
-    provider: str,
-    indicator_query: str,
-) -> Optional[str]:
-    """Disabled: do not translate semantic text directly into provider codes.
-
-    Direct translator mappings are a rule-based shortcut path.  Callers should
-    rely on retrieval plus LLM adjudication, exact user-provided codes/titles,
-    or provider metadata discovery instead.
-    """
-    return None
-
-
 # ====================================================================
 # Indicator option collection
 # ====================================================================
@@ -908,8 +866,9 @@ def collect_indicator_choice_options(
         if normalized and normalized not in provider_candidates:
             provider_candidates.append(normalized)
 
-    from ..services import query as _qmod
-    resolver = _qmod.get_indicator_resolver()
+    from .indicator_selector import IndicatorSelector
+
+    selector = IndicatorSelector()
     scored_options: List[tuple[float, str, str]] = []
     seen_codes: set[tuple[str, str]] = set()
     provider_labels = {
@@ -935,109 +894,106 @@ def collect_indicator_choice_options(
             continue
 
         try:
-            resolved = resolver.resolve(
+            candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
                 indicator_query,
-                provider=provider_name,
-                country=target_country,
-                countries=target_countries or None,
-                use_cache=False,
+                provider_name,
+                top_k=max(max_options * 3, 8),
             )
-        except Exception:
-            resolved = None
-
-        if not resolved or not resolved.code or resolved.confidence < 0.55:
-            continue
-        if _is_placeholder_indicator_code(str(resolved.code)):
-            continue
-
-        resolved_name = " ".join(
-            part
-            for part in [
-                str(getattr(resolved, "name", "") or ""),
-                str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
-                str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
-            ]
-            if part
-        )
-        if not _is_resolved_indicator_plausible(
-            qs,
-            provider_name,
-            raw_query or indicator_query,
-            str(resolved.code),
-            resolved_name,
-        ):
-            continue
-        if not provider_can_execute_indicator_option(
-            qs=qs,
-            provider=provider_name,
-            code=str(resolved.code),
-            option_name=resolved_name,
-        ):
+        except Exception as exc:
+            logger.debug(
+                "IndicatorSelector candidate retrieval failed for %s/%s: %s",
+                provider_name,
+                indicator_query,
+                exc,
+            )
             continue
 
-        code_key = (provider_name, str(resolved.code).upper())
-        if code_key in seen_codes:
-            continue
-        seen_codes.add(code_key)
+        for idx, candidate in enumerate(candidates[: max(max_options * 2, 6)]):
+            if len(candidate) < 2:
+                continue
+            code, name = candidate[0], candidate[1]
+            code_text = str(code or "").strip()
+            name_text = str(name or "").strip()
+            if not code_text or _is_placeholder_indicator_code(code_text):
+                continue
+            if not _is_resolved_indicator_plausible(
+                qs,
+                provider_name,
+                raw_query or indicator_query,
+                code_text,
+                name_text,
+            ):
+                continue
+            if not provider_can_execute_indicator_option(
+                qs=qs,
+                provider=provider_name,
+                code=code_text,
+                option_name=name_text,
+            ):
+                continue
 
-        synthetic_series = {
-            "metadata": {
-                "indicator": resolved.name or "",
-                "seriesId": resolved.code,
-                "source": provider_name,
+            code_key = (provider_name, code_text.upper())
+            if code_key in seen_codes:
+                continue
+            seen_codes.add(code_key)
+
+            synthetic_series = {
+                "metadata": {
+                    "indicator": name_text,
+                    "seriesId": code_text,
+                    "source": provider_name,
+                }
             }
-        }
-        relevance_score = _score_series_relevance(query, synthetic_series)
-        if relevance_score < -0.5:
-            continue
+            relevance_score = _score_series_relevance(query, synthetic_series)
+            if relevance_score < -0.5:
+                continue
 
-        option_cues = _extract_indicator_cues(
-            f"{resolved.name or ''} {resolved.code or ''}"
-        )
-        if high_signal_query_cues and not _specific_cues_compatible(
-            high_signal_query_cues,
-            option_cues,
-        ):
-            continue
-        specific_query_cues = high_signal_query_cues & {
-            "trade_openness",
-            "gdp_deflator",
-            "hicp",
-            "debt_gdp_ratio",
-            "public_debt",
-            "trade_balance",
-            "import",
-            "export",
-            "house_prices",
-            "bond_yield",
-        }
-        if specific_query_cues and not _specific_cues_compatible(
-            specific_query_cues,
-            option_cues,
-        ):
-            continue
-        if "trade_openness" in specific_query_cues and "trade_openness" not in option_cues:
-            continue
-        if "gdp_deflator" in specific_query_cues and "gdp_deflator" not in option_cues:
-            continue
-        if "hicp" in specific_query_cues and "hicp" not in option_cues:
-            continue
-        if "debt_gdp_ratio" in specific_query_cues and not (
-            {"debt_gdp_ratio", "public_debt"} & option_cues
-        ):
-            continue
+            option_cues = _extract_indicator_cues(f"{name_text} {code_text}")
+            if high_signal_query_cues and not _specific_cues_compatible(
+                high_signal_query_cues,
+                option_cues,
+            ):
+                continue
+            specific_query_cues = high_signal_query_cues & {
+                "trade_openness",
+                "gdp_deflator",
+                "hicp",
+                "debt_gdp_ratio",
+                "public_debt",
+                "trade_balance",
+                "import",
+                "export",
+                "house_prices",
+                "bond_yield",
+            }
+            if specific_query_cues and not _specific_cues_compatible(
+                specific_query_cues,
+                option_cues,
+            ):
+                continue
+            if "trade_openness" in specific_query_cues and "trade_openness" not in option_cues:
+                continue
+            if "gdp_deflator" in specific_query_cues and "gdp_deflator" not in option_cues:
+                continue
+            if "hicp" in specific_query_cues and "hicp" not in option_cues:
+                continue
+            if "debt_gdp_ratio" in specific_query_cues and not (
+                {"debt_gdp_ratio", "public_debt"} & option_cues
+            ):
+                continue
 
-        combined_score = float(resolved.confidence) + (0.12 * relevance_score)
-        provider_label = provider_labels.get(provider_name, provider_name)
-        option_name = format_indicator_option_name(
-            qs=qs,
-            provider=provider_name,
-            code=str(resolved.code),
-            name=getattr(resolved, "name", None),
-            metadata=getattr(resolved, "metadata", None),
-        )
-        option_text = f"[{provider_label}] {option_name} ({resolved.code})"
-        scored_options.append((combined_score, option_text, provider_name))
+            retrieval_score = float(scores[idx]) if idx < len(scores) else 0.0
+            combined_score = retrieval_score + (0.12 * relevance_score) - (0.005 * idx)
+            provider_label = provider_labels.get(provider_name, provider_name)
+            option_name = format_indicator_option_name(
+                qs=qs,
+                provider=provider_name,
+                code=code_text,
+                name=name_text,
+                metadata=None,
+            )
+            option_text = f"[{provider_label}] {option_name} ({code_text})"
+            scored_options.append((combined_score, option_text, provider_name))
 
     scored_options.sort(key=lambda item: item[0], reverse=True)
     raw_options = [option for _, option, _ in scored_options]
@@ -1049,7 +1005,7 @@ async def collect_statscan_selector_choice_options(
     query: str,
     max_options: int = 4,
 ) -> List[str]:
-    """Ask the retrieval+LLM selector for StatsCan options when resolver options fail.
+    """Ask the retrieval+LLM selector for StatsCan clarification options.
 
     This is deliberately not a keyword/product map.  It reuses the generic
     embed -> LLM selector, including its ability to reject the candidate set and
@@ -1085,7 +1041,7 @@ async def collect_statscan_selector_choice_options(
         if code:
             options.append(f"[StatsCan] {name or selector_query} ({code})")
 
-        # A single LLM pick from a previously failed resolver path is not enough
+        # A single LLM pick from a previously failed selection path is not enough
         # evidence to auto-fetch.  Add neighboring retrieval candidates so the
         # user can clarify rather than letting one uncertain pick become a
         # silent provider-code overwrite.
@@ -1696,8 +1652,8 @@ def format_informational_results(
 # ====================================================================
 
 # Context terms that fundamentally change the requested measure. Kept local to
-# verification so this module does not instantiate the legacy resolver just to
-# read its private discriminator set.
+# verification so this module does not depend on retired shortcut modules just
+# to read a private discriminator set.
 SEMANTIC_DISCRIMINATORS: set[str] = {
     "growth", "real", "nominal", "level", "per capita",
     "constant", "current", "change", "rate",
@@ -2362,146 +2318,75 @@ async def build_prefetch_indicator_choice_clarification(
     target_countries = qs._collect_target_countries(params)
     target_country = target_countries[0] if target_countries else None
 
-    # For StatsCan, let the framework selector (embedding retrieval -> LLM
-    # adjudication, including REJECT/retry) make the first call before any
-    # legacy resolver/fallback option construction runs.  This prevents a
-    # low-relevance catalog/translator result from seeding cross-provider
-    # clarification options and blocking a valid primary-provider fetch.
-    if normalize_provider_name(provider) == "STATSCAN" and not current_indicator:
+    # Let the framework selector (retrieval -> LLM adjudication, including
+    # REJECT/retry) make the only prefetch direct-answer decision. Candidate
+    # options below may clarify, but must not silently become final authority.
+    resolved = None
+    primary_accepted = False
+    primary_relevance = -999.0
+    current_label = f"{provider or 'Unknown provider'} routing guess"
+    if not current_indicator:
         try:
             from .indicator_selector import IndicatorSelector
 
+            provider_for_selector = "StatsCan" if provider == "STATSCAN" else provider
             selection = await IndicatorSelector().select(
                 indicator_query,
-                "StatsCan",
+                provider_for_selector,
                 country=target_country,
             )
         except Exception as exc:
-            logger.debug("StatsCan prefetch selector unavailable: %s", exc)
+            logger.debug("Prefetch selector unavailable for %s/%s: %s", provider, indicator_query, exc)
             selection = None
 
-        if selection is not None:
-            if getattr(selection, "code", None):
-                selection_code = str(getattr(selection, "code") or "").strip()
-                selection_name = str(getattr(selection, "name", "") or "").strip()
-                if _is_resolved_indicator_plausible(
-                    qs,
-                    provider,
-                    indicator_query,
-                    selection_code,
-                    selection_name,
-                ):
-                    params["indicator"] = selection_code
-                    params["__semantic_indicator_label"] = indicator_query
-                    intent.parameters = params
-                    return None
-
-            if getattr(selection, "needs_user_choice", False):
-                logger.debug(
-                    "StatsCan prefetch selector requested clarification for '%s'; "
-                    "continuing to existing prefetch evidence path.",
-                    indicator_query,
+        if selection is not None and getattr(selection, "code", None):
+            selection_code = str(getattr(selection, "code") or "").strip()
+            selection_name = str(getattr(selection, "name", "") or "").strip()
+            if _is_resolved_indicator_plausible(
+                qs,
+                provider,
+                indicator_query,
+                selection_code,
+                selection_name,
+            ):
+                params["indicator"] = selection_code
+                params["__semantic_indicator_label"] = indicator_query
+                params["__semantic_authority"] = "llm_adjudication"
+                params["__decision_source"] = str(getattr(selection, "source", "") or "llm_pick")
+                intent.parameters = params
+                resolved = SimpleNamespace(
+                    code=selection_code,
+                    name=selection_name or selection_code,
+                    provider=provider,
+                    metadata={},
+                    source=str(getattr(selection, "source", "") or "llm_pick"),
                 )
+                primary_accepted = True
+                primary_relevance = 1.0
+                current_name = format_indicator_option_name(
+                    qs=qs,
+                    provider=provider,
+                    code=selection_code,
+                    name=selection_name,
+                    metadata=None,
+                )
+                current_label = f"{current_name} from {provider}"
+                return None
 
-    from ..services import query as _qmod
-    resolver = _qmod.get_indicator_resolver()
-    resolved = None
-    try:
-        resolved = resolver.resolve(
-            indicator_query,
-            provider=provider,
-            country=target_country,
-            countries=target_countries or None,
-            use_cache=False,
-        )
-    except Exception:
-        resolved = None
-
-    primary_accepted = False
-    primary_plausible = False
-    primary_relevance = -999.0
-    current_label = f"{provider or 'Unknown provider'} routing guess"
-    if resolved and getattr(resolved, "code", None):
-        threshold = qs._indicator_resolution_threshold(
-            indicator_query=indicator_query,
-            resolved_source=str(getattr(resolved, "source", "") or ""),
-        )
-        primary_relevance = qs._score_resolved_indicator_relevance(
-            indicator_query=indicator_query,
-            provider=provider,
-            resolved=resolved,
-        )
-        primary_accepted = float(getattr(resolved, "confidence", 0.0) or 0.0) >= threshold
-        resolved_name_full = " ".join(
-            part
-            for part in [
-                str(getattr(resolved, "name", "") or ""),
-                str((getattr(resolved, "metadata", None) or {}).get("indicator", "") or ""),
-                str((getattr(resolved, "metadata", None) or {}).get("description", "") or ""),
-            ]
-            if part
-        )
-        logger.info(
-            "Prefetch resolution: query='%s' code=%s conf=%.2f threshold=%.2f "
-            "relevance=%.2f accepted=%s",
-            indicator_query, resolved.code,
-            float(getattr(resolved, "confidence", 0.0) or 0.0),
-            threshold, primary_relevance, primary_accepted,
-        )
-        if primary_accepted:
-            plausible = _is_resolved_indicator_plausible(
-                qs, provider, indicator_query, str(resolved.code), resolved_name_full,
+        if selection is not None and getattr(selection, "needs_user_choice", False):
+            logger.debug(
+                "Prefetch selector requested clarification for '%s'; "
+                "continuing to candidate evidence path.",
+                indicator_query,
             )
-            primary_plausible = bool(plausible)
-            logger.info("Plausibility check: %s (code=%s)", plausible, resolved.code)
-            if not plausible:
-                primary_accepted = False
-        if primary_accepted and primary_relevance < qs._minimum_resolved_relevance_threshold(indicator_query):
-            primary_accepted = False
-
-        current_name = format_indicator_option_name(
-            qs=qs,
-            provider=provider,
-            code=str(resolved.code),
-            name=getattr(resolved, "name", None),
-            metadata=getattr(resolved, "metadata", None),
-        )
-        current_label = f"{current_name} from {provider or getattr(resolved, 'provider', 'unknown provider')}"
-        if (
-            not use_outcome_decision_stage
-            and primary_accepted
-            and primary_relevance >= 0.65
-        ):
-            return None
 
     options = qs._collect_indicator_choice_options(
         query_text or indicator_query,
         intent,
         max_options=option_budget,
     )
-    if primary_accepted and resolved and getattr(resolved, "code", None):
-        current_provider_label = (
-            "StatsCan" if normalize_provider_name(provider) == "STATSCAN"
-            else provider or str(getattr(resolved, "provider", "") or "Provider")
-        )
-        current_option = f"[{current_provider_label}] {current_name} ({resolved.code})"
-        options = dedupe_indicator_choice_options(qs, [current_option, *options])
     if not options:
         if not primary_accepted:
-            direct_translation = get_direct_provider_indicator_translation(
-                qs=qs,
-                provider=provider,
-                indicator_query=indicator_query,
-            )
-            if direct_translation:
-                logger.info(
-                    "Allowing direct %s translation '%s' for '%s' to bypass prefetch clarification",
-                    provider,
-                    direct_translation,
-                    indicator_query,
-                )
-                return None
-
             fallback_providers = qs._get_fallback_providers(provider)
             original_provider = intent.apiProvider
             for fb_provider in fallback_providers:
@@ -2518,18 +2403,6 @@ async def build_prefetch_indicator_choice_clarification(
                     )
                     options = fb_options
                     break
-                fb_direct = get_direct_provider_indicator_translation(
-                    qs=qs,
-                    provider=fb_provider,
-                    indicator_query=fb_query,
-                )
-                if fb_direct:
-                    logger.info(
-                        "Primary %s failed, direct translation via fallback %s: '%s'",
-                        original_provider, fb_provider, fb_direct,
-                    )
-                    return None
-
             intent.apiProvider = original_provider
             if not options and normalize_provider_name(provider) == "STATSCAN":
                 options = await collect_statscan_selector_choice_options(
@@ -2580,32 +2453,18 @@ async def build_prefetch_indicator_choice_clarification(
     )
 
     if len(options) == 1:
-        if (
-            top_option
-            and normalize_provider_name(top_option[0]) != normalize_provider_name(provider)
-        ):
-            if normalize_provider_name(provider) == "STATSCAN" or primary_accepted:
-                return None
-            # Let the normal clarification builder ask before crossing providers.
-        elif top_option and (not primary_accepted or not top_matches_primary):
-            apply_indicator_option_to_intent(intent, options[0])
+        if primary_accepted and top_matches_primary:
             return None
+        return build_no_reliable_indicator_match_response(
+            conversation_id=conversation_id,
+            intent=intent,
+            query=query_text or indicator_query,
+            qs=qs,
+            processing_steps=processing_steps,
+        )
 
     if len(options) < 2:
         if not primary_accepted:
-            direct_translation = get_direct_provider_indicator_translation(
-                qs=qs,
-                provider=provider,
-                indicator_query=indicator_query,
-            )
-            if direct_translation:
-                logger.info(
-                    "Allowing direct %s translation '%s' for '%s' to bypass prefetch clarification",
-                    provider,
-                    direct_translation,
-                    indicator_query,
-                )
-                return None
             return build_no_reliable_indicator_match_response(
                 conversation_id=conversation_id,
                 intent=intent,
@@ -3012,69 +2871,6 @@ def needs_indicator_clarification(
     except Exception:
         pass
 
-    try:
-        from ..services import query as _qmod
-        resolver = _qmod.get_indicator_resolver()
-        target_countries = qs._collect_target_countries(intent.parameters) if intent else []
-        target_country = target_countries[0] if target_countries else None
-        canonical = resolver.resolve(
-            query,
-            country=target_country,
-            countries=target_countries or None,
-        )
-
-        if canonical and canonical.confidence >= 0.9 and top_meta:
-            top_provider = normalize_provider_name(getattr(top_meta, "source", "") or "")
-            canonical_provider = normalize_provider_name(canonical.provider or "")
-            top_indicator = str(getattr(top_meta, "indicator", "") or "")
-            top_series_id = str(getattr(top_meta, "seriesId", "") or "")
-            top_code = top_series_id or (
-                top_indicator if looks_like_provider_indicator_code(top_provider, top_indicator) else ""
-            )
-            canonical_code = str(canonical.code or "")
-
-            def _codes_match(lhs: str, rhs: str) -> bool:
-                left = str(lhs or "").upper().strip()
-                right = str(rhs or "").upper().strip()
-                if not left or not right:
-                    return False
-                if left == right:
-                    return True
-                left_prefix = re.split(r"[_.]", left)[0]
-                right_prefix = re.split(r"[_.]", right)[0]
-                if len(left_prefix) >= 5 and left_prefix == right_prefix:
-                    return True
-                return False
-
-            if top_provider and canonical_provider and top_code and canonical_code:
-                canonical_cues = _extract_indicator_cues(
-                    f"{canonical.name or ''} {canonical.code or ''}"
-                )
-                cue_conflict = bool(high_signal_query_cues) and not (
-                    high_signal_query_cues & top_series_cues
-                )
-                canonical_supports_query = not high_signal_query_cues or bool(
-                    high_signal_query_cues & canonical_cues
-                )
-
-                if (
-                    top_provider != canonical_provider
-                    and cue_conflict
-                    and canonical_supports_query
-                    and top_score < 0.85
-                ):
-                    return True
-                if (
-                    not _codes_match(top_code, canonical_code)
-                    and cue_conflict
-                    and canonical_supports_query
-                    and top_score < 0.6
-                ):
-                    return True
-                if top_provider == canonical_provider and _codes_match(top_code, canonical_code):
-                    return False
-    except Exception:
-        pass
 
     if (
         qs._is_temporal_split_query(query)
@@ -3188,54 +2984,6 @@ def build_uncertain_result_clarification(
             )
             current_option = f"[{current_provider}] {current_name} ({current_code})"
             options.insert(0, current_option)
-
-    if len(options) < 2:
-        try:
-            from ..services import query as _qmod
-            resolver = _qmod.get_indicator_resolver()
-            target_countries = qs._collect_target_countries(intent.parameters)
-            if not target_countries:
-                target_countries = qs._extract_countries_from_query(query)
-            target_country = target_countries[0] if target_countries else None
-
-            canonical = resolver.resolve(
-                query,
-                country=target_country,
-                countries=target_countries or None,
-                use_cache=False,
-            )
-            if canonical and canonical.code:
-                if _is_placeholder_indicator_code(canonical.code):
-                    canonical = None
-            if canonical and canonical.code:
-                provider_label = normalize_provider_name(canonical.provider or "")
-                canonical_cues = _extract_indicator_cues(
-                    f"{canonical.name or ''} {canonical.code or ''}"
-                )
-                cue_compatible = _specific_cues_compatible(high_signal_query_cues, canonical_cues)
-                from ..services.provider_fallback import (
-                    provider_covers_country_list as _provider_covers_country_list,
-                )
-                provider_compatible = _provider_covers_country_list(
-                    provider_label,
-                    target_countries or None,
-                )
-                if cue_compatible and provider_compatible:
-                    canonical_name = format_indicator_option_name(
-                        qs=qs,
-                        provider=provider_label,
-                        code=str(canonical.code),
-                        name=str(canonical.name or canonical.code),
-                        metadata=getattr(canonical, "metadata", None),
-                    )
-                    canonical_option = (
-                        f"[{provider_label}] "
-                        f"{canonical_name} "
-                        f"({canonical.code})"
-                    )
-                    options.append(canonical_option)
-        except Exception:
-            pass
 
     options = dedupe_indicator_choice_options(qs, options)
     mismatch_hint = build_indicator_mismatch_hint(query, top_series)
