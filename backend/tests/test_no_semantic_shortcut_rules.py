@@ -209,6 +209,30 @@ def test_runtime_code_does_not_import_retired_resolver_or_translator() -> None:
     assert offenders == []
 
 
+def test_tests_do_not_patch_retired_resolver_shims() -> None:
+    """Avoid no-op create=True patches for deleted shortcut modules in tests."""
+
+    forbidden = (
+        "backend.services.query.get_indicator_" + "resolver",
+        "backend.services.indicator_" + "resolver.get_indicator_resolver",
+        "backend.services.indicator_" + "translator.get_indicator_translator",
+    )
+    scanned = [
+        Path("backend/tests/test_query_service.py"),
+        Path("backend/tests/test_providers.py"),
+        Path("backend/tests/test_indicator_resolution.py"),
+    ]
+
+    offenders = [
+        f"{path}:{marker}"
+        for path in scanned
+        for marker in forbidden
+        if marker in path.read_text()
+    ]
+
+    assert offenders == []
+
+
 def test_no_unreviewed_banned_semantic_final_authority_findings() -> None:
     findings = scan_semantic_shortcuts()
 
