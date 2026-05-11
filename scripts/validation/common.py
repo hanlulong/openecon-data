@@ -591,10 +591,21 @@ def preferred_default_country_for_record(provider: str, category: str, name: str
     if provider_key not in {'WORLDBANK', 'IMF'}:
         return fallback_choice
 
+    category_key = str(category or '').strip()
+    if provider_key == 'IMF':
+        regional_defaults = {
+            # Regional Economic Outlook indicators are not universal
+            # DataMapper/WEO series.  Pick an in-region default country so
+            # certification query synthesis does not create impossible
+            # country/indicator pairs such as India for AFRREO.
+            'AFRREO': 'Nigeria',
+        }
+        if category_key.upper() in regional_defaults:
+            return regional_defaults[category_key.upper()]
+
     subfamily = provider_subfamily_key(provider_key, name)
     priors = _load_empirical_country_subfamily_priors()
     category_priors = _load_empirical_country_category_priors()
-    category_key = str(category or '').strip()
 
     scored_choices: list[tuple[int, int, int, int, str]] = []
     for choice in choices:

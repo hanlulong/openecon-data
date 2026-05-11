@@ -2575,6 +2575,30 @@ def test_preferred_default_country_for_record_uses_category_country_priors():
     ) == "India"
 
 
+def test_preferred_default_country_for_record_uses_imf_reo_region_country():
+    defaults = ["United States", "China", "India", "Brazil", "Japan", "Germany"]
+
+    assert preferred_default_country_for_record(
+        "IMF",
+        "AFRREO",
+        "Real Non-Oil GDP Growth",
+        defaults,
+        "India",
+    ) == "Nigeria"
+
+
+def test_default_query_for_row_uses_imf_reo_region_country():
+    row = {
+        "provider": "IMF",
+        "code": "NGDPXO_RPCH",
+        "name": "Real Non-Oil GDP Growth",
+        "description": "",
+        "category": "AFRREO",
+    }
+
+    assert default_query_for_row(row) == "Nigeria Real Non-Oil GDP Growth from IMF"
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {
