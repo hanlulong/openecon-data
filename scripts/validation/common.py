@@ -1280,6 +1280,14 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from BIS".strip()
     if provider_upper == 'FRED':
+        # Long FRED catalog titles (especially punctuation-heavy Financial
+        # Accounts rows) can force slow natural-language discovery even though
+        # the frozen catalog row already carries the exact provider-native
+        # series ID.  Use that ID as a mechanical probe when semicolon-delimited
+        # title fragments make a clean direct-query sentence brittle.  This does
+        # not infer semantic meaning; it transports exact provider input.
+        if code and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{5,}', code) and ';' in name:
+            return f"{code.upper()} from FRED".strip()
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from FRED".strip()
     if transform in {'imports', 'exports', 'trade_balance', 'current_account'}:

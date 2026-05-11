@@ -176,6 +176,19 @@ def test_default_query_for_row_avoids_prefixing_country_when_title_already_has_s
     assert query == "Bank Deposits to GDP for Japan from FRED"
 
 
+def test_default_query_for_row_uses_exact_fred_code_for_long_punctuated_titles():
+    row = {
+        "provider": "FRED",
+        "code": "BOGZ1FL363030005A",
+        "name": "General Government; Total Time and Savings Deposits; Asset, Level",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "BOGZ1FL363030005A from FRED"
+
+
 def test_default_query_for_row_prefers_country_in_origin_name_over_provider_default() -> None:
     row = {
         "provider": "FRED",
