@@ -200,6 +200,23 @@ def test_imf_bop_label_matching_is_not_runtime_final_authority() -> None:
     assert "_fetch_bop_family(" not in source
     assert "no-rule authority policy" in source
 
+
+def test_imf_sdmx_exact_candidate_helpers_do_not_use_label_semantics() -> None:
+    """Public-SDMX exact candidate construction must stay code-mechanical."""
+
+    trade_indicator = inspect.getsource(IMFProvider._trade_indicator_from_code)
+    trade_transformation = inspect.getsource(IMFProvider._trade_transformation_from_code)
+    cpi_coicop = inspect.getsource(IMFProvider._coicop_from_cpi_code)
+    ppi_indicator = inspect.getsource(IMFProvider._ppi_indicator_from_code)
+
+    combined = "\n".join([trade_indicator, trade_transformation, cpi_coicop, ppi_indicator])
+
+    assert "label" not in combined.lower()
+    assert "food" not in combined.lower()
+    assert "export" not in combined.lower()
+    assert "import" not in combined.lower()
+    assert "producer price" not in combined.lower()
+
 def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority() -> None:
     """Rule plausibility guards may fail closed, but must not create final authority."""
 

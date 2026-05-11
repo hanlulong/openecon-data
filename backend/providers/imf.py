@@ -1049,51 +1049,32 @@ class IMFProvider(BaseProvider):
         )
 
     @staticmethod
-    def _trade_indicator_from_code(bare_code: str, label: str) -> Optional[str]:
-        text = f"{bare_code} {label}".upper()
-        if re.match(r"^(?:T?XG?|XG)_", text) or "EXPORT" in text:
+    def _trade_indicator_from_code(bare_code: str) -> Optional[str]:
+        code = str(bare_code or "").strip().upper()
+        if re.match(r"^(?:T?XG?|XG)_", code):
             return "XG"
-        if re.match(r"^(?:T?MG?|MG)_", text) or "IMPORT" in text:
+        if re.match(r"^(?:T?MG?|MG)_", code):
             return "MG"
         return None
 
     @staticmethod
-    def _trade_transformation_from_code(bare_code: str, label: str) -> Optional[str]:
-        text = f"{bare_code} {label}".upper()
-        basis = "FOB" if "FOB" in text or "FREE ON BOARD" in text else "CIF" if "CIF" in text else None
-        currency = "XDC" if "XDC" in text or "NATIONAL CURRENCY" in text else "USD" if "USD" in text or "US DOLLAR" in text else None
+    def _trade_transformation_from_code(bare_code: str) -> Optional[str]:
+        code = str(bare_code or "").strip().upper()
+        basis = "FOB" if re.search(r"(?:^|_)FOB(?:_|$)", code) else "CIF" if re.search(r"(?:^|_)CIF(?:_|$)", code) else None
+        currency = "XDC" if re.search(r"(?:^|_)XDC(?:_|$)", code) else "USD" if re.search(r"(?:^|_)USD(?:_|$)", code) else None
         if basis and currency:
-            return f"{basis}_{currency}"
+            suffix = "_IX" if code.endswith("_IX") else ""
+            return f"{basis}_{currency}{suffix}"
         return None
 
     @staticmethod
-    def _coicop_from_cpi_code_or_label(bare_code: str, label: str) -> str:
+    def _coicop_from_cpi_code(bare_code: str) -> str:
         code = str(bare_code or "").upper()
-        text = str(label or "").lower()
-        match = re.search(r"(?:^|_)CP_?(\d{2})(?:\d{0,3})?(?:_|$)", code)
+        if code == "PCPI_IX":
+            return "_T"
+        match = re.search(r"(?:^|_)CP_?(\d{2})(?:_|$)", code)
         if match:
             return f"CP{match.group(1)}"
-        match = re.search(r"(?:^|_)XCP_?(\d{2})(?:\d{0,3})?(?:_|$)", code)
-        if match:
-            return f"XCP{match.group(1)}"
-        if any(term in text for term in ["food", "beverage"]):
-            return "CP01"
-        if any(term in text for term in ["clothing", "footwear"]):
-            return "CP03"
-        if any(term in text for term in ["housing", "water", "electricity", "gas", "fuel"]):
-            return "CP04"
-        if "health" in text:
-            return "CP06"
-        if "transport" in text:
-            return "CP07"
-        if "communication" in text:
-            return "CP08"
-        if any(term in text for term in ["recreation", "culture"]):
-            return "CP09"
-        if "education" in text:
-            return "CP10"
-        if any(term in text for term in ["restaurant", "hotel"]):
-            return "CP11"
         return "_T"
 
     @staticmethod
@@ -1104,9 +1085,9 @@ class IMFProvider(BaseProvider):
             return False
         if code == "PCPI_IX":
             return True
-        if re.fullmatch(r"PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", code):
+        if re.fullmatch(r"PCPI_CP_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", code):
             return True
-        return bool("consumer price" in text and code == "PCPI_IX")
+        return False
 
     @staticmethod
     def _is_ppi_candidate(bare_code: str, label: str) -> bool:
@@ -1116,7 +1097,16 @@ class IMFProvider(BaseProvider):
             return False
         if any(term in text for term in ["by activity", "manufacture of", "mining of", "commodities by activity"]):
             return False
-        return "PPPI" in code or "producer price index" in text
+        return code in {"PPPI_IX", "PPI_IX", "WPI_IX", "PPPIA_IX"}
+
+    @staticmethod
+    def _ppi_indicator_from_code(bare_code: str) -> Optional[str]:
+        code = str(bare_code or "").strip().upper()
+        if code.startswith("WPI"):
+            return "WPI"
+        if code in {"PPPI_IX", "PPI_IX", "PPPIA_IX"}:
+            return "PPI"
+        return None
 
     def _build_sdmx_series_candidates(
         self,
@@ -1139,8 +1129,8 @@ class IMFProvider(BaseProvider):
         candidates: List[Dict[str, str]] = []
 
         if self._is_aggregate_trade_code(bare_code):
-            indicator = self._trade_indicator_from_code(bare_code, label)
-            transformation = self._trade_transformation_from_code(bare_code, label)
+            indicator = self._trade_indicator_from_code(bare_code)
+            transformation = self._trade_transformation_from_code(bare_code)
             if indicator and transformation:
                 for country in countries_to_try:
                     candidates.append(
@@ -1156,7 +1146,7 @@ class IMFProvider(BaseProvider):
             return candidates
 
         if self._is_cpi_candidate(bare_code, label):
-            coicop = self._coicop_from_cpi_code_or_label(bare_code, label)
+            coicop = self._coicop_from_cpi_code(bare_code)
             transformation = "IX"
             frequencies = ["A"] if coicop == "_T" else ["A", "M", "Q"]
             for country in countries_to_try:
@@ -1174,8 +1164,9 @@ class IMFProvider(BaseProvider):
             return candidates
 
         if self._is_ppi_candidate(bare_code, label):
-            for country in countries_to_try:
-                for indicator in ("PPI", "WPI", ""):
+            indicator = self._ppi_indicator_from_code(bare_code)
+            if indicator:
+                for country in countries_to_try:
                     candidates.append(
                         {
                             "flow": "PPI",
@@ -1217,6 +1208,41 @@ class IMFProvider(BaseProvider):
         if match:
             return match.group(1)
         return value if re.fullmatch(r"[A-Za-z0-9_]+", value) else None
+
+    @staticmethod
+    def _sdmx_codelist_aliases_by_dimension() -> Dict[str, tuple[str, ...]]:
+        """Known IMF.STA codelist ids for dimensions that omit localRepresentation.
+
+        IMF's public SDMX structures often include the relevant codelists in
+        ``references=all`` responses but omit per-dimension enumeration refs.
+        These aliases are mechanical metadata wiring only: they expose official
+        codelist values for diagnostics/contract checks and do not select a
+        semantic series.
+        """
+        return {
+            "COUNTRY": ("CL_COUNTRY",),
+            "BOP_ACCOUNTING_ENTRY": ("CL_BOP_ACCOUNTING_ENTRY",),
+            "INDICATOR": (
+                "CL_BOP_INDICATOR",
+                "CL_ITG_INDICATOR",
+                "CL_PPI_INDICATOR",
+                "CL_LS_INDICATOR",
+                "CL_INDICATOR",
+            ),
+            "TYPE_OF_TRANSFORMATION": (
+                "CL_ITG_TYPE_OF_TRANSFORMATION",
+                "CL_CPI_TYPE_OF_TRANSFORMATION",
+                "CL_PPI_TYPE_OF_TRANSFORMATION",
+                "CL_LS_TYPE_OF_TRANSFORMAtION",
+                "CL_TYPE_OF_TRANSFORMATION",
+                "CL_TRANSFORMATION",
+            ),
+            "UNIT": ("CL_UNIT",),
+            "FREQ": ("CL_FREQ", "CL_FREQUENCY"),
+            "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
+            "INDEX_TYPE": ("CL_INDEX_TYPE",),
+            "COICOP_1999": ("CL_COICOP_1999",),
+        }
 
     @classmethod
     def _first_sdmx_name(cls, element: ET.Element) -> Optional[str]:
@@ -1353,13 +1379,7 @@ class IMFProvider(BaseProvider):
                     }
                 )
 
-            codelist_aliases_by_dimension = {
-                "COUNTRY": ("CL_COUNTRY",),
-                "BOP_ACCOUNTING_ENTRY": ("CL_BOP_ACCOUNTING_ENTRY",),
-                "INDICATOR": ("CL_BOP_INDICATOR", "CL_INDICATOR"),
-                "UNIT": ("CL_UNIT",),
-                "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
-            }
+            codelist_aliases_by_dimension = cls._sdmx_codelist_aliases_by_dimension()
             allowed_values_by_dimension: Dict[str, set[str]] = {}
             codelist_entries_by_dimension: Dict[str, List[Dict[str, str]]] = {}
             for dimension in dimensions:
@@ -1464,13 +1484,7 @@ class IMFProvider(BaseProvider):
 
         dimensions = parse_dimensions(dimension_list.get("dimensions") if isinstance(dimension_list, dict) else [])
         time_dimensions = parse_dimensions(dimension_list.get("timeDimensions") if isinstance(dimension_list, dict) else [])
-        codelist_aliases_by_dimension = {
-            "COUNTRY": ("CL_COUNTRY",),
-            "BOP_ACCOUNTING_ENTRY": ("CL_BOP_ACCOUNTING_ENTRY",),
-            "INDICATOR": ("CL_BOP_INDICATOR", "CL_INDICATOR"),
-            "UNIT": ("CL_UNIT",),
-            "FREQUENCY": ("CL_FREQ", "CL_FREQUENCY"),
-        }
+        codelist_aliases_by_dimension = cls._sdmx_codelist_aliases_by_dimension()
         allowed_values_by_dimension: Dict[str, set[str]] = {}
         codelist_entries_by_dimension: Dict[str, List[Dict[str, str]]] = {}
         for dim in dimensions:

@@ -1681,6 +1681,105 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(metadata["allowed_values_by_dimension"]["BOP_ACCOUNTING_ENTRY"], {"BX"})
         self.assertEqual(metadata["allowed_values_by_dimension"]["INDICATOR"], {"SRLO"})
 
+    def test_imf_parses_flow_specific_sdmx_codelist_aliases(self) -> None:
+        payload = {
+            "data": {
+                "codelists": [
+                    {"id": "CL_LS_INDICATOR", "codes": [{"id": "U"}, {"id": "LF"}]},
+                    {"id": "CL_LS_TYPE_OF_TRANSFORMAtION", "codes": [{"id": "PT"}, {"id": "PE"}]},
+                    {"id": "CL_FREQ", "codes": [{"id": "A"}]},
+                ],
+                "dataflows": [{"id": "LS", "agencyID": "IMF.STA", "version": "9.0.0"}],
+                "dataStructures": [
+                    {
+                        "id": "DSD_LS",
+                        "agencyID": "IMF.STA",
+                        "dataStructureComponents": {
+                            "dimensionList": {
+                                "dimensions": [
+                                    {"id": "INDICATOR", "position": 0, "type": "Dimension"},
+                                    {"id": "TYPE_OF_TRANSFORMATION", "position": 1, "type": "Dimension"},
+                                    {"id": "FREQUENCY", "position": 2, "type": "Dimension"},
+                                ]
+                            }
+                        },
+                    }
+                ],
+            }
+        }
+
+        metadata = IMFProvider._parse_imf_dataflow_structure(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(metadata["allowed_values_by_dimension"]["INDICATOR"], {"U", "LF"})
+        self.assertEqual(metadata["allowed_values_by_dimension"]["TYPE_OF_TRANSFORMATION"], {"PT", "PE"})
+        self.assertEqual(metadata["allowed_values_by_dimension"]["FREQUENCY"], {"A"})
+
+    def test_imf_parses_xml_flow_specific_sdmx_codelist_aliases(self) -> None:
+        payload = """<?xml version='1.0' encoding='UTF-8'?>
+        <mes:Structure xmlns:mes="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message"
+            xmlns:str="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/structure"
+            xmlns:com="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/common">
+          <mes:Structures>
+            <str:Dataflows>
+              <str:Dataflow agencyID="IMF.STA" id="PPI" version="3.0.0" />
+            </str:Dataflows>
+            <str:DataStructures>
+              <str:DataStructure agencyID="IMF.STA" id="DSD_PPI" version="3.0.0">
+                <str:DataStructureComponents>
+                  <str:DimensionList>
+                    <str:Dimension id="INDICATOR" position="0"><str:ConceptIdentity><Ref id="INDICATOR"/></str:ConceptIdentity></str:Dimension>
+                    <str:Dimension id="TYPE_OF_TRANSFORMATION" position="1"><str:ConceptIdentity><Ref id="TYPE_OF_TRANSFORMATION"/></str:ConceptIdentity></str:Dimension>
+                  </str:DimensionList>
+                </str:DataStructureComponents>
+              </str:DataStructure>
+            </str:DataStructures>
+            <str:Codelists>
+              <str:Codelist agencyID="IMF.STA" id="CL_PPI_INDICATOR" version="1.0.0">
+                <str:Code id="PPI"><com:Name xml:lang="en">Producer price index</com:Name></str:Code>
+                <str:Code id="WPI"><com:Name xml:lang="en">Wholesale price index</com:Name></str:Code>
+              </str:Codelist>
+              <str:Codelist agencyID="IMF.STA" id="CL_PPI_TYPE_OF_TRANSFORMATION" version="1.0.0">
+                <str:Code id="IX"><com:Name xml:lang="en">Index</com:Name></str:Code>
+              </str:Codelist>
+            </str:Codelists>
+          </mes:Structures>
+        </mes:Structure>
+        """
+
+        metadata = IMFProvider._parse_imf_dataflow_structure(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(metadata["allowed_values_by_dimension"]["INDICATOR"], {"PPI", "WPI"})
+        self.assertEqual(metadata["allowed_values_by_dimension"]["TYPE_OF_TRANSFORMATION"], {"IX"})
+
+    def test_imf_sdmx_candidate_builder_uses_exact_code_not_label_semantics(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        cpi_candidates = provider._build_sdmx_series_candidates(  # pylint: disable=protected-access
+            indicator_code="PCPI_IX",
+            indicator_label="Food and non-alcoholic beverages consumer price index",
+            countries=["USA"],
+        )
+        trade_candidates = provider._build_sdmx_series_candidates(  # pylint: disable=protected-access
+            indicator_code="TXG_CIF_USD",
+            indicator_label="Imports of goods, value, cost insurance and freight",
+            countries=["USA"],
+        )
+        ppi_candidates = provider._build_sdmx_series_candidates(  # pylint: disable=protected-access
+            indicator_code="NOT_PPI_IX",
+            indicator_label="Producer price index",
+            countries=["USA"],
+        )
+        trade_index_candidates = provider._build_sdmx_series_candidates(  # pylint: disable=protected-access
+            indicator_code="TXG_FOB_USD_IX",
+            indicator_label="Exports of goods index",
+            countries=["USA"],
+        )
+
+        self.assertEqual([candidate["key"] for candidate in cpi_candidates], ["USA.CPI._T.IX.A"])
+        self.assertEqual([candidate["key"] for candidate in trade_candidates], ["USA.XG.CIF_USD.A"])
+        self.assertEqual(ppi_candidates, [])
+        self.assertEqual([candidate["key"] for candidate in trade_index_candidates], ["USA.XG.FOB_USD_IX.A"])
+
     def test_imf_fetches_and_caches_bop_dataflow_structure(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
         provider._DATAFLOW_STRUCTURE_CACHE.clear()  # pylint: disable=protected-access

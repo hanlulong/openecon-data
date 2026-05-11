@@ -72,9 +72,7 @@ def _is_imf_aggregate_cpi_code(code: str, name: str = "") -> bool:
         return False
     if bare_code == "PCPI_IX":
         return True
-    if re.fullmatch(r"PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", bare_code):
-        return True
-    if "consumer price" in text and bare_code == "PCPI_IX":
+    if re.fullmatch(r"PCPI_CP_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", bare_code):
         return True
     return False
 
