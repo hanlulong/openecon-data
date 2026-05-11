@@ -8280,6 +8280,31 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("does not name the geography", joined)
         pro_mode_mock.assert_not_awaited()
 
+    def test_process_query_skips_auto_promode_for_explicit_provider_code(self) -> None:
+        query = "23100048 Railway industry balance sheet of regional companies from StatsCan"
+
+        with patch.object(self.service, "_execute_pro_mode", new_callable=AsyncMock) as pro_mode_mock, \
+             patch(
+                 "backend.services.query.QueryComplexityAnalyzer.detect_complexity",
+                 return_value={"pro_mode_required": True, "complexity_factors": ["regional_breakdown"]},
+             ), \
+             patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
+             patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
+             patch.object(
+                 self.service,
+                 "_fetch_data",
+                 return_value=[sample_series_with(series_id="23100048", indicator="23100048", source="StatsCan")],
+             ):
+            response = run(self.service.process_query(query, auto_pro_mode=True))
+
+        pro_mode_mock.assert_not_awaited()
+        self.assertFalse(response.clarificationNeeded)
+        self.assertIsNotNone(response.intent)
+        assert response.intent is not None
+        self.assertEqual(response.intent.apiProvider, "STATSCAN")
+        self.assertEqual(response.intent.parameters.get("__statscan_product_id"), "23100048")
+        self.assertEqual((response.data or [])[0].metadata.source, "StatsCan")
+
     def test_detect_explicit_provider_does_not_treat_oecd_region_phrase_as_provider_request(self) -> None:
         provider = self.service._detect_explicit_provider(  # pylint: disable=protected-access
             "Long-term interest rate comparison for OECD economies"

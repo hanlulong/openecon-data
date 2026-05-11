@@ -4409,7 +4409,16 @@ class QueryService:
                 return generic_scope_clarification
 
             if auto_pro_mode and _query_type in (None, "new_query"):
-                early_complexity = QueryComplexityAnalyzer.detect_complexity(query, intent=None)
+                early_explicit_code_intent = self._build_explicit_provider_code_intent(query)
+                if early_explicit_code_intent is not None:
+                    logger.info(
+                        "Skipping auto Pro Mode for explicit provider-code query: %s/%s",
+                        early_explicit_code_intent.apiProvider,
+                        (early_explicit_code_intent.parameters or {}).get("indicator"),
+                    )
+                    early_complexity = {"pro_mode_required": False, "complexity_factors": []}
+                else:
+                    early_complexity = QueryComplexityAnalyzer.detect_complexity(query, intent=None)
                 if early_complexity['pro_mode_required']:
                     logger.info("🚀 Auto-switching to Pro Mode (detected: %s)", early_complexity['complexity_factors'])
                     return await self._execute_pro_mode(query, conv_id)
