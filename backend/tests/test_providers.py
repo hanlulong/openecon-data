@@ -2328,6 +2328,56 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("time_period", params)
         self.assertNotIn("empty", params)
 
+    def test_eurostat_exact_dataset_can_fetch_without_geo_filter(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 10.0, "1": 11.0},
+                "dimension": {
+                    "freq": {"category": {"index": {"A": 0}, "label": {"A": "Annual"}}},
+                    "unit": {"category": {"index": {"PC": 0}, "label": {"PC": "Percentage"}}},
+                    "stk_flow": {
+                        "category": {
+                            "index": {"IMP": 0, "EXP": 1},
+                            "label": {"IMP": "Imports", "EXP": "Exports"},
+                        }
+                    },
+                    "geo": {
+                        "category": {
+                            "index": {"MD": 0, "GE": 1},
+                            "label": {"MD": "Moldova", "GE": "Georgia"},
+                        }
+                    },
+                    "time": {"category": {"index": {"2023": 0, "2024": 1}}},
+                },
+                "id": ["freq", "unit", "stk_flow", "geo", "time"],
+                "size": [1, 1, 2, 2, 2],
+                "updated": "2026-02-03",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="ENPE_EXT_INTRO", country="__ALL__", start_year=2023))
+
+        self.assertEqual(series.metadata.seriesId, "enpe_ext_intro")
+        self.assertEqual(series.metadata.country, "ALL_AVAILABLE")
+        self.assertEqual(len(series.data), 2)
+        _, params = client.calls[0]
+        self.assertNotIn("geo", params)
+        self.assertEqual(params.get("freq"), "A")
+
     def test_oecd_resolve_indicator_uses_metadata_for_short_code(self) -> None:
         class StubMetadata:
             def __init__(self):

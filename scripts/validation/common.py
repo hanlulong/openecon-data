@@ -1271,8 +1271,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         # exact-code probe for those dimension-heavy titles.  This is
         # mechanical certification query shaping, not semantic code selection.
         if code and ',' in name and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,}', code):
-            prefix = '' if query_mentions_country(name) else f"{choice} "
-            return f"{prefix}{code.upper()} from Eurostat".strip()
+            return f"{code.upper()} from Eurostat".strip()
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from Eurostat".strip()
     if provider_upper == 'BIS':

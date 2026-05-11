@@ -2791,8 +2791,8 @@ def test_default_query_for_row_uses_eurostat_exact_code_for_dimension_heavy_titl
     query = default_query_for_row(row)
     materialized_query = default_query_for_row({"provider_stratum": "Eurostat", "origin": origin})
 
-    assert query.endswith("ILC_HCH17 from Eurostat")
-    assert materialized_query.endswith("ILC_HCH17 from Eurostat")
+    assert query == "ILC_HCH17 from Eurostat"
+    assert materialized_query == "ILC_HCH17 from Eurostat"
     assert "income quintile" not in query.lower()
     audit = audit_direct_query_shape(
         {

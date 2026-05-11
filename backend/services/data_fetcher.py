@@ -1677,6 +1677,10 @@ async def _fetch_from_eurostat(
     request_end_year = eurostat_request.get("end_year")
     request_filters = dict(eurostat_request.get("filters") or {})
     original_query = str(params.get("__original_query") or intent.originalQuery or "")
+    exact_dataset_code_requested = bool(
+        indicator
+        and re.search(rf"(?<![A-Z0-9_]){re.escape(indicator)}(?![A-Z0-9_])", original_query, flags=re.IGNORECASE)
+    )
     explicit_time_scope = _query_has_explicit_time_scope(original_query)
     current_year = datetime.utcnow().year
     default_recent_start_year = current_year - 5
@@ -1774,7 +1778,7 @@ async def _fetch_from_eurostat(
         return series_list
 
     # Single country query (default to EU aggregate if not specified)
-    single_country = country_param if country_param else "EU27_2020"
+    single_country = country_param if country_param else ("__ALL__" if exact_dataset_code_requested else "EU27_2020")
     series = await _fetch_indicator_with_sparse_history_retry(single_country)
     return [series]
 

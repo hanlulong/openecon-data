@@ -3958,6 +3958,46 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(calls[0]["end_year"], 2024)
         self.assertEqual(calls[0]["filters"], {"sex": "F", "age": "Y16-24"})
 
+    def test_fetch_data_uses_no_geo_for_exact_eurostat_code_without_country(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["ENPE_EXT_INTRO"],
+            parameters={
+                "indicator": "ENPE_EXT_INTRO",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_code_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="ENPE_EXT_INTRO from Eurostat",
+        )
+
+        calls = []
+
+        async def _fake_fetch_indicator(*, indicator, country, start_year=None, end_year=None, filters=None):
+            calls.append(
+                {
+                    "indicator": indicator,
+                    "country": country,
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "filters": dict(filters or {}),
+                }
+            )
+            return sample_series_with(
+                source="Eurostat",
+                indicator="Share of imports and exports in EU27 trade",
+                country="ALL_AVAILABLE",
+                series_id=indicator,
+            )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(calls[0]["indicator"], "enpe_ext_intro")
+        self.assertEqual(calls[0]["country"], "__ALL__")
+
     def test_fetch_data_does_not_retry_eurostat_when_time_scope_is_explicit(self) -> None:
         intent = ParsedIntent(
             apiProvider="EUROSTAT",

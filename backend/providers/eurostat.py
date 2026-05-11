@@ -193,7 +193,7 @@ class EurostatProvider(BaseProvider):
     async def fetch_indicator(
         self,
         indicator: str,
-        country: str = "EU",
+        country: Optional[str] = "EU",
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
         filters: Optional[Dict[str, Any]] = None,
@@ -206,8 +206,11 @@ class EurostatProvider(BaseProvider):
         If start_year and end_year are not specified, defaults to last 5 years of data.
         """
         dataset_code, dataset_label = await self._resolve_dataset(indicator)
-        country_code = self._country_code(country)
-        country_code = self._default_geo_for_dataset(dataset_code, country_code)
+        raw_country = str(country or "").strip()
+        no_geo_filter = raw_country.upper() in {"__ALL__", "ALL_AVAILABLE", "ALL"}
+        country_code = None if no_geo_filter else self._country_code(raw_country or "EU")
+        if country_code:
+            country_code = self._default_geo_for_dataset(dataset_code, country_code)
 
         # Use JSON-stat API endpoint (statistics/1.0) instead of SDMX
         # This is more reliable and doesn't have the 406 Not Acceptable errors
@@ -226,10 +229,9 @@ class EurostatProvider(BaseProvider):
             freq = "A"  # Annual by default (includes ext_lt_maineu)
 
         # Build query parameters
-        query_params: Dict[str, str] = {
-            "geo": country_code,
-            "freq": freq,
-        }
+        query_params: Dict[str, str] = {"freq": freq}
+        if country_code:
+            query_params["geo"] = country_code
 
         # Add time range (JSON-stat uses sinceTimePeriod, not startPeriod)
         # Default to last 5 years if not specified
@@ -259,13 +261,13 @@ class EurostatProvider(BaseProvider):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 raise DataNotAvailableError(
-                    f"Eurostat dataset '{dataset_code}' not found for country {country_code}"
+                    f"Eurostat dataset '{dataset_code}' not found for country {country_code or 'ALL_AVAILABLE'}"
                 )
             raise
 
         data_points, frequency = self._parse_dataset(payload, dataset_code)
         if not data_points:
-            raise DataNotAvailableError(f"No data found for {country_code} in dataset {dataset_code}")
+            raise DataNotAvailableError(f"No data found for {country_code or 'ALL_AVAILABLE'} in dataset {dataset_code}")
 
         # Apply year-over-year rate calculation if requested
         # Check if indicator name suggests rate/growth/change calculation is needed
@@ -320,7 +322,7 @@ class EurostatProvider(BaseProvider):
         metadata = Metadata(
             source="Eurostat",
             indicator=dataset_label or payload.get("label", indicator),
-            country=country_code,
+            country=country_code or "ALL_AVAILABLE",
             frequency=frequency,
             unit=unit,
             lastUpdated=payload.get("updated", ""),
