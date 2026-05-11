@@ -705,12 +705,130 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("/country/all/indicator/TOT", calls[0]["url"])
         self.assertIn("/sources/15/country/all/series/TOT", calls[1]["url"])
-        self.assertEqual(calls[1]["params"].get("MRV"), 5)
+        self.assertEqual(calls[1]["params"].get("MRNEV"), 5)
+        self.assertNotIn("MRV", calls[1]["params"])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata.seriesId, "TOT")
         self.assertEqual(results[0].metadata.country, "Advanced Economies")
         self.assertEqual(results[0].data[0].date, "2024-01-01")
         self.assertEqual(results[0].data[0].value, 101.5)
+
+    def test_worldbank_source_endpoint_uses_mrnev_and_keeps_native_dimensions(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            async def get(self, url, *, params=None, **_kwargs):
+                calls.append({"url": str(url), "params": dict(params or {})})
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        generic_missing = MockAsyncResponse(
+            [
+                {
+                    "message": [
+                        {
+                            "id": "175",
+                            "key": "Invalid format",
+                            "value": "The indicator was not found. It may have been deleted or archived.",
+                        }
+                    ]
+                }
+            ]
+        )
+        source_response = MockAsyncResponse(
+            {
+                "page": 1,
+                "pages": 1,
+                "per_page": 1000,
+                "total": 3,
+                "lastupdated": "2025-12-03",
+                "source": {
+                    "id": "81",
+                    "name": "International Debt Statistics: DSSI",
+                    "data": [
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "BGD", "value": "Bangladesh"},
+                                {
+                                    "concept": "Series",
+                                    "id": "DT.INT.DLXF.CD",
+                                    "value": "Interest payments on external debt, long-term (INT, current US$)",
+                                },
+                                {"concept": "Counterpart-Area", "id": "915", "value": "Asian Dev. Bank"},
+                                {"concept": "Time", "id": "Monthly", "value": "Monthly"},
+                            ],
+                            "value": 1568577993.1,
+                        },
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "BGD", "value": "Bangladesh"},
+                                {
+                                    "concept": "Series",
+                                    "id": "DT.INT.DLXF.CD",
+                                    "value": "Interest payments on external debt, long-term (INT, current US$)",
+                                },
+                                {"concept": "Counterpart-Area", "id": "915", "value": "Asian Dev. Bank"},
+                                {"concept": "Time", "id": "Annual", "value": "Annual"},
+                            ],
+                            "value": 5091906245.3,
+                        },
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "BGD", "value": "Bangladesh"},
+                                {
+                                    "concept": "Series",
+                                    "id": "DT.INT.DLXF.CD",
+                                    "value": "Interest payments on external debt, long-term (INT, current US$)",
+                                },
+                                {"concept": "Counterpart-Area", "id": "913", "value": "African Dev. Bank"},
+                                {"concept": "Time", "id": "Annual", "value": "Annual"},
+                            ],
+                            "value": 123.0,
+                        },
+                    ],
+                },
+            }
+        )
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "WorldBank",
+            "code": "DT.INT.DLXF.CD",
+            "raw_metadata": json.dumps(
+                {"source": {"id": "81", "value": "International Debt Statistics: DSSI"}}
+            ),
+        }
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_missing, source_response])), \
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
+             patch("backend.providers.worldbank._wb_record_success"):
+            results = run(provider.fetch_indicator("DT.INT.DLXF.CD"))
+
+        record_failure.assert_not_called()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/sources/81/country/all/series/DT.INT.DLXF.CD", calls[1]["url"])
+        self.assertEqual(calls[1]["params"].get("MRNEV"), 5)
+        self.assertEqual(len(results), 3)
+        series_ids = {result.metadata.seriesId for result in results}
+        self.assertIn("DT.INT.DLXF.CD:Counterpart-Area=915|Time=Monthly", series_ids)
+        self.assertIn("DT.INT.DLXF.CD:Counterpart-Area=915|Time=Annual", series_ids)
+        monthly = next(
+            result
+            for result in results
+            if result.metadata.seriesId == "DT.INT.DLXF.CD:Counterpart-Area=915|Time=Monthly"
+        )
+        self.assertEqual(monthly.metadata.frequency, "monthly")
+        self.assertEqual(monthly.data[0].date, "2025-12-03")
+        self.assertEqual(monthly.data[0].value, 1568577993.1)
+        self.assertTrue(
+            any("source lastupdated" in note for note in (monthly.metadata.notes or []))
+        )
 
     def test_worldbank_all_country_fetches_remaining_pages(self) -> None:
         provider = WorldBankProvider()

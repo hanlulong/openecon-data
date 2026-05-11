@@ -618,6 +618,74 @@ class WorldBankProvider(BaseProvider):
                 return item
         return {}
 
+    @staticmethod
+    def _source_time_point(
+        time_var: dict[str, Any],
+        last_updated: str,
+    ) -> tuple[str, Optional[int], str, bool]:
+        """Normalize a WorldBank source Time variable.
+
+        Source-specific endpoints use the documented advanced-data shape where
+        Time is another provider-native concept variable.  When using MRNEV,
+        some sources return a frequency label such as ``Monthly`` or ``Annual``
+        instead of the exact observation period.  Keep those provider-native
+        records usable without inventing a semantic year by dating the single
+        latest-value point to the source ``lastupdated`` stamp and separating
+        frequency labels into distinct series.
+        """
+        raw_time = str(time_var.get("id") or time_var.get("value") or "").strip()
+        time_value = str(time_var.get("value") or time_var.get("id") or "").strip()
+        combined = " ".join(part for part in (raw_time, time_value) if part).strip()
+
+        match = re.search(r"YR(?P<year>19\d{2}|20\d{2})-M(?P<month>\d{1,2})", combined, re.IGNORECASE)
+        if match:
+            year = int(match.group("year"))
+            month = max(1, min(12, int(match.group("month"))))
+            return f"{year:04d}-{month:02d}-01", year, time_value or raw_time, True
+
+        match = re.search(r"(?P<year>19\d{2}|20\d{2})M(?P<month>\d{1,2})", combined, re.IGNORECASE)
+        if match:
+            year = int(match.group("year"))
+            month = max(1, min(12, int(match.group("month"))))
+            return f"{year:04d}-{month:02d}-01", year, time_value or raw_time, True
+
+        match = re.search(r"(?P<year>19\d{2}|20\d{2})Q(?P<quarter>[1-4])", combined, re.IGNORECASE)
+        if match:
+            year = int(match.group("year"))
+            month = (int(match.group("quarter")) - 1) * 3 + 1
+            return f"{year:04d}-{month:02d}-01", year, time_value or raw_time, True
+
+        match = re.search(r"\b(19\d{2}|20\d{2})\b", combined)
+        if match:
+            year = int(match.group(1))
+            return f"{year:04d}-01-01", year, time_value or raw_time, True
+
+        fallback = ""
+        last_updated_text = str(last_updated or "").strip()
+        last_updated_match = re.search(r"\b(19\d{2}|20\d{2})-\d{2}-\d{2}\b", last_updated_text)
+        if last_updated_match:
+            fallback = last_updated_match.group(0)
+        else:
+            year_match = re.search(r"\b(19\d{2}|20\d{2})\b", last_updated_text)
+            fallback = f"{year_match.group(1)}-01-01" if year_match else "latest"
+
+        return fallback, None, time_value or raw_time or "latest", False
+
+    @staticmethod
+    def _source_frequency(time_label: str, parsed_date: str) -> str:
+        label = str(time_label or "").strip().lower()
+        if "monthly" in label or re.search(
+            r"\d{4}\s*M\d{1,2}|YR\d{4}-M\d{1,2}",
+            str(time_label),
+            re.IGNORECASE,
+        ):
+            return "monthly"
+        if "quarter" in label or re.search(r"\d{4}Q[1-4]", str(time_label), re.IGNORECASE):
+            return "quarterly"
+        if "annual" in label or re.fullmatch(r"\d{4}-01-01", str(parsed_date or "")):
+            return "annual"
+        return "annual"
+
     async def _fetch_source_series_endpoint(
         self,
         *,
@@ -648,11 +716,11 @@ class WorldBankProvider(BaseProvider):
             params["date"] = f"{start_date[:4]}:{end_date[:4]}"
         elif not start_date and not end_date:
             # Source-specific endpoints often sort all-country records by
-            # far-future placeholder years with null values.  MRV keeps the
-            # provider-native series query on the latest available slice and
-            # avoids walking thousands of null records for exact no-date
-            # catalog-code requests.
-            params["MRV"] = 5
+            # far-future placeholder years with null values.  WorldBank's
+            # documented MRNEV parameter returns the most recent non-empty
+            # provider-native values, avoiding false data_not_available
+            # outcomes for exact no-date catalog-code requests.
+            params["MRNEV"] = 5
         logger.info("WorldBank source endpoint call: %s | params=%s", url, params)
 
         response = await client.get(
@@ -717,7 +785,7 @@ class WorldBankProvider(BaseProvider):
         start_year = int(start_date[:4]) if start_date else None
         end_year = int(end_date[:4]) if end_date else None
 
-        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
         for record in records:
             value = record.get("value")
             if value is None:
@@ -726,13 +794,13 @@ class WorldBankProvider(BaseProvider):
             country_var = self._source_variable(record, "Country")
             time_var = self._source_variable(record, "Time")
             series_var = self._source_variable(record, "Series")
-            sector_var = self._source_variable(record, "Sector")
 
-            year_text = str(time_var.get("value") or time_var.get("id") or "").strip()
-            year_match = re.search(r"(19\d{2}|20\d{2})", year_text)
-            if not year_match:
+            point_date, year, time_label, has_observation_period = self._source_time_point(
+                time_var,
+                last_updated,
+            )
+            if (start_year or end_year) and year is None:
                 continue
-            year = int(year_match.group(1))
             if start_year and year < start_year:
                 continue
             if end_year and year > end_year:
@@ -740,22 +808,40 @@ class WorldBankProvider(BaseProvider):
 
             country_id = str(country_var.get("id") or "").strip() or "all"
             country_name = str(country_var.get("value") or country_id).strip()
-            sector_id = str(sector_var.get("id") or "").strip()
-            sector_name = str(sector_var.get("value") or "").strip()
             indicator_name = str(series_var.get("value") or indicator_code).strip()
-            series_key = (country_id, sector_id)
+
+            dimension_parts: list[tuple[str, str, str]] = []
+            for item in record.get("variable") or []:
+                if not isinstance(item, dict):
+                    continue
+                concept = str(item.get("concept") or "").strip()
+                if concept.lower() in {"country", "series", "time"}:
+                    continue
+                dim_id = str(item.get("id") or "").strip()
+                dim_value = str(item.get("value") or dim_id).strip()
+                if dim_id or dim_value:
+                    dimension_parts.append((concept, dim_id, dim_value))
+            if time_label and not has_observation_period:
+                dimension_parts.append(("Time", str(time_var.get("id") or time_label).strip(), time_label))
+
+            series_key = (
+                country_id,
+                tuple((concept, dim_id) for concept, dim_id, _ in dimension_parts),
+            )
             bucket = grouped.setdefault(
                 series_key,
                 {
                     "country_id": country_id,
                     "country_name": country_name,
-                    "sector_id": sector_id,
-                    "sector_name": sector_name,
                     "indicator_name": indicator_name,
+                    "dimension_parts": dimension_parts,
+                    "time_label": time_label,
+                    "frequency": self._source_frequency(time_label, point_date),
+                    "uses_lastupdated_date": not has_observation_period,
                     "points": [],
                 },
             )
-            bucket["points"].append({"date": f"{year}-01-01", "value": value})
+            bucket["points"].append({"date": point_date, "value": value})
 
         results: List[NormalizedData] = []
         max_source_series = 500
@@ -765,14 +851,48 @@ class WorldBankProvider(BaseProvider):
             points = sorted(bucket["points"], key=lambda item: item["date"])
             if not points:
                 continue
-            sector_name = str(bucket.get("sector_name") or "").strip()
-            sector_id = str(bucket.get("sector_id") or "").strip()
             indicator_label = str(bucket.get("indicator_name") or indicator_code).strip()
-            if sector_name:
-                indicator_label = f"{indicator_label} — {sector_name}"
-            series_id = indicator_code if not sector_id else f"{indicator_code}:{sector_id}"
+            dimension_parts = list(bucket.get("dimension_parts") or [])
+            if dimension_parts:
+                label_suffix = " — ".join(
+                    dim_value or dim_id
+                    for _, dim_id, dim_value in dimension_parts
+                    if dim_value or dim_id
+                )
+                if label_suffix:
+                    indicator_label = f"{indicator_label} — {label_suffix}"
+            if not dimension_parts:
+                series_id = indicator_code
+            elif len(dimension_parts) == 1 and dimension_parts[0][0].lower() == "sector":
+                series_id = f"{indicator_code}:{dimension_parts[0][1]}"
+            else:
+                dimension_suffix = "|".join(
+                    f"{concept}={dim_id or dim_value}"
+                    for concept, dim_id, dim_value in dimension_parts
+                    if concept and (dim_id or dim_value)
+                )
+                series_id = f"{indicator_code}:{dimension_suffix}" if dimension_suffix else indicator_code
             values = [point["value"] for point in points if point.get("value") is not None]
             unit = "USD" if "$" in indicator_label or "us$" in indicator_label.lower() or "dollars" in indicator_label.lower() else ""
+            notes = [
+                f"WorldBank source-specific endpoint source={source_id}",
+                (
+                    "dimensions="
+                    + "; ".join(
+                        f"{concept}={dim_value or dim_id}"
+                        for concept, dim_id, dim_value in dimension_parts
+                    )
+                ) if dimension_parts else "dimensions=not specified",
+                (
+                    f"source endpoint returned {total_records} records; "
+                    f"response limited to first {max_source_series} series"
+                ) if total_records > max_source_series else "source endpoint returned complete first page",
+            ]
+            if bucket.get("uses_lastupdated_date"):
+                notes.append(
+                    "WorldBank MRNEV source response omitted an observation period; "
+                    "data point date uses source lastupdated"
+                )
 
             results.append(
                 NormalizedData(
@@ -780,7 +900,7 @@ class WorldBankProvider(BaseProvider):
                         source="World Bank",
                         indicator=indicator_label,
                         country=str(bucket.get("country_name") or bucket.get("country_id") or ""),
-                        frequency="annual",
+                        frequency=str(bucket.get("frequency") or "annual"),
                         unit=unit,
                         lastUpdated=last_updated,
                         seriesId=series_id,
@@ -790,14 +910,7 @@ class WorldBankProvider(BaseProvider):
                         dataType="Level",
                         priceType="Nominal (current prices)" if unit == "USD" else None,
                         description=f"{source_name}: {indicator_label}",
-                        notes=[
-                            f"WorldBank source-specific endpoint source={source_id}",
-                            f"sector={sector_name or sector_id or 'not specified'}",
-                            (
-                                f"source endpoint returned {total_records} records; "
-                                f"response limited to first {max_source_series} series"
-                            ) if total_records > max_source_series else "source endpoint returned complete first page",
-                        ],
+                        notes=notes,
                         startDate=points[0]["date"],
                         endDate=points[-1]["date"],
                     ),
