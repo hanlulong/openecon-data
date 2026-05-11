@@ -177,6 +177,19 @@ def test_default_query_for_row_keeps_statscan_dimension_titles_natural():
     assert not query.startswith("17100147")
 
 
+def test_default_query_for_row_carries_statscan_historical_product_id_with_date_range():
+    row = {
+        "provider": "StatsCan",
+        "code": "14100297",
+        "name": "Labour force characteristics by occupation, annual, 1987 to 2018, inactive",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "14100297 Labour force characteristics by occupation annual 1987 to 2018 inactive from StatsCan"
+
+
 def test_audit_direct_query_shape_does_not_block_exact_statscan_product_title():
     audit = audit_direct_query_shape(
         {

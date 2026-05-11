@@ -553,6 +553,17 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "24100026")
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "24100026")
 
+    def test_explicit_provider_code_intent_preserves_year_range_from_title(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "15100032 Population by first official language spoken and geography 1971 to 2021 from StatsCan"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.parameters.get("indicator"), "15100032")
+        self.assertEqual(intent.parameters.get("startDate"), "1971-01-01")
+        self.assertEqual(intent.parameters.get("endDate"), "2021-12-31")
+
     def test_explicit_provider_code_intent_extracts_catalog_backed_coingecko_slug(self) -> None:
         class _Lookup:
             def get(self, provider, code):

@@ -1228,6 +1228,17 @@ def statscan_title_needs_dimension_evidence(title: str) -> bool:
     )
 
 
+def statscan_title_has_explicit_year_range(title: str) -> bool:
+    """Return True when a catalog title carries an explicit historical range."""
+    return bool(
+        re.search(
+            r'(?<!\d)(?:19|20)\d{2}(?!\d)\s*(?:to|-|–|—)\s*(?<!\d)(?:19|20)\d{2}(?!\d)',
+            str(title or ''),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     origin = dict(row.get('origin') or {})
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '')
@@ -1271,12 +1282,17 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         statscan_title = name or description or phrase
         if (
             re.fullmatch(r'\d{8}|\d{10}', statscan_product_id)
-            and not statscan_title_needs_dimension_evidence(statscan_title)
+            and (
+                not statscan_title_needs_dimension_evidence(statscan_title)
+                or statscan_title_has_explicit_year_range(statscan_title)
+            )
         ):
             # Carry the exact provider-native table/product id while retaining
             # the catalog title as query evidence for downstream dimension
-            # extraction.  This is mechanical product-id transport, not
-            # semantic table selection.
+            # extraction and historical-date parsing.  Historical range titles
+            # need the product id so default recent windows do not erase the
+            # archived provider surface.  This is mechanical product-id
+            # transport, not semantic table selection.
             title_evidence = re.sub(r'[,;:]+', ' ', statscan_title)
             title_evidence = re.sub(r'\s+', ' ', title_evidence).strip()
             return f"{statscan_product_id[:8]} {title_evidence} from StatsCan".strip()

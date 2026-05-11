@@ -396,6 +396,20 @@ class QueryService:
         """Disabled compatibility shim for the old broad-concept shortcut."""
         return None
 
+    @staticmethod
+    def _explicit_year_range_from_text(text: str) -> tuple[str, str] | None:
+        """Extract a mechanical year range embedded in exact-code query text."""
+        years = [
+            int(match.group(0))
+            for match in re.finditer(r"(?<!\d)(?:19|20)\d{2}(?!\d)", str(text or ""))
+        ]
+        if len(years) < 2:
+            return None
+        start_year, end_year = years[0], years[1]
+        if start_year > end_year:
+            return None
+        return f"{start_year:04d}-01-01", f"{end_year:04d}-12-31"
+
     def _build_explicit_provider_code_intent(self, query: str) -> Optional[ParsedIntent]:
         """Fast path for raw queries that are just a provider code plus provider mention."""
         explicit_provider = normalize_provider_name(self._detect_explicit_provider(query) or "")
@@ -522,6 +536,9 @@ class QueryService:
         }
         if statscan_exact_product_id:
             params["__statscan_product_id"] = statscan_exact_product_id
+        explicit_year_range = self._explicit_year_range_from_text(stripped_original)
+        if explicit_year_range is not None:
+            params["startDate"], params["endDate"] = explicit_year_range
         if len(countries) == 1:
             params["country"] = countries[0]
         elif len(countries) > 1:
