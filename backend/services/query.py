@@ -402,44 +402,69 @@ class QueryService:
         if not explicit_provider:
             return None
 
-        stripped = str(query or "").strip().lower()
+        stripped_original = str(query or "").strip()
         provider_suffixes = [explicit_provider]
         if explicit_provider.upper() == "WORLDBANK":
             provider_suffixes.extend(["world bank", "worldbank"])
         for provider_suffix in dict.fromkeys(provider_suffixes):
             for verb in ("from", "use", "using", "via"):
-                stripped = re.sub(
-                    rf"\b{verb}\s+{re.escape(provider_suffix.lower())}\b",
+                stripped_original = re.sub(
+                    rf"\b{verb}\s+{re.escape(provider_suffix)}\b",
                     " ",
-                    stripped,
+                    stripped_original,
                     flags=re.IGNORECASE,
                 )
-        stripped = re.sub(r"\s+", " ", stripped).strip(" ,;:")
+        stripped_original = re.sub(r"\s+", " ", stripped_original).strip(" ,;:")
+        stripped = stripped_original.lower()
         if not stripped:
             return None
 
-        candidate = str(stripped).upper()
+        candidate = stripped_original if explicit_provider == "WORLDBANK" else str(stripped_original).upper()
+        worldbank_catalog_codes: list[str] = []
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             code_candidates = [
-                token.upper()
+                token if explicit_provider == "WORLDBANK" else token.upper()
                 for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_.]{2,}\b", str(query or ""))
                 if ("_" in token or "." in token)
-                and self._looks_like_provider_indicator_code(explicit_provider, token.upper())
+                and self._looks_like_provider_indicator_code(
+                    explicit_provider,
+                    token if explicit_provider == "WORLDBANK" else token.upper(),
+                )
             ]
             if explicit_provider == "IMF":
                 code_candidates.extend(
                     self._imf_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 )
+            if explicit_provider == "WORLDBANK":
+                worldbank_catalog_codes = self._worldbank_uppercase_catalog_code_tokens(str(query or ""), stripped)
+                code_candidates.extend(worldbank_catalog_codes)
             if len(dict.fromkeys(code_candidates)) == 1:
                 candidate = code_candidates[0]
 
-        if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
+        catalog_backed_worldbank_code = (
+            explicit_provider == "WORLDBANK"
+            and candidate in worldbank_catalog_codes
+        )
+        if (
+            not catalog_backed_worldbank_code
+            and not self._looks_like_provider_indicator_code(explicit_provider, candidate)
+        ):
             return None
 
-        if not re.fullmatch(r"[A-Z0-9_@.\-]{3,}", candidate):
+        if explicit_provider == "WORLDBANK":
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.\-]{1,127}", candidate):
+                return None
+        elif not re.fullmatch(r"[A-Z0-9_@.\-]{3,}", candidate):
             return None
 
-        countries = self._extract_countries_from_query(query)
+        country_scope_text = re.sub(
+            re.escape(str(candidate)),
+            " ",
+            stripped_original,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        countries = self._extract_countries_from_query(country_scope_text)
         params = {
             "indicator": candidate,
             "__semantic_indicator_label": candidate,
@@ -468,6 +493,53 @@ class QueryService:
             decompositionEntities=None,
             useProMode=False,
         )
+
+    def _worldbank_uppercase_catalog_code_tokens(self, query: str, stripped_query: str = "") -> list[str]:
+        """Return exact uppercase WorldBank catalog-code tokens embedded in a query.
+
+        Some WorldBank public sources use short provider-native codes such as
+        ``TOT`` that do not contain dots, underscores, or digits.  Accept those
+        only when the original query contains the uppercase token and the token
+        already exists as a WorldBank code in the local catalog.  This keeps the
+        path mechanical and prevents lower-case natural-language words from
+        being promoted to provider codes.
+        """
+        tokens = [
+            match.group(0)
+            for match in re.finditer(r"\b[A-Z][A-Z0-9]{1,15}\b", str(query or ""))
+        ]
+        if not tokens:
+            return []
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+        except Exception:
+            return []
+
+        matches: list[str] = []
+        for token in tokens:
+            if token in {"WORLD", "BANK", "WORLDBANK"}:
+                continue
+            residual = re.sub(
+                rf"\b{re.escape(token.lower())}\b",
+                " ",
+                str(stripped_query or "").lower(),
+            )
+            residual = re.sub(r"\s+", " ", residual).strip(" ,;:")
+            if residual and not CountryResolver.normalize(residual):
+                continue
+            try:
+                metadata = lookup.get("WorldBank", token)
+            except Exception:
+                metadata = None
+            if not metadata:
+                continue
+            exact_code = str(metadata.get("code") or token).strip()
+            if exact_code:
+                matches.append(exact_code)
+        return matches
 
     def _imf_uppercase_catalog_code_tokens(self, query: str, stripped_query: str = "") -> list[str]:
         """Return exact uppercase IMF DataMapper-code tokens embedded in a query.

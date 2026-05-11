@@ -516,6 +516,51 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "DE")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_does_not_extract_country_from_worldbank_code_suffix(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "GC.TAX.TOTL.CN from World Bank"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "GC.TAX.TOTL.CN")
+        self.assertNotIn("country", intent.parameters)
+        self.assertNotIn("countries", intent.parameters)
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_accepts_catalog_backed_short_worldbank_code(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "WorldBank" and code == "TOT":
+                    return {"provider": "WorldBank", "code": "TOT", "name": "Terms of Trade"}
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "TOT from World Bank"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "TOT")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_does_not_promote_lowercase_short_worldbank_word(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "WorldBank" and code == "TOT":
+                    return {"provider": "WorldBank", "code": "TOT", "name": "Terms of Trade"}
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "tot from World Bank"
+            )
+
+        self.assertIsNone(intent)
+
     def test_fetch_data_replaces_explicit_fred_code_when_query_conflicts(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",

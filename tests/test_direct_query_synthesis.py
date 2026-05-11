@@ -246,9 +246,20 @@ def test_default_query_for_row_does_not_treat_current_us_dollar_unit_as_country_
 
     query = default_query_for_row(row)
 
-    assert query == "Industry (including construction) value added (current US$) from World Bank"
+    assert query == "NV.IND.TOTL.CD from World Bank"
     assert query.lower().endswith("from world bank")
     assert not query.startswith(("United States ", "Germany ", "Brazil ", "India ", "Nigeria ", "China "))
+
+
+def test_default_query_for_row_preserves_mixed_case_worldbank_code() -> None:
+    row = {
+        "provider": "WorldBank",
+        "code": "CoHD_v_ss",
+        "name": "Cost of vegetables relative to the starchy staples in a least-cost healthy diet",
+        "description": "",
+    }
+
+    assert default_query_for_row(row) == "CoHD_v_ss from World Bank"
 
 
 def test_default_query_for_row_does_not_treat_metric_ton_as_tonga_scope() -> None:
@@ -265,7 +276,7 @@ def test_default_query_for_row_does_not_treat_metric_ton_as_tonga_scope() -> Non
     query = default_query_for_row(row)
 
     assert not query.startswith("Ton ")
-    assert query.lower().endswith("from world bank")
+    assert query == "NY.ADJ.DCO2.GN.ZS from World Bank"
 
 
 def test_default_query_for_row_does_not_treat_worldwide_source_family_as_country_scope() -> None:
@@ -282,8 +293,7 @@ def test_default_query_for_row_does_not_treat_worldwide_source_family_as_country
     query = default_query_for_row(row)
 
     assert query != "Worldwide Control of Corruption: Estimate from World Bank"
-    assert query.lower().endswith("control of corruption: estimate from world bank")
-    assert query == "Control of Corruption: Estimate from World Bank"
+    assert query == "CC.EST from World Bank"
 
 
 def test_default_query_for_row_keeps_intrinsic_worldbank_country_scope() -> None:
@@ -297,7 +307,7 @@ def test_default_query_for_row_keeps_intrinsic_worldbank_country_scope() -> None
 
     query = default_query_for_row(row)
 
-    assert query == "Japan total Population from World Bank"
+    assert query == "Japan SP.POP.TOTL from World Bank"
 
 
 def test_default_query_for_row_enriches_generic_oecd_title_from_description():
@@ -401,6 +411,25 @@ def test_audit_direct_query_shape_flags_worldbank_non_api_source_families() -> N
     assert g20["risk_level"] == "high"
     assert "worldbank_specialized_source_family" in gdld["reasons"]
     assert "worldbank_specialized_source_family" in g20["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_exact_worldbank_code_probe_low_risk() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider_stratum": "WorldBank",
+            "query": "CoHD_v_ss from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "CoHD_v_ss",
+                "name": "Cost of vegetables relative to the starchy staples in a least-cost healthy diet",
+                "category": "Food Prices for Nutrition",
+                "raw_metadata": '{"source": {"id": "88", "value": "Food Prices for Nutrition"}}',
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "low"
+    assert not any(reason.startswith("worldbank_") for reason in audit["reasons"])
 
 
 def test_audit_direct_query_shape_flags_worldbank_country_role_availability() -> None:

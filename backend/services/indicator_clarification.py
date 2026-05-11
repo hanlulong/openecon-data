@@ -3317,7 +3317,16 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
     provider_upper = normalize_provider_name(provider)
 
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
-        return bool(re.fullmatch(r"[A-Z]{2,}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
+        # WorldBank public REST IDs are broader than dotted WDI codes:
+        # source-specific exact codes may be lower/mixed-case and may use
+        # underscores or digits (for example ``CoHD_v_ss`` and
+        # ``per_si_allsi.adq_pop_tot``).  Plain short acronyms such as ``TOT``
+        # are accepted only by the catalog-backed explicit-code fast path, not
+        # by this shape-only guard.
+        return bool(
+            re.fullmatch(r"[A-Za-z][A-Za-z0-9_.\-]{1,127}", indicator_text)
+            and ("." in indicator_text or "_" in indicator_text or any(ch.isdigit() for ch in indicator_text))
+        )
 
     if provider_upper == "BIS":
         return bool(

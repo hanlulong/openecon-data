@@ -182,7 +182,10 @@ def _looks_like_provider_indicator_code_local(provider: str, indicator: str) -> 
     provider_upper = _normalize_provider_name(provider)
     code_upper = indicator_text.upper()
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
-        return bool(re.fullmatch(r"[A-Z]{2,}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
+        return bool(
+            re.fullmatch(r"[A-Za-z][A-Za-z0-9_.\-]{1,127}", indicator_text)
+            and ("." in indicator_text or "_" in indicator_text or any(ch.isdigit() for ch in indicator_text))
+        )
     if provider_upper == "BIS":
         return bool(
             code_upper.startswith("WS_")
@@ -1581,6 +1584,22 @@ async def resolve_indicator_for_fetch(
         and svc._looks_like_provider_indicator_code(provider, existing_indicator)
     )
     exact_match_locked = is_exact_match_locked(params)
+    if (
+        not has_explicit_code
+        and exact_match_locked
+        and provider in {"WORLDBANK", "WORLD BANK"}
+        and existing_indicator
+    ):
+        try:
+            from .indicator_database import get_indicator_lookup
+
+            has_explicit_code = bool(get_indicator_lookup().get("WorldBank", existing_indicator))
+        except Exception as exc:
+            logger.debug(
+                "WorldBank exact-code catalog check skipped for %s: %s",
+                existing_indicator,
+                exc,
+            )
 
     # Path 1: Validate explicit code against query context
     if has_explicit_code and exact_match_locked:

@@ -644,6 +644,15 @@ class WorldBankProvider(BaseProvider):
         batch_codes = ";".join(country_codes or ["all"])
         url = f"{self.base_url}/sources/{source_id}/country/{batch_codes}/series/{indicator_code}"
         params = {"format": "json", "per_page": 1000}
+        if start_date and end_date:
+            params["date"] = f"{start_date[:4]}:{end_date[:4]}"
+        elif not start_date and not end_date:
+            # Source-specific endpoints often sort all-country records by
+            # far-future placeholder years with null values.  MRV keeps the
+            # provider-native series query on the latest available slice and
+            # avoids walking thousands of null records for exact no-date
+            # catalog-code requests.
+            params["MRV"] = 5
         logger.info("WorldBank source endpoint call: %s | params=%s", url, params)
 
         response = await client.get(
@@ -653,13 +662,49 @@ class WorldBankProvider(BaseProvider):
             timeout=effective_timeout(25.0),
         )
         response.raise_for_status()
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            logger.warning(
+                "WorldBank source endpoint returned non-JSON response for source=%s indicator=%s",
+                source_id,
+                indicator_code,
+            )
+            return []
         if not isinstance(payload, dict):
             return []
         source = payload.get("source") or {}
         if not isinstance(source, dict):
             return []
         records = [record for record in (source.get("data") or []) if isinstance(record, dict)]
+        total_pages = int(payload.get("pages") or 1)
+        if 1 < total_pages <= 10:
+            for page_num in range(2, total_pages + 1):
+                page_params = {**params, "page": page_num}
+                page_response = await client.get(
+                    url,
+                    params=page_params,
+                    headers=headers,
+                    timeout=effective_timeout(25.0),
+                )
+                page_response.raise_for_status()
+                try:
+                    page_payload = page_response.json()
+                except ValueError:
+                    logger.warning(
+                        "WorldBank source endpoint page %d returned non-JSON response for source=%s indicator=%s",
+                        page_num,
+                        source_id,
+                        indicator_code,
+                    )
+                    continue
+                page_source = page_payload.get("source") if isinstance(page_payload, dict) else None
+                if isinstance(page_source, dict):
+                    records.extend(
+                        record
+                        for record in (page_source.get("data") or [])
+                        if isinstance(record, dict)
+                    )
         if not records:
             return []
         total_records = int(payload.get("total") or len(records) or 0)
@@ -804,8 +849,14 @@ class WorldBankProvider(BaseProvider):
                 f"WorldBank API is temporarily unavailable (circuit breaker open). "
                 f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
             )
-        exact_indicator_request = self._looks_like_worldbank_indicator_code(indicator)
+        catalog_source_id = self._indicator_source_id(indicator)
+        exact_indicator_request = bool(
+            self._looks_like_worldbank_indicator_code(indicator)
+            or catalog_source_id
+        )
         indic = await self._resolve_indicator_code(indicator)
+        if not catalog_source_id or str(indic).strip() != str(indicator or "").strip():
+            catalog_source_id = self._indicator_source_id(indic)
         country_list = countries or ([country] if country else ["all"])
 
         # Detect when the country list represents a known WB aggregate region.
@@ -902,6 +953,7 @@ class WorldBankProvider(BaseProvider):
         payload = None
         batch_response = None  # Track response for metadata (e.g. Date header)
         api_error_detail = None
+        transport_failure_seen = False
         if prefer_parallel_small_group:
             logger.info(
                 "WorldBank: skipping batched multi-country request for small group (%d countries); "
@@ -915,6 +967,7 @@ class WorldBankProvider(BaseProvider):
                     logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
                     if batch_response.status_code != 502:
                         break
+                    transport_failure_seen = True
                     logger.warning(f"WorldBank 502 Bad Gateway (attempt {_attempt+1}/3), retrying...")
                     await asyncio.sleep(1.0)
                 batch_response.raise_for_status()
@@ -984,13 +1037,14 @@ class WorldBankProvider(BaseProvider):
                             payload = None  # Force fallback to per-country sequential fetch
             except httpx.HTTPError as e:
                 logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
+                transport_failure_seen = True
                 payload = None
             except Exception as e:
                 logger.warning(f"Error fetching batched data: {e}")
                 payload = None
 
         if api_error_detail and exact_indicator_request:
-            source_id = self._indicator_source_id(indic)
+            source_id = catalog_source_id or self._indicator_source_id(indic)
             if source_id and source_id != "2":
                 source_results = await self._fetch_source_series_endpoint(
                     source_id=source_id,
@@ -1004,7 +1058,6 @@ class WorldBankProvider(BaseProvider):
                 if source_results:
                     _wb_record_success()
                     return source_results
-            _wb_record_failure()
             raise DataNotAvailableError(
                 f"WorldBank exact indicator code '{indic}' is not available from the public data endpoint: "
                 f"{api_error_detail}"
@@ -1015,7 +1068,11 @@ class WorldBankProvider(BaseProvider):
         # batch processing loop below handles all countries together.
         # Skip fallback if time budget already exceeded (avoids cascading timeouts).
         _elapsed_so_far = _time.perf_counter() - _fetch_start
-        if not payload and _elapsed_so_far < _FETCH_BUDGET_S:
+        skip_duplicate_all_country_fallback = (
+            len(country_list) == 1
+            and self._country_code(str(country_list[0])) == "all"
+        )
+        if not payload and not skip_duplicate_all_country_fallback and _elapsed_so_far < _FETCH_BUDGET_S:
             remaining_budget = _FETCH_BUDGET_S - _elapsed_so_far
             accumulated_records = []
             fallback_meta = None
@@ -1055,6 +1112,8 @@ class WorldBankProvider(BaseProvider):
                     "WorldBank per-country fallback timed out after %.1fs",
                     _time.perf_counter() - _fetch_start,
                 )
+        elif not payload and skip_duplicate_all_country_fallback:
+            logger.info("WorldBank skipping per-country fallback: all-country request already attempted")
         elif not payload:
             logger.info(
                 "WorldBank skipping per-country fallback: time budget exceeded (%.1fs)",
@@ -1173,6 +1232,37 @@ class WorldBankProvider(BaseProvider):
         # No results — try fallbacks in order of priority.
         _results_elapsed = _time.perf_counter() - _fetch_start
 
+        # 0. Exact catalog-backed non-WDI source endpoint.  Some public
+        # WorldBank sources return empty/deleted from the generic
+        # /country/{country}/indicator/{code} endpoint but serve the same
+        # provider-native code through /sources/{source}/country/{country}/series/{code}.
+        # This uses only source id metadata already stored with the exact
+        # catalog code; it does not infer a semantic replacement indicator.
+        if exact_indicator_request:
+            source_id = catalog_source_id or self._indicator_source_id(indic)
+            if source_id and source_id != "2":
+                try:
+                    source_results = await self._fetch_source_series_endpoint(
+                        source_id=source_id,
+                        indicator=indic,
+                        country_codes=list(resolved_codes.keys()),
+                        start_date=start_date,
+                        end_date=end_date,
+                        headers=headers,
+                        client=client,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "WorldBank source endpoint fallback failed for source=%s indicator=%s: %s",
+                        source_id,
+                        indic,
+                        exc,
+                    )
+                    source_results = []
+                if source_results:
+                    _wb_record_success()
+                    return source_results
+
         # 1. Income aggregate fallback (only if time budget allows)
         if _results_elapsed < _FETCH_BUDGET_S:
             income_aggregates_tried = [c for c in country_list if c in self.INCOME_AGGREGATE_FALLBACKS]
@@ -1236,7 +1326,8 @@ class WorldBankProvider(BaseProvider):
         # list which the query service treated as "no data" rather than an error,
         # silently skipping the WB provider without triggering fallback chains.
         _total_elapsed = _time.perf_counter() - _fetch_start
-        _wb_record_failure()
+        if transport_failure_seen:
+            _wb_record_failure()
         logger.warning(
             "WorldBank fetch failed for indicator %s after %.1fs (budget=%.0fs)",
             indic, _total_elapsed, _FETCH_BUDGET_S,
@@ -1264,6 +1355,14 @@ class WorldBankProvider(BaseProvider):
         # gets re-resolved to a different (wrong) indicator.
         if self._looks_like_worldbank_indicator_code(indicator):
             logger.info(f"🔒 WorldBank: Using pre-resolved indicator code: {indicator}")
+            return str(indicator).strip()
+
+        # Some WorldBank public sources use short exact catalog codes (for
+        # example GEM `TOT`) that do not contain dots, underscores, or digits.
+        # If the local catalog has an exact code record, keep it mechanically
+        # instead of sending the token through semantic metadata search.
+        if self._indicator_source_id(indicator):
+            logger.info("🔒 WorldBank: Using exact catalog-backed indicator code: %s", indicator)
             return str(indicator).strip()
 
         exact_title_text = str(indicator or "").strip()

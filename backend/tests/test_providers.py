@@ -644,6 +644,74 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("/country/all/indicator/NY.GDP.MKTP.CD", client.urls[0])
         self.assertNotIn("/country/ALL/", client.urls[0])
 
+    def test_worldbank_exact_short_catalog_code_uses_source_endpoint_when_generic_empty(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            async def get(self, url, *, params=None, **_kwargs):
+                calls.append({"url": str(url), "params": dict(params or {})})
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        generic_empty = MockAsyncResponse(
+            [
+                {"page": 0, "pages": 0, "per_page": 0, "total": 0, "sourceid": None},
+                None,
+            ]
+        )
+        source_response = MockAsyncResponse(
+            {
+                "page": 1,
+                "pages": 1,
+                "per_page": 1000,
+                "total": 1,
+                "lastupdated": "2026-03-31",
+                "source": {
+                    "id": "15",
+                    "name": "Global Economic Monitor",
+                    "data": [
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "AME", "value": "Advanced Economies"},
+                                {"concept": "Series", "id": "TOT", "value": "Terms of Trade"},
+                                {"concept": "Time", "id": "YR2024", "value": "2024"},
+                            ],
+                            "value": 101.5,
+                        }
+                    ],
+                },
+            }
+        )
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "WorldBank",
+            "code": "TOT",
+            "raw_metadata": json.dumps({"source": {"id": "15", "value": "Global Economic Monitor"}}),
+        }
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_empty, source_response])), \
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
+             patch("backend.providers.worldbank._wb_record_success"):
+            results = run(provider.fetch_indicator("TOT"))
+
+        record_failure.assert_not_called()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/country/all/indicator/TOT", calls[0]["url"])
+        self.assertIn("/sources/15/country/all/series/TOT", calls[1]["url"])
+        self.assertEqual(calls[1]["params"].get("MRV"), 5)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata.seriesId, "TOT")
+        self.assertEqual(results[0].metadata.country, "Advanced Economies")
+        self.assertEqual(results[0].data[0].date, "2024-01-01")
+        self.assertEqual(results[0].data[0].value, 101.5)
+
     def test_worldbank_all_country_fetches_remaining_pages(self) -> None:
         provider = WorldBankProvider()
 

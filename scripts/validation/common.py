@@ -1248,6 +1248,16 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         natural_query = f"{prefix}{phrase} from IMF".strip()
         return natural_query
     if provider_upper == 'WORLDBANK':
+        # The frozen catalog row already carries the provider-native WorldBank
+        # code.  Use it directly so certification probes do not enter
+        # ambiguous title-search/list-result paths, and so code fragments such
+        # as ``.CN``/``.CD`` cannot be mistaken for user-supplied countries.
+        # This is exact provider-code transport, not semantic code selection.
+        if code and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{1,127}', code):
+            coverage_country = detect_single_country_from_text(str(row.get('coverage') or ''))
+            prefix = f"{coverage_country} " if coverage_country else ''
+            return f"{prefix}{code} from World Bank".strip()
+
         # WorldBank has a native all-country surface.  Injecting an arbitrary
         # default country into broad catalog-title certification rows turns
         # real provider coverage into false "data not available" failures
@@ -2052,6 +2062,32 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'imf_low_viability_family',
                 'imf_query_only_public_surface_family',
                 'methodology_dense',
+            }
+        ]
+    exact_worldbank_code_query = (
+        provider_upper == 'WORLDBANK'
+        and origin_code_upper
+        and re.search(
+            rf'(^|\s){re.escape(str(origin.get("source_indicator_code") or row.get("code") or "").strip())}\s+from\s+World\s+Bank$',
+            query.strip(),
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+    if exact_worldbank_code_query:
+        # Exact provider-code probes are mechanical WorldBank catalog requests.
+        # Do not let the human title/category metadata reclassify the code-only
+        # probe as an execution-high-risk natural-language surface. Runtime
+        # data availability/supportability remains measured by the replay.
+        reasons = [
+            reason for reason in reasons
+            if not reason.startswith('worldbank_')
+            and reason not in {
+                'acronym_dense',
+                'definition_financial_query',
+                'definition_survey_query',
+                'methodology_dense',
+                'multi_modifier_title',
             }
         ]
     reasons = list(dict.fromkeys(reasons))
