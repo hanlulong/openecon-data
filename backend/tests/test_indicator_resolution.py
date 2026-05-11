@@ -169,7 +169,7 @@ class IndicatorResolutionTests(unittest.TestCase):
         self.assertEqual(params.get("indicator"), "retired shortcut")
         self.assertEqual(params.get("__indicator_selection_status"), "no_decision")
 
-    def test_implausible_selector_pick_skips_retired_fallback(self) -> None:
+    def test_selector_llm_pick_is_not_overruled_by_rule_plausibility(self) -> None:
         svc = SimpleNamespace(
             settings=SimpleNamespace(),
             statscan_provider=SimpleNamespace(
@@ -194,10 +194,7 @@ class IndicatorResolutionTests(unittest.TestCase):
                     source="llm_pick",
                 )
             ),
-        ), patch(
-            "backend.services.indicator_resolution.is_resolved_indicator_plausible",
-            return_value=False,
-        ):
+        ), patch("backend.services.indicator_resolution.is_resolved_indicator_plausible") as plausibility_mock:
             params = asyncio.run(
                 resolve_indicator_for_fetch(
                     svc,
@@ -207,9 +204,82 @@ class IndicatorResolutionTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(params.get("indicator"), "number of households")
-        self.assertEqual(params.get("__indicator_selection_status"), "llm_pick")
-        self.assertEqual(params.get("__indicator_rejection_reason"), "implausible_llm_pick")
+        self.assertEqual(params.get("indicator"), "42100012")
+        self.assertEqual(params.get("__semantic_authority"), "llm_adjudication")
+        self.assertEqual(params.get("__decision_source"), "llm_pick")
+        plausibility_mock.assert_not_called()
+
+    def test_provider_looking_code_not_promoted_without_literal_user_input(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(),
+            fred_provider=SimpleNamespace(),
+            _looks_like_provider_indicator_code=lambda provider, indicator: (
+                provider.upper() == "FRED" and str(indicator).strip().upper() == "BADCODE"
+            ),
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["BADCODE"],
+            parameters={"indicator": "BADCODE"},
+            clarificationNeeded=False,
+            originalQuery="inflation rate in the United States from FRED",
+        )
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code="CPIAUCSL",
+                    name="Consumer Price Index for All Urban Consumers",
+                    source="llm_pick",
+                )
+            ),
+        ):
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "FRED",
+                    intent,
+                    dict(intent.parameters or {})
+                )
+            )
+
+        self.assertEqual(params.get("indicator"), "CPIAUCSL")
+        self.assertEqual(params.get("__semantic_authority"), "llm_adjudication")
+        self.assertEqual(params.get("__decision_source"), "llm_pick")
+
+    def test_literal_provider_code_remains_mechanical_exact_input(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(),
+            fred_provider=SimpleNamespace(),
+            _looks_like_provider_indicator_code=lambda provider, indicator: (
+                provider.upper() == "FRED" and str(indicator).strip().upper() == "CPIAUCSL"
+            ),
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["CPIAUCSL"],
+            parameters={"indicator": "CPIAUCSL"},
+            clarificationNeeded=False,
+            originalQuery="FRED CPIAUCSL",
+        )
+
+        with patch("backend.services.indicator_selector.IndicatorSelector.select") as select_mock:
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "FRED",
+                    intent,
+                    dict(intent.parameters or {})
+                )
+            )
+
+        self.assertEqual(params.get("indicator"), "CPIAUCSL")
+        self.assertEqual(params.get("__semantic_authority"), "exact_user_input")
+        self.assertEqual(params.get("__decision_source"), "exact_code")
+        select_mock.assert_not_called()
 
     def test_provider_lock_does_not_force_noisy_query_for_provider_code(self) -> None:
         svc = SimpleNamespace(

@@ -1,11 +1,11 @@
-"""Indicator resolution, plausibility checking, and distilled query building.
+"""Indicator resolution, exact passthrough, and distilled query building.
 
 Extracted from query.py to reduce file size and isolate indicator resolution
 logic into a testable, reusable module.
 
 This module provides:
-- Semantic code hints for provider-native indicator codes
-- Plausibility checks for resolved indicator codes vs query intent
+- Candidate-only code hints for provider-native indicator codes
+- Fail-closed guardrails for obviously unsupported/implausible results
 - Resolution threshold computation (dynamic acceptance levels)
 - Disabled provider override shims kept only for compatibility
 - Full indicator resolution pipeline (exact provider-native title/code -> IndicatorSelector)
@@ -1087,6 +1087,24 @@ def is_placeholder_indicator_code(code: Optional[str]) -> bool:
     }
 
 
+def _exact_provider_code_literal_present(code: str, *texts: str) -> bool:
+    """Return True only when the user/request text literally contains ``code``.
+
+    This is mechanical provider-native passthrough evidence, not semantic
+    inference.  It prevents LLM/parser-produced provider-looking strings from
+    being promoted to ``exact_user_input`` solely because a deterministic
+    plausibility rule thought the code looked compatible with the query.
+    """
+    normalized_code = str(code or "").strip()
+    if not normalized_code:
+        return False
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(normalized_code)}(?![A-Za-z0-9_])",
+        flags=re.IGNORECASE,
+    )
+    return any(pattern.search(str(text or "")) for text in texts if text)
+
+
 def indicator_resolution_threshold(indicator_query: str, resolved_source: str) -> float:
     """
     Dynamic acceptance threshold for resolver output.
@@ -1575,81 +1593,53 @@ async def resolve_indicator_for_fetch(
         intent.parameters = params
         return params
 
-    if has_explicit_code and str(params.get("__semantic_authority") or "") == "llm_adjudication":
-        semantic_query = (
-            str(params.get("__semantic_indicator_label") or "").strip()
-            or _effective_original_query(intent)
-            or str(intent.indicators[0] if intent.indicators else existing_indicator)
+    if (
+        has_explicit_code
+        and str(params.get("__semantic_authority") or "") == "llm_adjudication"
+        and not is_placeholder_indicator_code(existing_indicator)
+    ):
+        # Do not let deterministic semantic plausibility rules overrule or
+        # supply final semantic authority.  An LLM-adjudicated code has already
+        # passed the candidate-evidence selector; downstream fetch/verification
+        # may still fail closed, but rule code must not make the semantic
+        # accept/reject decision here.
+        params = _apply_indicator_with_semantic_label(
+            existing_indicator,
+            __semantic_authority="llm_adjudication",
+            __decision_source=str(params.get("__decision_source") or "llm_pick"),
         )
-        if is_resolved_indicator_plausible(
-            svc=svc,
-            provider=provider,
-            indicator_query=semantic_query,
-            resolved_code=existing_indicator,
-            resolved_name=str(params.get("__semantic_indicator_label") or ""),
-        ):
-            params = _apply_indicator_with_semantic_label(
-                existing_indicator,
-                __semantic_authority="llm_adjudication",
-                __decision_source=str(params.get("__decision_source") or "llm_pick"),
-            )
-            intent.parameters = params
-            return params
+        intent.parameters = params
+        return params
 
     if has_explicit_code:
-        plausibility_query = select_indicator_query_for_resolution(svc, intent)
-        if not plausibility_query:
-            plausibility_query = _effective_original_query(intent)
-        if not plausibility_query:
-            plausibility_query = str(intent.indicators[0] if intent.indicators else existing_indicator)
-
-        if plausibility_query and not is_resolved_indicator_plausible(
-            svc=svc,
-            provider=provider,
-            indicator_query=plausibility_query,
-            resolved_code=existing_indicator,
-        ):
+        explicit_code_in_user_text = _exact_provider_code_literal_present(
+            existing_indicator,
+            _effective_original_query(intent),
+            str(intent.originalQuery or ""),
+            str(intent.resolvedQuery or ""),
+        )
+        if not explicit_code_in_user_text:
             logger.info(
-                "🔎 Explicit %s indicator '%s' conflicts with query context '%s'; attempting dynamic resolution",
+                "🔎 Provider-looking %s indicator '%s' was not literal user input; "
+                "refusing deterministic plausibility promotion and attempting selector resolution",
                 provider,
                 existing_indicator,
-                plausibility_query,
             )
             has_explicit_code = False
 
     if has_explicit_code:
-        semantic_query = (
-            _effective_original_query(intent)
-            or str(params.get("__semantic_indicator_label") or "").strip()
-            or str(intent.indicators[0] if intent.indicators else "")
-        )
-        semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
-        if is_resolved_indicator_plausible(
-            svc=svc,
-            provider=provider,
-            indicator_query=semantic_query,
-            resolved_code=existing_indicator,
-            resolved_name=semantic_label,
-        ):
-            logger.info(
-                "🔒 Keeping explicit %s indicator code: %s",
-                provider,
-                existing_indicator,
-            )
-            params = _apply_indicator_with_semantic_label(
-                existing_indicator,
-                __semantic_authority="exact_user_input",
-                __decision_source="exact_code",
-            )
-            intent.parameters = params
-            return params
         logger.info(
-            "🚫 Explicit %s indicator code rejected as implausible for query: %s -> %s",
+            "🔒 Keeping literal user-supplied %s indicator code: %s",
             provider,
-            semantic_query,
             existing_indicator,
         )
-        has_explicit_code = False
+        params = _apply_indicator_with_semantic_label(
+            existing_indicator,
+            __semantic_authority="exact_user_input",
+            __decision_source="exact_code",
+        )
+        intent.parameters = params
+        return params
 
     # Dynamic resolution (IndicatorSelector -> provider-neutral raw query)
     indicator_query = select_indicator_query_for_resolution(svc, intent)
@@ -1723,21 +1713,9 @@ async def resolve_indicator_for_fetch(
             selector_retry_query = str(getattr(selection, "retry_query", "") or "")
             if selection.code:
                 selection_name = str(getattr(selection, "name", "") or "")
-                if not is_resolved_indicator_plausible(
-                    svc=svc,
-                    provider=provider,
-                    indicator_query=_effective_original_query(intent) or indicator_query,
-                    resolved_code=selection.code,
-                    resolved_name=selection_name,
-                ):
-                    logger.info(
-                        "🚫 IndicatorSelector candidate rejected as implausible: '%s' → %s (%s)",
-                        indicator_query,
-                        selection.code,
-                        selection_name or "<missing-name>",
-                    )
+                if is_placeholder_indicator_code(selection.code):
                     selector_without_final_authority = True
-                    selector_rejection_reason = "implausible_llm_pick"
+                    selector_rejection_reason = "placeholder_llm_pick"
                 else:
                     logger.info(
                         "🎯 IndicatorSelector resolved: '%s' → %s [%s]",

@@ -17,6 +17,7 @@ from typing import Literal
 ShortcutClassification = Literal[
     "allowed_mechanical",
     "candidate_generation_only",
+    "fail_closed_supportability",
     "banned_semantic_final_authority",
     "legacy_disabled_must_not_enable",
 ]
@@ -99,6 +100,34 @@ PATTERNS = (
         regex=r"Legacy IndicatorResolver|_resolver\(\)\.resolve|fall through to legacy resolver",
         classification="banned_semantic_final_authority",
         rationale="Indicator resolution still falls through to legacy resolver after selector failure.",
+    ),
+    ShortcutPattern(
+        id="indicator_resolution_exact_code_literal_gate",
+        path_glob="backend/services/indicator_resolution.py",
+        regex=r"_exact_provider_code_literal_present|literal user-supplied .* indicator code",
+        classification="allowed_mechanical",
+        rationale="Literal provider-code passthrough is mechanical exact user input, not semantic inference.",
+    ),
+    ShortcutPattern(
+        id="indicator_resolution_fail_closed_plausibility_guard",
+        path_glob="backend/services/indicator_resolution.py",
+        regex=r"def is_resolved_indicator_plausible|def has_implausible_top_series|return not is_resolved_indicator_plausible|fail-closed guardrails",
+        classification="fail_closed_supportability",
+        rationale="Deterministic plausibility logic may only block/retry unsupported or implausible outputs; it must not select or promote final semantic authority.",
+    ),
+    ShortcutPattern(
+        id="indicator_resolution_candidate_code_hints",
+        path_glob="backend/services/indicator_resolution.py",
+        regex=r"def code_semantic_hint|code_semantic_hint\(",
+        classification="candidate_generation_only",
+        rationale="Provider-code hints may enrich candidate scoring text but must not become a standalone concept-to-code shortcut.",
+    ),
+    ShortcutPattern(
+        id="indicator_resolution_fail_closed_thresholds",
+        path_glob="backend/services/indicator_resolution.py",
+        regex=r"def minimum_resolved_relevance_threshold|def indicator_resolution_threshold|strict_precision_cues|high_precision_cues",
+        classification="fail_closed_supportability",
+        rationale="Static threshold logic may fail closed on weak evidence; it must not replace selector or LLM adjudication as semantic authority.",
     ),
     ShortcutPattern(
         id="indicator_clarification_legacy_resolver_options",

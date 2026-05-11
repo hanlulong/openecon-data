@@ -13,6 +13,7 @@ from backend.services.data_fetcher import fetch_from_provider_dispatch
 from backend.services.indicator_resolution import (
     apply_catalog_availability_override,
     apply_concept_provider_override,
+    resolve_indicator_for_fetch,
 )
 from backend.services.query import QueryService
 from backend.tests.semantic_shortcut_audit import (
@@ -168,8 +169,20 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
     found_ids = {finding.pattern_id for finding in findings}
     assert {
         "unified_router_provider_candidate_metadata",
+        "indicator_resolution_exact_code_literal_gate",
+        "indicator_resolution_fail_closed_plausibility_guard",
         "query_parsing_cue_inference",
     } <= found_ids
+
+
+def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority() -> None:
+    """Rule plausibility guards may fail closed, but must not create final authority."""
+
+    source = inspect.getsource(resolve_indicator_for_fetch)
+
+    assert "implausible_llm_pick" not in source
+    assert "is_resolved_indicator_plausible(" not in source
+    assert "refusing deterministic plausibility promotion" in source
 
 
 def test_legacy_resolver_and_translator_modules_are_removed() -> None:
