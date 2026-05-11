@@ -138,6 +138,25 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(dataflow, "DSD_EARNINGS@PAY_INCIDENCE")
         self.assertEqual(version, "1.0")
 
+    def test_oecd_resolve_indicator_accepts_prefixed_exact_dataflow_without_catalog(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        code = "DSD_HCQO@DF_HKP"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": json.dumps({"agencyID": "OECD.ELS.HD", "version": "1.1"}),
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            agency, dataflow, version = run(  # pylint: disable=protected-access
+                provider._resolve_indicator("OECD_DSD_HCQO@DF_HKP")
+            )
+
+        self.assertEqual(agency, "OECD.ELS.HD")
+        self.assertEqual(dataflow, code)
+        self.assertEqual(version, "1.1")
+
     def test_oecd_resolve_indicator_accepts_exact_agency_non_df_dataflow_tuple(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
         lookup = MagicMock()
@@ -250,6 +269,77 @@ class ProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(key, ".JPN....A")
+
+    def test_oecd_builds_positional_key_with_provider_native_defaults(self) -> None:
+        metadata = {
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "PLAN_TYPE", "position": 1},
+                {"id": "DEFINITION_TYPE", "position": 2},
+                {"id": "VEHICLE_TYPE", "position": 3},
+                {"id": "FREQ", "position": 4},
+            ],
+            "default_values": {
+                "PLAN_TYPE": "_T",
+                "DEFINITION_TYPE": "_T",
+                "VEHICLE_TYPE": "_T",
+                "FREQ": "A",
+            },
+        }
+
+        defaults = dict(metadata["default_values"])
+        key = OECDProvider._build_oecd_key_from_structure(  # pylint: disable=protected-access
+            metadata,
+            "CAN",
+            custom_defaults=defaults,
+        )
+
+        self.assertEqual(key, "CAN._T._T._T.A")
+
+    def test_oecd_default_annotations_parse_provider_values(self) -> None:
+        defaults = OECDProvider._parse_oecd_default_annotations(  # pylint: disable=protected-access
+            [
+                {
+                    "type": "DEFAULT",
+                    "title": "PLAN_TYPE=_T,DEFINITION_TYPE=_T,VEHICLE_TYPE=_T",
+                },
+                {"type": "LAYOUT_ROW", "title": "REF_AREA"},
+            ]
+        )
+
+        self.assertEqual(
+            defaults,
+            {
+                "PLAN_TYPE": "_T",
+                "DEFINITION_TYPE": "_T",
+                "VEHICLE_TYPE": "_T",
+            },
+        )
+
+    def test_oecd_registry_external_bases_come_from_provider_links(self) -> None:
+        code = "DSD_OTHMRKR@DF_OTHERMARKERS"
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "OECD",
+            "code": code,
+            "raw_metadata": json.dumps(
+                {
+                    "links": [
+                        {
+                            "href": "https://sdmx.oecd.org/dcd-public/rest/dataflow/OECD.DCD.FSD/DSD_OTHMRKR@DF_OTHERMARKERS/1.4",
+                            "rel": "external",
+                        }
+                    ]
+                }
+            ),
+        }
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            bases = OECDProvider._lookup_dataflow_registry_external_bases(  # pylint: disable=protected-access
+                code
+            )
+
+        self.assertEqual(bases, ["https://sdmx.oecd.org/dcd-public/rest"])
 
     def test_oecd_builds_all_key_when_structure_has_no_country_dimension(self) -> None:
         metadata = {

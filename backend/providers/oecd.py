@@ -292,6 +292,48 @@ class OECDProvider(BaseProvider):
 
         return agency, version
 
+    @classmethod
+    def _lookup_dataflow_registry_external_bases(cls, dataflow_code: str) -> List[str]:
+        """Return provider-native REST bases advertised by the local OECD registry."""
+        code = cls._canonical_dataflow_code(dataflow_code)
+        if not re.fullmatch(r"DSD_[A-Za-z0-9_]+@[A-Za-z0-9_]+", code):
+            return []
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+            row = lookup.get("OECD", code)
+        except Exception as exc:
+            logger.debug("OECD registry external-base lookup skipped for %s: %s", code, exc)
+            row = None
+
+        if not row or str(row.get("code") or "").strip().upper() != code.upper():
+            return []
+
+        raw_metadata = row.get("raw_metadata")
+        metadata: dict = {}
+        if isinstance(raw_metadata, str) and raw_metadata.strip():
+            try:
+                parsed = json.loads(raw_metadata)
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except json.JSONDecodeError:
+                return []
+        elif isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+
+        bases: List[str] = []
+        links = metadata.get("links")
+        if isinstance(links, list):
+            for link in links:
+                if not isinstance(link, dict):
+                    continue
+                rest_base = cls._oecd_rest_base_from_link(str(link.get("href") or ""))
+                if rest_base and rest_base not in bases:
+                    bases.append(rest_base)
+        return bases
+
     @staticmethod
     def _oecd_structure_cache_key(base_url: str, agency: str, dataflow: str, version: str) -> str:
         """Return a stable cache key for OECD dataflow structure metadata."""
@@ -327,6 +369,34 @@ class OECDProvider(BaseProvider):
                 return str(value) if value is not None else None
         return None
 
+    @staticmethod
+    def _parse_oecd_default_annotations(annotations: Any) -> Dict[str, str]:
+        """Parse OECD provider-native DEFAULT annotations into dimension defaults."""
+        if not isinstance(annotations, list):
+            return {}
+
+        defaults: Dict[str, str] = {}
+        for annotation in annotations:
+            if not isinstance(annotation, dict):
+                continue
+            if str(annotation.get("type") or "").upper() != "DEFAULT":
+                continue
+            title = str(annotation.get("title") or "").strip()
+            if not title:
+                continue
+            for part in title.split(","):
+                if "=" not in part:
+                    continue
+                key, value = part.split("=", 1)
+                dim_id = key.strip()
+                dim_value = value.strip()
+                if not dim_id or not dim_value:
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9_]+", dim_id):
+                    continue
+                defaults.setdefault(dim_id, dim_value)
+        return defaults
+
     @classmethod
     def _parse_oecd_dataflow_structure(
         cls,
@@ -345,6 +415,7 @@ class OECDProvider(BaseProvider):
 
         dataflows = data.get("dataflows") if isinstance(data.get("dataflows"), list) else []
         dataflow_info = dataflows[0] if dataflows and isinstance(dataflows[0], dict) else {}
+        default_values = cls._parse_oecd_default_annotations(dataflow_info.get("annotations"))
 
         data_structures = (
             data.get("dataStructures")
@@ -441,6 +512,7 @@ class OECDProvider(BaseProvider):
             "valid_values_by_dimension": {
                 dim_id: sorted(values) for dim_id, values in valid_values_by_dimension.items()
             },
+            "default_values": default_values,
             "time_ranges": time_ranges,
             "obs_count": obs_count,
         }
@@ -509,6 +581,9 @@ class OECDProvider(BaseProvider):
             return metadata
 
         external_bases = list(metadata.get("external_base_urls", [])) if metadata else []
+        for registry_base in self._lookup_dataflow_registry_external_bases(dataflow):
+            if registry_base not in external_bases:
+                external_bases.append(registry_base)
         for external_base in external_bases:
             if external_base.rstrip("/") == self.base_url.rstrip("/"):
                 continue
@@ -542,7 +617,7 @@ class OECDProvider(BaseProvider):
     @staticmethod
     def _build_oecd_key_from_structure(
         structure_metadata: Dict[str, Any],
-        country_code: str,
+        country_code: Optional[str],
         custom_defaults: Optional[Dict[str, str]] = None,
     ) -> Optional[str]:
         """Build an SDMX v1 positional key from OECD structure metadata."""
@@ -564,8 +639,12 @@ class OECDProvider(BaseProvider):
                 position = array_idx
 
             if dim_id in country_dims:
-                key_parts[position] = str(country_code)
-                filled = True
+                if country_code:
+                    key_parts[position] = str(country_code)
+                    filled = True
+                elif dim_id in defaults and defaults[dim_id]:
+                    key_parts[position] = str(defaults[dim_id])
+                    filled = True
             elif dim_id in defaults and defaults[dim_id]:
                 key_parts[position] = str(defaults[dim_id])
                 filled = True
@@ -855,6 +934,7 @@ class OECDProvider(BaseProvider):
         """
         raw_indicator = str(indicator or "").strip()
         explicit_dataflow = raw_indicator.upper()
+        canonical_explicit_dataflow = self._canonical_dataflow_code(raw_indicator).upper()
 
         exact_parts = [part.strip() for part in raw_indicator.split(",")]
         if len(exact_parts) in (2, 3):
@@ -872,15 +952,7 @@ class OECDProvider(BaseProvider):
                 cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
                 return result
 
-        if re.fullmatch(r"DSD_[A-Z0-9_]+@[A-Z0-9_]+", explicit_dataflow):
-            logger.info("🔒 Treating explicit OECD dataflow as resolved: %s", explicit_dataflow)
-            result = self._build_result_from_discovery(explicit_dataflow, {})
-            cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
-            return result
-
-        explicit_prefix = explicit_dataflow
-        if explicit_prefix.startswith("OECD_"):
-            explicit_prefix = explicit_prefix[len("OECD_"):]
+        explicit_prefix = canonical_explicit_dataflow
         if explicit_prefix.startswith("DSD_") and "@" in explicit_prefix:
             catalog = self._load_dataflows_catalog()
             prefix_matches = [
@@ -888,32 +960,36 @@ class OECDProvider(BaseProvider):
                 for flow_id in catalog
                 if flow_id.upper().startswith(explicit_prefix)
             ]
-            if prefix_matches:
-                # Prefer the shortest matching catalog key to avoid drifting to
-                # longer, more specialized derivatives when the fragment already
-                # identifies a common parent dataflow.
-                exact_matches = [
-                    flow_id
-                    for flow_id in prefix_matches
-                    if flow_id.upper() == explicit_prefix
-                ]
-                flow_id = exact_matches[0] if exact_matches else min(prefix_matches, key=len)
+            exact_matches = [
+                flow_id
+                for flow_id in prefix_matches
+                if flow_id.upper() == explicit_prefix
+            ]
+            if prefix_matches and not exact_matches:
+                # Some user-visible OECD catalog fragments are valid prefixes
+                # rather than full dataflow IDs. Keep expanding those through
+                # the provider catalog instead of treating the fragment as a
+                # final exact ID.
+                flow_id = min(prefix_matches, key=len)
                 logger.info(
                     "🔒 Resolved OECD dataflow prefix '%s' -> %s via local catalog",
                     explicit_dataflow,
                     flow_id,
                 )
-                if exact_matches:
-                    result = self._build_result_from_discovery(flow_id, {})
-                else:
-                    structure = flow_id.split("@")[0]
-                    result = (
-                        self._extract_agency_from_structure(structure, flow_id),
-                        self._canonical_dataflow_code(flow_id),
-                        "1.0",
-                    )
+                structure = flow_id.split("@")[0]
+                result = (
+                    self._extract_agency_from_structure(structure, flow_id),
+                    flow_id,
+                    "1.0",
+                )
                 cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
                 return result
+
+        if re.fullmatch(r"DSD_[A-Z0-9_]+@[A-Z0-9_]+", canonical_explicit_dataflow):
+            logger.info("🔒 Treating explicit OECD dataflow as resolved: %s", canonical_explicit_dataflow)
+            result = self._build_result_from_discovery(canonical_explicit_dataflow, {})
+            cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
+            return result
 
         lookup_terms = self._build_indicator_lookup_terms(indicator)
         if not lookup_terms:
@@ -1217,7 +1293,7 @@ class OECDProvider(BaseProvider):
 
         # Resolve indicator to (agency, dataflow, version) tuple using metadata search if needed
         agency, dataflow, version = await self._resolve_indicator(indicator)
-        country_code = self._country_code(country)
+        country_code = self._country_code(country) if country else None
 
         # Build time parameters with intelligent defaults
         from datetime import datetime
@@ -1260,17 +1336,21 @@ class OECDProvider(BaseProvider):
         structure_metadata = await self._get_oecd_dataflow_structure(agency, dataflow, version)
         filter_key = None
         if structure_metadata and structure_metadata.get("dimensions"):
-            country_constraint_error = self._oecd_country_constraint_error(
-                structure_metadata,
-                country_code,
-                dataflow,
-            )
-            if country_constraint_error:
-                raise DataNotAvailableError(country_constraint_error)
+            if country_code:
+                country_constraint_error = self._oecd_country_constraint_error(
+                    structure_metadata,
+                    country_code,
+                    dataflow,
+                )
+                if country_constraint_error:
+                    raise DataNotAvailableError(country_constraint_error)
             if used_default_time_range:
                 self._clamp_default_time_params_to_oecd_constraints(params, structure_metadata)
             data_base_url = str(structure_metadata.get("base_url") or self.base_url).rstrip("/")
-            defaults = {"frequency": expected_freq} if expected_freq else None
+            defaults = dict(structure_metadata.get("default_values") or {})
+            if expected_freq and "FREQ" not in defaults:
+                defaults["frequency"] = expected_freq
+            defaults = defaults or None
             filter_key = self._build_oecd_key_from_structure(
                 structure_metadata,
                 country_code,
@@ -1294,7 +1374,7 @@ class OECDProvider(BaseProvider):
                 dsd_id=dsd_id,
                 version=version,
                 base_url=data_base_url,
-                user_params={"country": country_code},
+                user_params={"country": country_code} if country_code else {},
                 custom_defaults={"frequency": expected_freq} if expected_freq else None,
             )
 
@@ -1307,7 +1387,7 @@ class OECDProvider(BaseProvider):
             # Instead of "all", use common OECD dimension pattern:
             # Most OECD dataflows follow: REF_AREA.INDICATOR.MEASURE.FREQ...
             # Build a minimal key with just country to reduce data volume
-            filter_key = f".{country_code}.........."  # Country in 2nd position (common pattern)
+            filter_key = f".{country_code}.........." if country_code else "all"
             logger.info(f"Using fallback dimension key: {filter_key}")
         else:
             logger.info(f"Built OECD dimension key: {filter_key}")
