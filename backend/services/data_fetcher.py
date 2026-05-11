@@ -640,7 +640,12 @@ async def fetch_from_coingecko(
         metric = "volume"
     elif any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
         metric = "market_cap"
-    elif any(t in metric_text for t in ["24h change", "24 hour change", "price change", "change"]):
+    elif re.search(
+        r"(?<![a-z0-9])(?:24h|24-hour|24 hour)\s+change(?![a-z0-9])"
+        r"|(?<![a-z0-9])price\s+change(?![a-z0-9])"
+        r"|(?<![a-z0-9])change(?![a-z0-9])",
+        metric_text,
+    ):
         metric = "24h_change"
 
     return await coingecko_provider.get_simple_price(

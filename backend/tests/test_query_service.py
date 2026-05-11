@@ -9429,6 +9429,23 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(historical_mock.call_args.kwargs.get("metric"), "volume")
         self.assertEqual(historical_mock.call_args.kwargs.get("days"), 90)
 
+    def test_fetch_data_coingecko_exchange_name_does_not_imply_price_change_metric(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="CoinGecko",
+            indicators=["Your Futures Exchange"],
+            parameters={"coinIds": ["yfx"]},
+            clarificationNeeded=False,
+            originalQuery="Your Futures Exchange cryptocurrency price from CoinGecko",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.coingecko_provider, "get_simple_price", return_value=[sample_series_with(series_id="yfx", indicator="Your Futures Exchange", source="CoinGecko")]) as simple_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertTrue(simple_mock.called)
+        self.assertEqual(simple_mock.call_args.kwargs.get("coin_ids"), ["yfx"])
+        self.assertEqual(simple_mock.call_args.kwargs.get("metric"), "price")
+
     def test_fetch_data_coingecko_dedupes_coin_ids_for_comparisons(self) -> None:
         intent = ParsedIntent(
             apiProvider="CoinGecko",
