@@ -840,35 +840,56 @@ def test_audit_direct_query_shape_flags_imf_debt_schedule_queries():
     assert "imf_low_viability_family" in audit["reasons"]
 
 
-def test_audit_direct_query_shape_flags_query_only_imf_public_surface_blockers() -> None:
+def test_audit_direct_query_shape_does_not_use_query_text_as_imf_supportability_authority() -> None:
     from scripts.validation.run_certification import unsupported_direct_surface_reason
 
-    queries = [
-        "Brazil Import Price Index Mining and quarrying from IMF",
-        "Brazil General Government Total debt Fiscal Year US Dollar Government and Public Sector Finance from IMF",
-        "Brazil Food Consumer Prices Food and Non-alcoholic Beverages Food at Home Fruits and Vegetables from IMF",
-        "United States Terms of Trade (Index 2010 = 100) from IMF",
-        "Industrial Production Current activity Angola Definition BC: Mining and Quarrying from IMF",
-        "Brazil Real NACE2 Gross value added Public administration and defence; compulsory social security from IMF",
-        "Quarried Stone Metric Ton Mineral Production from IMF",
-        "Brazil Publishing Producer Price Index from IMF",
-        "Brazil Percent Social Indicators Poverty (% of Population) from IMF",
-        "Brazil Population By Sex Female Pervious Period Persons Number of Socio-Demographic Indicators from IMF",
-        "Expenses: Panama Definition Panama Canal Authority Operations Materials and supplies from IMF",
-        "Brazil General Government Total expenditure Fiscal from IMF",
-        "Brazil Memorandum Items Domestic Output Real Activity from IMF",
-        "Brazil Financial auxiliaries Assets Loans Sectoral from IMF",
-        "SF027.T LIQUIDITY in percent Percent Togo Definition Financial Soudness Indicators from IMF",
-        "Brazil All Items BY2008 Consumer Prices from IMF",
-        "United States Government Fiscal Total Domestic Public Debt BoZ Bridge Loans from IMF",
+    row = {
+        "provider": "IMF",
+        "query": (
+            "Brazil Food Consumer Prices Food and Non-alcoholic Beverages "
+            "Food at Home Fruits and Vegetables from IMF"
+        ),
+        "type": "direct",
+    }
+    audit = audit_direct_query_shape(row)
+
+    assert "imf_query_only_public_surface_family" not in audit["reasons"]
+    assert unsupported_direct_surface_reason(row, audit) is None
+
+
+def test_unsupported_direct_surface_reason_uses_imf_provider_native_code_metadata() -> None:
+    from scripts.validation.run_certification import unsupported_direct_surface_reason
+
+    rows = [
+        (
+            "PMP_ISIC3_C_IX",
+            "Import Price Index, Mining and quarrying, Index",
+        ),
+        (
+            "PCPIFFHF_IX",
+            "Food Consumer Prices, Food at Home, Fruits and Vegetables, Index",
+        ),
+        (
+            "GGDD_FY_USD",
+            "General Government, Total debt, Fiscal Year, US Dollar",
+        ),
     ]
 
-    for query in queries:
-        row = {"provider": "IMF", "query": query, "type": "direct"}
+    for code, name in rows:
+        row = {
+            "provider": "IMF",
+            "query": f"Brazil {code} from IMF",
+            "type": "direct",
+            "origin": {
+                "source_provider": "IMF",
+                "source_indicator_code": code,
+                "name": name,
+                "category": "INDICATOR",
+            },
+        }
         audit = audit_direct_query_shape(row)
 
-        assert audit["risk_level"] == "high"
-        assert "imf_query_only_public_surface_family" in audit["reasons"]
+        assert "imf_query_only_public_surface_family" not in audit["reasons"]
         assert unsupported_direct_surface_reason(row, audit) == "imf_non_weo_public_surface_unsupported"
 
 
@@ -2599,7 +2620,7 @@ def test_default_query_for_row_uses_imf_reo_region_country():
     assert default_query_for_row(row) == "Nigeria Real Non-Oil GDP Growth from IMF"
 
 
-def test_default_query_for_row_uses_short_imf_datamapper_code_when_natural_title_is_guarded():
+def test_default_query_for_row_keeps_imf_reo_natural_title_without_query_text_guard():
     row = {
         "provider": "IMF",
         "code": "TTT",
@@ -2608,7 +2629,7 @@ def test_default_query_for_row_uses_short_imf_datamapper_code_when_natural_title
         "category": "AFRREO",
     }
 
-    assert default_query_for_row(row) == "Nigeria TTT from IMF"
+    assert default_query_for_row(row) == "Nigeria Terms of Trade (Index 2010 = 100) from IMF"
 
 
 def test_audit_direct_query_shape_does_not_mark_exact_public_imf_bop_code_high_risk():

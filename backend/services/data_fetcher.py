@@ -24,7 +24,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
-from ..utils.imf_supportability import imf_query_only_public_surface_reason
+from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
@@ -1932,7 +1932,7 @@ async def fetch_data(
     intent.parameters = params
 
     if provider == "IMF":
-        supportability_reason = imf_query_only_public_surface_reason(
+        supportability_reason = imf_exact_provider_surface_supportability_reason(
             intent.originalQuery or ranking_scope_query,
             intent.indicators or [],
             params,
@@ -2314,7 +2314,7 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
     )
 
     if _normalize_provider_name(explicit_provider or intent.apiProvider) == "IMF":
-        supportability_reason = imf_query_only_public_surface_reason(
+        supportability_reason = imf_exact_provider_surface_supportability_reason(
             intent.originalQuery or "",
             intent.indicators or [],
             intent.parameters or {},

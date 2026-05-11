@@ -1,9 +1,8 @@
-"""Conservative IMF public-surface supportability guards.
+"""Provider-native IMF public-surface supportability helpers.
 
-These helpers protect runtime and certification from treating detailed IMF
-catalog slices as ordinary legacy DataMapper requests.  They deliberately do
-not map detailed rows to broad proxies; they only identify query shapes that
-need true IMF dataset-family routing before they can be claim-grade successes.
+These helpers deliberately avoid judging arbitrary natural-language query text.
+They only fail closed when an exact IMF provider code can be checked against
+local/provider catalog metadata and the current runtime support matrix.
 """
 
 from __future__ import annotations
@@ -14,161 +13,201 @@ from typing import Any
 
 UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON = "imf_non_weo_public_surface_unsupported"
 
-_PUBLIC_SDMX_CODE_RE = re.compile(
-    r"\b(?:"
-    r"(?:T[MX]G?_(?:FOB|CIF)_USD)"
-    r"|(?:P{1,2}PIA?_IX)"
-    r"|(?:PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}(?:M\d{2})?)?_IX)"
-    r"|(?:(?:[A-Z]{3}_)?(?:BOP_)?B[A-Z0-9_]*(?:_BP6)?(?:_FY)?_(?:USD|EUR|XDC|XDR))"
-    r")\b",
+_EXACT_CODE_TOKEN_RE = re.compile(
+    r"\b[A-Z0-9][A-Z0-9_\.]{1,40}\b",
     flags=re.IGNORECASE,
 )
 
-_DETAIL_MARKERS = {
-    "activity",
-    "activities",
-    "agricultural",
-    "agriculture",
-    "animal",
-    "barrels",
-    "base year",
-    "beverage",
-    "budgetary",
-    "capital city",
-    "cash",
-    "central government",
-    "clothing",
-    "coicop",
-    "compensation of employees",
-    "construction",
-    "current activity",
-    "definition",
-    "fabrics",
-    "fiscal year",
-    "food",
-    "fruit",
-    "fruits",
-    "general government",
-    "government and public sector finance",
-    "industry",
-    "isic",
-    "kathmandu valley",
-    "local government",
-    "manufactur",
-    "mining",
-    "nace",
-    "non-alcoholic beverages",
-    "oil production",
-    "publishing",
-    "quarry",
-    "regional government",
-    "sector",
-    "service activities",
-    "terms of trade",
-    "total debt",
-    "vegetables",
-    "veterinary",
-    "wages and salaries",
-}
 
-_CONSUMER_PRICE_DETAIL_MARKERS = {
-    "all items special indexes",
-    "base year previous period",
-    "capital city",
-    "clothing",
-    "coicop",
-    "definition",
-    "fabrics",
-    "food",
-    "food and beverage",
-    "food and non-alcoholic beverages",
-    "food at home",
-    "fruits and vegetables",
-    "harmonized consumer prices",
-    "housing gas and other fuels",
-    "services housing",
-    "kathmandu valley",
-    "non-alcoholic beverages",
-}
-
-_FISCAL_DETAIL_MARKERS = {
-    "budgetary central government",
-    "cash",
-    "central government",
-    "compensation of employees",
-    "expense",
-    "fiscal year",
-    "government and public sector finance",
-    "local government",
-    "regional government",
-    "revenue",
-    "social contributions",
-    "tax",
-    "taxes",
-    "total expenditure",
-    "domestic public debt",
-    "public debt",
-    "bridge loans",
-    "total debt",
-    "wages and salaries",
-}
-
-_NATIONAL_ACCOUNTS_DETAIL_MARKERS = {
-    "collective consumption expenditure",
-    "domestic output",
-    "external balance of goods and services",
-    "financial intermediation nominal services",
-    "gross domestic expenditure",
-    "gross real national income",
-    "gross real saving",
-    "gross value added",
-    "memorandum items",
-    "nace2",
-    "net exports crude oil",
-    "public final consumption expenditure",
-    "real chained",
-    "subsidies on products",
-}
-
-_NATIONAL_ACCOUNTS_DEFLATOR_RE = re.compile(
-    r"\bdeflator\b.*\b(?:gross value added|subsidies on products)\b"
-    r"|\b(?:gross value added|subsidies on products)\b.*\bdeflator\b",
-    flags=re.IGNORECASE,
-)
-
-_SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS = {
-    "mortality rate",
-    "poverty",
-    "social indicators",
-    "socio demographic",
-    "socio-demographic",
-}
-
-_COMPLEX_FINANCE_DETAIL_MARKERS = {
-    "assets loans sectoral",
-    "financial auxiliaries",
-    "financial corporations",
-    "financial soudness",
-    "financial soundness",
-    "monetary net foreign assets",
-    "sectoral accounts",
-}
-
-_SPECIAL_PUBLIC_ENTITY_MARKERS = {
-    "federation income and distribution",
-    "panama canal authority",
-    "state oil fund",
-}
+def _normalize_code(value: Any) -> str:
+    return str(value or "").strip().upper()
 
 
-def _normalize_text(parts: Iterable[Any]) -> str:
-    text = " ".join(str(part or "") for part in parts if part is not None)
-    text = text.replace("–", "-").replace("—", "-")
-    return re.sub(r"\s+", " ", text).strip().lower()
+def _looks_like_imf_provider_code(value: Any) -> bool:
+    """Return True for provider-native code tokens, not prose labels."""
+    token = _normalize_code(value)
+    if not token:
+        return False
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,40}", token):
+        return False
+    return (
+        "_" in token
+        or "." in token
+        or any(ch.isdigit() for ch in token)
+        or token in {"NGDP", "NGDPD", "NGDPRPC", "GG_DEBT_GDP", "TTT"}
+    )
 
 
-def _has_any(text: str, markers: Iterable[str]) -> bool:
-    return any(marker in text for marker in markers)
+def _strip_imf_iso3_country_prefix(code: str) -> str:
+    value = _normalize_code(code)
+    if "_" not in value:
+        return value
+    prefix = value.split("_", 1)[0]
+    if len(prefix) != 3 or not prefix.isalpha():
+        return value
+    try:
+        from ..routing.country_resolver import CountryResolver
+
+        if CountryResolver.to_iso2(prefix):
+            return value[len(prefix) + 1 :]
+    except Exception:
+        pass
+    return value
+
+
+def _is_imf_aggregate_trade_code(code: str) -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    if any(fragment in bare_code for fragment in ("_H5_", "_HS", "_SITC", "_CPC", "_BEC")):
+        return False
+    return bool(
+        re.fullmatch(r"(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)", bare_code)
+        or re.fullmatch(r"(?:T?[XM]G?|[XM]G)_(?:FOB|CIF)_(?:USD|XDC)_IX", bare_code)
+    )
+
+
+def _is_imf_aggregate_cpi_code(code: str, name: str = "") -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    text = str(name or "").lower()
+    if "weight" in text:
+        return False
+    if bare_code == "PCPI_IX":
+        return True
+    if re.fullmatch(r"PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}|_BY\d{4}M\d{2})?_IX", bare_code):
+        return True
+    if "consumer price" in text and bare_code == "PCPI_IX":
+        return True
+    return False
+
+
+def _is_imf_aggregate_ppi_code(code: str, name: str = "") -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    text = str(name or "").lower()
+    if any(fragment in bare_code for fragment in ("ISIC", "NACE")):
+        return False
+    if any(term in text for term in ["by activity", "commodities by activity", "manufacture of", "mining of"]):
+        return False
+    return bare_code in {"PPPI_IX", "PPI_IX", "WPI_IX"} or bare_code == "PPPIA_IX"
+
+
+def _is_imf_bop_public_sdmx_code(code: str, name: str = "") -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    if bare_code.startswith("BOP_"):
+        bare_code = bare_code[len("BOP_") :]
+    if re.search(r"(?:^|_)\d+[A-Z]?(?:_|$)", bare_code):
+        return False
+    text = f"{name or ''} {code or ''}".lower()
+    if not (
+        "balance of payments" in text
+        or "bpm6" in text
+        or "_bp6_" in f"_{bare_code.lower()}_"
+    ):
+        return False
+    return bool(re.fullmatch(r"B[A-Z0-9_]*(?:_BP6)?(?:_FY)?_(?:USD|EUR|XDC|XDR)", bare_code))
+
+
+def imf_public_sdmx_runtime_family(code: str, name: str = "", category: str = "") -> str | None:
+    """Return the exact public IMF.STA SDMX family currently executable.
+
+    This is a provider support matrix, not a semantic match.  It only accepts
+    exact provider-native code shapes that map mechanically to implemented
+    public IMF.STA dataset keys.
+    """
+    if str(category or "").strip().lower() == "weo":
+        return None
+    if _is_imf_aggregate_trade_code(code):
+        return "itg_aggregate"
+    if _is_imf_aggregate_cpi_code(code, name):
+        return "cpi_aggregate"
+    if _is_imf_aggregate_ppi_code(code, name):
+        return "ppi_aggregate"
+    if _is_imf_bop_public_sdmx_code(code, name):
+        return "bop_exact"
+    return None
+
+
+def _catalog_entry_for_code(code: str) -> Mapping[str, Any]:
+    exact_code = _normalize_code(code)
+    if not exact_code:
+        return {}
+    try:
+        from ..services.indicator_database import get_indicator_lookup
+
+        entry = get_indicator_lookup().get("IMF", exact_code)
+        if isinstance(entry, Mapping):
+            return entry
+    except Exception:
+        return {}
+    return {}
+
+
+def imf_catalog_surface_supportability_reason(
+    code: str = "",
+    name: str = "",
+    category: str = "",
+) -> str | None:
+    """Fail closed only for exact IMF catalog codes outside runtime support.
+
+    Natural-language wording is intentionally ignored.  A supportability reason
+    is returned only when provider-native metadata identifies the code as an IMF
+    ``INDICATOR`` row and no implemented exact public-SDMX family can execute it.
+    """
+    exact_code = _normalize_code(code)
+    if not _looks_like_imf_provider_code(exact_code):
+        return None
+
+    entry = _catalog_entry_for_code(exact_code)
+    label = str(name or entry.get("name") or "")
+    category_value = str(category or entry.get("category") or "").strip().upper()
+
+    if imf_public_sdmx_runtime_family(exact_code, label, category_value):
+        return None
+    if category_value and category_value != "INDICATOR":
+        return None
+    if category_value == "INDICATOR":
+        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+    return None
+
+
+def _exact_code_candidates(
+    query: str,
+    indicators: Iterable[Any] | None,
+    params: Mapping[str, Any],
+) -> list[str]:
+    candidates: list[str] = []
+    for value in (
+        params.get("indicator"),
+        params.get("__semantic_indicator_code"),
+        params.get("source_indicator_code"),
+    ):
+        if _looks_like_imf_provider_code(value):
+            candidates.append(_normalize_code(value))
+    for indicator in indicators or []:
+        if _looks_like_imf_provider_code(indicator):
+            candidates.append(_normalize_code(indicator))
+    for match in _EXACT_CODE_TOKEN_RE.findall(str(query or "")):
+        if _looks_like_imf_provider_code(match):
+            candidates.append(_normalize_code(match))
+    return list(dict.fromkeys(candidates))
+
+
+def imf_exact_provider_surface_supportability_reason(
+    query: str = "",
+    indicators: Iterable[Any] | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return an IMF supportability reason from exact provider-code evidence only.
+
+    Query text only contributes literal provider-code tokens; prose never
+    becomes final supportability authority.
+    """
+    params = params or {}
+    label = str(params.get("__semantic_indicator_label") or params.get("indicator_label") or "")
+    category = str(params.get("__semantic_indicator_category") or params.get("category") or "")
+    for code in _exact_code_candidates(query, indicators, params):
+        reason = imf_catalog_surface_supportability_reason(code, label, category)
+        if reason:
+            return reason
+    return None
 
 
 def imf_query_only_public_surface_reason(
@@ -176,109 +215,5 @@ def imf_query_only_public_surface_reason(
     indicators: Iterable[Any] | None = None,
     params: Mapping[str, Any] | None = None,
 ) -> str | None:
-    """Return a supportability reason for unsupported natural IMF detail rows.
-
-    The guard is intentionally conservative.  It leaves verified public SDMX
-    code requests and broad aggregate DataMapper/SDMX concepts alone, while
-    flagging detailed natural-language IMF catalog titles that currently cause
-    slow fuzzy-resolution/fallback loops or require dataset-family routing not
-    implemented in production.
-    """
-    params = params or {}
-    indicator_parts = [str(indicator or "") for indicator in (indicators or [])]
-    text = _normalize_text([query, *indicator_parts, params.get("__semantic_indicator_label")])
-    if not text:
-        return None
-
-    explicit_indicator = str(params.get("indicator") or "").strip()
-    if explicit_indicator and _PUBLIC_SDMX_CODE_RE.fullmatch(explicit_indicator):
-        return None
-    if _PUBLIC_SDMX_CODE_RE.search(text):
-        return None
-
-    # Broad aggregate concepts that are currently executable should remain on
-    # the runtime path unless the query includes a detailed IMF catalog slice.
-    detailed = _has_any(text, _DETAIL_MARKERS)
-
-    if "terms of trade" in text:
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if _has_any(text, _SPECIAL_PUBLIC_ENTITY_MARKERS):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if _has_any(text, {"mineral production", "quarried stone"}):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if _has_any(text, _SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "population" in text and _has_any(
-        text,
-        {
-            "by sex",
-            "definition",
-            "north west",
-            "of which foreign resident",
-            "socio demographic",
-            "socio-demographic",
-        },
-    ):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if _has_any(text, _COMPLEX_FINANCE_DETAIL_MARKERS):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if _has_any(text, _NATIONAL_ACCOUNTS_DETAIL_MARKERS) or _NATIONAL_ACCOUNTS_DEFLATOR_RE.search(text):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "external sector" in text and "external balance" in text:
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if re.search(r"\b(?:import|export) price index\b", text) and detailed:
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "producer price index" in text and detailed:
-        if "publishing" in text:
-            return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-        # Do not block the broad aggregate PPI query; only detailed PPI slices.
-        broad_only = re.fullmatch(
-            r"(?:[a-z .'-]+ )?producer price index(?: from imf)?",
-            text,
-        )
-        if not broad_only:
-            return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-    elif "producer price index" in text and "publishing" in text:
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if (
-        ("consumer price" in text or "consumer prices" in text or "price index" in text)
-        and (
-            _has_any(text, _CONSUMER_PRICE_DETAIL_MARKERS)
-            or re.search(r"\ball items\s+by\d{4}\b", text)
-        )
-    ):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if (
-        ("fiscal" in text or "government and public sector finance" in text)
-        and _has_any(text, _FISCAL_DETAIL_MARKERS)
-        and not re.search(r"\bgeneral government (?:debt|net lending) fiscal from imf\b", text)
-    ):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "industrial production" in text and _has_any(
-        text,
-        {"current activity", "definition", "mining", "quarry", "manufactur", "construction", "economic activity", "base year"},
-    ):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "oil production" in text and _has_any(text, {"barrels", "definition", "not specified", "economic activity"}):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    if "gross domestic product" in text and _has_any(
-        text,
-        {"industry base year", "base year-", "by industry", "activity", "production approach", "nominal gdp by industry"},
-    ):
-        return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
-
-    return None
+    """Compatibility wrapper for the old query-text guard name."""
+    return imf_exact_provider_surface_supportability_reason(query, indicators, params)

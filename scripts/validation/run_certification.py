@@ -20,8 +20,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.validation.common import (  # noqa: E402
     audit_direct_query_shape,
-    imf_public_sdmx_runtime_family,
-    imf_query_only_public_surface_reason,
+    imf_catalog_surface_supportability_reason,
     worldbank_source_id_for_code,
 )
 
@@ -125,42 +124,11 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     if provider != 'IMF':
         return None
 
-    if imf_public_sdmx_runtime_family(
+    return imf_catalog_surface_supportability_reason(
         str(origin.get('source_indicator_code') or row.get('code') or ''),
         str(origin.get('name') or row.get('name') or ''),
         str(origin.get('category') or row.get('category') or ''),
-    ):
-        return None
-
-    query_only_reason = imf_query_only_public_surface_reason(str(row.get('query') or ''))
-    if query_only_reason:
-        return query_only_reason
-
-    if (
-        ('imf_low_viability_family' in reasons or 'imf_price_or_memorandum_family' in reasons)
-        and category
-        and category != 'weo'
-    ):
-        return 'imf_non_weo_public_surface_unsupported'
-    if (
-        category
-        and category != 'weo'
-        and risk_level == 'high'
-        and reasons.intersection(
-            {
-                'very_long_query',
-                'imf_complex_finance_family',
-                'definition_financial_query',
-                'definition_survey_query',
-                'catalog_jargon',
-                'methodology_dense',
-                'classification_gva_query',
-                'country_scope_conflict',
-            }
-        )
-    ):
-        return 'imf_non_weo_public_surface_unsupported'
-    return None
+    )
 
 
 def preflight_audit_rows(

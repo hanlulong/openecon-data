@@ -334,7 +334,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="BIS",
             indicators=["policy rate"],
-            parameters={"country": "US", "indicator": "BIS.CBPOL"},
+            parameters={"country": "US", "indicator": "BIS.CBPOL", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
             originalQuery="policy rate in us",
         )
@@ -601,49 +601,41 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertFalse(hasattr(indicator_resolution, "_resolve_imf_aggregate_indicator_fast_path"))
 
-    def test_fetch_data_fails_fast_for_query_only_imf_public_surface_blocker(self) -> None:
+    def test_fetch_data_fails_fast_for_exact_imf_public_surface_blocker(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
-            indicators=["Food Consumer Prices"],
-            parameters={"country": "BR"},
+            indicators=["PCPIFFHF_IX"],
+            parameters={"country": "BR", "indicator": "PCPIFFHF_IX"},
             clarificationNeeded=False,
-            originalQuery=(
-                "Brazil Food Consumer Prices Food and Non-alcoholic Beverages "
-                "Food at Home Fruits and Vegetables from IMF"
-            ),
+            originalQuery="Brazil PCPIFFHF_IX from IMF",
         )
 
         with patch.object(
             self.service,
             "_resolve_indicator_for_fetch",
-            side_effect=AssertionError("unsupported IMF detail row should fail before dynamic resolution"),
+            side_effect=AssertionError("unsupported exact IMF detail code should fail before dynamic resolution"),
         ):
             with self.assertRaises(DataNotAvailableError) as raised:
                 run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertIn("fail-closed supportability block", str(raised.exception))
 
-    def test_fetch_multi_indicator_data_fails_fast_for_query_only_imf_public_surface_blocker(self) -> None:
+    def test_fetch_multi_indicator_data_fails_fast_for_exact_imf_public_surface_blocker(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=[
-                "Food Consumer Prices",
-                "Food and Non-alcoholic Beverages",
-                "Food at Home",
-                "Fruits and Vegetables",
+                "PCPIFFHF_IX",
+                "PMP_ISIC3_C_IX",
             ],
             parameters={"country": "BR"},
             clarificationNeeded=False,
-            originalQuery=(
-                "Brazil Food Consumer Prices Food and Non-alcoholic Beverages "
-                "Food at Home Fruits and Vegetables from IMF"
-            ),
+            originalQuery="Brazil PCPIFFHF_IX and PMP_ISIC3_C_IX from IMF",
         )
 
         with patch.object(
             self.service,
             "_resolve_indicator_for_fetch",
-            side_effect=AssertionError("unsupported IMF multi-detail row should fail before child resolution"),
+            side_effect=AssertionError("unsupported exact IMF detail code should fail before child resolution"),
         ):
             with self.assertRaises(DataNotAvailableError) as raised:
                 run(self.service._fetch_multi_indicator_data(intent))  # pylint: disable=protected-access
@@ -651,10 +643,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("fail-closed supportability block", str(raised.exception))
 
     def test_process_query_fails_closed_for_explicit_imf_supportability_blocker_before_parse(self) -> None:
-        query = (
-            "Brazil Real NACE2 Gross value added Public administration and defence; "
-            "compulsory social security from IMF"
-        )
+        query = "Brazil PCPIFFHF_IX from IMF"
 
         with patch.object(
             self.service.pipeline,
@@ -710,7 +699,7 @@ class QueryServiceTests(unittest.TestCase):
         )
 
     def test_direct_query_shape_treats_imf_bop_exact_code_as_public_sdmx(self) -> None:
-        from backend.utils.imf_supportability import imf_query_only_public_surface_reason
+        from backend.utils.imf_supportability import imf_exact_provider_surface_supportability_reason
         from scripts.validation.common import imf_public_sdmx_runtime_family
 
         self.assertEqual(
@@ -729,7 +718,7 @@ class QueryServiceTests(unittest.TestCase):
             ),
             "bop_exact",
         )
-        self.assertIsNone(imf_query_only_public_surface_reason("BMISO_BP6_FY_USD from IMF"))
+        self.assertIsNone(imf_exact_provider_surface_supportability_reason("BMISO_BP6_FY_USD from IMF"))
 
     def test_resolve_indicator_for_fetch_keeps_imf_code_from_intent_without_selector(self) -> None:
         intent = ParsedIntent(
@@ -3565,9 +3554,10 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertFalse(response.error)
         self.assertEqual(len(response.data or []), 2)
-        self.assertTrue(intent.needsDecomposition)
-        self.assertEqual(intent.decompositionType, "dimension")
-        self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+        response_intent = response.intent or intent
+        self.assertTrue(response_intent.needsDecomposition)
+        self.assertEqual(response_intent.decompositionType, "dimension")
+        self.assertEqual((response_intent.parameters or {}).get("__statscan_decomposition_axis"), "Gender")
 
         persisted = conversation_manager.get_conversation_state(conv_id)
         assert persisted is not None
@@ -7484,7 +7474,7 @@ class QueryServiceTests(unittest.TestCase):
 
         fetch_mock.assert_not_called()
 
-    def test_fetch_data_rejects_implausible_imf_selector_pick_without_retired_fallback(self) -> None:
+    def test_fetch_data_allows_llm_adjudicated_imf_selector_pick_without_rule_veto(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=[
@@ -7518,23 +7508,23 @@ class QueryServiceTests(unittest.TestCase):
         with patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
              patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
-            with self.assertRaises(DataNotAvailableError):
-                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        fetch_mock.assert_not_awaited()
+        self.assertEqual(fetch_mock.await_count, 1)
+        self.assertEqual(fetch_mock.await_args.kwargs.get("indicator"), "BCA_NGDPD")
 
     def test_fetch_data_fails_closed_for_unsupported_imf_fiscal_public_surface(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
-            indicators=["revenue", "general government taxes", "social contributions"],
+            indicators=["GGDD_FY_USD"],
             parameters={
                 "country": "Germany",
-                "indicator": "rev",
-                "__semantic_indicator_label": "general government taxes and social contributions revenue",
+                "indicator": "GGDD_FY_USD",
+                "__semantic_indicator_label": "General Government Total debt Fiscal Year US Dollar",
                 "__semantic_provider_locked": True,
             },
             clarificationNeeded=False,
-            originalQuery="Germany Revenue General Government Taxes Social contributions Government and Public Sector Finance from IMF",
+            originalQuery="Germany GGDD_FY_USD from IMF",
         )
 
         with patch.dict("sys.modules", {"backend.services.indicator_selector": None}), \
@@ -7572,7 +7562,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="Eurostat",
             indicators=["harmonized inflation"],
-            parameters={"country": "DE", "indicator": "prc_hicp_manr"},
+            parameters={"country": "DE", "indicator": "prc_hicp_manr", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
             originalQuery="hicp inflation germany",
         )
@@ -7587,7 +7577,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["unemployment rate"],
-            parameters={"country": "USA", "indicator": "LFS_UNEM_A"},
+            parameters={"country": "USA", "indicator": "LFS_UNEM_A", "__semantic_authority": "llm_adjudication"},
             clarificationNeeded=False,
             originalQuery="oecd unemployment rate us",
         )
@@ -7605,6 +7595,7 @@ class QueryServiceTests(unittest.TestCase):
             parameters={
                 "countries": ["China", "Brazil"],
                 "indicator": "GGXCNL_NGDP",
+                "__semantic_authority": "llm_adjudication",
                 "startDate": "2015-01-01",
                 "endDate": "2024-01-01",
             },
@@ -8411,10 +8402,10 @@ class QueryServiceTests(unittest.TestCase):
     def test_process_query_provider_locked_imf_public_surface_fails_closed_before_fetch(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
-            indicators=["Consumer Prices Miscellaneous Goods and Services"],
-            parameters={"country": "Germany", "__semantic_provider_locked": True},
+            indicators=["PCPIFFHF_IX"],
+            parameters={"country": "Germany", "indicator": "PCPIFFHF_IX", "__semantic_provider_locked": True},
             clarificationNeeded=False,
-            originalQuery="Germany All Items Special Indexes Capital City Consumer Prices Miscellaneous Goods and Services from IMF",
+            originalQuery="Germany unsupported detailed consumer prices from IMF",
         )
         validation = ValidationResult(
             is_multi_indicator=False,
@@ -8429,7 +8420,7 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(intent=intent, explicit_provider="IMF", routed_provider="IMF", validation_warning=None))), \
              patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
              patch.object(self.service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
-             patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=AssertionError("supportability blocker should not fetch"))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=AssertionError("supportability blocker should not resolve dynamically")), \
              patch.object(self.service, "_try_with_fallback", new=AsyncMock(side_effect=AssertionError("fallback should not run"))):
             response = run(self.service.process_query(intent.originalQuery))
 

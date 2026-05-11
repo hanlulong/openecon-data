@@ -62,6 +62,7 @@ SCAN_GLOBS = (
     "backend/services/relevance_scorer.py",
     "backend/services/statscan_metadata.py",
     "backend/providers/*.py",
+    "backend/utils/imf_supportability.py",
 )
 
 
@@ -205,6 +206,20 @@ PATTERNS = (
         regex=r"DATASET_MAPPINGS|_dataset_code|translate_indicator",
         classification="banned_semantic_final_authority",
         rationale="Eurostat mappings/translator can choose datasets from semantic labels.",
+    ),
+    ShortcutPattern(
+        id="imf_supportability_exact_catalog_guard",
+        path_glob="backend/utils/imf_supportability.py",
+        regex=r"imf_catalog_surface_supportability_reason|_exact_code_candidates",
+        classification="fail_closed_supportability",
+        rationale="IMF supportability may fail closed from exact provider-native code/catalog evidence, but must not judge arbitrary query text.",
+    ),
+    ShortcutPattern(
+        id="imf_supportability_query_text_marker_regression",
+        path_glob="backend/utils/imf_supportability.py",
+        regex=r"_DETAIL_MARKERS|_CONSUMER_PRICE_DETAIL_MARKERS|_FISCAL_DETAIL_MARKERS|_NATIONAL_ACCOUNTS_DETAIL_MARKERS|_SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS|_COMPLEX_FINANCE_DETAIL_MARKERS|_SPECIAL_PUBLIC_ENTITY_MARKERS",
+        classification="banned_semantic_final_authority",
+        rationale="IMF supportability must not reintroduce query-text keyword marker sets as final supportability authority.",
     ),
     ShortcutPattern(
         id="imf_translator_or_direct_mapping",

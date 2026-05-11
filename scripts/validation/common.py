@@ -17,9 +17,9 @@ except Exception:  # pragma: no cover - fallback for lightweight script usage
     CountryResolver = None
 
 try:
-    from backend.utils.imf_supportability import imf_query_only_public_surface_reason
+    from backend.utils.imf_supportability import imf_catalog_surface_supportability_reason
 except Exception:  # pragma: no cover - fallback for lightweight script usage
-    def imf_query_only_public_surface_reason(*_args: Any, **_kwargs: Any) -> str | None:
+    def imf_catalog_surface_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
         return None
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1162,6 +1162,8 @@ def _is_imf_bop_public_sdmx_code(code: str, name: str = '') -> bool:
     bare_code = _strip_imf_iso3_country_prefix(code)
     if bare_code.startswith('BOP_'):
         bare_code = bare_code[len('BOP_'):]
+    if re.search(r'(?:^|_)\d+[A-Z]?(?:_|$)', bare_code):
+        return False
     text = f"{name or ''} {code or ''}".lower()
     if not (
         'balance of payments' in text
@@ -1241,20 +1243,6 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
             return f"{code.upper()} from IMF"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         natural_query = f"{prefix}{phrase} from IMF".strip()
-        category_upper = str(row.get('category') or '').strip().upper()
-        # Some regional-outlook DataMapper rows have short exact provider codes whose
-        # natural catalog titles overlap with fail-closed public-SDMX detail
-        # guards (for example AFRREO "Terms of Trade").  In that narrow case,
-        # prefer the provider-native code instead of certifying an intentionally
-        # blocked natural title.  This is mechanical exact-code passthrough, not
-        # a semantic provider shortcut.
-        if (
-            category_upper
-            and category_upper.endswith('REO')
-            and re.fullmatch(r'[A-Z][A-Z0-9]{2,10}', code.upper())
-            and imf_query_only_public_surface_reason(natural_query)
-        ):
-            return f"{choice} {code.upper()} from IMF"
         return natural_query
     if provider_upper == 'WORLDBANK':
         # WorldBank has a native all-country surface.  Injecting an arbitrary
@@ -1350,12 +1338,6 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     provider_upper = provider.upper()
     reasons: list[str] = []
     query_lower = query.lower()
-    imf_query_only_supportability_reason = None
-    if provider_upper == 'IMF':
-        imf_query_only_supportability_reason = imf_query_only_public_surface_reason(query)
-        if imf_query_only_supportability_reason:
-            reasons.append('imf_query_only_public_surface_family')
-            reasons.append('imf_low_viability_family')
     parsed_metadata: dict[str, Any] = {}
     metadata_text = ''
     if provider_upper in {'IMF', 'WORLDBANK', 'OECD', 'EUROSTAT'}:

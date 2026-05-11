@@ -154,6 +154,7 @@ def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> N
         "backend/providers/imf.py",
         "backend/providers/bis.py",
         "backend/providers/fred.py",
+        "backend/utils/imf_supportability.py",
     }
 
     assert required <= scanned
@@ -174,6 +175,22 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
         "query_parsing_cue_inference",
     } <= found_ids
 
+
+
+def test_imf_supportability_does_not_use_query_text_marker_sets() -> None:
+    source = Path("backend/utils/imf_supportability.py").read_text()
+
+    forbidden_markers = {
+        "_DETAIL_MARKERS",
+        "_CONSUMER_PRICE_DETAIL_MARKERS",
+        "_FISCAL_DETAIL_MARKERS",
+        "_NATIONAL_ACCOUNTS_DETAIL_MARKERS",
+        "_SOCIAL_DEMOGRAPHIC_DETAIL_MARKERS",
+        "_COMPLEX_FINANCE_DETAIL_MARKERS",
+        "_SPECIAL_PUBLIC_ENTITY_MARKERS",
+    }
+
+    assert [marker for marker in forbidden_markers if marker in source] == []
 
 def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority() -> None:
     """Rule plausibility guards may fail closed, but must not create final authority."""

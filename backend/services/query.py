@@ -58,7 +58,7 @@ from ..providers.eurostat import EurostatProvider
 from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
-from ..utils.imf_supportability import imf_query_only_public_surface_reason
+from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.http_pool import extended_timeout
@@ -3674,7 +3674,7 @@ class QueryService:
             history = conversation_manager.get_history(conv_id)
 
             if normalize_provider_name(self._detect_explicit_provider(query) or "") == "IMF":
-                early_supportability_reason = imf_query_only_public_surface_reason(query)
+                early_supportability_reason = imf_exact_provider_surface_supportability_reason(query)
                 if early_supportability_reason:
                     with tracker.track(
                         "provider_supportability",
@@ -4871,6 +4871,27 @@ class QueryService:
             )
         except DataNotAvailableError as exc:
             logger.warning("Data not available from primary provider: %s", exc)
+            exc_text = str(exc)
+            supportability_blocked = (
+                "fail-closed supportability block" in exc_text
+                or "imf_non_weo_public_surface_unsupported" in exc_text
+            )
+            if supportability_blocked:
+                formatted_message = QueryComplexityAnalyzer.format_error_message(
+                    exc_text, query, intent if 'intent' in locals() else None
+                )
+                if '_prev_good_intent' in locals() and _prev_good_intent is not None:
+                    conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+                if '_prev_good_state' in locals() and _prev_good_state is not None:
+                    conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+                return QueryResponse(
+                    conversationId=conv_id,
+                    intent=intent if "intent" in locals() else None,
+                    clarificationNeeded=False,
+                    error="data_not_available",
+                    message=formatted_message,
+                    processingSteps=tracker.to_list(),
+                )
 
             # Try fallback providers before giving up
             if 'intent' in locals() and intent:
