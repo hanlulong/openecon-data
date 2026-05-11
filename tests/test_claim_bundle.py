@@ -181,6 +181,12 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
             "8",
             "--run-request-timeout",
             "45",
+            "--run-request-spacing",
+            "1.25",
+            "--run-rate-limit-retries",
+            "3",
+            "--run-rate-limit-backoff",
+            "2.5",
             "--run-skip-completed",
             "--run-classify-unsupported-direct",
             "--run-continue-on-error",
@@ -203,6 +209,12 @@ def test_run_claim_bundle_passes_resume_controls_to_run_certification_and_start_
     assert "8" in run_cmd
     assert "--request-timeout" in run_cmd
     assert "45.0" in run_cmd
+    assert "--request-spacing" in run_cmd
+    assert "1.25" in run_cmd
+    assert "--rate-limit-retries" in run_cmd
+    assert "3" in run_cmd
+    assert "--rate-limit-backoff" in run_cmd
+    assert "2.5" in run_cmd
     assert "--skip-completed" in run_cmd
     assert "--classify-unsupported-direct" in run_cmd
     assert "--continue-on-error" in run_cmd

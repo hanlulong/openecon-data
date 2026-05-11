@@ -881,6 +881,7 @@ def test_record_response_marks_coingecko_provider_no_price_as_supportability_blo
     assert record["supportability_blocked"] is True
     assert record["supportability_reason"] == "coingecko_price_unavailable"
     assert record["error"] == "data_not_available"
+    assert record["message"] == response_payload["message"]
     assert record["series_count"] == 0
 
 

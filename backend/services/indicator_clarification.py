@@ -589,6 +589,8 @@ async def maybe_recover_from_uncertain_match(
     params = dict(intent.parameters or {})
     if params.get("_uncertain_recovery_attempted"):
         return None
+    if params.get("__exact_provider_code_match"):
+        return None
     if not qs._needs_indicator_clarification(query, data, intent):
         return None
 
@@ -3310,7 +3312,11 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
     _ENGLISH_SUFFIXES = ("tion", "ment", "ness", "ity", "ing", "ure", "ism",
                          "ance", "ence", "ory", "ies", "ous", "ble", "ive",
                          "age", "ure", "dom")
-    if any(_lower.endswith(s) for s in _ENGLISH_SUFFIXES):
+    has_code_syntax = (
+        any(ch in indicator_text for ch in "_@.-")
+        or any(ch.isdigit() for ch in indicator_text)
+    )
+    if not has_code_syntax and any(_lower.endswith(s) for s in _ENGLISH_SUFFIXES):
         return False
 
     code_upper = indicator_text.upper()

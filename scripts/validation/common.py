@@ -1269,6 +1269,9 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
             prefix = f"{choice} "
         return f"{prefix}{phrase} from World Bank".strip()
     if provider_upper == 'OECD':
+        if code and re.fullmatch(r'(?:OECD_)?DSD_[A-Za-z0-9_]+@DF_[A-Za-z0-9_]+', code):
+            prefix = '' if query_mentions_country(code) else f"{choice} "
+            return f"{prefix}{code.upper()} from OECD".strip()
         if re.fullmatch(r'[A-Z0-9]{1,6}', phrase):
             phrase = f"{provider} indicator {phrase}"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
@@ -1290,13 +1293,12 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from BIS".strip()
     if provider_upper == 'FRED':
-        # Long FRED catalog titles (especially punctuation-heavy Financial
-        # Accounts rows) can force slow natural-language discovery even though
-        # the frozen catalog row already carries the exact provider-native
-        # series ID.  Use that ID as a mechanical probe when semicolon-delimited
-        # title fragments make a clean direct-query sentence brittle.  This does
-        # not infer semantic meaning; it transports exact provider input.
-        if code and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{5,}', code) and ';' in name:
+        # The frozen catalog row already carries the provider-native FRED
+        # series ID.  Use it directly for certification probes so direct-cert
+        # does not depend on natural-language title search for country-like,
+        # discontinued, or otherwise ambiguous titles.  This is exact
+        # provider-code transport, not semantic code selection.
+        if code and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{2,}', code):
             return f"{code.upper()} from FRED".strip()
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from FRED".strip()
@@ -2086,6 +2088,31 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'acronym_dense',
                 'definition_financial_query',
                 'definition_survey_query',
+                'methodology_dense',
+                'multi_modifier_title',
+            }
+        ]
+    exact_oecd_code_query = (
+        provider_upper == 'OECD'
+        and origin_code_upper
+        and re.search(
+            rf'(^|\s){re.escape(str(origin.get("source_indicator_code") or row.get("code") or "").strip())}\s+from\s+OECD$',
+            query.strip(),
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+    if exact_oecd_code_query:
+        # Exact provider-code probes are mechanical OECD dataflow requests.
+        # Runtime availability/supportability remains measured by replay; the
+        # audit should not reclassify a code-only probe using the human title's
+        # country words or low-viability semantic family hints.
+        reasons = [
+            reason for reason in reasons
+            if not reason.startswith('oecd_')
+            and reason not in {
+                'acronym_dense',
+                'country_scope_conflict',
                 'methodology_dense',
                 'multi_modifier_title',
             }

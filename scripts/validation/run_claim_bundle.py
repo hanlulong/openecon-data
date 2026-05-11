@@ -68,6 +68,9 @@ def main() -> int:
     parser.add_argument("--start-index", type=int, default=0, help="0-based session index passed to run_certification.py and score_certification.py.")
     parser.add_argument("--run-concurrency", type=int, default=None, help="Pass --concurrency to run_certification.py.")
     parser.add_argument("--run-request-timeout", type=float, default=None, help="Pass --request-timeout to run_certification.py.")
+    parser.add_argument("--run-request-spacing", type=float, default=None, help="Pass --request-spacing to run_certification.py.")
+    parser.add_argument("--run-rate-limit-retries", type=int, default=None, help="Pass --rate-limit-retries to run_certification.py.")
+    parser.add_argument("--run-rate-limit-backoff", type=float, default=None, help="Pass --rate-limit-backoff to run_certification.py.")
     parser.add_argument("--run-resume", action="store_true", help="Pass --resume to run_certification.py.")
     parser.add_argument("--run-start-index", type=int, default=None, help="Deprecated alias: pass --start-index to run_certification.py and score_certification.py.")
     parser.add_argument("--run-skip-completed", action="store_true", help="Pass --skip-completed to run_certification.py.")
@@ -128,6 +131,12 @@ def main() -> int:
         run_cert_cmd += ["--concurrency", str(args.run_concurrency)]
     if args.run_request_timeout is not None:
         run_cert_cmd += ["--request-timeout", str(args.run_request_timeout)]
+    if args.run_request_spacing is not None:
+        run_cert_cmd += ["--request-spacing", str(args.run_request_spacing)]
+    if args.run_rate_limit_retries is not None:
+        run_cert_cmd += ["--rate-limit-retries", str(args.run_rate_limit_retries)]
+    if args.run_rate_limit_backoff is not None:
+        run_cert_cmd += ["--rate-limit-backoff", str(args.run_rate_limit_backoff)]
     if effective_start_index:
         run_cert_cmd += ["--start-index", str(effective_start_index)]
     if args.run_resume:

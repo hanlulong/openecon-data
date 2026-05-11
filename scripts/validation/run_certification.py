@@ -424,6 +424,7 @@ def runtime_supportability_reason(row: dict[str, Any], resp_json: dict[str, Any]
 def record_response(row: dict[str, Any], dataset_type: str, round_index: int, query: str, resp, elapsed: float, data: dict[str, Any]) -> dict[str, Any]:
     response_signals = extract_response_signals(data)
     supportability_reason = runtime_supportability_reason(row, data)
+    message = data.get('message')
     record = {
         'session_id': row['id'],
         'dataset_type': dataset_type,
@@ -432,6 +433,7 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
         'status_code': resp.status_code,
         'elapsed_seconds': round(elapsed, 3),
         'error': data.get('error'),
+        'message': message if isinstance(message, str) and message.strip() else None,
         'series_count': response_signals['series_count'],
         'providers': response_signals['providers'],
         'countries': response_signals['countries'],

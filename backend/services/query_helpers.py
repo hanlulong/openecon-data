@@ -399,6 +399,8 @@ async def maybe_recover_from_empty_data(
     params = dict(intent.parameters or {})
     if params.get("_semantic_recovery_attempted"):
         return None
+    if params.get("__exact_provider_code_match"):
+        return None
 
     ranking_or_comparison = svc._is_ranking_query(query) or svc._is_comparison_query(query)
     distilled_indicator = svc._build_distilled_indicator_query(query)

@@ -173,7 +173,7 @@ def test_default_query_for_row_avoids_prefixing_country_when_title_already_has_s
 
     query = default_query_for_row(row)
 
-    assert query == "Bank Deposits to GDP for Japan from FRED"
+    assert query == "DDOI02JPA156NWDB from FRED"
 
 
 def test_default_query_for_row_uses_exact_fred_code_for_long_punctuated_titles():
@@ -191,7 +191,7 @@ def test_default_query_for_row_uses_exact_fred_code_for_long_punctuated_titles()
 
 def test_default_query_for_row_prefers_country_in_origin_name_over_provider_default() -> None:
     row = {
-        "provider": "FRED",
+        "provider": "BIS",
         "code": "CPTEST",
         "name": "Consumer Price Indices (CPIs, HICPs), COICOP 1999: Consumer Price Index: Total for Luxembourg",
         "description": "",
@@ -201,6 +201,20 @@ def test_default_query_for_row_prefers_country_in_origin_name_over_provider_defa
 
     assert query.lower().startswith("luxembourg ")
     assert "united states" not in query.lower()
+
+
+def test_default_query_for_row_uses_exact_oecd_dataflow_with_country_scope() -> None:
+    row = {
+        "provider": "OECD",
+        "code": "OECD_DSD_NASEC10@DF_TABLE14_REV",
+        "name": "Annual non-financial accounts by institutional sector (Revenue)",
+        "coverage": "Canada",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "Canada OECD_DSD_NASEC10@DF_TABLE14_REV from OECD"
 
 
 def test_detect_single_country_from_text_extracts_named_country() -> None:
@@ -324,8 +338,7 @@ def test_default_query_for_row_enriches_generic_oecd_title_from_description():
 
     query = default_query_for_row(row)
 
-    assert "physicians by status" in query.lower()
-    assert query.lower().endswith("from oecd")
+    assert query == "Japan DSD_HEALTH_EMP_REAC@DF_PHYS from OECD"
 
 
 def test_default_query_for_row_does_not_prepend_country_when_imf_title_already_names_one():
@@ -776,6 +789,24 @@ def test_audit_direct_query_shape_flags_oecd_instruction_time_and_childcare_data
 
         assert audit["risk_level"] == "high"
         assert "oecd_low_viability_family" in audit["reasons"]
+
+
+def test_audit_direct_query_shape_keeps_exact_oecd_dataflow_probe_low_risk() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "OECD",
+            "query": "Canada OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_MEAN_AGE from OECD",
+            "origin": {
+                "name": "Mean age of enrolled students new entrants and graduates",
+                "source_indicator_code": "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_MEAN_AGE",
+                "category": "OECD Dataflow",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "low"
+    assert "country_scope_conflict" not in audit["reasons"]
+    assert "oecd_low_viability_family" not in audit["reasons"]
 
 
 def test_audit_direct_query_shape_keeps_oecd_nonproduction_alone_below_high_risk():

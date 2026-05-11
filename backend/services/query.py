@@ -420,12 +420,16 @@ class QueryService:
             return None
 
         candidate = stripped_original if explicit_provider == "WORLDBANK" else str(stripped_original).upper()
+        fred_catalog_codes: list[str] = []
         worldbank_catalog_codes: list[str] = []
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             code_candidates = [
                 token if explicit_provider == "WORLDBANK" else token.upper()
-                for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_.]{2,}\b", str(query or ""))
-                if ("_" in token or "." in token)
+                for token in re.findall(
+                    r"(?<![A-Za-z0-9_@.\-])[A-Za-z][A-Za-z0-9_@.\-]{2,}(?![A-Za-z0-9_@.\-])",
+                    str(query or ""),
+                )
+                if ("_" in token or "." in token or "@" in token or "-" in token)
                 and self._looks_like_provider_indicator_code(
                     explicit_provider,
                     token if explicit_provider == "WORLDBANK" else token.upper(),
@@ -435,6 +439,9 @@ class QueryService:
                 code_candidates.extend(
                     self._imf_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 )
+            if explicit_provider == "FRED":
+                fred_catalog_codes = self._fred_uppercase_catalog_code_tokens(str(query or ""), stripped)
+                code_candidates.extend(fred_catalog_codes)
             if explicit_provider == "WORLDBANK":
                 worldbank_catalog_codes = self._worldbank_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 code_candidates.extend(worldbank_catalog_codes)
@@ -445,8 +452,13 @@ class QueryService:
             explicit_provider == "WORLDBANK"
             and candidate in worldbank_catalog_codes
         )
+        catalog_backed_fred_code = (
+            explicit_provider == "FRED"
+            and candidate in fred_catalog_codes
+        )
         if (
             not catalog_backed_worldbank_code
+            and not catalog_backed_fred_code
             and not self._looks_like_provider_indicator_code(explicit_provider, candidate)
         ):
             return None
@@ -532,6 +544,51 @@ class QueryService:
                 continue
             try:
                 metadata = lookup.get("WorldBank", token)
+            except Exception:
+                metadata = None
+            if not metadata:
+                continue
+            exact_code = str(metadata.get("code") or token).strip()
+            if exact_code:
+                matches.append(exact_code)
+        return matches
+
+    def _fred_uppercase_catalog_code_tokens(self, query: str, stripped_query: str = "") -> list[str]:
+        """Return exact uppercase FRED catalog-code tokens embedded in a query.
+
+        Some FRED series IDs are long uppercase words that happen to end with an
+        English suffix (for example ``PATENTUSMEUTILITY``).  Accept them only
+        when the original token is already present in the local FRED catalog and
+        the non-code remainder is empty or just a recognized country phrase.
+        """
+        tokens = [
+            match.group(0)
+            for match in re.finditer(r"\b[A-Z][A-Z0-9]{2,63}\b", str(query or ""))
+        ]
+        if not tokens:
+            return []
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+        except Exception:
+            return []
+
+        matches: list[str] = []
+        for token in tokens:
+            if token in {"FRED"}:
+                continue
+            residual = re.sub(
+                rf"\b{re.escape(token.lower())}\b",
+                " ",
+                str(stripped_query or "").lower(),
+            )
+            residual = re.sub(r"\s+", " ", residual).strip(" ,;:")
+            if residual and not CountryResolver.normalize(residual):
+                continue
+            try:
+                metadata = lookup.get("FRED", token)
             except Exception:
                 metadata = None
             if not metadata:

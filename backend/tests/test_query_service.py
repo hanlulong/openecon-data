@@ -516,6 +516,48 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "DE")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_extracts_oecd_dataflow_with_country_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Canada OECD_DSD_NASEC10@DF_TABLE14_REV from OECD"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "OECD")
+        self.assertEqual(intent.parameters.get("indicator"), "OECD_DSD_NASEC10@DF_TABLE14_REV")
+        self.assertEqual(intent.parameters.get("country"), "CA")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_oecd_provider_code_shape_accepts_dataflow_ending_with_english_suffix(self) -> None:
+        self.assertTrue(
+            self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access
+                "OECD",
+                "OECD_DSD_EAG_UOE_NON_FIN_STUD@DF_UOE_NF_MEAN_AGE",
+            )
+        )
+
+    def test_explicit_provider_code_intent_accepts_catalog_backed_fred_code_with_english_suffix(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "FRED" and code == "PATENTUSMEUTILITY":
+                    return {
+                        "provider": "FRED",
+                        "code": "PATENTUSMEUTILITY",
+                        "name": "U.S. Granted Utility Patents Originating in Maine",
+                    }
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "PATENTUSMEUTILITY from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "PATENTUSMEUTILITY")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_explicit_provider_code_intent_does_not_extract_country_from_worldbank_code_suffix(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "GC.TAX.TOTL.CN from World Bank"
@@ -2430,6 +2472,32 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertIsNone(clarification)
 
+    def test_uncertain_match_recovery_skips_exact_provider_code_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD"],
+            parameters={
+                "indicator": "OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD",
+                "__exact_provider_code_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD from OECD",
+        )
+        fetched = [sample_series_with(source="OECD", indicator="Some other OECD dataflow")]
+
+        with patch.object(self.service, "_needs_indicator_clarification", return_value=True), \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("exact codes should not collect alternatives")):
+            recovered = run(
+                self.service._maybe_recover_from_uncertain_match(  # pylint: disable=protected-access
+                    intent.originalQuery or "",
+                    intent,
+                    fetched,
+                )
+            )
+
+        self.assertIsNone(recovered)
+
     def test_build_no_data_indicator_clarification_returns_options(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar")
         conversation_manager.clear_pending_indicator_options(conv_id)
@@ -2493,6 +2561,29 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(clarification)
+
+    def test_empty_data_recovery_skips_exact_provider_code_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD"],
+            parameters={
+                "indicator": "OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD",
+                "__exact_provider_code_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada OECD_DSD_EAG_UOE_FIN@DF_UOE_INDIC_FIN_PERSTUD from OECD",
+        )
+
+        with patch.object(self.service, "_fetch_data", side_effect=AssertionError("exact no-data should not semantically refetch")):
+            recovered = run(
+                self.service._maybe_recover_from_empty_data(  # pylint: disable=protected-access
+                    intent.originalQuery or "",
+                    intent,
+                )
+            )
+
+        self.assertIsNone(recovered)
 
     def test_build_no_data_indicator_clarification_uses_simplified_provider_native_variant(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar-simplified-variant")
