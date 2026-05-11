@@ -263,6 +263,13 @@ class EurostatProvider(BaseProvider):
                 raise DataNotAvailableError(
                     f"Eurostat dataset '{dataset_code}' not found for country {country_code or 'ALL_AVAILABLE'}"
                 )
+            if e.response.status_code == 413:
+                raise DataNotAvailableError(
+                    "fail-closed supportability block: "
+                    "reason=eurostat_response_too_large; "
+                    f"dataset={dataset_code}; "
+                    f"country={country_code or 'ALL_AVAILABLE'}"
+                )
             raise
 
         data_points, frequency = self._parse_dataset(payload, dataset_code)

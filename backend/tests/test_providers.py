@@ -2378,6 +2378,33 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("geo", params)
         self.assertEqual(params.get("freq"), "A")
 
+    def test_eurostat_response_too_large_is_fail_closed_supportability(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class TooLargeResponse(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__({}, status_code=413, request_url="https://example.com/eurostat")
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    413,
+                    request=httpx.Request("GET", "https://example.com/eurostat"),
+                )
+                raise httpx.HTTPStatusError("too large", request=response.request, response=response)
+
+        class RecordingClient:
+            async def get(self, url, *, params=None, **_kwargs):
+                return TooLargeResponse()
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=RecordingClient()):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(provider.fetch_indicator(indicator="EF_RD_LEG", country="__ALL__", start_year=2021))
+
+        message = str(raised.exception)
+        self.assertIn("eurostat_response_too_large", message)
+        self.assertIn("dataset=ef_rd_leg", message)
+        self.assertIn("country=ALL_AVAILABLE", message)
+
     def test_oecd_resolve_indicator_uses_metadata_for_short_code(self) -> None:
         class StubMetadata:
             def __init__(self):

@@ -914,6 +914,36 @@ def test_record_response_marks_statscan_required_dimension_missing_as_supportabi
     assert record["series_count"] == 0
 
 
+def test_record_response_marks_eurostat_response_too_large_as_supportability_blocked():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-eurostat-large",
+        "provider_stratum": "Eurostat",
+        "query": "EF_RD_LEG from Eurostat",
+        "origin": {"source_provider": "Eurostat", "source_indicator_code": "EF_RD_LEG"},
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "fail-closed supportability block: "
+            "reason=eurostat_response_too_large; "
+            "dataset=ef_rd_leg; "
+            "country=ALL_AVAILABLE"
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "eurostat_response_too_large"
+    assert record["error"] == "data_not_available"
+    assert record["series_count"] == 0
+
+
 def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []
