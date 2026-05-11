@@ -2774,6 +2774,38 @@ def test_audit_direct_query_shape_flags_oecd_programme_share_queries() -> None:
     assert "oecd_education_programme_share_query" in audit["reasons"]
 
 
+def test_default_query_for_row_uses_eurostat_exact_code_for_dimension_heavy_titles() -> None:
+    origin = {
+        "name": "Persons reporting basic activity difficulty by sex, age, level of difficulty and income quintile",
+        "source_indicator_code": "ILC_HCH17",
+        "source_provider": "Eurostat",
+    }
+    row = {
+        "provider": "Eurostat",
+        "code": origin["source_indicator_code"],
+        "name": origin["name"],
+        "description": "",
+        "coverage": "EU",
+    }
+
+    query = default_query_for_row(row)
+    materialized_query = default_query_for_row({"provider_stratum": "Eurostat", "origin": origin})
+
+    assert query.endswith("ILC_HCH17 from Eurostat")
+    assert materialized_query.endswith("ILC_HCH17 from Eurostat")
+    assert "income quintile" not in query.lower()
+    audit = audit_direct_query_shape(
+        {
+            **row,
+            "query": query,
+            "provider_stratum": "Eurostat",
+            "origin": origin,
+        }
+    )
+    assert audit["risk_level"] == "low"
+    assert audit["reasons"] == []
+
+
 def test_audit_direct_query_shape_flags_eurostat_dimension_fragments() -> None:
     audit = audit_direct_query_shape(
         {

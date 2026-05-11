@@ -1092,8 +1092,9 @@ def natural_phrase_from_name(name: str, description: str = '') -> str:
 
 
 def derive_coin_query_name(row: dict[str, Any]) -> str:
-    name = str(row.get('name') or '').strip()
-    code = str(row.get('code') or '').strip()
+    origin = dict(row.get('origin') or {})
+    name = str(row.get('name') or origin.get('name') or '').strip()
+    code = str(row.get('code') or origin.get('source_indicator_code') or '').strip()
     if code and '-' in code:
         if len(name.split()) >= 4 or len(name) >= 24 or any(symbol in name for symbol in {'€', '$', '£'}):
             return code
@@ -1203,11 +1204,12 @@ def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = ''
 
 
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
-    provider = str(row.get('provider') or '')
+    origin = dict(row.get('origin') or {})
+    provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '')
     provider_upper = provider.upper()
-    code = str(row.get('code') or '').strip()
-    name = str(row.get('name') or '').strip()
-    description = str(row.get('description') or '').strip()
+    code = str(row.get('code') or origin.get('source_indicator_code') or '').strip()
+    name = str(row.get('name') or origin.get('name') or '').strip()
+    description = str(row.get('description') or origin.get('description') or '').strip()
     transform = infer_transform_family(name, description, str(row.get('unit') or ''), str(row.get('code') or ''))
     defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider, ['United States'])
     choice = defaults[stable_seed(provider, name) % len(defaults)]
@@ -1262,6 +1264,15 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from OECD".strip()
     if provider_upper == 'EUROSTAT':
+        # Eurostat dataset titles often encode several required dimensions in
+        # comma-separated catalog labels.  Dropping or reordering those
+        # dimension fragments creates ambiguous natural-language probes.  When
+        # the catalog row already has a provider-native dataset code, prefer an
+        # exact-code probe for those dimension-heavy titles.  This is
+        # mechanical certification query shaping, not semantic code selection.
+        if code and ',' in name and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,}', code):
+            prefix = '' if query_mentions_country(name) else f"{choice} "
+            return f"{prefix}{code.upper()} from Eurostat".strip()
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from Eurostat".strip()
     if provider_upper == 'BIS':
