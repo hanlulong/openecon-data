@@ -1995,6 +1995,35 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('methodology_dense')
     if origin_name.count(',') >= 3:
         reasons.append('multi_modifier_title')
+
+    exact_imf_code_query = (
+        provider_upper == 'IMF'
+        and origin_code_upper
+        and re.fullmatch(
+            rf'{re.escape(origin_code_upper)}\s+from\s+IMF',
+            query.strip(),
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+    if exact_imf_code_query and imf_public_sdmx_runtime_family(
+        origin_code_upper,
+        origin_name,
+        str(origin.get('category') or ''),
+    ):
+        # Exact provider-code probes for public IMF SDMX families are already
+        # treated as supportable by the runtime support matrix.  Do not let the
+        # long human catalog title reclassify the code-only query as an
+        # execution-high-risk natural-language surface.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'imf_complex_finance_family',
+                'imf_low_viability_family',
+                'imf_query_only_public_surface_family',
+                'methodology_dense',
+            }
+        ]
     reasons = list(dict.fromkeys(reasons))
 
     risk_level = 'low'

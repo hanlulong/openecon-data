@@ -2611,6 +2611,29 @@ def test_default_query_for_row_uses_short_imf_datamapper_code_when_natural_title
     assert default_query_for_row(row) == "Nigeria TTT from IMF"
 
 
+def test_audit_direct_query_shape_does_not_mark_exact_public_imf_bop_code_high_risk():
+    audit = audit_direct_query_shape(
+        {
+            "provider_stratum": "IMF",
+            "query": "BFORAONF_S_BP6_FY_USD from IMF",
+            "origin": {
+                "source_provider": "IMF",
+                "source_indicator_code": "BFORAONF_S_BP6_FY_USD",
+                "category": "INDICATOR",
+                "name": (
+                    "Balance of Payments, Financial Account, Other investment, "
+                    "Other accounts receivable/payable, Net acquisition of financial assets, "
+                    "Other sectors, Short-term [BPM6], Fiscal Year, US Dollars"
+                ),
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "medium"
+    assert "imf_low_viability_family" not in audit["reasons"]
+    assert "imf_complex_finance_family" not in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {
