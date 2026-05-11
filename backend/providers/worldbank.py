@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, List, Optional, TYPE_CHECKING
+import json
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import logging
 import re
 
@@ -573,6 +574,209 @@ class WorldBankProvider(BaseProvider):
             return False
         return "." in text or "_" in text or any(ch.isdigit() for ch in text)
 
+    def _indicator_source_id(self, indicator_code: str) -> Optional[str]:
+        """Return the provider-native WorldBank source id for an exact code.
+
+        This is metadata plumbing: the local catalog stores the source object
+        returned by the WorldBank indicator metadata API.  It lets exact codes
+        from non-WDI sources use their documented source-specific data endpoint
+        instead of being mislabeled as deleted by the generic WDI data path.
+        """
+        code = str(indicator_code or "").strip()
+        if not code:
+            return None
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            row = get_indicator_lookup().get("WorldBank", code)
+        except Exception as exc:
+            logger.debug("WorldBank source-id lookup skipped for %s: %s", code, exc)
+            return None
+        if not row:
+            return None
+
+        raw = row.get("raw_metadata")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = None
+        if isinstance(raw, dict):
+            source = raw.get("source")
+            if isinstance(source, dict):
+                source_id = str(source.get("id") or "").strip()
+                if source_id:
+                    return source_id
+        return None
+
+    @staticmethod
+    def _source_variable(record: dict[str, Any], concept: str) -> dict[str, Any]:
+        for item in record.get("variable") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("concept") or "").strip().lower() == concept.lower():
+                return item
+        return {}
+
+    async def _fetch_source_series_endpoint(
+        self,
+        *,
+        source_id: str,
+        indicator: str,
+        country_codes: list[str],
+        start_date: Optional[str],
+        end_date: Optional[str],
+        headers: dict[str, str],
+        client: Any,
+    ) -> List[NormalizedData]:
+        """Fetch exact non-WDI WorldBank source-series data.
+
+        The generic `/country/{country}/indicator/{code}` endpoint can report
+        source-specific indicators as deleted even when their metadata and data
+        are public under `/sources/{source}/country/{country}/series/{code}`.
+        Use that documented source endpoint only for exact catalog-backed codes.
+        """
+        source_id = str(source_id or "").strip()
+        indicator_code = str(indicator or "").strip()
+        if not source_id or not indicator_code:
+            return []
+
+        batch_codes = ";".join(country_codes or ["all"])
+        url = f"{self.base_url}/sources/{source_id}/country/{batch_codes}/series/{indicator_code}"
+        params = {"format": "json", "per_page": 1000}
+        logger.info("WorldBank source endpoint call: %s | params=%s", url, params)
+
+        response = await client.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=effective_timeout(25.0),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return []
+        source = payload.get("source") or {}
+        if not isinstance(source, dict):
+            return []
+        records = [record for record in (source.get("data") or []) if isinstance(record, dict)]
+        if not records:
+            return []
+        total_records = int(payload.get("total") or len(records) or 0)
+
+        source_name = str(source.get("name") or f"WorldBank source {source_id}").strip()
+        last_updated = str(payload.get("lastupdated") or response.headers.get("Date", "") or "")
+        api_url = self._compose_source_url(url, params)
+        source_url = f"https://api.worldbank.org/v2/sources/{source_id}/country/{batch_codes}/series/{indicator_code}?format=json"
+
+        start_year = int(start_date[:4]) if start_date else None
+        end_year = int(end_date[:4]) if end_date else None
+
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for record in records:
+            value = record.get("value")
+            if value is None:
+                continue
+
+            country_var = self._source_variable(record, "Country")
+            time_var = self._source_variable(record, "Time")
+            series_var = self._source_variable(record, "Series")
+            sector_var = self._source_variable(record, "Sector")
+
+            year_text = str(time_var.get("value") or time_var.get("id") or "").strip()
+            year_match = re.search(r"(19\d{2}|20\d{2})", year_text)
+            if not year_match:
+                continue
+            year = int(year_match.group(1))
+            if start_year and year < start_year:
+                continue
+            if end_year and year > end_year:
+                continue
+
+            country_id = str(country_var.get("id") or "").strip() or "all"
+            country_name = str(country_var.get("value") or country_id).strip()
+            sector_id = str(sector_var.get("id") or "").strip()
+            sector_name = str(sector_var.get("value") or "").strip()
+            indicator_name = str(series_var.get("value") or indicator_code).strip()
+            series_key = (country_id, sector_id)
+            bucket = grouped.setdefault(
+                series_key,
+                {
+                    "country_id": country_id,
+                    "country_name": country_name,
+                    "sector_id": sector_id,
+                    "sector_name": sector_name,
+                    "indicator_name": indicator_name,
+                    "points": [],
+                },
+            )
+            bucket["points"].append({"date": f"{year}-01-01", "value": value})
+
+        results: List[NormalizedData] = []
+        max_source_series = 500
+        for bucket in grouped.values():
+            if len(results) >= max_source_series:
+                break
+            points = sorted(bucket["points"], key=lambda item: item["date"])
+            if not points:
+                continue
+            sector_name = str(bucket.get("sector_name") or "").strip()
+            sector_id = str(bucket.get("sector_id") or "").strip()
+            indicator_label = str(bucket.get("indicator_name") or indicator_code).strip()
+            if sector_name:
+                indicator_label = f"{indicator_label} — {sector_name}"
+            series_id = indicator_code if not sector_id else f"{indicator_code}:{sector_id}"
+            values = [point["value"] for point in points if point.get("value") is not None]
+            unit = "USD" if "$" in indicator_label or "us$" in indicator_label.lower() or "dollars" in indicator_label.lower() else ""
+
+            results.append(
+                NormalizedData(
+                    metadata=Metadata(
+                        source="World Bank",
+                        indicator=indicator_label,
+                        country=str(bucket.get("country_name") or bucket.get("country_id") or ""),
+                        frequency="annual",
+                        unit=unit,
+                        lastUpdated=last_updated,
+                        seriesId=series_id,
+                        apiUrl=api_url,
+                        sourceUrl=source_url,
+                        seasonalAdjustment=None,
+                        dataType="Level",
+                        priceType="Nominal (current prices)" if unit == "USD" else None,
+                        description=f"{source_name}: {indicator_label}",
+                        notes=[
+                            f"WorldBank source-specific endpoint source={source_id}",
+                            f"sector={sector_name or sector_id or 'not specified'}",
+                            (
+                                f"source endpoint returned {total_records} records; "
+                                f"response limited to first {max_source_series} series"
+                            ) if total_records > max_source_series else "source endpoint returned complete first page",
+                        ],
+                        startDate=points[0]["date"],
+                        endDate=points[-1]["date"],
+                    ),
+                    data=points,
+                )
+            )
+
+        if results:
+            logger.info(
+                "WorldBank source endpoint returned %d series for source=%s indicator=%s",
+                len(results),
+                source_id,
+                indicator_code,
+            )
+        return results
+
+    @staticmethod
+    def _compose_source_url(base_url: str, params: Dict[str, Any]) -> str:
+        if not params:
+            return base_url
+        from urllib.parse import urlencode
+
+        return f"{base_url}?{urlencode(params)}"
+
     # Reverse mapping: sets of ISO2 country codes that correspond to
     # WorldBank aggregate region codes.  When the query service expands
     # a region like "Sub-Saharan Africa" into individual countries, we
@@ -786,6 +990,20 @@ class WorldBankProvider(BaseProvider):
                 payload = None
 
         if api_error_detail and exact_indicator_request:
+            source_id = self._indicator_source_id(indic)
+            if source_id and source_id != "2":
+                source_results = await self._fetch_source_series_endpoint(
+                    source_id=source_id,
+                    indicator=indic,
+                    country_codes=list(resolved_codes.keys()),
+                    start_date=start_date,
+                    end_date=end_date,
+                    headers=headers,
+                    client=client,
+                )
+                if source_results:
+                    _wb_record_success()
+                    return source_results
             _wb_record_failure()
             raise DataNotAvailableError(
                 f"WorldBank exact indicator code '{indic}' is not available from the public data endpoint: "

@@ -587,7 +587,7 @@ def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
 
 
 
-def test_preflight_classifies_worldbank_niche_and_specialized_sources_as_supportability_blocked(tmp_path: Path):
+def test_preflight_allows_worldbank_source_endpoint_indicators_to_execute(tmp_path: Path):
     module = load_module()
     niche_worldbank = {
         "id": "direct-worldbank-niche",
@@ -618,19 +618,23 @@ def test_preflight_classifies_worldbank_niche_and_specialized_sources_as_support
     )
 
     assert audit["summary"]["high_risk_rows"] == 2
-    assert audit["summary"]["supportability_blocked_rows"] == 2
-    assert audit["summary"]["execution_high_risk_rows"] == 0
+    assert audit["summary"]["supportability_blocked_rows"] == 1
+    assert audit["summary"]["execution_high_risk_rows"] == 1
     assert audit["summary"]["supportability_blocked_reason_counts"] == {
         "worldbank_niche_catalog_unsupported": 1,
-        "worldbank_specialized_source_unsupported": 1,
     }
-    assert {row["execution_mode"] for row in audit["flagged_rows_sample"]} == {"supportability_blocked"}
-    module.enforce_preflight_audit(
-        tmp_path / "unsupported-worldbank.json",
-        [niche_worldbank, specialized_worldbank],
-        allow_high_risk_direct=False,
-        classify_unsupported_direct=True,
-    )
+    modes_by_id = {row["id"]: row["execution_mode"] for row in audit["flagged_rows_sample"]}
+    assert modes_by_id == {
+        "direct-worldbank-niche": "supportability_blocked",
+        "direct-worldbank-specialized": "ordinary_runtime",
+    }
+    with pytest.raises(RuntimeError, match="1 executable high-risk direct rows"):
+        module.enforce_preflight_audit(
+            tmp_path / "unsupported-worldbank.json",
+            [niche_worldbank, specialized_worldbank],
+            allow_high_risk_direct=False,
+            classify_unsupported_direct=True,
+        )
 
 
 def test_preflight_classifies_worldbank_country_availability_surface_as_supportability_blocked(tmp_path: Path):

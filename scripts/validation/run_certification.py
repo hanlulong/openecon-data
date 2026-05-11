@@ -22,6 +22,7 @@ from scripts.validation.common import (  # noqa: E402
     audit_direct_query_shape,
     imf_public_sdmx_runtime_family,
     imf_query_only_public_surface_reason,
+    worldbank_source_id_for_code,
 )
 
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-raw-results.jsonl'
@@ -109,6 +110,14 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     ):
         return 'worldbank_niche_catalog_unsupported'
     if provider == 'WORLDBANK' and 'worldbank_specialized_source_family' in reasons:
+        # Source-specific WorldBank indicators can be publicly executable via
+        # /sources/{source}/country/{country}/series/{code}.  Do not preflight
+        # block exact codes whose catalog metadata carries a non-WDI source id;
+        # let the provider prove or fail the documented source endpoint.
+        source_code = str(origin.get('source_indicator_code') or row.get('code') or '').strip()
+        source_id = worldbank_source_id_for_code(source_code)
+        if source_id and source_id != '2':
+            return None
         return 'worldbank_specialized_source_unsupported'
     if provider == 'WORLDBANK' and 'worldbank_country_availability_surface' in reasons:
         return 'worldbank_country_availability_surface'

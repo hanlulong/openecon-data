@@ -507,7 +507,7 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(provider._looks_like_worldbank_indicator_code("GDP"))  # pylint: disable=protected-access
         self.assertFalse(provider._looks_like_worldbank_indicator_code("household income"))  # pylint: disable=protected-access
 
-    def test_worldbank_exact_archived_code_does_not_try_alternatives(self) -> None:
+    def test_worldbank_exact_source_indicator_uses_source_series_endpoint(self) -> None:
         provider = WorldBankProvider()
         calls = []
 
@@ -529,17 +529,65 @@ class ProviderTests(unittest.TestCase):
                 }
             ]
         )
+        source_response = MockAsyncResponse(
+            {
+                "page": 1,
+                "pages": 1,
+                "per_page": 10000,
+                "total": 1,
+                "lastupdated": "2020-07-25",
+                "source": {
+                    "id": "80",
+                    "name": "Gender Disaggregated Labor Database (GDLD)",
+                    "data": [
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "BRA", "value": "Brazil"},
+                                {"concept": "Time", "id": "YR2014", "value": "2014"},
+                                {
+                                    "concept": "Series",
+                                    "id": "w_F_skl",
+                                    "value": "Annual wage for skilled female workers (US$ Dollars)",
+                                },
+                                {"concept": "Sector", "id": "TRD", "value": "Trade"},
+                            ],
+                            "value": 1234.5,
+                        }
+                    ],
+                },
+            }
+        )
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "WorldBank",
+            "code": "w_F_skl",
+            "raw_metadata": json.dumps(
+                {
+                    "source": {
+                        "id": "80",
+                        "value": "Gender Disaggregated Labor Database (GDLD)",
+                    }
+                }
+            ),
+        }
 
-        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([missing_response])), \
+        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([missing_response, source_response])), \
              patch.object(provider, "_get_alternative_indicators", new=AsyncMock(side_effect=AssertionError("no alternatives for exact codes"))), \
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
              patch("backend.providers.worldbank._wb_is_available", return_value=True), \
-             patch("backend.providers.worldbank._wb_record_failure"):
-            with self.assertRaises(DataNotAvailableError) as ctx:
-                run(provider.fetch_indicator("w_F_skl", country="China", start_date="2018", end_date="2025"))
+             patch("backend.providers.worldbank._wb_record_failure"), \
+             patch("backend.providers.worldbank._wb_record_success"):
+            results = run(provider.fetch_indicator("w_F_skl", country="Brazil", start_date="2014", end_date="2014"))
 
-        self.assertEqual(len(calls), 1)
-        self.assertIn("/country/CN/indicator/w_F_skl", calls[0]["url"])
-        self.assertIn("exact indicator code 'w_F_skl'", str(ctx.exception))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/country/BR/indicator/w_F_skl", calls[0]["url"])
+        self.assertIn("/sources/80/country/BR/series/w_F_skl", calls[1]["url"])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata.seriesId, "w_F_skl:TRD")
+        self.assertEqual(results[0].metadata.country, "Brazil")
+        self.assertEqual(results[0].metadata.unit, "USD")
+        self.assertEqual(results[0].data[0].date, "2014-01-01")
+        self.assertEqual(results[0].data[0].value, 1234.5)
 
     def test_worldbank_no_country_uses_lowercase_all_endpoint(self) -> None:
         provider = WorldBankProvider()

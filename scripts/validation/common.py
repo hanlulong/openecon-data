@@ -863,6 +863,35 @@ def provider_metadata_context(record: dict[str, Any]) -> tuple[dict[str, Any], s
     return parsed, metadata_text
 
 
+@lru_cache(maxsize=50000)
+def worldbank_source_id_for_code(code: str, db_path: str = str(DEFAULT_DB)) -> str:
+    """Return WorldBank metadata source id for an exact provider code."""
+    indicator_code = str(code or '').strip()
+    if not indicator_code:
+        return ''
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT raw_metadata FROM indicators WHERE provider = ? AND code = ? LIMIT 1",
+            ("WorldBank", indicator_code),
+        ).fetchone()
+        con.close()
+    except Exception:
+        return ''
+    if not row:
+        return ''
+    raw = row['raw_metadata']
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+    except Exception:
+        parsed = {}
+    source = parsed.get('source') if isinstance(parsed, dict) else None
+    if isinstance(source, dict):
+        return str(source.get('id') or '').strip()
+    return ''
+
+
 def _metadata_annotation_is_true(parsed_metadata: dict[str, Any], annotation_type: str) -> bool:
     target = str(annotation_type or '').strip().lower()
     if not target:
