@@ -216,6 +216,19 @@ def test_default_query_for_row_uses_exact_oecd_dataflow_with_country_scope() -> 
     assert query == "Canada OECD_DSD_NASEC10@DF_TABLE14_REV from OECD"
 
 
+def test_default_query_for_row_strips_eurostat_extraction_suffix_for_exact_dataset() -> None:
+    row = {
+        "provider": "Eurostat",
+        "code": "SBS_SC_1B_SE_R2$DV_664",
+        "name": "Services by employment size class (NACE Rev. 2, H-N, S95) (2005-2020)",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "SBS_SC_1B_SE_R2 from Eurostat"
+
+
 def test_detect_single_country_from_text_extracts_named_country() -> None:
     assert detect_single_country_from_text("Consumer Price Index for Luxembourg") == "Luxembourg"
 

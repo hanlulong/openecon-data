@@ -1280,14 +1280,13 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from OECD".strip()
     if provider_upper == 'EUROSTAT':
-        # Eurostat dataset titles often encode several required dimensions in
-        # comma-separated catalog labels.  Dropping or reordering those
-        # dimension fragments creates ambiguous natural-language probes.  When
-        # the catalog row already has a provider-native dataset code, prefer an
-        # exact-code probe for those dimension-heavy titles.  This is
-        # mechanical certification query shaping, not semantic code selection.
-        if code and ',' in name and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,}', code):
-            return f"{code.upper()} from Eurostat".strip()
+        # Eurostat catalog rows carry provider-native dataset IDs.  Use those
+        # exact IDs for certification probes so punctuation such as "NACE Rev."
+        # cannot be parsed as a dataset name.  This is mechanical code
+        # transport, not semantic dataset selection.
+        eurostat_code = code.split('$', 1)[0].strip().upper() if code else ''
+        if eurostat_code and re.fullmatch(r'[A-Z][A-Z0-9_]{3,}', eurostat_code):
+            return f"{eurostat_code} from Eurostat".strip()
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
         return f"{prefix}{phrase} from Eurostat".strip()
     if provider_upper == 'BIS':
