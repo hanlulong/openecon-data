@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -10,15 +9,26 @@ from backend.tests.utils import run
 from backend.utils.retry import DataNotAvailableError
 
 
-if "pybreaker" not in sys.modules:
+try:
+    import pybreaker as _pybreaker  # noqa: F401
+except ModuleNotFoundError:
     fake_pybreaker = types.ModuleType("pybreaker")
+
+    class _CircuitBreakerError(Exception):  # pragma: no cover - test shim only
+        pass
 
     class _CircuitBreaker:  # pragma: no cover - test shim only
         def __init__(self, *args, **kwargs):
             self.args = args
             self.kwargs = kwargs
 
+        async def call_async(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
     fake_pybreaker.CircuitBreaker = _CircuitBreaker
+    fake_pybreaker.CircuitBreakerError = _CircuitBreakerError
+    import sys
+
     sys.modules["pybreaker"] = fake_pybreaker
 
 from backend.providers.imf import IMFProvider
@@ -283,9 +293,8 @@ def test_xml_bop_structure_codelists_drive_fail_closed_validation() -> None:
     assert error == "INDICATOR value(s) not present in BOP structure: C_375"
 
 
-def test_fetch_batch_indicator_routes_bop_hint_into_bop_lane() -> None:
+def test_fetch_batch_indicator_does_not_route_bop_hint_into_disabled_label_lane() -> None:
     provider = IMFProvider(metadata_search_service=None)
-    fake_result = [_sample_series("BXSRLO_USD")]
 
     with patch.object(
         provider,
@@ -294,19 +303,24 @@ def test_fetch_batch_indicator_routes_bop_hint_into_bop_lane() -> None:
     ), patch.object(
         provider,
         "_fetch_bop_family",
-        AsyncMock(return_value=fake_result),
+        AsyncMock(side_effect=AssertionError("BOP label bridge must stay disabled")),
     ) as fetch_bop_mock:
-        result = run(
-            provider.fetch_batch_indicator(
-                indicator="ignored",
-                countries=["USA"],
-                start_year=2020,
-                end_year=2021,
+        try:
+            run(
+                provider.fetch_batch_indicator(
+                    indicator="ignored",
+                    countries=["USA"],
+                    start_year=2020,
+                    end_year=2021,
+                )
             )
-        )
+        except DataNotAvailableError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected DataNotAvailableError")
 
-    assert result == fake_result
-    fetch_bop_mock.assert_awaited_once()
+    assert "non-DataMapper IMF family" in message
+    fetch_bop_mock.assert_not_awaited()
 
 
 def test_fetch_batch_indicator_keeps_weo_on_datamapper_path() -> None:

@@ -673,8 +673,7 @@ class IMFProvider(BaseProvider):
                     start_year=start_year,
                     end_year=end_year,
                 )
-            dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
-            if dataset_hint == "IMF.STA:BOP":
+            if self._is_disabled_bop_exact_code_shape(indicator_code):
                 raise DataNotAvailableError(
                     f"IMF BOP exact-code execution is disabled under the no-rule authority policy for {indicator_code}. "
                     "The currently available BOP bridge requires label-to-codelist candidate matching, so this family "
@@ -928,7 +927,7 @@ class IMFProvider(BaseProvider):
         indicator_code: str,
         indicator_label: Optional[str],
     ) -> Optional[str]:
-        """Infer the most likely IMF dataset family for a non-DataMapper series."""
+        """Diagnostic-only hint for offline triage of non-DataMapper series."""
         code = str(indicator_code or "").strip().upper()
         label = str(indicator_label or "").strip().lower()
         if not code and not label:
@@ -963,6 +962,13 @@ class IMFProvider(BaseProvider):
             return "IMF.STA:NA_MAIN"
 
         return None
+
+    def _is_disabled_bop_exact_code_shape(self, indicator_code: str) -> bool:
+        """Return whether an exact code targets the disabled no-rule BOP bridge."""
+        code = self._strip_country_prefix(indicator_code)
+        if code.startswith("BOP_"):
+            return True
+        return bool(re.search(r"(?:^|_)BP6(?:_|$)", code))
 
     @staticmethod
     def _local_xml_name(tag: str) -> str:
@@ -2236,13 +2242,10 @@ class IMFProvider(BaseProvider):
             return
 
         label = str(indicator_label or indicator_code).strip() or indicator_code
-        dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
-        dataset_suffix = f" Likely next dataset family: {dataset_hint}." if dataset_hint else ""
         raise DataNotAvailableError(
             f"IMF indicator '{label}' ({indicator_code}) resolved to a non-DataMapper IMF family. "
             f"The current runtime can resolve this series from the local IMF catalog, but execution still "
             f"requires IMF dataset-family routing beyond the legacy DataMapper v1 path."
-            f"{dataset_suffix}"
         )
 
     async def _resolve_indicator_code(self, indicator: str) -> tuple[str, Optional[str]]:

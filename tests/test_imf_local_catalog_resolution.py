@@ -1,21 +1,31 @@
 from __future__ import annotations
 
-import sys
 import types
 from unittest.mock import patch
 
 from backend.tests.utils import run
 
 
-if "pybreaker" not in sys.modules:
+try:
+    import pybreaker as _pybreaker  # noqa: F401
+except ModuleNotFoundError:
     fake_pybreaker = types.ModuleType("pybreaker")
+
+    class _CircuitBreakerError(Exception):  # pragma: no cover - test shim only
+        pass
 
     class _CircuitBreaker:  # pragma: no cover - test shim only
         def __init__(self, *args, **kwargs):
             self.args = args
             self.kwargs = kwargs
 
+        async def call_async(self, func, *args, **kwargs):
+            return await func(*args, **kwargs)
+
     fake_pybreaker.CircuitBreaker = _CircuitBreaker
+    fake_pybreaker.CircuitBreakerError = _CircuitBreakerError
+    import sys
+
     sys.modules["pybreaker"] = fake_pybreaker
 
 from backend.providers.imf import IMFProvider
@@ -287,7 +297,7 @@ def test_imf_dataset_family_hint_maps_national_accounts_codes() -> None:
     assert hint == "IMF.STA:NA_MAIN"
 
 
-def test_imf_non_datamapper_failure_includes_dataset_hint() -> None:
+def test_imf_non_datamapper_failure_does_not_promote_dataset_hint_to_runtime_authority() -> None:
     provider = IMFProvider(metadata_search_service=None)
 
     with patch.object(
@@ -305,4 +315,5 @@ def test_imf_non_datamapper_failure_includes_dataset_hint() -> None:
         else:  # pragma: no cover - defensive
             raise AssertionError("Expected DataNotAvailableError")
 
-    assert "Likely next dataset family: IMF.STA:NA_MAIN" in message
+    assert "requires IMF dataset-family routing beyond the legacy DataMapper v1 path" in message
+    assert "Likely next dataset family" not in message

@@ -1828,8 +1828,6 @@ class ProviderTests(unittest.TestCase):
             provider, "_classify_execution_family", return_value="NON_DATAMAPPER_INDICATOR",
         ), patch.object(
             provider, "_build_sdmx_series_candidates", return_value=[],
-        ), patch.object(
-            provider, "_likely_dataset_family_hint", return_value="IMF.STA:BOP",
         ):
             with self.assertRaisesRegex(DataNotAvailableError, "no-rule authority policy"):
                 run(
@@ -1974,10 +1972,6 @@ class ProviderTests(unittest.TestCase):
             provider,
             "_build_sdmx_series_candidates",
             return_value=[],
-        ), patch.object(
-            provider,
-            "_likely_dataset_family_hint",
-            return_value="IMF.STA:BOP",
         ), patch.object(
             provider,
             "_fetch_bop_family",

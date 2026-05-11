@@ -198,6 +198,7 @@ def test_imf_bop_label_matching_is_not_runtime_final_authority() -> None:
     source = inspect.getsource(IMFProvider.fetch_batch_indicator)
 
     assert "_fetch_bop_family(" not in source
+    assert "_likely_dataset_family_hint(" not in source
     assert "no-rule authority policy" in source
 
 
