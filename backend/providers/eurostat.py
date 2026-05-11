@@ -123,10 +123,25 @@ class EurostatProvider(BaseProvider):
         # === Energy ===
         "nrg_bal_c": {"nrg_bal": "GIC", "siec": "TOTAL", "unit": "KTOE"},  # Gross inland consumption (kilotonnes of oil equivalent)
 
+        # === Regional and city statistics ===
+        # TGS00007 is a NUTS-2 regional table; country aggregates such as FR/ES
+        # are not valid geo members for the selected slice.
+        "tgs00007": {"unit": "PC", "sex": "T", "age": "Y15-64"},
+        # City rents require a dwelling type and currency; fetch_indicator()
+        # picks a representative capital-city geo when callers pass a country.
+        "prc_colc_rents": {"building": "FLAT2", "currency": "EUR"},
+
         # === Interest Rates (INFRASTRUCTURE FIX) ===
         # EI_MFIR_M: Interest rates - monthly data
         # indic options: MF-DDI-RT (day-to-day), MF-3MI-RT (3-month), MF-LTGBY-RT (long-term govt bond yield)
         "EI_MFIR_M": {"indic": "MF-LTGBY-RT"},  # Default: Long-term government bond yields (10-year equivalent)
+    }
+
+    NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY: Dict[str, str] = {
+        "DE": "DE30",  # Berlin
+        "ES": "ES30",  # Comunidad de Madrid
+        "FR": "FR10",  # Ile-de-France
+        "IT": "ITI4",  # Lazio
     }
 
     @property
@@ -188,6 +203,7 @@ class EurostatProvider(BaseProvider):
         """
         dataset_code, dataset_label = await self._resolve_dataset(indicator)
         country_code = self._country_code(country)
+        country_code = self._default_geo_for_dataset(dataset_code, country_code)
 
         # Use JSON-stat API endpoint (statistics/1.0) instead of SDMX
         # This is more reliable and doesn't have the 406 Not Acceptable errors
@@ -308,6 +324,16 @@ class EurostatProvider(BaseProvider):
         )
 
         return NormalizedData(metadata=metadata, data=data_points)
+
+    def _default_geo_for_dataset(self, dataset_code: str, country_code: str) -> str:
+        """Return a dataset-valid default geo for dimensionful regional tables."""
+        code = str(dataset_code or "").strip().lower()
+        geo = str(country_code or "").strip().upper()
+        if code == "tgs00007" and geo in self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY:
+            return self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY[geo]
+        if code == "prc_colc_rents" and re.fullmatch(r"[A-Z]{2}", geo):
+            return f"{geo}_CAP"
+        return country_code
 
     async def _resolve_dataset(self, indicator: str) -> tuple[str, Optional[str]]:
         """Resolve Eurostat dataset ID through exact codes or metadata search."""
@@ -906,6 +932,13 @@ class EurostatProvider(BaseProvider):
                                 return label
 
                     # Return the first label
+                    return next(iter(labels.values()))
+
+            currency_dim = dimensions.get("currency", {})
+            if currency_dim:
+                category = currency_dim.get("category", {})
+                labels = category.get("label", {})
+                if labels:
                     return next(iter(labels.values()))
 
             # Check for unit in the dataset label

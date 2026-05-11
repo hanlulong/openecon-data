@@ -2002,6 +2002,84 @@ class ProviderTests(unittest.TestCase):
         _, params = client.calls[0]
         self.assertNotIn("na_item", params)
 
+    def test_eurostat_nuts2_table_uses_representative_geo_and_defaults(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 68.3, "1": 69.8},
+                "dimension": {
+                    "time": {"category": {"index": {"2023": 0, "2024": 1}}},
+                    "geo": {"category": {"index": {"FR10": 0}, "label": {"FR10": "Ile-de-France"}}},
+                    "unit": {"category": {"index": {"PC": 0}, "label": {"PC": "Percentage"}}},
+                },
+                "id": ["geo", "time"],
+                "size": [1, 2],
+                "updated": "2026-04-17",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="TGS00007", country="FR", start_year=2023))
+
+        self.assertEqual(series.metadata.seriesId, "tgs00007")
+        self.assertEqual(series.metadata.country, "FR10")
+        _, params = client.calls[0]
+        self.assertEqual(params.get("geo"), "FR10")
+        self.assertEqual(params.get("unit"), "PC")
+        self.assertEqual(params.get("sex"), "T")
+        self.assertEqual(params.get("age"), "Y15-64")
+
+    def test_eurostat_city_rent_table_uses_capital_geo_and_rent_defaults(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 920, "1": 980},
+                "dimension": {
+                    "time": {"category": {"index": {"2022": 0, "2023": 1}}},
+                    "geo": {"category": {"index": {"ES_CAP": 0}, "label": {"ES_CAP": "Madrid"}}},
+                    "currency": {"category": {"index": {"EUR": 0}, "label": {"EUR": "Euro"}}},
+                },
+                "id": ["geo", "time"],
+                "size": [1, 2],
+                "updated": "2026-01-06",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="PRC_COLC_RENTS", country="ES", start_year=2022))
+
+        self.assertEqual(series.metadata.seriesId, "prc_colc_rents")
+        self.assertEqual(series.metadata.country, "ES_CAP")
+        self.assertEqual(series.metadata.unit, "Euro")
+        _, params = client.calls[0]
+        self.assertEqual(params.get("geo"), "ES_CAP")
+        self.assertEqual(params.get("building"), "FLAT2")
+        self.assertEqual(params.get("currency"), "EUR")
+
     def test_oecd_resolve_indicator_uses_metadata_for_short_code(self) -> None:
         class StubMetadata:
             def __init__(self):
