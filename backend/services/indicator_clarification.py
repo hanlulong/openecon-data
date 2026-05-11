@@ -44,6 +44,7 @@ from ..services.relevance_scorer import (
 )
 from ..services.indicator_resolution import (
     is_comparison_query as _is_comparison_query_standalone,
+    is_exact_match_locked as _is_exact_match_locked,
     is_placeholder_indicator_code as _is_placeholder_indicator_code,
     is_resolved_indicator_plausible as _is_resolved_indicator_plausible,
 )
@@ -2619,6 +2620,8 @@ async def build_post_parse_clarification(
 ) -> Optional[QueryResponse]:
     """Apply the shared clarification guardrails after parse/validation."""
     intent = parse_result.intent
+    if _is_exact_match_locked(intent.parameters if intent else None):
+        return None
 
     if normalize_provider_name(intent.apiProvider or "") == "NOT_AVAILABLE":
         indicator_text = intent.indicators[0] if intent.indicators else query
@@ -2923,6 +2926,8 @@ def build_uncertain_result_clarification(
     processing_steps: Optional[List[Any]] = None,
 ) -> Optional[QueryResponse]:
     """Return a clarification response with options when series selection is uncertain."""
+    if intent and _is_exact_match_locked(intent.parameters):
+        return None
     if intent and intent.indicators and len(intent.indicators) > 1:
         return None
     if not intent or not qs._needs_indicator_clarification(query, data, intent):
@@ -3123,6 +3128,8 @@ def build_no_data_indicator_clarification(
 ) -> Optional[QueryResponse]:
     """Offer indicator choices when no data is returned and intent may be ambiguous."""
     if not intent:
+        return None
+    if _is_exact_match_locked(intent.parameters):
         return None
     if intent.indicators and len(intent.indicators) > 1:
         return None

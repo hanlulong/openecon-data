@@ -1118,12 +1118,31 @@ def _is_imf_aggregate_ppi_code(code: str, name: str = '') -> bool:
     return bare_code in {'PPPI_IX', 'PPI_IX', 'WPI_IX'} or bare_code == 'PPPIA_IX'
 
 
+def _is_imf_bop_public_sdmx_code(code: str, name: str = '') -> bool:
+    bare_code = _strip_imf_iso3_country_prefix(code)
+    if bare_code.startswith('BOP_'):
+        bare_code = bare_code[len('BOP_'):]
+    text = f"{name or ''} {code or ''}".lower()
+    if not (
+        'balance of payments' in text
+        or 'bpm6' in text
+        or '_bp6_' in f"_{bare_code.lower()}_"
+    ):
+        return False
+    if not re.fullmatch(
+        r'B[A-Z0-9_]*(?:_BP6)?(?:_FY)?_(?:USD|EUR|XDC|XDR)',
+        bare_code,
+    ):
+        return False
+    return True
+
+
 def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = '') -> str | None:
     """Return the narrow public IMF.STA SDMX family now executable by runtime.
 
     This helper is deliberately conservative.  It only marks rows as supported
     when the provider code maps to a documented country-level SDMX 2.1 key.
-    Detailed HS/SITC/CPC trade, city CPI, ISIC/NACE PPI, BOP, fiscal, monetary,
+    Detailed HS/SITC/CPC trade, city CPI, ISIC/NACE PPI, fiscal, monetary,
     and other non-WEO families remain explicit supportability blockers until
     their exact public dimensions are implemented.
     """
@@ -1135,6 +1154,8 @@ def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = ''
         return 'cpi_aggregate'
     if _is_imf_aggregate_ppi_code(code, name):
         return 'ppi_aggregate'
+    if _is_imf_bop_public_sdmx_code(code, name):
+        return 'bop_exact'
     return None
 
 

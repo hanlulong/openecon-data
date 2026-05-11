@@ -19,6 +19,7 @@ _PUBLIC_SDMX_CODE_RE = re.compile(
     r"(?:T[MX]G?_(?:FOB|CIF)_USD)"
     r"|(?:P{1,2}PIA?_IX)"
     r"|(?:PCPI_(?:X?CP)_?\d{2}(?:_BY\d{4}(?:M\d{2})?)?_IX)"
+    r"|(?:(?:[A-Z]{3}_)?(?:BOP_)?B[A-Z0-9_]*(?:_BP6)?(?:_FY)?_(?:USD|EUR|XDC|XDR))"
     r")\b",
     flags=re.IGNORECASE,
 )

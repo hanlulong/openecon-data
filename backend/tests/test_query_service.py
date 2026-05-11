@@ -690,6 +690,28 @@ class QueryServiceTests(unittest.TestCase):
             "cpi_aggregate",
         )
 
+    def test_direct_query_shape_treats_imf_bop_exact_code_as_public_sdmx(self) -> None:
+        from backend.utils.imf_supportability import imf_query_only_public_surface_reason
+        from scripts.validation.common import imf_public_sdmx_runtime_family
+
+        self.assertEqual(
+            imf_public_sdmx_runtime_family(
+                "BMISO_BP6_FY_USD",
+                "Balance of Payments, Current Account, Secondary Income, Debit [BPM6], Fiscal Year, US Dollars",
+                "INDICATOR",
+            ),
+            "bop_exact",
+        )
+        self.assertEqual(
+            imf_public_sdmx_runtime_family(
+                "BHS_BOP_BXSTRAPA_XDC",
+                "Bahamas Definition, Balance of Payments, Services, Transport, Passenger, Credit, National Currency",
+                "INDICATOR",
+            ),
+            "bop_exact",
+        )
+        self.assertIsNone(imf_query_only_public_surface_reason("BMISO_BP6_FY_USD from IMF"))
+
     def test_resolve_indicator_for_fetch_keeps_imf_code_from_intent_without_selector(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
@@ -2302,6 +2324,47 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("may be wrong", joined)
         self.assertIn("exact indicator", joined)
 
+    def test_build_uncertain_result_clarification_skips_exact_provider_code_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["BMISO_BP6_FY_USD"],
+            parameters={
+                "indicator": "BMISO_BP6_FY_USD",
+                "__exact_provider_code_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="BMISO_BP6_FY_USD from IMF",
+        )
+        fetched = [
+            NormalizedData.model_validate(
+                {
+                    "metadata": {
+                        "source": "IMF",
+                        "indicator": "Balance of Payments, Secondary income, Debit, US Dollars",
+                        "country": "United States",
+                        "frequency": "annual",
+                        "unit": "USD",
+                        "lastUpdated": "",
+                        "seriesId": "BMISO_BP6_FY_USD",
+                    },
+                    "data": [{"date": "2022-01-01", "value": 1.0}],
+                }
+            )
+        ]
+
+        with patch.object(self.service, "_needs_indicator_clarification", return_value=True), \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("exact codes should not collect alternatives")):
+            clarification = self.service._build_uncertain_result_clarification(  # pylint: disable=protected-access
+                conversation_id="conv-exact-imf-code",
+                query=intent.originalQuery,
+                intent=intent,
+                data=fetched,
+                processing_steps=None,
+            )
+
+        self.assertIsNone(clarification)
+
     def test_build_no_data_indicator_clarification_returns_options(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar")
         conversation_manager.clear_pending_indicator_options(conv_id)
@@ -2338,6 +2401,33 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(options_payload[0].code, "NE.IMP.GNFS.ZS")
         pending = conversation_manager.get_pending_indicator_options(conv_id)
         self.assertIsNotNone(pending)
+
+    def test_build_no_data_indicator_clarification_skips_exact_provider_code_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["BMIPIDEDFN_BP6_EUR"],
+            parameters={
+                "indicator": "BMIPIDEDFN_BP6_EUR",
+                "__exact_provider_code_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="BMIPIDEDFN_BP6_EUR from IMF",
+        )
+
+        with patch.object(
+            self.service,
+            "_collect_indicator_choice_options",
+            side_effect=AssertionError("exact code no-data should not collect alternatives"),
+        ):
+            clarification = self.service._build_no_data_indicator_clarification(  # pylint: disable=protected-access
+                conversation_id="conv-exact-code-no-data",
+                query=intent.originalQuery or "",
+                intent=intent,
+                processing_steps=None,
+            )
+
+        self.assertIsNone(clarification)
 
     def test_build_no_data_indicator_clarification_uses_simplified_provider_native_variant(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar-simplified-variant")
@@ -6244,6 +6334,51 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIsNotNone(pending)
         assert pending is not None
         self.assertEqual(pending.get("kind"), "missing_decomposition_entities")
+
+    def test_post_parse_clarification_skips_exact_provider_code_match(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-exact-code-post-parse")
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["BMISO_BP6_FY_USD"],
+            parameters={
+                "indicator": "BMISO_BP6_FY_USD",
+                "__exact_provider_code_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="BMISO_BP6_FY_USD from IMF",
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider="IMF",
+            routed_provider="IMF",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch(
+            "backend.services.indicator_clarification.build_prefetch_indicator_choice_clarification",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("exact codes should not enter indicator-choice clarification"),
+        ):
+            clarification = run(
+                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query=intent.originalQuery,
+                    parse_result=parse_result,
+                    validation=validation,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
 
     def test_process_query_generic_exact_title_interest_rate_uses_llm_pipeline(self) -> None:
         intent = ParsedIntent(

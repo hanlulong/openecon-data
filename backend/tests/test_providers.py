@@ -1631,6 +1631,74 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(first["time_dimension_ids"], ["TIME_PERIOD"])
         self.assertIn("dataflow/IMF.STA/BOP/latest", first["structureUrl"])
 
+    def test_imf_bop_exact_code_uses_public_sdmx_v21(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+        structure = {
+            "dimension_ids": ["COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"],
+            "allowed_values_by_dimension": {
+                "COUNTRY": {"USA"},
+                "BOP_ACCOUNTING_ENTRY": {"DB_T"},
+                "INDICATOR": {"IN2"},
+                "UNIT": {"USD"},
+                "FREQUENCY": {"A"},
+            },
+            "codelist_entries_by_dimension": {
+                "INDICATOR": [
+                    {"id": "IN2", "name": "Secondary income"},
+                    {"id": "GS", "name": "Goods and services"},
+                ]
+            },
+        }
+
+        class _TextResponse(MockAsyncResponse):
+            def __init__(self, text: str) -> None:
+                super().__init__({})
+                self.text = text
+                self.content = text.encode("utf-8")
+
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
+          <message:DataSet>
+            <Series COUNTRY="USA" BOP_ACCOUNTING_ENTRY="DB_T" INDICATOR="IN2" UNIT="USD" FREQUENCY="A">
+              <Obs TIME_PERIOD="2021" OBS_VALUE="313777000000" />
+            </Series>
+          </message:DataSet>
+        </message:StructureSpecificData>
+        """
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            return_value=(
+                "BMISO_BP6_FY_USD",
+                "Balance of Payments, Current Account, Secondary Income, Debit [BPM6], Fiscal Year, US Dollars",
+            ),
+        ), patch.object(
+            provider,
+            "_indicator_catalog_entry",
+            return_value={"category": "INDICATOR"},
+        ), patch.object(
+            provider,
+            "_get_imf_dataflow_structure",
+            new=AsyncMock(return_value=structure),
+        ), patch(
+            "backend.providers.imf.get_http1_client",
+            return_value=MockAsyncClient([_TextResponse(xml)]),
+        ):
+            result = run(
+                provider.fetch_batch_indicator(
+                    indicator="BMISO_BP6_FY_USD",
+                    countries=["United States"],
+                )
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.country, "United States")
+        self.assertIn("/IMF.STA,BOP/USA.DB_T.IN2.USD.A", result[0].metadata.apiUrl or "")
+        self.assertEqual(result[0].metadata.seriesId, "BMISO_BP6_FY_USD")
+        self.assertEqual(result[0].data[0].date, "2021-01-01")
+        self.assertEqual(result[0].data[0].value, 313777000000.0)
+
     def test_imf_short_natural_language_phrase_fails_closed_without_metadata_search(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
