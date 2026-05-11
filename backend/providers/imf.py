@@ -675,12 +675,10 @@ class IMFProvider(BaseProvider):
                 )
             dataset_hint = self._likely_dataset_family_hint(indicator_code, indicator_label)
             if dataset_hint == "IMF.STA:BOP":
-                return await self._fetch_bop_family(
-                    indicator_code=indicator_code,
-                    indicator_label=indicator_label,
-                    countries=countries,
-                    start_year=start_year,
-                    end_year=end_year,
+                raise DataNotAvailableError(
+                    f"IMF BOP exact-code execution is disabled under the no-rule authority policy for {indicator_code}. "
+                    "The currently available BOP bridge requires label-to-codelist candidate matching, so this family "
+                    "remains fail-closed until an exact provider-native dimension contract is implemented."
                 )
             self._raise_for_unsupported_execution_family(indicator_code, indicator_label)
 

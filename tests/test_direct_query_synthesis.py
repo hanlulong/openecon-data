@@ -198,6 +198,21 @@ def test_detect_single_country_from_text_ignores_ambiguous_short_aliases() -> No
     assert detect_single_country_from_text("household composition and degree of urbanisation") is None
 
 
+def test_detect_single_country_from_text_ignores_nor_conjunction() -> None:
+    assert detect_single_country_from_text("Spices; coriander seeds, neither crushed nor ground") is None
+
+
+def test_default_query_for_row_does_not_treat_nor_conjunction_as_country() -> None:
+    row = {
+        "provider": "Comtrade",
+        "code": "090921",
+        "name": "Spices; coriander seeds, neither crushed nor ground",
+        "description": "",
+    }
+
+    assert not default_query_for_row(row).startswith("Nor ")
+
+
 def test_detect_single_country_from_text_ignores_ambiguous_america_region_alias() -> None:
     assert detect_single_country_from_text("Latin America and the Caribbean informal employment") is None
 
@@ -2632,27 +2647,28 @@ def test_default_query_for_row_keeps_imf_reo_natural_title_without_query_text_gu
     assert default_query_for_row(row) == "Nigeria Terms of Trade (Index 2010 = 100) from IMF"
 
 
-def test_audit_direct_query_shape_does_not_mark_exact_public_imf_bop_code_high_risk():
-    audit = audit_direct_query_shape(
-        {
-            "provider_stratum": "IMF",
-            "query": "BFORAONF_S_BP6_FY_USD from IMF",
-            "origin": {
-                "source_provider": "IMF",
-                "source_indicator_code": "BFORAONF_S_BP6_FY_USD",
-                "category": "INDICATOR",
-                "name": (
-                    "Balance of Payments, Financial Account, Other investment, "
-                    "Other accounts receivable/payable, Net acquisition of financial assets, "
-                    "Other sectors, Short-term [BPM6], Fiscal Year, US Dollars"
-                ),
-            },
-        }
-    )
+def test_audit_direct_query_shape_treats_imf_bop_exact_code_as_fail_closed_supportability():
+    from scripts.validation.run_certification import unsupported_direct_surface_reason
 
-    assert audit["risk_level"] == "medium"
-    assert "imf_low_viability_family" not in audit["reasons"]
-    assert "imf_complex_finance_family" not in audit["reasons"]
+    row = {
+        "provider_stratum": "IMF",
+        "query": "BFORAONF_S_BP6_FY_USD from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "BFORAONF_S_BP6_FY_USD",
+            "category": "INDICATOR",
+            "name": (
+                "Balance of Payments, Financial Account, Other investment, "
+                "Other accounts receivable/payable, Net acquisition of financial assets, "
+                "Other sectors, Short-term [BPM6], Fiscal Year, US Dollars"
+            ),
+        },
+    }
+
+    audit = audit_direct_query_shape(row)
+
+    assert audit["risk_level"] == "high"
+    assert unsupported_direct_surface_reason(row, audit) == "imf_non_weo_public_surface_unsupported"
 
 
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():

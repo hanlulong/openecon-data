@@ -6929,7 +6929,7 @@ class QueryService:
                    len(aggregated_data), len(sub_queries), failed_count)
 
         if not aggregated_data:
-            raise Exception(f"All sub-queries failed for {intent.decompositionType}")
+            raise DataNotAvailableError(f"All sub-queries failed for {intent.decompositionType}")
 
         return aggregated_data
 

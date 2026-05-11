@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.models import ExecutionPlan, ParsedIntent
+from backend.providers.imf import IMFProvider
 from backend.routing.unified_router import UnifiedRouter
 from backend.services.data_fetcher import fetch_from_provider_dispatch
 from backend.services.indicator_resolution import (
@@ -191,6 +192,13 @@ def test_imf_supportability_does_not_use_query_text_marker_sets() -> None:
     }
 
     assert [marker for marker in forbidden_markers if marker in source] == []
+
+
+def test_imf_bop_label_matching_is_not_runtime_final_authority() -> None:
+    source = inspect.getsource(IMFProvider.fetch_batch_indicator)
+
+    assert "_fetch_bop_family(" not in source
+    assert "no-rule authority policy" in source
 
 def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority() -> None:
     """Rule plausibility guards may fail closed, but must not create final authority."""

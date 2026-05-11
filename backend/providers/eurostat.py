@@ -127,6 +127,9 @@ class EurostatProvider(BaseProvider):
         # TGS00007 is a NUTS-2 regional table; country aggregates such as FR/ES
         # are not valid geo members for the selected slice.
         "tgs00007": {"unit": "PC", "sex": "T", "age": "Y15-64"},
+        # TGS00107 is likewise NUTS-2 only; Eurostat's default presentation uses
+        # percentage of population, and country-level geo codes have no rows.
+        "tgs00107": {"unit": "PC_POP"},
         # City rents require a dwelling type and currency; fetch_indicator()
         # picks a representative capital-city geo when callers pass a country.
         "prc_colc_rents": {"building": "FLAT2", "currency": "EUR"},
@@ -330,6 +333,8 @@ class EurostatProvider(BaseProvider):
         code = str(dataset_code or "").strip().lower()
         geo = str(country_code or "").strip().upper()
         if code == "tgs00007" and geo in self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY:
+            return self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY[geo]
+        if code == "tgs00107" and geo in self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY:
             return self.NUTS2_REPRESENTATIVE_GEO_BY_COUNTRY[geo]
         if code == "prc_colc_rents" and re.fullmatch(r"[A-Z]{2}", geo):
             return f"{geo}_CAP"

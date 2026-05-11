@@ -120,8 +120,6 @@ def imf_public_sdmx_runtime_family(code: str, name: str = "", category: str = ""
         return "cpi_aggregate"
     if _is_imf_aggregate_ppi_code(code, name):
         return "ppi_aggregate"
-    if _is_imf_bop_public_sdmx_code(code, name):
-        return "bop_exact"
     return None
 
 

@@ -493,6 +493,17 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "NY.GDP.MKTP.CD")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_build_explicit_provider_code_intent_accepts_bis_catalog_prefixed_code(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "BIS_WS_CBPOL from BIS"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "BIS")
+        self.assertEqual(intent.parameters.get("indicator"), "BIS_WS_CBPOL")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_explicit_provider_code_intent_extracts_worldbank_code_with_country_context(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "Germany SH.TBS.INCD from World Bank"
@@ -698,27 +709,28 @@ class QueryServiceTests(unittest.TestCase):
             "cpi_aggregate",
         )
 
-    def test_direct_query_shape_treats_imf_bop_exact_code_as_public_sdmx(self) -> None:
+    def test_direct_query_shape_blocks_imf_bop_exact_code_without_no_rule_contract(self) -> None:
         from backend.utils.imf_supportability import imf_exact_provider_surface_supportability_reason
         from scripts.validation.common import imf_public_sdmx_runtime_family
 
-        self.assertEqual(
+        self.assertIsNone(
             imf_public_sdmx_runtime_family(
                 "BMISO_BP6_FY_USD",
                 "Balance of Payments, Current Account, Secondary Income, Debit [BPM6], Fiscal Year, US Dollars",
                 "INDICATOR",
             ),
-            "bop_exact",
         )
-        self.assertEqual(
+        self.assertIsNone(
             imf_public_sdmx_runtime_family(
                 "BHS_BOP_BXSTRAPA_XDC",
                 "Bahamas Definition, Balance of Payments, Services, Transport, Passenger, Credit, National Currency",
                 "INDICATOR",
             ),
-            "bop_exact",
         )
-        self.assertIsNone(imf_exact_provider_surface_supportability_reason("BMISO_BP6_FY_USD from IMF"))
+        self.assertEqual(
+            imf_exact_provider_surface_supportability_reason("BMISO_BP6_FY_USD from IMF"),
+            "imf_non_weo_public_surface_unsupported",
+        )
 
     def test_resolve_indicator_for_fetch_keeps_imf_code_from_intent_without_selector(self) -> None:
         intent = ParsedIntent(
@@ -3782,6 +3794,33 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["startDate"], "2006-01-01")
         self.assertEqual(params["endDate"], "2026-03-01")
 
+    def test_decompose_and_aggregate_all_failed_subqueries_is_data_not_available(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["17100147"],
+            parameters={
+                "country": "CA",
+                "indicator": "17100147",
+                "__statscan_product_id": "17100147",
+                "__semantic_indicator_label": "First names at birth by sex at birth, selected indicators",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["Male", "Female"],
+            originalQuery="Canada selected indicators First names at birth by sex at birth from Statistics Canada",
+        )
+
+        with patch.object(self.service, "_execute_sub_query", new=AsyncMock(return_value=None)):
+            with self.assertRaisesRegex(DataNotAvailableError, "All sub-queries failed for dimension"):
+                run(
+                    self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                        intent.originalQuery,
+                        intent,
+                        "conv-statscan-all-dimensions-empty",
+                    )
+                )
+
     def test_process_query_statscan_province_decomposition_keeps_provinces_only(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",
@@ -3868,7 +3907,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(calls[0], ("trng_cvt_20s", "IT", 2021, 2026))
         self.assertEqual(calls[1][0:2], ("trng_cvt_20s", "IT"))
-        self.assertLess(calls[1][2], calls[0][2])
+        self.assertEqual(calls[1][2], 1990)
 
     def test_fetch_data_does_not_retry_eurostat_when_time_scope_is_explicit(self) -> None:
         intent = ParsedIntent(
@@ -3989,7 +4028,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual({series.metadata.country for series in data}, {"IT", "DE"})
         self.assertEqual(sum(1 for _, country, _, _ in calls if country == "DE"), 1)
         self.assertEqual(sum(1 for _, country, _, _ in calls if country == "IT"), 2)
-        self.assertTrue(any(country == "IT" and start_year < 2021 for _, country, start_year, _ in calls))
+        self.assertTrue(any(country == "IT" and start_year == 1990 for _, country, start_year, _ in calls))
 
     def test_execute_standard_pipeline_passes_materialized_execution_plan_to_fetch(self) -> None:
         self.service.settings.use_minimal_execution_plan = True

@@ -1676,7 +1676,11 @@ async def _fetch_from_eurostat(
         and request_start_year is not None
         and int(request_start_year) >= default_recent_start_year
     )
-    fallback_start_year = max(2000, current_year - 15)
+    # Some exact Eurostat catalog titles are sparse or historical one-off
+    # tables.  When the framework supplied only a recent default window (not a
+    # user time constraint), retry against a broad mechanical history window
+    # rather than letting the default window create a false no-data result.
+    fallback_start_year = 1990
 
     async def _fetch_indicator_with_sparse_history_retry(country_code: str) -> NormalizedData:
         try:

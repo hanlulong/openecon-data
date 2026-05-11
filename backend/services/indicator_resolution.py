@@ -184,7 +184,11 @@ def _looks_like_provider_indicator_code_local(provider: str, indicator: str) -> 
     if provider_upper in {"WORLDBANK", "WORLD BANK"}:
         return bool(re.fullmatch(r"[A-Z]{2,}\.[A-Z0-9]{2,}(?:\.[A-Z0-9]{2,}){1,4}", code_upper))
     if provider_upper == "BIS":
-        return bool(code_upper.startswith("WS_") or re.fullmatch(r"BIS\.[A-Z0-9_]{3,}", code_upper))
+        return bool(
+            code_upper.startswith("WS_")
+            or code_upper.startswith("BIS_WS_")
+            or re.fullmatch(r"BIS\.[A-Z0-9_]{3,}", code_upper)
+        )
     if provider_upper == "IMF":
         return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{2,}", code_upper))
     if provider_upper == "FRED":

@@ -1715,73 +1715,30 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(first["time_dimension_ids"], ["TIME_PERIOD"])
         self.assertIn("dataflow/IMF.STA/BOP/latest", first["structureUrl"])
 
-    def test_imf_bop_exact_code_uses_public_sdmx_v21(self) -> None:
+    def test_imf_bop_exact_code_fails_closed_without_no_rule_dimension_contract(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
-        structure = {
-            "dimension_ids": ["COUNTRY", "BOP_ACCOUNTING_ENTRY", "INDICATOR", "UNIT", "FREQUENCY"],
-            "allowed_values_by_dimension": {
-                "COUNTRY": {"USA"},
-                "BOP_ACCOUNTING_ENTRY": {"DB_T"},
-                "INDICATOR": {"IN2"},
-                "UNIT": {"USD"},
-                "FREQUENCY": {"A"},
-            },
-            "codelist_entries_by_dimension": {
-                "INDICATOR": [
-                    {"id": "IN2", "name": "Secondary income"},
-                    {"id": "GS", "name": "Goods and services"},
-                ]
-            },
-        }
-
-        class _TextResponse(MockAsyncResponse):
-            def __init__(self, text: str) -> None:
-                super().__init__({})
-                self.text = text
-                self.content = text.encode("utf-8")
-
-        xml = """<?xml version="1.0" encoding="UTF-8"?>
-        <message:StructureSpecificData xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v2_1/message">
-          <message:DataSet>
-            <Series COUNTRY="USA" BOP_ACCOUNTING_ENTRY="DB_T" INDICATOR="IN2" UNIT="USD" FREQUENCY="A">
-              <Obs TIME_PERIOD="2021" OBS_VALUE="313777000000" />
-            </Series>
-          </message:DataSet>
-        </message:StructureSpecificData>
-        """
 
         with patch.object(
             provider,
             "_resolve_indicator_code",
-            return_value=(
+            new=AsyncMock(return_value=(
                 "BMISO_BP6_FY_USD",
                 "Balance of Payments, Current Account, Secondary Income, Debit [BPM6], Fiscal Year, US Dollars",
-            ),
+            )),
         ), patch.object(
-            provider,
-            "_indicator_catalog_entry",
-            return_value={"category": "INDICATOR"},
+            provider, "_classify_execution_family", return_value="NON_DATAMAPPER_INDICATOR",
         ), patch.object(
-            provider,
-            "_get_imf_dataflow_structure",
-            new=AsyncMock(return_value=structure),
-        ), patch(
-            "backend.providers.imf.get_http1_client",
-            return_value=MockAsyncClient([_TextResponse(xml)]),
+            provider, "_build_sdmx_series_candidates", return_value=[],
+        ), patch.object(
+            provider, "_likely_dataset_family_hint", return_value="IMF.STA:BOP",
         ):
-            result = run(
-                provider.fetch_batch_indicator(
-                    indicator="BMISO_BP6_FY_USD",
-                    countries=["United States"],
+            with self.assertRaisesRegex(DataNotAvailableError, "no-rule authority policy"):
+                run(
+                    provider.fetch_batch_indicator(
+                        indicator="BMISO_BP6_FY_USD",
+                        countries=["United States"],
+                    )
                 )
-            )
-
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].metadata.country, "United States")
-        self.assertIn("/IMF.STA,BOP/USA.DB_T.IN2.USD.A", result[0].metadata.apiUrl or "")
-        self.assertEqual(result[0].metadata.seriesId, "BMISO_BP6_FY_USD")
-        self.assertEqual(result[0].data[0].date, "2021-01-01")
-        self.assertEqual(result[0].data[0].value, 313777000000.0)
 
     def test_imf_short_natural_language_phrase_fails_closed_without_metadata_search(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
@@ -1890,6 +1847,45 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series_list[0].metadata.indicator, "Custom BIS Flow")
         self.assertEqual(series_list[0].data[0].value, 1.5)
         self.assertEqual(metadata_stub.keyword, "custom bis")
+
+    def test_bis_prefixed_dataflow_codes_are_mechanical_passthrough(self) -> None:
+        provider = BISProvider(metadata_search_service=None)
+
+        self.assertEqual(
+            run(provider._resolve_indicator_code("BIS_WS_CBPOL")),  # pylint: disable=protected-access
+            ("WS_CBPOL", None),
+        )
+        self.assertEqual(
+            run(provider._resolve_indicator_code("BIS.WS_XRU")),  # pylint: disable=protected-access
+            ("WS_XRU", None),
+        )
+
+    def test_imf_bop_bridge_fails_closed_before_label_matching(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        with patch.object(
+            provider,
+            "_resolve_indicator_code",
+            new=AsyncMock(return_value=("BMISO_BP6_FY_USD", "BOP secondary income debit")),
+        ), patch.object(
+            provider,
+            "_classify_execution_family",
+            return_value="NON_DATAMAPPER_INDICATOR",
+        ), patch.object(
+            provider,
+            "_build_sdmx_series_candidates",
+            return_value=[],
+        ), patch.object(
+            provider,
+            "_likely_dataset_family_hint",
+            return_value="IMF.STA:BOP",
+        ), patch.object(
+            provider,
+            "_fetch_bop_family",
+            side_effect=AssertionError("BOP label-to-codelist bridge must stay disabled"),
+        ):
+            with self.assertRaisesRegex(DataNotAvailableError, "no-rule authority policy"):
+                run(provider.fetch_batch_indicator("BMISO_BP6_FY_USD", ["USA"]))
 
     def test_eurostat_sdmx3_fetch(self) -> None:
         class StubMetadata:
@@ -2103,6 +2099,43 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(params.get("unit"), "PC")
         self.assertEqual(params.get("sex"), "T")
         self.assertEqual(params.get("age"), "Y15-64")
+
+    def test_eurostat_nuts2_social_exclusion_table_uses_representative_geo(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 18.4, "1": 17.9},
+                "dimension": {
+                    "time": {"category": {"index": {"2023": 0, "2024": 1}}},
+                    "geo": {"category": {"index": {"DE30": 0}, "label": {"DE30": "Berlin"}}},
+                    "unit": {"category": {"index": {"PC_POP": 0}, "label": {"PC_POP": "Percentage of population"}}},
+                },
+                "id": ["geo", "time"],
+                "size": [1, 2],
+                "updated": "2026-04-17",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="TGS00107", country="DE", start_year=2023))
+
+        self.assertEqual(series.metadata.seriesId, "tgs00107")
+        self.assertEqual(series.metadata.country, "DE30")
+        _, params = client.calls[0]
+        self.assertEqual(params.get("geo"), "DE30")
+        self.assertEqual(params.get("unit"), "PC_POP")
 
     def test_eurostat_city_rent_table_uses_capital_geo_and_rent_defaults(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)

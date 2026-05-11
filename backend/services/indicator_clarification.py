@@ -3322,6 +3322,7 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
     if provider_upper == "BIS":
         return bool(
             code_upper.startswith("WS_")
+            or code_upper.startswith("BIS_WS_")
             or re.fullmatch(r"BIS\.[A-Z0-9_]{3,}", code_upper)
         )
 

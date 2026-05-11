@@ -874,8 +874,14 @@ class BISProvider(BaseProvider):
         """Resolve BIS indicator code through mechanical codes or metadata search."""
         # Step 1: Allow users/upstream selectors to supply raw BIS dataflow
         # codes directly. This is mechanical provider-native passthrough.
-        if indicator and indicator.upper().startswith("WS_"):
-            return indicator.upper(), None
+        indicator_text = str(indicator or "").strip()
+        indicator_upper = indicator_text.upper()
+        if indicator_upper.startswith("BIS_WS_"):
+            indicator_upper = indicator_upper.removeprefix("BIS_")
+        elif indicator_upper.startswith("BIS.WS_"):
+            indicator_upper = indicator_upper.split(".", 1)[1]
+        if indicator_upper.startswith("WS_"):
+            return indicator_upper, None
 
         if not self.metadata_search:
             raise DataNotAvailableError(

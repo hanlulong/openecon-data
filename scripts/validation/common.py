@@ -105,6 +105,11 @@ _AMBIGUOUS_COUNTRY_TERMS = {
     'are',
     'can',
     'per',
+    # ISO alpha-3 for Norway is NOR, but lower-case "nor" is a common
+    # conjunction in indicator and commodity titles (for example "neither
+    # crushed nor ground").  Treating it as country scope generated invalid
+    # direct-cert queries such as "Nor exports..." for Comtrade rows.
+    'nor',
     # ISO alpha-3 for Tonga is TON, but lower-case "ton" is overwhelmingly a
     # unit in economic indicator titles/descriptions.  Treating it as country
     # scope generated invalid direct-cert queries such as "Ton Adjusted
@@ -1196,8 +1201,6 @@ def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = ''
         return 'cpi_aggregate'
     if _is_imf_aggregate_ppi_code(code, name):
         return 'ppi_aggregate'
-    if _is_imf_bop_public_sdmx_code(code, name):
-        return 'bop_exact'
     return None
 
 
