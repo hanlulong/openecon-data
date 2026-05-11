@@ -678,6 +678,25 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "PCPI_CP_01_BY2010_IX")
         self.assertEqual(intent.parameters.get("country"), "US")
 
+    def test_explicit_provider_code_intent_extracts_short_imf_datamapper_code_with_country_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Nigeria TTT from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "TTT")
+        self.assertEqual(intent.parameters.get("country"), "NG")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_does_not_hijack_uppercase_acronym_in_imf_title(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Nigeria Real Non-Oil GDP Growth from IMF"
+        )
+
+        self.assertIsNone(intent)
+
     def test_direct_query_shape_treats_imf_cpi_base_year_as_public_sdmx(self) -> None:
         from scripts.validation.common import imf_public_sdmx_runtime_family
 

@@ -2599,6 +2599,18 @@ def test_default_query_for_row_uses_imf_reo_region_country():
     assert default_query_for_row(row) == "Nigeria Real Non-Oil GDP Growth from IMF"
 
 
+def test_default_query_for_row_uses_short_imf_datamapper_code_when_natural_title_is_guarded():
+    row = {
+        "provider": "IMF",
+        "code": "TTT",
+        "name": "Terms of Trade (Index 2010 = 100)",
+        "description": "",
+        "category": "AFRREO",
+    }
+
+    assert default_query_for_row(row) == "Nigeria TTT from IMF"
+
+
 def test_audit_direct_query_shape_flags_oecd_conflict_analysis_queries():
     audit = audit_direct_query_shape(
         {

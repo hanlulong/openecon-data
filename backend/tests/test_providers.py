@@ -1302,6 +1302,27 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(DataNotAvailableError):
                 run(provider._resolve_indicator_code("ABC"))
 
+    def test_imf_short_datamapper_catalog_code_bypasses_metadata_discovery(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _Lookup:
+            def get(self, provider_name: str, code: str):
+                if provider_name == "IMF" and code == "TTT":
+                    return {
+                        "code": "TTT",
+                        "category": "AFRREO",
+                        "name": "Terms of Trade (Index, 2010 = 100)",
+                    }
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            code, label = run(provider._resolve_indicator_code("TTT"))
+
+        self.assertEqual(code, "TTT")
+        self.assertIsNotNone(label)
+        assert label is not None
+        self.assertIn("terms of trade", label.lower())
+
     def test_imf_non_datamapper_trade_code_uses_public_sdmx_v21(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 

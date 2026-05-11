@@ -426,6 +426,10 @@ class QueryService:
                 if ("_" in token or "." in token)
                 and self._looks_like_provider_indicator_code(explicit_provider, token.upper())
             ]
+            if explicit_provider == "IMF":
+                code_candidates.extend(
+                    self._imf_uppercase_catalog_code_tokens(str(query or ""), stripped)
+                )
             if len(dict.fromkeys(code_candidates)) == 1:
                 candidate = code_candidates[0]
 
@@ -464,6 +468,56 @@ class QueryService:
             decompositionEntities=None,
             useProMode=False,
         )
+
+    def _imf_uppercase_catalog_code_tokens(self, query: str, stripped_query: str = "") -> list[str]:
+        """Return exact uppercase IMF DataMapper-code tokens embedded in a query.
+
+        Queries such as ``Nigeria TTT from IMF`` are still explicit provider-code
+        requests even though the code has no underscore/digit namespace. Keep
+        this narrow: only original uppercase alphanumeric tokens that already
+        exist in the local IMF catalog and are served by a regional outlook
+        DataMapper category are accepted. Natural-language words are intentionally not
+        uppercased and reinterpreted as codes here.  The non-code remainder
+        must be empty or just a recognized country phrase, so natural titles
+        like ``Nigeria Real Non-Oil GDP Growth from IMF`` do not get hijacked by
+        the embedded ``GDP`` acronym.
+        """
+        tokens = [
+            match.group(0)
+            for match in re.finditer(r"\b[A-Z][A-Z0-9]{2,10}\b", str(query or ""))
+        ]
+        if not tokens:
+            return []
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+        except Exception:
+            return []
+
+        matches: list[str] = []
+        for token in tokens:
+            if token in {"IMF"}:
+                continue
+            residual = re.sub(
+                rf"\b{re.escape(token.lower())}\b",
+                " ",
+                str(stripped_query or "").lower(),
+            )
+            residual = re.sub(r"\s+", " ", residual).strip(" ,;:")
+            if residual and not CountryResolver.normalize(residual):
+                continue
+            try:
+                metadata = lookup.get("IMF", token)
+            except Exception:
+                metadata = None
+            if not metadata:
+                continue
+            category = str(metadata.get("category") or "").strip().upper()
+            if category.endswith("REO"):
+                matches.append(token)
+        return matches
 
     def _build_exact_indicator_title_intent(self, query: str) -> Optional[ParsedIntent]:
         """Fast path for raw queries that already match a provider-native title."""

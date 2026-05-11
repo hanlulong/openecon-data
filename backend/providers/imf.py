@@ -2264,9 +2264,11 @@ class IMFProvider(BaseProvider):
                 logger.debug("IMF exact-code lookup skipped for '%s': %s", indicator, exc)
                 exact_meta = None
 
+            exact_category = str(exact_meta.get("category") or "").strip().upper() if exact_meta else ""
             if exact_meta and (
                 exact_code_has_namespace
-                or str(exact_meta.get("category") or "").strip().upper() == "WEO"
+                or exact_category == "WEO"
+                or exact_category.endswith("REO")
             ):
                 label_hint = str(exact_meta.get("name") or indicator)
                 logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)

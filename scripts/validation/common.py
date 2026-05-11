@@ -1211,7 +1211,22 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         if sdmx_family:
             return f"{code.upper()} from IMF"
         prefix = '' if query_mentions_country(phrase) else f"{choice} "
-        return f"{prefix}{phrase} from IMF".strip()
+        natural_query = f"{prefix}{phrase} from IMF".strip()
+        category_upper = str(row.get('category') or '').strip().upper()
+        # Some regional-outlook DataMapper rows have short exact provider codes whose
+        # natural catalog titles overlap with fail-closed public-SDMX detail
+        # guards (for example AFRREO "Terms of Trade").  In that narrow case,
+        # prefer the provider-native code instead of certifying an intentionally
+        # blocked natural title.  This is mechanical exact-code passthrough, not
+        # a semantic provider shortcut.
+        if (
+            category_upper
+            and category_upper.endswith('REO')
+            and re.fullmatch(r'[A-Z][A-Z0-9]{2,10}', code.upper())
+            and imf_query_only_public_surface_reason(natural_query)
+        ):
+            return f"{choice} {code.upper()} from IMF"
+        return natural_query
     if provider_upper == 'WORLDBANK':
         # WorldBank has a native all-country surface.  Injecting an arbitrary
         # default country into broad catalog-title certification rows turns
