@@ -553,6 +553,25 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "24100026")
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "24100026")
 
+    def test_explicit_provider_code_intent_extracts_catalog_backed_coingecko_slug(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "CoinGecko" and code == "draiftking":
+                    return {"provider": provider, "code": code, "name": "SIRE"}
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Draiftking cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "draiftking")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "draiftking")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_oecd_provider_code_shape_accepts_dataflow_ending_with_english_suffix(self) -> None:
         self.assertTrue(
             self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access
@@ -9414,6 +9433,34 @@ class QueryServiceTests(unittest.TestCase):
         else:
             self.assertTrue(range_mock.called)
             self.assertEqual(range_mock.call_args.kwargs.get("coin_id"), "libfi")
+
+    def test_fetch_data_coingecko_respects_exact_provider_slug_indicator(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="CoinGecko",
+            indicators=["draiftking"],
+            parameters={"indicator": "draiftking", "__exact_provider_code_match": True},
+            clarificationNeeded=False,
+            originalQuery="Draiftking cryptocurrency price from CoinGecko",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(
+                 self.service.coingecko_provider,
+                 "get_simple_price",
+                 return_value=[sample_series_with(series_id="draiftking", indicator="SIRE", source="CoinGecko")],
+             ) as simple_mock, \
+             patch.object(
+                 self.service.coingecko_provider,
+                 "get_historical_data_range",
+                 return_value=[sample_series_with(series_id="draiftking", indicator="SIRE", source="CoinGecko")],
+             ) as range_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        if simple_mock.called:
+            self.assertEqual(simple_mock.call_args.kwargs.get("coin_ids"), ["draiftking"])
+        else:
+            self.assertTrue(range_mock.called)
+            self.assertEqual(range_mock.call_args.kwargs.get("coin_id"), "draiftking")
 
     def test_fetch_data_comtrade_trade_balance_uses_balance_fetch_despite_stale_flow(self) -> None:
         intent = ParsedIntent(

@@ -421,9 +421,10 @@ class QueryService:
         if not stripped:
             return None
 
-        candidate = stripped_original if explicit_provider == "WORLDBANK" else str(stripped_original).upper()
+        candidate = stripped_original if explicit_provider in {"WORLDBANK", "COINGECKO"} else str(stripped_original).upper()
         fred_catalog_codes: list[str] = []
         worldbank_catalog_codes: list[str] = []
+        coingecko_catalog_slugs: list[str] = []
         statscan_exact_product_id: str | None = None
         statscan_label: str | None = None
         if explicit_provider == "STATSCAN":
@@ -436,7 +437,7 @@ class QueryService:
                 candidate = statscan_exact_product_id
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             code_candidates = [
-                token if explicit_provider == "WORLDBANK" else token.upper()
+                token if explicit_provider in {"WORLDBANK", "COINGECKO"} else token.upper()
                 for token in re.findall(
                     r"(?<![A-Za-z0-9_@.\-])[A-Za-z][A-Za-z0-9_@.\-]{2,}(?![A-Za-z0-9_@.\-])",
                     str(query or ""),
@@ -466,6 +467,9 @@ class QueryService:
             if explicit_provider == "WORLDBANK":
                 worldbank_catalog_codes = self._worldbank_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 code_candidates.extend(worldbank_catalog_codes)
+            if explicit_provider == "COINGECKO":
+                coingecko_catalog_slugs = self._coingecko_catalog_slug_tokens(str(query or ""), stripped)
+                code_candidates.extend(coingecko_catalog_slugs)
             if len(dict.fromkeys(code_candidates)) == 1:
                 candidate = code_candidates[0]
 
@@ -477,15 +481,23 @@ class QueryService:
             explicit_provider == "FRED"
             and candidate in fred_catalog_codes
         )
+        catalog_backed_coingecko_slug = (
+            explicit_provider == "COINGECKO"
+            and candidate in coingecko_catalog_slugs
+        )
         if (
             not catalog_backed_worldbank_code
             and not catalog_backed_fred_code
+            and not catalog_backed_coingecko_slug
             and not self._looks_like_provider_indicator_code(explicit_provider, candidate)
         ):
             return None
 
         if explicit_provider == "WORLDBANK":
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.\-]{1,127}", candidate):
+                return None
+        elif explicit_provider == "COINGECKO":
+            if not re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,127}", candidate):
                 return None
         elif explicit_provider == "COMTRADE":
             candidate = re.sub(r"^HS", "", candidate.upper())
@@ -627,6 +639,66 @@ class QueryService:
             if not metadata:
                 continue
             exact_code = str(metadata.get("code") or token).strip()
+            if exact_code:
+                matches.append(exact_code)
+        return matches
+
+    def _coingecko_catalog_slug_tokens(self, query: str, stripped_query: str = "") -> list[str]:
+        """Return exact CoinGecko slug tokens embedded in a provider-locked query.
+
+        Lowercase CoinGecko ids can look like ordinary words (for example
+        ``status``), so this path only accepts tokens already present as exact
+        local CoinGecko catalog codes and only when the remaining text is
+        generic crypto/price wording. This preserves mechanical exact-id
+        transport without adding semantic coin-name selection.
+        """
+        tokens = [
+            match.group(0).lower()
+            for match in re.finditer(r"\b[a-zA-Z0-9][a-zA-Z0-9\-]{1,127}\b", str(query or ""))
+        ]
+        if not tokens:
+            return []
+
+        generic_residual_tokens = {
+            "crypto",
+            "cryptocurrency",
+            "coin",
+            "token",
+            "price",
+            "current",
+            "latest",
+            "usd",
+        }
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+        except Exception:
+            return []
+
+        matches: list[str] = []
+        for token in tokens:
+            if token in {"coingecko", "crypto", "cryptocurrency", "coin", "token", "price", "usd"}:
+                continue
+            residual = re.sub(
+                rf"\b{re.escape(token)}\b",
+                " ",
+                str(stripped_query or "").lower(),
+            )
+            residual_words = {
+                word
+                for word in re.sub(r"[^a-z0-9]+", " ", residual).split()
+                if word
+            }
+            if residual_words - generic_residual_tokens:
+                continue
+            try:
+                metadata = lookup.get("CoinGecko", token)
+            except Exception:
+                metadata = None
+            if not metadata:
+                continue
+            exact_code = str(metadata.get("code") or token).strip().lower()
             if exact_code:
                 matches.append(exact_code)
         return matches

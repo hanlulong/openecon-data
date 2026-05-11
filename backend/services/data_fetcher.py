@@ -524,6 +524,15 @@ async def fetch_from_coingecko(
         coin_ids = [p.strip() for p in raw_coin_ids.split(",") if p.strip()]
     else:
         coin_ids = []
+    if (
+        not coin_ids
+        and params.get("__exact_provider_code_match")
+        and re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,127}", str(params.get("indicator") or ""))
+    ):
+        # Exact provider-code parser already verified this slug against the
+        # local CoinGecko catalog.  Preserve it as the provider-native id so
+        # generic fallback detection cannot silently fetch bitcoin.
+        coin_ids = [str(params["indicator"]).strip().lower()]
 
     # Sanitize vs_currency
     raw_vs = str(coingecko_request.get("vs_currency") or params.get("vsCurrency") or "usd").strip().lower()
