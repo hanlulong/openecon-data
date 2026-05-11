@@ -1203,6 +1203,31 @@ def imf_public_sdmx_runtime_family(code: str, name: str = '', category: str = ''
     return None
 
 
+def statscan_title_needs_dimension_evidence(title: str) -> bool:
+    """Return True when a StatsCan catalog title advertises required dimensions.
+
+    Exact product ids are safe mechanical table selectors, but code-only probes
+    can hide arbitrary provider defaults for tables whose title itself says the
+    surface is broken down by a dimension. Keep those rows on the natural-title
+    path so runtime must either extract dimensions or fail closed.
+    """
+    text = str(title or '').lower()
+    return bool(
+        re.search(r'\bby\s+(?:sex|gender|age|age group|province|territory|geography|occupation|industry|income|education|type)\b', text)
+        or any(
+            cue in text
+            for cue in [
+                'provinces',
+                'territories',
+                'health regions',
+                'geography',
+                'income quintile',
+                'parental education',
+            ]
+        )
+    )
+
+
 def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
     origin = dict(row.get('origin') or {})
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '')
@@ -1242,6 +1267,19 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
         commodity = re.sub(r'^\d+\s*-\s*', '', name).strip() or name
         return f"{choice} exports of {commodity} from Comtrade"
     if provider_upper == 'STATSCAN':
+        statscan_product_id = ''.join(ch for ch in code if ch.isdigit())
+        statscan_title = name or description or phrase
+        if (
+            re.fullmatch(r'\d{8}|\d{10}', statscan_product_id)
+            and not statscan_title_needs_dimension_evidence(statscan_title)
+        ):
+            # Carry the exact provider-native table/product id while retaining
+            # the catalog title as query evidence for downstream dimension
+            # extraction.  This is mechanical product-id transport, not
+            # semantic table selection.
+            title_evidence = re.sub(r'[,;:]+', ' ', statscan_title)
+            title_evidence = re.sub(r'\s+', ' ', title_evidence).strip()
+            return f"{statscan_product_id[:8]} {title_evidence} from StatsCan".strip()
         return f"Canada {phrase} from Statistics Canada"
     if provider_upper == 'IMF':
         sdmx_family = imf_public_sdmx_runtime_family(code, name, str(row.get('category') or ''))
@@ -2116,6 +2154,36 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'acronym_dense',
                 'country_scope_conflict',
                 'methodology_dense',
+                'multi_modifier_title',
+            }
+        ]
+    statscan_product_id = ''.join(
+        ch for ch in str(origin.get('source_indicator_code') or row.get('code') or '')
+        if ch.isdigit()
+    )
+    exact_statscan_product_query = (
+        provider_upper == 'STATSCAN'
+        and re.fullmatch(r'\d{8}|\d{10}', statscan_product_id)
+        and re.search(
+            rf'^\s*{re.escape(statscan_product_id[:8])}\b.*\s+from\s+(?:StatsCan|Statistics\s+Canada)\s*$',
+            query.strip(),
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+    if exact_statscan_product_query:
+        # Exact StatsCan product/table probes are mechanical catalog requests.
+        # Keep title text in the query so runtime can extract dimensions, but
+        # do not let the title's length or subgroup words block execution as a
+        # natural-language high-risk surface. Runtime supportability/adjudication
+        # still owns the semantic decision.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'education_subgroup_slice',
+                'socioeconomic_slice',
                 'multi_modifier_title',
             }
         ]

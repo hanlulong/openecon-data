@@ -150,6 +150,57 @@ def test_default_query_for_row_naturalizes_comtrade_codes_into_exports_query():
     assert "exports of HS72 from Comtrade" in query
 
 
+def test_default_query_for_row_carries_statscan_product_id_with_title_evidence():
+    row = {
+        "provider": "StatsCan",
+        "code": "24100026",
+        "name": "Travel price index, quarterly",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "24100026 Travel price index quarterly from StatsCan"
+
+
+def test_default_query_for_row_keeps_statscan_dimension_titles_natural():
+    row = {
+        "provider": "StatsCan",
+        "code": "17100147",
+        "name": "First names at birth by sex at birth, selected indicators",
+        "description": "",
+    }
+
+    query = default_query_for_row(row)
+
+    assert query == "Canada selected indicators First names at birth by sex at birth from Statistics Canada"
+    assert not query.startswith("17100147")
+
+
+def test_audit_direct_query_shape_does_not_block_exact_statscan_product_title():
+    audit = audit_direct_query_shape(
+        {
+            "provider": "StatsCan",
+            "query": (
+                "13100949 Health indicator statistics for children and youth aged 1 to 17 years "
+                "parent reported by household income quintile and highest level of parental education from StatsCan"
+            ),
+            "origin": {
+                "name": (
+                    "Health indicator statistics for children and youth aged 1 to 17 years, "
+                    "parent reported by household income quintile and highest level of parental education"
+                ),
+                "source_indicator_code": "13100949",
+                "source_provider": "StatsCan",
+            },
+        }
+    )
+
+    assert audit["risk_level"] != "high"
+    assert "education_subgroup_slice" not in audit["reasons"]
+    assert "socioeconomic_slice" not in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_opaque_acronym_queries():
     row = {
         "query": "Germany NAAG",

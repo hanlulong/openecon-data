@@ -528,6 +528,31 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "CA")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_extracts_statscan_product_with_title_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "24100026 Travel price index, quarterly from StatsCan"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.parameters.get("indicator"), "24100026")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "24100026")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "Travel price index, quarterly")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_accepts_statistics_canada_suffix(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "24100026 from Statistics Canada"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.parameters.get("indicator"), "24100026")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "24100026")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "24100026")
+
     def test_oecd_provider_code_shape_accepts_dataflow_ending_with_english_suffix(self) -> None:
         self.assertTrue(
             self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access

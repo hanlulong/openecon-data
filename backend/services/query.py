@@ -406,6 +406,8 @@ class QueryService:
         provider_suffixes = [explicit_provider]
         if explicit_provider.upper() == "WORLDBANK":
             provider_suffixes.extend(["world bank", "worldbank"])
+        if explicit_provider.upper() == "STATSCAN":
+            provider_suffixes.extend(["statscan", "stats canada", "statistics canada"])
         for provider_suffix in dict.fromkeys(provider_suffixes):
             for verb in ("from", "use", "using", "via"):
                 stripped_original = re.sub(
@@ -422,6 +424,16 @@ class QueryService:
         candidate = stripped_original if explicit_provider == "WORLDBANK" else str(stripped_original).upper()
         fred_catalog_codes: list[str] = []
         worldbank_catalog_codes: list[str] = []
+        statscan_exact_product_id: str | None = None
+        statscan_label: str | None = None
+        if explicit_provider == "STATSCAN":
+            product_match = re.match(r"^\s*(\d{8}|\d{10})(?:\b|(?=\D))(.*)$", stripped_original)
+            if product_match:
+                raw_product_id = product_match.group(1)
+                statscan_exact_product_id = raw_product_id[:8]
+                label = re.sub(r"\s+", " ", product_match.group(2) or "").strip(" ,;:-")
+                statscan_label = label or statscan_exact_product_id
+                candidate = statscan_exact_product_id
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
             code_candidates = [
                 token if explicit_provider == "WORLDBANK" else token.upper()
@@ -492,10 +504,12 @@ class QueryService:
         countries = self._extract_countries_from_query(country_scope_text)
         params = {
             "indicator": candidate,
-            "__semantic_indicator_label": candidate,
+            "__semantic_indicator_label": statscan_label if statscan_exact_product_id else candidate,
             "__semantic_provider_locked": True,
             "__exact_provider_code_match": True,
         }
+        if statscan_exact_product_id:
+            params["__statscan_product_id"] = statscan_exact_product_id
         if len(countries) == 1:
             params["country"] = countries[0]
         elif len(countries) > 1:
