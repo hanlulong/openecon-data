@@ -147,8 +147,7 @@ def test_default_query_for_row_naturalizes_comtrade_codes_into_exports_query():
 
     query = default_query_for_row(row)
 
-    assert "exports of iron and steel" in query.lower()
-    assert "from comtrade" in query.lower()
+    assert "exports of HS72 from Comtrade" in query
 
 
 def test_audit_direct_query_shape_flags_opaque_acronym_queries():

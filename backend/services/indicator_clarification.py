@@ -3353,6 +3353,9 @@ def looks_like_provider_indicator_code(provider: str, indicator: str) -> bool:
     if provider_upper == "OECD":
         return bool(re.fullmatch(r"[A-Z0-9_@\.]{3,}", code_upper))
 
+    if provider_upper == "COMTRADE":
+        return bool(re.fullmatch(r"(?:HS)?[0-9]{2,6}", code_upper))
+
     if provider_upper in {"STATSCAN", "STATISTICS CANADA"}:
         return bool(re.fullmatch(r"[A-Z0-9_]{3,}", code_upper))
 

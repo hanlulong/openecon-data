@@ -1236,6 +1236,9 @@ def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
             return f"USD to {target_code} exchange rate from ExchangeRate"
         return f"{choice} exchange rate from ExchangeRate"
     if provider_upper == 'COMTRADE':
+        code_numeric = re.sub(r'^HS', '', code.upper()).strip() if code else ''
+        if re.fullmatch(r'\d{2,6}', code_numeric):
+            return f"{choice} exports of HS{code_numeric} from Comtrade"
         commodity = re.sub(r'^\d+\s*-\s*', '', name).strip() or name
         return f"{choice} exports of {commodity} from Comtrade"
     if provider_upper == 'STATSCAN':

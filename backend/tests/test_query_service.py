@@ -536,6 +536,33 @@ class QueryServiceTests(unittest.TestCase):
             )
         )
 
+    def test_explicit_provider_code_intent_extracts_comtrade_hs_code_with_flow(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "China exports of HS950360 from Comtrade"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertEqual(intent.parameters.get("indicator"), "950360")
+        self.assertEqual(intent.parameters.get("country"), "CN")
+        self.assertEqual(intent.parameters.get("flow"), "EXPORT")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_comtrade_provider_code_shape_accepts_hs_codes(self) -> None:
+        self.assertTrue(
+            self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access
+                "COMTRADE",
+                "HS950360",
+            )
+        )
+        self.assertTrue(
+            self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access
+                "COMTRADE",
+                "950360",
+            )
+        )
+
     def test_explicit_provider_code_intent_accepts_catalog_backed_fred_code_with_english_suffix(self) -> None:
         class _Lookup:
             def get(self, provider, code):

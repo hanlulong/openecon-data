@@ -442,6 +442,15 @@ class QueryService:
             if explicit_provider == "FRED":
                 fred_catalog_codes = self._fred_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 code_candidates.extend(fred_catalog_codes)
+            if explicit_provider == "COMTRADE":
+                code_candidates.extend(
+                    re.sub(r"^HS", "", token.upper())
+                    for token in re.findall(
+                        r"(?<![A-Za-z0-9])HS[0-9]{2,6}(?![A-Za-z0-9])",
+                        str(query or ""),
+                        flags=re.IGNORECASE,
+                    )
+                )
             if explicit_provider == "WORLDBANK":
                 worldbank_catalog_codes = self._worldbank_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 code_candidates.extend(worldbank_catalog_codes)
@@ -466,6 +475,10 @@ class QueryService:
         if explicit_provider == "WORLDBANK":
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.\-]{1,127}", candidate):
                 return None
+        elif explicit_provider == "COMTRADE":
+            candidate = re.sub(r"^HS", "", candidate.upper())
+            if not re.fullmatch(r"[0-9]{2,6}", candidate):
+                return None
         elif not re.fullmatch(r"[A-Z0-9_@.\-]{3,}", candidate):
             return None
 
@@ -487,6 +500,12 @@ class QueryService:
             params["country"] = countries[0]
         elif len(countries) > 1:
             params["countries"] = countries
+        if explicit_provider == "COMTRADE":
+            query_lower = str(query or "").lower()
+            if re.search(r"\b(?:re-?)?exports?\b", query_lower):
+                params["flow"] = "EXPORT"
+            elif re.search(r"\b(?:re-?)?imports?\b", query_lower):
+                params["flow"] = "IMPORT"
 
         return ParsedIntent(
             apiProvider=explicit_provider,
