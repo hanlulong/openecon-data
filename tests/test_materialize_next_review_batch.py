@@ -99,10 +99,13 @@ def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):
     direct_rows = read_jsonl(output_dir / "next_batch_direct.jsonl")
     multiround_rows = read_jsonl(output_dir / "next_batch_multiround.jsonl")
     ambiguity_rows = read_jsonl(output_dir / "next_batch_ambiguity.jsonl")
+    all_rows = read_jsonl(output_dir / "next_batch_all.jsonl")
 
     assert len(direct_rows) == 3
     assert len(multiround_rows) == 2
     assert len(ambiguity_rows) == 3
+    assert len(all_rows) == 8
+    assert all_rows == direct_rows + multiround_rows + ambiguity_rows
     assert direct_rows[0]["provenance"]["holdout_split"] == "batch_review"
     assert direct_rows[0]["provenance"]["batch_plan"] == "next_review_batch"
     assert "description" in direct_rows[0]["origin"]
@@ -136,6 +139,7 @@ def test_materialize_next_review_batch_handles_empty_targets(tmp_path: Path):
     assert read_jsonl(output_dir / "next_batch_direct.jsonl") == []
     assert read_jsonl(output_dir / "next_batch_multiround.jsonl") == []
     assert read_jsonl(output_dir / "next_batch_ambiguity.jsonl") == []
+    assert read_jsonl(output_dir / "next_batch_all.jsonl") == []
 
 
 def test_materialize_multiround_starts_after_current_n():

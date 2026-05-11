@@ -312,9 +312,11 @@ def main() -> int:
     direct_path = output_dir / 'next_batch_direct.jsonl'
     multiround_path = output_dir / 'next_batch_multiround.jsonl'
     ambiguity_path = output_dir / 'next_batch_ambiguity.jsonl'
+    all_path = output_dir / 'next_batch_all.jsonl'
     write_jsonl(direct_path, direct_rows)
     write_jsonl(multiround_path, multiround_rows)
     write_jsonl(ambiguity_path, ambiguity_rows)
+    write_jsonl(all_path, direct_rows + multiround_rows + ambiguity_rows)
 
     print(
         json.dumps(
