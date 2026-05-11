@@ -241,7 +241,7 @@ class OECDProvider(BaseProvider):
         falling back to heuristics.
         """
         code = cls._canonical_dataflow_code(dataflow_code)
-        if not re.fullmatch(r"DSD_[A-Za-z0-9_]+@DF_[A-Za-z0-9_]+", code):
+        if not re.fullmatch(r"DSD_[A-Za-z0-9_]+@[A-Za-z0-9_]+", code):
             return None, None
 
         try:
@@ -863,7 +863,7 @@ class OECDProvider(BaseProvider):
             exact_version = exact_parts[2] if len(exact_parts) == 3 else ""
             if (
                 re.fullmatch(r"[A-Za-z0-9_.-]+", exact_agency or "")
-                and re.fullmatch(r"DSD_[A-Za-z0-9_]+@DF_[A-Za-z0-9_]+", exact_dataflow or "")
+                and re.fullmatch(r"DSD_[A-Za-z0-9_]+@[A-Za-z0-9_]+", exact_dataflow or "")
                 and (not exact_version or re.fullmatch(r"[0-9][A-Za-z0-9_.-]*", exact_version))
             ):
                 _, registry_version = self._lookup_dataflow_registry_metadata(exact_dataflow)
@@ -872,7 +872,7 @@ class OECDProvider(BaseProvider):
                 cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
                 return result
 
-        if re.fullmatch(r"DSD_[A-Z0-9_]+@DF_[A-Z0-9_]+", explicit_dataflow):
+        if re.fullmatch(r"DSD_[A-Z0-9_]+@[A-Z0-9_]+", explicit_dataflow):
             logger.info("🔒 Treating explicit OECD dataflow as resolved: %s", explicit_dataflow)
             result = self._build_result_from_discovery(explicit_dataflow, {})
             cache_service.set(f"oecd_indicator:{explicit_dataflow}", result, ttl=86400)
@@ -881,7 +881,7 @@ class OECDProvider(BaseProvider):
         explicit_prefix = explicit_dataflow
         if explicit_prefix.startswith("OECD_"):
             explicit_prefix = explicit_prefix[len("OECD_"):]
-        if explicit_prefix.startswith("DSD_") and "@DF_" in explicit_prefix:
+        if explicit_prefix.startswith("DSD_") and "@" in explicit_prefix:
             catalog = self._load_dataflows_catalog()
             prefix_matches = [
                 flow_id
@@ -1125,6 +1125,8 @@ class OECDProvider(BaseProvider):
         if "DSD_HW" in structure_upper or "DSD_HW" in dataflow_upper:
             return "OECD.ELS.SAE"
         if any(x in dataflow_upper for x in ["AVG_ANN_HRS", "AVG_USL_WK", "HRS_WKD"]):
+            return "OECD.ELS.SAE"
+        if "DSD_EARNINGS" in structure_upper:
             return "OECD.ELS.SAE"
 
         # Labor force statistics (Unemployment, Employment, LSO)
