@@ -236,6 +236,7 @@ class EurostatProvider(BaseProvider):
         # Add time range (JSON-stat uses sinceTimePeriod, not startPeriod)
         # Default to last 5 years if not specified
         current_year = datetime.now(timezone.utc).year
+        used_default_time_range = start_year is None and end_year is None
         query_params["sinceTimePeriod"] = str(start_year or (current_year - 5))
 
         # Add mechanical defaults for an already-selected provider-native dataset.
@@ -252,27 +253,77 @@ class EurostatProvider(BaseProvider):
                 continue
             query_params[dim_key] = str(value)
 
+        def latest_all_available_params() -> Dict[str, str]:
+            bounded_params = dict(query_params)
+            # Some exact Eurostat datasets are quarterly/monthly or mixed-frequency.
+            # If no geography/time was requested, use Eurostat's provider-native
+            # latest-period filter and avoid imposing our inferred annual freq.
+            bounded_params.pop("freq", None)
+            bounded_params.pop("sinceTimePeriod", None)
+            bounded_params["lastTimePeriod"] = "1"
+            return bounded_params
+
         # Use shared HTTP client pool for better performance
         client = get_http_client()
-        try:
-            response = await client.get(data_url, params=query_params, timeout=effective_timeout(30.0))
+        effective_query_params = dict(query_params)
+
+        async def fetch_payload(params: Dict[str, str]) -> Dict[str, Any]:
+            response = await client.get(data_url, params=params, timeout=effective_timeout(30.0))
             response.raise_for_status()
-            payload = response.json()
+            return response.json()
+
+        try:
+            payload = await fetch_payload(effective_query_params)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise DataNotAvailableError(
-                    f"Eurostat dataset '{dataset_code}' not found for country {country_code or 'ALL_AVAILABLE'}"
-                )
-            if e.response.status_code == 413:
-                raise DataNotAvailableError(
-                    "fail-closed supportability block: "
-                    "reason=eurostat_response_too_large; "
-                    f"dataset={dataset_code}; "
-                    f"country={country_code or 'ALL_AVAILABLE'}"
-                )
-            raise
+            if e.response.status_code == 413 and no_geo_filter and used_default_time_range:
+                effective_query_params = latest_all_available_params()
+                try:
+                    payload = await fetch_payload(effective_query_params)
+                except httpx.HTTPStatusError as retry_error:
+                    if retry_error.response.status_code != 413:
+                        raise
+                    raise DataNotAvailableError(
+                        "fail-closed supportability block: "
+                        "reason=eurostat_response_too_large; "
+                        f"dataset={dataset_code}; "
+                        f"country={country_code or 'ALL_AVAILABLE'}"
+                    ) from retry_error
+            else:
+                if e.response.status_code == 404:
+                    raise DataNotAvailableError(
+                        f"Eurostat dataset '{dataset_code}' not found for country {country_code or 'ALL_AVAILABLE'}"
+                    )
+                if e.response.status_code == 413:
+                    raise DataNotAvailableError(
+                        "fail-closed supportability block: "
+                        "reason=eurostat_response_too_large; "
+                        f"dataset={dataset_code}; "
+                        f"country={country_code or 'ALL_AVAILABLE'}"
+                    )
+                raise
 
         data_points, frequency = self._parse_dataset(payload, dataset_code)
+        if not data_points and no_geo_filter and used_default_time_range:
+            retry_params = latest_all_available_params()
+            if retry_params != effective_query_params:
+                try:
+                    retry_payload = await fetch_payload(retry_params)
+                except httpx.HTTPStatusError as retry_error:
+                    if retry_error.response.status_code == 413:
+                        raise DataNotAvailableError(
+                            "fail-closed supportability block: "
+                            "reason=eurostat_response_too_large; "
+                            f"dataset={dataset_code}; "
+                            f"country={country_code or 'ALL_AVAILABLE'}"
+                        ) from retry_error
+                    raise
+                retry_points, retry_frequency = self._parse_dataset(retry_payload, dataset_code)
+                if retry_points:
+                    payload = retry_payload
+                    data_points = retry_points
+                    frequency = retry_frequency
+                    effective_query_params = retry_params
+
         if not data_points:
             raise DataNotAvailableError(f"No data found for {country_code or 'ALL_AVAILABLE'} in dataset {dataset_code}")
 
@@ -291,7 +342,7 @@ class EurostatProvider(BaseProvider):
         if unit == "percent" or "percent" in unit.lower():
             data_points = self._normalize_percentage_values(data_points, dataset_code)
 
-        api_url = self._compose_url(data_url, query_params)
+        api_url = self._compose_url(data_url, effective_query_params)
 
         # Human-readable URL for data verification on Eurostat Data Browser
         source_url = f"https://ec.europa.eu/eurostat/databrowser/view/{dataset_code}/default/table?lang=en"

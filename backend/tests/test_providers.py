@@ -2682,6 +2682,110 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("geo", params)
         self.assertEqual(params.get("freq"), "A")
 
+    def test_eurostat_all_available_empty_result_retries_latest_without_inferred_freq(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        empty_response = MockAsyncResponse(
+            {
+                "value": {},
+                "dimension": {
+                    "freq": {"category": {"index": {"A": 0}, "label": {"A": "Annual"}}},
+                    "geo": {"category": {"index": {"FR": 0}, "label": {"FR": "France"}}},
+                    "time": {"category": {"index": {"2024": 0}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 1],
+                "updated": "2026-02-03",
+            }
+        )
+        latest_response = MockAsyncResponse(
+            {
+                "value": {"0": 12.0},
+                "dimension": {
+                    "freq": {"category": {"index": {"Q": 0}, "label": {"Q": "Quarterly"}}},
+                    "geo": {"category": {"index": {"FR": 0}, "label": {"FR": "France"}}},
+                    "time": {"category": {"index": {"2024-Q4": 0}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 1],
+                "updated": "2026-02-03",
+            }
+        )
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                response = empty_response if len(self.calls) == 1 else latest_response
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        client = RecordingClient()
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="TOUR_DEM_EXQ2", country="__ALL__"))
+
+        self.assertEqual(len(series.data), 1)
+        self.assertEqual(series.metadata.apiUrl and "lastTimePeriod=1" in series.metadata.apiUrl, True)
+        _, first_params = client.calls[0]
+        _, retry_params = client.calls[1]
+        self.assertEqual(first_params.get("freq"), "A")
+        self.assertIn("sinceTimePeriod", first_params)
+        self.assertNotIn("freq", retry_params)
+        self.assertNotIn("sinceTimePeriod", retry_params)
+        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+
+    def test_eurostat_all_available_413_retries_latest_without_inferred_freq(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class TooLargeResponse(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__({}, status_code=413, request_url="https://example.com/eurostat")
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    413,
+                    request=httpx.Request("GET", "https://example.com/eurostat"),
+                )
+                raise httpx.HTTPStatusError("too large", request=response.request, response=response)
+
+        latest_response = MockAsyncResponse(
+            {
+                "value": {"0": 1.0},
+                "dimension": {
+                    "freq": {"category": {"index": {"M": 0}, "label": {"M": "Monthly"}}},
+                    "geo": {"category": {"index": {"FR": 0}, "label": {"FR": "France"}}},
+                    "time": {"category": {"index": {"2024-12": 0}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 1],
+                "updated": "2026-02-03",
+            }
+        )
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                if len(self.calls) == 1:
+                    return TooLargeResponse()
+                latest_response.request = MockAsyncResponse([], request_url=str(url)).request
+                return latest_response
+
+        client = RecordingClient()
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="BD_SIZE", country="__ALL__"))
+
+        self.assertEqual(len(series.data), 1)
+        self.assertEqual(len(client.calls), 2)
+        _, retry_params = client.calls[1]
+        self.assertNotIn("freq", retry_params)
+        self.assertNotIn("sinceTimePeriod", retry_params)
+        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+
     def test_eurostat_response_too_large_is_fail_closed_supportability(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)
 
