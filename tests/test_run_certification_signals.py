@@ -945,6 +945,36 @@ def test_record_response_marks_eurostat_response_too_large_as_supportability_blo
     assert record["series_count"] == 0
 
 
+def test_record_response_marks_comtrade_quota_as_runtime_unavailable():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-comtrade-quota",
+        "provider_stratum": "Comtrade",
+        "query": "France exports of HS722860 from Comtrade",
+        "origin": {"source_provider": "Comtrade", "source_indicator_code": "722860"},
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "🚦 **Rate Limit Reached**\n"
+            "Error: Comtrade API quota exhausted for reporter FR: HTTP 403; "
+            "retry_after_seconds=36305; provider_message=Out of call volume quota."
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["request_failed"] is True
+    assert record["runtime_unavailable"] is True
+    assert record["runtime_unavailable_reason"] == "comtrade_api_quota_or_forbidden"
+    assert "supportability_blocked" not in record
+    assert record["error"] == "data_not_available"
+
+
 def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

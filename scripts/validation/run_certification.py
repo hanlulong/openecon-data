@@ -421,9 +421,30 @@ def runtime_supportability_reason(row: dict[str, Any], resp_json: dict[str, Any]
     return None
 
 
+def runtime_unavailable_reason(row: dict[str, Any], resp_json: dict[str, Any]) -> str | None:
+    provider = str(row.get('provider_stratum') or (row.get('origin') or {}).get('source_provider') or '').upper()
+    evidence = ' '.join(
+        str(resp_json.get(key) or '')
+        for key in ('error', 'message', 'response')
+    ).lower()
+    if not evidence:
+        return None
+    if provider == 'COMTRADE' and (
+        'comtrade api quota exhausted' in evidence
+        or 'out of call volume quota' in evidence
+        or ('comtrade api error' in evidence and 'http 403' in evidence)
+    ):
+        return 'comtrade_api_quota_or_forbidden'
+    if 'rate limit' in evidence or 'too many requests' in evidence or 'quota exhausted' in evidence:
+        normalized_provider = (provider or 'provider').lower().replace(' ', '_')
+        return f'{normalized_provider}_rate_limited'
+    return None
+
+
 def record_response(row: dict[str, Any], dataset_type: str, round_index: int, query: str, resp, elapsed: float, data: dict[str, Any]) -> dict[str, Any]:
     response_signals = extract_response_signals(data)
     supportability_reason = runtime_supportability_reason(row, data)
+    unavailable_reason = None if supportability_reason else runtime_unavailable_reason(row, data)
     message = data.get('message')
     record = {
         'session_id': row['id'],
@@ -447,6 +468,12 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
         record.update({
             'supportability_blocked': True,
             'supportability_reason': supportability_reason,
+        })
+    if unavailable_reason:
+        record.update({
+            'request_failed': True,
+            'runtime_unavailable': True,
+            'runtime_unavailable_reason': unavailable_reason,
         })
     return record
 

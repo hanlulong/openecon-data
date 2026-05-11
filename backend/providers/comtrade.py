@@ -671,6 +671,23 @@ class ComtradeProvider(BaseProvider):
                     continue
                 else:
                     # Not a rate limit error, or final retry exhausted
+                    response_text = (e.response.text or "").strip()[:300]
+                    retry_after = e.response.headers.get("Retry-After")
+                    quota_exhausted = (
+                        status_code == 403
+                        and (
+                            "quota" in response_text.lower()
+                            or retry_after is not None
+                        )
+                    )
+                    if quota_exhausted:
+                        detail = f"Comtrade API quota exhausted for reporter {reporter_raw}: HTTP 403"
+                        if retry_after:
+                            detail += f"; retry_after_seconds={retry_after}"
+                        if response_text:
+                            detail += f"; provider_message={response_text}"
+                        logger.warning(detail)
+                        raise DataNotAvailableError(detail) from e
                     logger.error(
                         f"Comtrade API error for reporter {reporter_raw}: "
                         f"HTTP {status_code}: {str(e)}"

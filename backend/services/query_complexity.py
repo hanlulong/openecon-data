@@ -331,7 +331,13 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • Simplify your query (fewer countries or shorter time range)")
             message_parts.append("  • Try a different data provider")
 
-        elif 'rate limit' in error_lower or '429' in error_lower or 'too many requests' in error_lower:
+        elif (
+            'rate limit' in error_lower
+            or '429' in error_lower
+            or 'too many requests' in error_lower
+            or 'quota exhausted' in error_lower
+            or 'out of call volume quota' in error_lower
+        ):
             message_parts.append("🚦 **Rate Limit Reached**")
             message_parts.append("Too many requests were made to the data provider.")
             message_parts.append("")
