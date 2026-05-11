@@ -3909,6 +3909,55 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(calls[1][0:2], ("trng_cvt_20s", "IT"))
         self.assertEqual(calls[1][2], 1990)
 
+    def test_fetch_data_forwards_eurostat_provider_request_filters(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["HLTH_EHIS_PL1E"],
+            parameters={
+                "country": "FR",
+                "indicator": "HLTH_EHIS_PL1E",
+                "sex": "F",
+                "age": "Y16-24",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+                "startDate": "2020-01-01",
+                "endDate": "2024-12-31",
+            },
+            clarificationNeeded=False,
+            originalQuery="France persons reporting basic activity difficulty by sex from Eurostat",
+        )
+
+        calls = []
+
+        async def _fake_fetch_indicator(*, indicator, country, start_year=None, end_year=None, filters=None):
+            calls.append(
+                {
+                    "indicator": indicator,
+                    "country": country,
+                    "start_year": start_year,
+                    "end_year": end_year,
+                    "filters": dict(filters or {}),
+                }
+            )
+            return sample_series_with(
+                source="Eurostat",
+                indicator="Persons reporting basic activity difficulty",
+                country=country,
+                series_id=indicator,
+            )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["indicator"], "hlth_ehis_pl1e")
+        self.assertEqual(calls[0]["country"], "FR")
+        self.assertEqual(calls[0]["start_year"], 2020)
+        self.assertEqual(calls[0]["end_year"], 2024)
+        self.assertEqual(calls[0]["filters"], {"sex": "F", "age": "Y16-24"})
+
     def test_fetch_data_does_not_retry_eurostat_when_time_scope_is_explicit(self) -> None:
         intent = ParsedIntent(
             apiProvider="EUROSTAT",

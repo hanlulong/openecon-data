@@ -2269,6 +2269,65 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(params.get("building"), "FLAT2")
         self.assertEqual(params.get("currency"), "EUR")
 
+    def test_eurostat_fetch_indicator_forwards_provider_dimension_filters_mechanically(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        response = MockAsyncResponse(
+            {
+                "value": {"0": 12.5},
+                "dimension": {
+                    "sex": {"category": {"index": {"F": 0}, "label": {"F": "Females"}}},
+                    "age": {"category": {"index": {"Y16-24": 0}, "label": {"Y16-24": "16 to 24 years"}}},
+                    "geo": {"category": {"index": {"FR": 0}, "label": {"FR": "France"}}},
+                    "time": {"category": {"index": {"2024": 0}, "label": {"2024": "2024"}}},
+                },
+                "id": ["sex", "age", "geo", "time"],
+                "size": [1, 1, 1, 1],
+                "updated": "2026-01-06",
+            }
+        )
+        client = RecordingClient(response)
+
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(
+                provider.fetch_indicator(
+                    indicator="HLTH_EHIS_PL1E",
+                    country="FR",
+                    start_year=2024,
+                    filters={
+                        "sex": "F",
+                        "age": "Y16-24",
+                        "indicator": "SHOULD_NOT_BE_A_DIMENSION",
+                        "__semantic_provider_locked": True,
+                        "geo": "DE",
+                        "freq": "M",
+                        "time_period": "2023",
+                        "empty": "",
+                    },
+                )
+            )
+
+        self.assertEqual(series.metadata.seriesId, "hlth_ehis_pl1e")
+        _, params = client.calls[0]
+        self.assertEqual(params.get("geo"), "FR")
+        self.assertEqual(params.get("freq"), "A")
+        self.assertEqual(params.get("sex"), "F")
+        self.assertEqual(params.get("age"), "Y16-24")
+        self.assertNotIn("indicator", params)
+        self.assertNotIn("__semantic_provider_locked", params)
+        self.assertNotIn("time_period", params)
+        self.assertNotIn("empty", params)
+
     def test_oecd_resolve_indicator_uses_metadata_for_short_code(self) -> None:
         class StubMetadata:
             def __init__(self):

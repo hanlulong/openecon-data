@@ -345,7 +345,15 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["filters"] = {
             key: value
             for key, value in params.items()
-            if key not in {"country", "countries", "startDate", "endDate", "start_year", "end_year"}
+            if key not in {
+                "country",
+                "countries",
+                "indicator",
+                "startDate",
+                "endDate",
+                "start_year",
+                "end_year",
+            }
             and not str(key).startswith("__")
         }
 
@@ -1667,6 +1675,7 @@ async def _fetch_from_eurostat(
     scoped_countries = list(eurostat_request.get("country_scope") or [])
     request_start_year = eurostat_request.get("start_year")
     request_end_year = eurostat_request.get("end_year")
+    request_filters = dict(eurostat_request.get("filters") or {})
     original_query = str(params.get("__original_query") or intent.originalQuery or "")
     explicit_time_scope = _query_has_explicit_time_scope(original_query)
     current_year = datetime.utcnow().year
@@ -1683,13 +1692,16 @@ async def _fetch_from_eurostat(
     fallback_start_year = 1990
 
     async def _fetch_indicator_with_sparse_history_retry(country_code: str) -> NormalizedData:
+        fetch_kwargs = {
+            "indicator": indicator,
+            "country": country_code,
+            "start_year": request_start_year,
+            "end_year": request_end_year,
+        }
+        if request_filters:
+            fetch_kwargs["filters"] = request_filters
         try:
-            return await svc.eurostat_provider.fetch_indicator(
-                indicator=indicator,
-                country=country_code,
-                start_year=request_start_year,
-                end_year=request_end_year,
-            )
+            return await svc.eurostat_provider.fetch_indicator(**fetch_kwargs)
         except DataNotAvailableError:
             if not should_retry_sparse_history or fallback_start_year >= int(request_start_year):
                 raise
@@ -1700,12 +1712,8 @@ async def _fetch_from_eurostat(
                 request_start_year,
                 fallback_start_year,
             )
-            return await svc.eurostat_provider.fetch_indicator(
-                indicator=indicator,
-                country=country_code,
-                start_year=fallback_start_year,
-                end_year=request_end_year,
-            )
+            fetch_kwargs["start_year"] = fallback_start_year
+            return await svc.eurostat_provider.fetch_indicator(**fetch_kwargs)
 
     country_param = params.get("country") or (scoped_countries[0] if len(scoped_countries) == 1 else None)
     countries_param = params.get("countries") or scoped_countries

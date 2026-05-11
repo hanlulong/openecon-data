@@ -196,6 +196,7 @@ class EurostatProvider(BaseProvider):
         country: str = "EU",
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> NormalizedData:
         """Fetch economic indicator data from Eurostat JSON-stat API (statistics/1.0).
 
@@ -239,6 +240,15 @@ class EurostatProvider(BaseProvider):
         static_defaults = self.DATASET_DEFAULT_FILTERS.get(dataset_code, {})
         for key, value in static_defaults.items():
             query_params[key] = value
+        for key, value in (filters or {}).items():
+            dim_key = str(key or "").strip().lower()
+            if not dim_key or dim_key in {"country", "countries", "geo", "freq", "time", "time_period", "indicator"}:
+                continue
+            if dim_key.startswith("__"):
+                continue
+            if value is None or value == "":
+                continue
+            query_params[dim_key] = str(value)
 
         # Use shared HTTP client pool for better performance
         client = get_http_client()
