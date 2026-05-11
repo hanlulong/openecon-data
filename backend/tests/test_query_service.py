@@ -3821,6 +3821,59 @@ class QueryServiceTests(unittest.TestCase):
                     )
                 )
 
+    def test_decompose_and_aggregate_preserves_statscan_required_dimension_supportability_block(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["First names at birth by sex at birth, selected indicators"],
+            parameters={
+                "country": "CA",
+                "indicator": "17100147",
+                "__statscan_product_id": "17100147",
+                "__statscan_decomposition_axis": "Sex",
+                "__semantic_indicator_label": "First names at birth by sex at birth, selected indicators",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["Male", "Female"],
+            originalQuery="Canada selected indicators First names at birth by sex at birth from Statistics Canada",
+        )
+        supportability_error = DataNotAvailableError(
+            "fail-closed supportability block: "
+            "reason=statscan_required_dimension_missing; "
+            "product=17100147; "
+            "missing_dimensions=First name at birth"
+        )
+
+        with patch.object(
+            self.service.statscan_provider,
+            "fetch_multi_dimension_data",
+            new_callable=AsyncMock,
+            side_effect=supportability_error,
+        ) as fetch_multi_dim, \
+             patch.object(
+                 self.service,
+                 "_execute_sub_query",
+                 new_callable=AsyncMock,
+                 side_effect=AssertionError("supportability block should not fall back to sub-query decomposition"),
+             ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(
+                    self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                        intent.originalQuery,
+                        intent,
+                        "conv-statscan-required-dimension",
+                    )
+                )
+
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        self.assertIn("statscan_required_dimension_missing", str(raised.exception))
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["productId"], "17100147")
+        self.assertEqual(params["axis"], "Sex")
+
     def test_process_query_statscan_province_decomposition_keeps_provinces_only(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",
@@ -7816,6 +7869,52 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["periods"], 243)
         self.assertEqual(params["startDate"], "2006-01-01")
         self.assertEqual(params["endDate"], "2026-03-01")
+
+    def test_fetch_data_preserves_statscan_required_dimension_supportability_block(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["First names at birth by sex at birth, selected indicators"],
+            parameters={
+                "country": "CA",
+                "indicator": "17100147",
+                "__statscan_product_id": "17100147",
+                "__statscan_decomposition_axis": "Sex",
+                "__semantic_indicator_label": "First names at birth by sex at birth, selected indicators",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["Male", "Female"],
+            originalQuery="Canada selected indicators First names at birth by sex at birth from Statistics Canada",
+        )
+        supportability_error = DataNotAvailableError(
+            "fail-closed supportability block: "
+            "reason=statscan_required_dimension_missing; "
+            "product=17100147; "
+            "missing_dimensions=First name at birth"
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(
+                 self.service.statscan_provider,
+                 "fetch_multi_dimension_data",
+                 new_callable=AsyncMock,
+                 side_effect=supportability_error,
+             ) as fetch_multi_dim, \
+             patch.object(
+                 self.service.statscan_provider,
+                 "fetch_with_dimensions",
+                 new_callable=AsyncMock,
+                 side_effect=AssertionError("supportability block should not fall back to arbitrary defaults"),
+             ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        self.assertIn("statscan_required_dimension_missing", str(raised.exception))
+        self.assertIn("First name at birth", str(raised.exception))
 
     def test_fetch_data_statscan_dimension_decomposition_does_not_fallback_to_semantic_product_shortcut(self) -> None:
         intent = ParsedIntent(

@@ -988,6 +988,64 @@ class TestFetchMultiDimensionData:
         assert any("Ontario" in result.metadata.indicator for result in results)
         assert any("25 to 54 years" in result.metadata.indicator for result in results)
 
+    @pytest.mark.asyncio
+    async def test_high_cardinality_required_dimension_without_aggregate_fails_closed(self, monkeypatch, statscan_provider):
+        metadata = {
+            "productId": "17100147",
+            "cubeTitleEn": "First names at birth by sex at birth, selected indicators",
+            "dimension": [
+                {
+                    "dimensionNameEn": "Geography, place of residence of mother",
+                    "member": [{"memberId": 1, "memberNameEn": "Canada"}],
+                },
+                {
+                    "dimensionNameEn": "Sex at birth",
+                    "member": [
+                        {"memberId": 1, "memberNameEn": "Male"},
+                        {"memberId": 2, "memberNameEn": "Female"},
+                    ],
+                },
+                {
+                    "dimensionNameEn": "First name at birth",
+                    "member": [
+                        {"memberId": idx, "memberNameEn": f"Name {idx}"}
+                        for idx in range(1, 125)
+                    ],
+                },
+                {
+                    "dimensionNameEn": "Indicator",
+                    "member": [
+                        {"memberId": 1, "memberNameEn": "Frequency"},
+                        {"memberId": 2, "memberNameEn": "Rank"},
+                        {"memberId": 3, "memberNameEn": "Proportion"},
+                    ],
+                },
+            ],
+        }
+
+        class _UnexpectedClient:
+            async def post(self, *args, **kwargs):
+                raise AssertionError("required-dimension supportability block should happen before WDS data request")
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _UnexpectedClient())
+        statscan_provider._cube_metadata_cache["17100147"] = metadata
+
+        with pytest.raises(DataNotAvailableError) as raised:
+            await statscan_provider.fetch_multi_dimension_data(
+                {
+                    "productId": "17100147",
+                    "indicator": "17100147",
+                    "indicatorLabel": "First names at birth by sex at birth, selected indicators",
+                    "axis": "Sex",
+                    "dimensions": {},
+                    "periods": 24,
+                }
+            )
+
+        message = str(raised.value)
+        assert "statscan_required_dimension_missing" in message
+        assert "First name at birth" in message
+
 
 class TestFetchCategoricalData:
     @pytest.mark.asyncio

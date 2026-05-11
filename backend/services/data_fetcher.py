@@ -1261,6 +1261,8 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     results = await svc.statscan_provider.fetch_multi_dimension_data(decomposition_params)
                     return results if isinstance(results, list) else [results]
             except Exception as e:
+                if "statscan_required_dimension_missing" in str(e):
+                    raise
                 logger.warning(f"StatsCan dimension decomposition dispatch failed: {e}. Trying product-preserving fallback.")
                 if state_product_id:
                     try:

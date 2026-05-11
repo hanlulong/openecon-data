@@ -6767,6 +6767,65 @@ class QueryService:
 
         # Check if provider has batch method for efficient multi-entity queries
         # This avoids timeouts by making single API call instead of N parallel requests
+        if normalize_provider_name(intent.apiProvider) == "STATSCAN" and intent.decompositionType == "dimension":
+            resolved_params = dict(intent.parameters or {})
+            dimension_axis = str(resolved_params.get("__statscan_decomposition_axis") or "").strip()
+            product_id = (
+                self._infer_statscan_product_id_for_followup(conversation_id, intent)
+                or resolved_params.get("__statscan_product_id")
+                or resolved_params.get("productId")
+                or resolved_params.get("indicator")
+            )
+            product_id = self._extract_statscan_product_id(product_id)
+            provider_locked_dimension_request = bool(
+                resolved_params.get("__exact_indicator_title_match")
+                or resolved_params.get("__exact_provider_code_match")
+            )
+            if (
+                provider_locked_dimension_request
+                and dimension_axis
+                and product_id
+                and hasattr(self.statscan_provider, "fetch_multi_dimension_data")
+            ):
+                try:
+                    normalized_product_id = self.statscan_provider._normalize_metadata_product_id(product_id)
+                    if intent.parameters is None:
+                        intent.parameters = {}
+                    intent.parameters["indicator"] = normalized_product_id
+                    intent.parameters["__statscan_product_id"] = normalized_product_id
+
+                    indicator_name = intent.indicators[0] if intent.indicators else normalized_product_id
+                    dimensions = (
+                        resolved_params.get("dimensions")
+                        or resolved_params.get("__dimensions")
+                        or {}
+                    )
+                    params = {
+                        "productId": normalized_product_id,
+                        "indicator": resolved_params.get("__base_indicator") or resolved_params.get("indicator") or indicator_name,
+                        "indicatorLabel": str(resolved_params.get("__semantic_indicator_label") or indicator_name),
+                        "axis": dimension_axis,
+                        "periods": _df_statscan_periods_from_date_range(resolved_params, 60),
+                        "dimensions": dimensions,
+                        "startDate": resolved_params.get("startDate"),
+                        "endDate": resolved_params.get("endDate"),
+                    }
+                    logger.info(
+                        "🚀 Using StatsCan dimension batch method for product=%s axis=%s",
+                        normalized_product_id,
+                        dimension_axis,
+                    )
+                    batch_results = await self.statscan_provider.fetch_multi_dimension_data(params)
+                    logger.info("✅ StatsCan dimension batch method completed: %d series returned", len(batch_results))
+                    return batch_results if isinstance(batch_results, list) else [batch_results]
+                except Exception as e:
+                    if "statscan_required_dimension_missing" in str(e):
+                        raise
+                    logger.warning(
+                        "⚠️ StatsCan dimension batch method failed (%s), falling back to parallel decomposition",
+                        str(e),
+                    )
+
         if normalize_provider_name(intent.apiProvider) == "STATSCAN" and intent.decompositionType in ["provinces", "regions", "territories"]:
             if hasattr(self.statscan_provider, 'fetch_multi_province_data'):
                 logger.info("🚀 Using batch method for %d %s (single API call)",

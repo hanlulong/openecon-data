@@ -883,6 +883,37 @@ def test_record_response_marks_coingecko_provider_no_price_as_supportability_blo
     assert record["error"] == "data_not_available"
     assert record["series_count"] == 0
 
+
+def test_record_response_marks_statscan_required_dimension_missing_as_supportability_blocked():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-statscan-first-name",
+        "provider_stratum": "StatsCan",
+        "query": "Canada selected indicators First names at birth by sex at birth from Statistics Canada",
+        "origin": {"source_provider": "StatsCan", "source_indicator_code": "17100147"},
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "fail-closed supportability block: "
+            "reason=statscan_required_dimension_missing; "
+            "product=17100147; "
+            "missing_dimensions=First name at birth"
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "statscan_required_dimension_missing"
+    assert record["error"] == "data_not_available"
+    assert record["series_count"] == 0
+
+
 def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

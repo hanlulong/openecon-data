@@ -325,6 +325,38 @@ class StatsCanProvider(BaseProvider):
                 normalized[key] = raw_value
         return normalized
 
+    @staticmethod
+    def _dimension_has_aggregate_member(members: List[Dict[str, Any]]) -> bool:
+        aggregate_names = {
+            "all",
+            "all ages",
+            "all categories",
+            "all names",
+            "both sexes",
+            "canada",
+            "total",
+        }
+        for member in members:
+            name = StatsCanProvider._extract_member_name(member).lower()
+            if name in aggregate_names or name.startswith("total "):
+                return True
+        return False
+
+    @staticmethod
+    def _requires_explicit_dimension_member(dim_name: str, members: List[Dict[str, Any]]) -> bool:
+        """Return whether defaulting this dimension would be arbitrary.
+
+        High-cardinality dimensions with no aggregate member (for example a
+        first-name list) are provider-native required dimensions.  Picking the
+        first member would be a hidden default, so callers must supply a member
+        or fail closed as supportability-blocked.
+        """
+        if len(members) <= 100:
+            return False
+        if StatsCanProvider._dimension_has_aggregate_member(members):
+            return False
+        return True
+
     def _find_member_id_by_keywords(self, members: List[Dict[str, Any]], keywords: List[str]) -> Optional[int]:
         """Find the best matching member ID using exact-first keyword scoring.
 
@@ -3348,6 +3380,35 @@ class StatsCanProvider(BaseProvider):
         if not axis_members:
             raise DataNotAvailableError(
                 f"No non-aggregate members found for axis '{axis_hint}' in product {product_id}"
+            )
+
+        missing_required_dimensions: List[str] = []
+        for dim_idx, dim_info in enumerate(dimensions_list):
+            if dim_idx == axis_dim_idx:
+                continue
+            dim_name = str(dim_info.get("dimensionNameEn", "") or "")
+            dim_name_lower = dim_name.lower()
+            members = dim_info.get("member", [])
+            has_supplied_member = False
+            for hint, search_term in fixed_dimensions.items():
+                hint_lower = str(hint or "").strip().lower()
+                if not str(search_term or "").strip():
+                    continue
+                if hint_lower in dim_name_lower or dim_name_lower in hint_lower:
+                    if self._find_member_id_by_keywords(members, [str(search_term)]) is not None:
+                        has_supplied_member = True
+                        break
+            if has_supplied_member:
+                continue
+            if self._requires_explicit_dimension_member(dim_name, members):
+                missing_required_dimensions.append(dim_name)
+
+        if missing_required_dimensions:
+            raise DataNotAvailableError(
+                "fail-closed supportability block: "
+                "reason=statscan_required_dimension_missing; "
+                f"product={product_id}; "
+                f"missing_dimensions={', '.join(missing_required_dimensions)}"
             )
 
         indicator_lower = display_indicator.lower().replace("_", " ")
