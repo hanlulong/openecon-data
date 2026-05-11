@@ -855,6 +855,34 @@ def test_execute_rows_classifies_unsupported_direct_without_runtime_call(tmp_pat
     assert module.completed_session_ids_from_results([row], results) == {"direct-imf-1"}
 
 
+
+def test_record_response_marks_coingecko_provider_no_price_as_supportability_blocked():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-coingecko-rgb",
+        "provider_stratum": "CoinGecko",
+        "query": "Rgb cryptocurrency price from CoinGecko",
+        "origin": {"source_provider": "CoinGecko", "source_indicator_code": "rgb"},
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "No CoinGecko Price Available. Provider evidence: "
+            "reason=coingecko_price_unavailable; requested_ids=rgb"
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "coingecko_price_unavailable"
+    assert record["error"] == "data_not_available"
+    assert record["series_count"] == 0
+
 def test_execute_rows_can_fail_closed_when_runtime_unavailable(tmp_path: Path, monkeypatch):
     module = load_module()
     calls: list[dict[str, Any]] = []

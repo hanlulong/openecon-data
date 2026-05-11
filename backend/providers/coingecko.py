@@ -241,15 +241,20 @@ class CoinGeckoProvider(BaseProvider):
 
         api_key, indicator_suffix, unit = metric_mapping[metric_lower]
 
+        missing_metric_ids: list[str] = []
+        invalid_metric_ids: list[str] = []
+
         for coin_id, coin_data in data.items():
             if api_key not in coin_data:
                 logger.warning(f"⚠️ Metric '{api_key}' not found for {coin_id}")
+                missing_metric_ids.append(str(coin_id))
                 continue
 
             try:
                 price_value = float(coin_data[api_key])
             except (ValueError, TypeError):
                 logger.warning(f"Invalid price for {coin_id}: {coin_data.get(api_key)}")
+                invalid_metric_ids.append(str(coin_id))
                 continue
             data_points = [
                 DataPoint(date=current_time, value=price_value)
@@ -271,6 +276,16 @@ class CoinGeckoProvider(BaseProvider):
 
             result.append(
                 NormalizedData(metadata=metadata, data=data_points)
+            )
+
+        if not result:
+            requested_ids = ",".join(str(coin_id) for coin_id in coin_ids)
+            unavailable_ids = ",".join(missing_metric_ids + invalid_metric_ids) or requested_ids
+            raise DataNotAvailableError(
+                "CoinGecko current metric unavailable from provider response; "
+                "reason=coingecko_price_unavailable; "
+                f"metric={metric_lower}; vs_currency={vs_currency}; "
+                f"requested_ids={requested_ids}; unavailable_ids={unavailable_ids}"
             )
 
         return result

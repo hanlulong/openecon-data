@@ -366,7 +366,14 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • For regions, specify individual countries")
             message_parts.append("  • Example: Instead of 'Asia', try 'China, Japan, South Korea'")
 
-        # 4. No Data Found
+        # 4. Provider-native data unavailable
+        elif 'coingecko_price_unavailable' in error_lower:
+            message_parts.append("📭 **No CoinGecko Price Available**")
+            message_parts.append("CoinGecko recognizes the asset, but its current price endpoint did not provide the requested metric.")
+            message_parts.append("")
+            message_parts.append(f"Provider evidence: {error}")
+
+        # 5. No Data Found
         elif 'no data found' in error_lower or 'no data available' in error_lower or 'norecordsfound' in error_lower:
             message_parts.append("📭 **No Data Found**")
             message_parts.append("The requested data is not available from this source.")

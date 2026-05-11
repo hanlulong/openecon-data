@@ -406,9 +406,21 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def runtime_supportability_reason(row: dict[str, Any], resp_json: dict[str, Any]) -> str | None:
+    provider = str(row.get('provider_stratum') or (row.get('origin') or {}).get('source_provider') or '').upper()
+    evidence = ' '.join(
+        str(resp_json.get(key) or '')
+        for key in ('error', 'message', 'response')
+    ).lower()
+    if provider == 'COINGECKO' and 'coingecko_price_unavailable' in evidence:
+        return 'coingecko_price_unavailable'
+    return None
+
+
 def record_response(row: dict[str, Any], dataset_type: str, round_index: int, query: str, resp, elapsed: float, data: dict[str, Any]) -> dict[str, Any]:
     response_signals = extract_response_signals(data)
-    return {
+    supportability_reason = runtime_supportability_reason(row, data)
+    record = {
         'session_id': row['id'],
         'dataset_type': dataset_type,
         'round_index': round_index,
@@ -425,6 +437,12 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
         'clarification_questions_count': response_signals['clarification_questions_count'],
         'response_text_present': response_signals['response_text_present'],
     }
+    if supportability_reason:
+        record.update({
+            'supportability_blocked': True,
+            'supportability_reason': supportability_reason,
+        })
+    return record
 
 
 def _retry_after_seconds(resp, fallback: float) -> float:

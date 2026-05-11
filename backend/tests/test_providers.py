@@ -15,12 +15,27 @@ from backend.providers.imf import IMFProvider
 from backend.providers.bis import BISProvider
 from backend.providers.eurostat import EurostatProvider
 from backend.providers.oecd import OECDProvider
+from backend.providers.coingecko import CoinGeckoProvider
 from backend.services.rate_limiter import ProviderRateLimitWaitExceeded
 from backend.tests.utils import MockAsyncClient, MockAsyncResponse, run
 from backend.utils.retry import DataNotAvailableError
 
 
 class ProviderTests(unittest.TestCase):
+    def test_coingecko_simple_price_fails_closed_for_missing_provider_metric(self) -> None:
+        provider = CoinGeckoProvider()
+
+        with patch.object(
+            provider,
+            "_make_request_with_retry",
+            new=AsyncMock(return_value={"rgb": {}}),
+        ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(provider.get_simple_price(["rgb"], vs_currency="usd"))
+
+        self.assertIn("coingecko_price_unavailable", str(raised.exception))
+        self.assertIn("requested_ids=rgb", str(raised.exception))
+
     def test_oecd_lookup_terms_do_not_expand_short_code_semantically(self) -> None:
         provider = OECDProvider()
         terms = provider._build_indicator_lookup_terms("PPI")  # pylint: disable=protected-access

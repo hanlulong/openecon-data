@@ -4875,6 +4875,7 @@ class QueryService:
             supportability_blocked = (
                 "fail-closed supportability block" in exc_text
                 or "imf_non_weo_public_surface_unsupported" in exc_text
+                or "coingecko_price_unavailable" in exc_text
             )
             if supportability_blocked:
                 formatted_message = QueryComplexityAnalyzer.format_error_message(
