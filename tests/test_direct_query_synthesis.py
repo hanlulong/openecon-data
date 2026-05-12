@@ -1135,6 +1135,25 @@ def test_user_answerability_does_not_preblock_on_legacy_imf_code_metadata() -> N
     assert unsupported_direct_surface_reason(row, audit) is None
 
 
+def test_user_answerability_audit_does_not_use_legacy_imf_code_as_inventory_risk() -> None:
+    row = {
+        "provider": "IMF",
+        "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        "query": "Brazil labor force participation from IMF",
+        "type": "direct",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "LE_PLP_RATE",
+            "name": "Labor Force Participation Rate",
+            "category": "INDICATOR",
+        },
+    }
+
+    audit = audit_direct_query_shape(row)
+
+    assert "imf_low_viability_family" not in audit["reasons"]
+
+
 def test_audit_direct_query_shape_keeps_broad_imf_ppi_query_executable() -> None:
     row = {"provider": "IMF", "query": "Brazil Producer Price Index from IMF", "type": "direct"}
 

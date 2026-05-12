@@ -15,6 +15,7 @@ from scripts.validation.common import (  # noqa: E402
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
     CERTIFICATION_TARGETS,
     DEFAULT_DB,
+    certification_target_for_row,
     provider_family_key,
     sample_indicator_rows,
     write_jsonl,
@@ -105,10 +106,19 @@ def direct_oversample_count(provider: str, count: int, provider_population: int)
 def select_quality_screened_direct_records(records: list[dict], count: int) -> list[dict]:
     def sort_key(record: dict) -> tuple[int, int, int, str]:
         provenance = dict(record.get('provenance') or {})
+        origin = dict(record.get('origin') or {})
         risk_level = str(provenance.get('query_quality_risk') or 'low')
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
         specificity = direct_query_specificity_score(record)
+        popularity = float(origin.get('popularity') or 0.0)
+        if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+            return (
+                1 if risk_rank >= 2 else 0,
+                -int(popularity),
+                len(str(record.get('query') or '')),
+                str(record.get('id') or ''),
+            )
         risk_penalty = {'low': 0, 'medium': 10, 'high': 25}.get(risk_level, 30)
         effective_specificity = specificity - risk_penalty
         risk_group = 1 if risk_rank >= 2 else 0

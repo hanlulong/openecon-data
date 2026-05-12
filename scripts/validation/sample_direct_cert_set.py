@@ -16,6 +16,7 @@ from scripts.validation.common import (
     CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
     CERTIFICATION_TARGETS,
+    certification_target_for_row,
     DEFAULT_DB,
     default_query_for_row,
     direct_query_specificity_score,
@@ -121,10 +122,20 @@ def build_record(
 def _select_quality_screened_records(records: list[dict], count: int) -> list[dict]:
     def sort_key(record: dict) -> tuple[int, int, int, int, str]:
         provenance = dict(record.get('provenance') or {})
+        origin = dict(record.get('origin') or {})
         risk_level = str(provenance.get('query_quality_risk') or 'low')
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
         specificity = direct_query_specificity_score(record)
+        popularity = float(origin.get('popularity') or 0.0)
+        if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+            return (
+                risk_rank,
+                -int(popularity),
+                len(str(record.get('query') or '')),
+                len(reasons),
+                str(record.get('id') or ''),
+            )
         risk_penalty = {'low': 0, 'medium': 10, 'high': 25}.get(risk_level, 30)
         effective_specificity = specificity - risk_penalty
         return (

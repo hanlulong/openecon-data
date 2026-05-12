@@ -31,6 +31,27 @@ CERTIFICATION_TARGETS = (
     CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
 )
+USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS = {
+    'coin_low_viability_family',
+    'coin_slug_query',
+    'eurostat_agri_breakdown_query',
+    'eurostat_cross_tab_query',
+    'eurostat_dimension_fragment_query',
+    'eurostat_forestry_material_flow_query',
+    'eurostat_transport_port_query',
+    'fred_hicp_catalog_family',
+    'fred_low_viability_family',
+    'imf_complex_finance_family',
+    'imf_low_viability_family',
+    'imf_price_or_memorandum_family',
+    'imf_query_only_public_surface_family',
+    'oecd_low_viability_family',
+    'oecd_non_production_dataflow',
+    'worldbank_country_availability_surface',
+    'worldbank_ddh_prevalence_family',
+    'worldbank_niche_catalog_family',
+    'worldbank_specialized_source_family',
+}
 _EMPIRICAL_CATEGORY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_FAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_SUBFAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
@@ -1340,6 +1361,20 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
             choice = inferred_country
     phrase = natural_phrase_from_name(name, description) or name or description or code
     provider_label = _provider_query_label(provider_upper, provider)
+    if len(phrase) > 120 or len(phrase.split()) > 18:
+        # The user-answerability target must not turn a frozen catalog title
+        # into a giant legacy-row replay prompt.  When a title is too dense,
+        # use the row only as sampling context and ask for the core concept
+        # tokens a user would reasonably type.
+        phrase = ' '.join(
+            top_tokens(
+                name,
+                description,
+                category,
+                str(origin.get('subcategory') or row.get('subcategory') or ''),
+                limit=6,
+            )
+        )
 
     if provider_upper == 'COINGECKO':
         asset = name.strip()
@@ -2349,6 +2384,17 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'socioeconomic_slice',
                 'multi_modifier_title',
             }
+        ]
+    if evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Provider/family supportability hints were built for frozen catalog
+        # replay.  In the user-answerability lane they must not become a
+        # pre-runtime judgment that a real user prompt is invalid.  Keep generic
+        # prompt-quality flags such as long/micro/conflicting-scope, and let the
+        # live answer path plus adjudication decide provider outcome.
+        reasons = [
+            reason
+            for reason in reasons
+            if reason not in USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS
         ]
     reasons = list(dict.fromkeys(reasons))
 
