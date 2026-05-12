@@ -336,7 +336,10 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         return False
 
     search_inputs = exact_title_search_inputs(text, provider_name)
-    min_name_len = 4 if _normalize_provider_name(provider_name) == "COINGECKO" else 24
+    provider_key = _normalize_provider_name(provider_name)
+    min_name_len = 4 if provider_key == "COINGECKO" else 24
+    if provider_key == "IMF":
+        min_name_len = 8
 
     candidates = []
     seen_codes = set()
@@ -399,6 +402,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
     search_inputs = exact_title_search_inputs(text, provider_name)
     provider_key = _normalize_provider_name(provider_name)
     min_name_len = 3 if provider_key == "COINGECKO" else 24
+    if provider_key == "IMF":
+        # IMF DataMapper/WEO exposes short, provider-native titles such as
+        # "Real GDP growth" and "Population".  These are exact title matches,
+        # not semantic concept-to-code shortcuts, so allow them through the
+        # existing provider-scoped exact-title path.
+        min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
 
     best_candidate: Optional[Dict[str, Any]] = None

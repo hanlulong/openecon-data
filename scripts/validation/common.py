@@ -1958,7 +1958,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append('classification_gva_query')
     if any(term in metadata_text for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile']):
         reasons.append('worldbank_niche_catalog_family')
-    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'fpn datahub archive', 'lac equity lab', 'country partnership strategy', 'disability data hub']):
+    if any(term in category_lower for term in ['global jobs indicators database', 'global findex', 'global financial inclusion and consumer protection survey', 'health nutrition and population statistics by wealth quintile', 'health equity and financial protection', 'atlas of social protection', 'education statistics', 'wdi database archives', 'statistical performance indicators', 'country climate and development report', 'indonesia database for policy and economic research', 'joint external debt hub', 'fpn datahub archive', 'lac equity lab', 'country partnership strategy', 'disability data hub']):
         reasons.append('worldbank_niche_catalog_family')
     if any(term in category_lower for term in ['quarterly external debt statistics', 'global public procurement', 'pefa', 'doing business']):
         reasons.append('worldbank_specialized_source_family')

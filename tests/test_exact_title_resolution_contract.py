@@ -62,7 +62,7 @@ def test_build_exact_indicator_title_intent_rejects_generic_suffix_only_match() 
     assert intent is None
 
 
-def test_build_exact_indicator_title_intent_preserves_broad_catalog_concept() -> None:
+def test_build_exact_indicator_title_intent_rejects_broad_catalog_concept_suffix_match() -> None:
     lookup_results = [
         {
             "provider": "FRED",
@@ -81,9 +81,7 @@ def test_build_exact_indicator_title_intent_preserves_broad_catalog_concept() ->
             all_providers=["FRED"],
         )
 
-    assert intent is not None
-    assert intent.parameters["__catalog_concept"] == "interest rate"
-    assert intent.parameters["__exact_indicator_title_match"] is True
+    assert intent is None
 
 
 def test_exact_title_match_prefers_count_variant_over_percentage_variant() -> None:
@@ -144,6 +142,32 @@ def test_exact_title_match_uses_exact_name_lookup_when_fts_misses_short_titles()
 
     assert match is not None
     assert match["code"] == "MYAGM1KRM189S"
+    assert looks_exact is True
+
+
+def test_exact_title_match_accepts_short_imf_weo_titles() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            assert "Real GDP growth" in search_inputs
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "NGDP_RPCH",
+                    "name": "Real GDP growth",
+                    "category": "WEO",
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match("Japan Real GDP growth from IMF", "IMF")
+        looks_exact = looks_like_exact_provider_title_match("Japan Real GDP growth from IMF", "IMF")
+
+    assert match is not None
+    assert match["code"] == "NGDP_RPCH"
     assert looks_exact is True
 
 

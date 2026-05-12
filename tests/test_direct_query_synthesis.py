@@ -721,6 +721,23 @@ def test_audit_direct_query_shape_flags_worldbank_dhs_family() -> None:
     assert "worldbank_education_expenditure_family" in audit["reasons"]
 
 
+def test_audit_direct_query_shape_flags_worldbank_education_statistics_inventory_family() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "provider": "WorldBank",
+            "query": "India proportion students the end lower secondary from World Bank",
+            "origin": {
+                "name": "Proportion of students at the end of lower secondary education achieving minimum proficiency",
+                "source_indicator_code": "UIS.MATH.LOWERSEC.LPIA",
+                "category": "Education Statistics",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_niche_catalog_family" in audit["reasons"]
+
+
 def test_audit_direct_query_shape_flags_worldbank_dac_donor_role_family() -> None:
     audit = audit_direct_query_shape(
         {

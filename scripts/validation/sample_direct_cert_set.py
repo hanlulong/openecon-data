@@ -5,6 +5,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,9 +23,11 @@ from scripts.validation.common import (
     direct_query_specificity_score,
     infer_scope_family,
     infer_transform_family,
+    imf_public_sdmx_runtime_family,
     read_json,
     sample_indicator_rows,
     top_tokens,
+    USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS,
     write_jsonl,
 )
 
@@ -120,17 +123,26 @@ def build_record(
 
 
 def _select_quality_screened_records(records: list[dict], count: int) -> list[dict]:
-    def sort_key(record: dict) -> tuple[int, int, int, int, str]:
+    def sort_key(record: dict) -> tuple:
         provenance = dict(record.get('provenance') or {})
         origin = dict(record.get('origin') or {})
         risk_level = str(provenance.get('query_quality_risk') or 'low')
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
+        selection_reasons = list(provenance.get('selection_quality_reasons') or reasons)
+        inventory_only_reason_count = sum(
+            1
+            for reason in selection_reasons
+            if reason in USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS
+        )
+        provider_anchor = bool(provenance.get('user_answerability_sampling_anchor'))
         specificity = direct_query_specificity_score(record)
         popularity = float(origin.get('popularity') or 0.0)
         if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             return (
                 risk_rank,
+                0 if provider_anchor else 1,
+                inventory_only_reason_count,
                 0 if popularity > 0 else 1,
                 -int(popularity),
                 -specificity,
@@ -150,6 +162,60 @@ def _select_quality_screened_records(records: list[dict], count: int) -> list[di
 
     ranked = sorted(records, key=sort_key)
     return ranked[:count]
+
+
+def _user_answerability_sampling_anchor_reason(row: dict) -> str | None:
+    """Return provider-native candidate-selection evidence for real-user rows.
+
+    This is deliberately only a sampler prior.  It does not make the runtime
+    result correct, it does not map old catalog labels to new codes, and it
+    does not create supportability/pass judgments.  It just prevents
+    row-count-heavy stale inventory surfaces from crowding out provider-native
+    current answer surfaces in the first user-answerability holdout chunks.
+    """
+    provider = str(row.get('provider') or '').upper()
+    category = str(row.get('category') or '').strip().lower()
+    code = str(row.get('code') or '').strip()
+    name = str(row.get('name') or '').strip()
+    if provider == 'IMF':
+        if category == 'weo':
+            return 'imf_provider_native_weo_surface'
+        sdmx_family = imf_public_sdmx_runtime_family(code, name, str(row.get('category') or ''))
+        if sdmx_family:
+            return f'imf_provider_native_sdmx_{sdmx_family}'
+    return None
+
+
+def _provider_anchor_rows(provider: str, *, db_path: Path) -> list[dict]:
+    provider_upper = provider.upper()
+    if provider_upper != 'IMF':
+        return []
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        '''
+        SELECT id, provider, code, name, description, category, subcategory, unit,
+               frequency, coverage, start_date, end_date, keywords, synonyms,
+               raw_metadata, popularity, last_updated
+        FROM indicators
+        WHERE provider = ?
+          AND lower(coalesce(category, '')) = 'weo'
+        ORDER BY id
+        ''',
+        (provider,),
+    ).fetchall()
+    con.close()
+    return [dict(row) for row in rows]
+
+
+def _merge_provider_anchor_rows(provider: str, sampled_rows: list[dict], *, db_path: Path) -> list[dict]:
+    anchors = _provider_anchor_rows(provider, db_path=db_path)
+    if not anchors:
+        return sampled_rows
+    by_id: dict[object, dict] = {row.get('id'): row for row in sampled_rows}
+    for row in anchors:
+        by_id.setdefault(row.get('id'), row)
+    return list(by_id.values())
 
 
 def provider_oversample_target(
@@ -211,6 +277,8 @@ def main() -> int:
             oversample_buffer=args.oversample_buffer,
         )
         samples = sample_indicator_rows(provider, oversample_count, db_path=args.db_path.resolve(), seed=args.seed)
+        if args.certification_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+            samples = _merge_provider_anchor_rows(provider, samples, db_path=args.db_path.resolve())
         candidate_records = []
         for row in samples:
             record = build_record(
@@ -227,6 +295,17 @@ def main() -> int:
             quality = audit_direct_query_shape(record)
             record['provenance']['query_quality_risk'] = quality['risk_level']
             record['provenance']['query_quality_reasons'] = quality['reasons']
+            selection_quality_record = dict(record)
+            selection_quality_record['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality_record['provenance'] = dict(record.get('provenance') or {})
+            selection_quality_record['provenance']['certification_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality_record['gold'] = dict(record.get('gold') or {})
+            selection_quality_record['gold']['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality = audit_direct_query_shape(selection_quality_record)
+            record['provenance']['selection_quality_reasons'] = selection_quality['reasons']
+            anchor_reason = _user_answerability_sampling_anchor_reason(row)
+            if anchor_reason:
+                record['provenance']['user_answerability_sampling_anchor'] = anchor_reason
             candidate_records.append(record)
             seq += 1
         rows_out.extend(_select_quality_screened_records(candidate_records, scaled_count))

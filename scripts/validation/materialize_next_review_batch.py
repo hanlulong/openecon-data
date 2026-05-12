@@ -12,9 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import (  # noqa: E402
+    CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
     CERTIFICATION_TARGETS,
     DEFAULT_DB,
+    USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS,
     certification_target_for_row,
     provider_family_key,
     sample_indicator_rows,
@@ -22,6 +24,10 @@ from scripts.validation.common import (  # noqa: E402
 )
 from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score, family_success_adjustment  # noqa: E402
 from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
+from scripts.validation.sample_direct_cert_set import (  # noqa: E402
+    _merge_provider_anchor_rows,
+    _user_answerability_sampling_anchor_reason,
+)
 from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
     annotate as annotate_multiround,
     mixed_provider_switch,
@@ -104,17 +110,26 @@ def direct_oversample_count(provider: str, count: int, provider_population: int)
 
 
 def select_quality_screened_direct_records(records: list[dict], count: int) -> list[dict]:
-    def sort_key(record: dict) -> tuple[int, int, int, str]:
+    def sort_key(record: dict) -> tuple:
         provenance = dict(record.get('provenance') or {})
         origin = dict(record.get('origin') or {})
         risk_level = str(provenance.get('query_quality_risk') or 'low')
         risk_rank = {'low': 0, 'medium': 1, 'high': 2}.get(risk_level, 3)
         reasons = list(provenance.get('query_quality_reasons') or [])
+        selection_reasons = list(provenance.get('selection_quality_reasons') or reasons)
+        inventory_only_reason_count = sum(
+            1
+            for reason in selection_reasons
+            if reason in USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS
+        )
+        provider_anchor = bool(provenance.get('user_answerability_sampling_anchor'))
         specificity = direct_query_specificity_score(record)
         popularity = float(origin.get('popularity') or 0.0)
         if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             return (
                 1 if risk_rank >= 2 else 0,
+                0 if provider_anchor else 1,
+                inventory_only_reason_count,
                 0 if popularity > 0 else 1,
                 -int(popularity),
                 -specificity,
@@ -206,6 +221,8 @@ def materialize_direct(
         provider_population = int(provider_counts.get(provider, count))
         oversample_count = direct_oversample_count(provider, count, provider_population)
         samples = sample_indicator_rows(provider, oversample_count, db_path=db_path.resolve(), seed=seed)
+        if certification_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+            samples = _merge_provider_anchor_rows(provider, samples, db_path=db_path.resolve())
         candidate_records = []
         for row in samples:
             record = build_direct_record(
@@ -224,6 +241,17 @@ def materialize_direct(
             record['provenance']['batch_plan'] = 'next_review_batch'
             record['provenance']['query_quality_risk'] = quality['risk_level']
             record['provenance']['query_quality_reasons'] = quality['reasons']
+            selection_quality_record = dict(record)
+            selection_quality_record['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality_record['provenance'] = dict(record.get('provenance') or {})
+            selection_quality_record['provenance']['certification_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality_record['gold'] = dict(record.get('gold') or {})
+            selection_quality_record['gold']['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+            selection_quality = audit_direct_query_shape(selection_quality_record)
+            record['provenance']['selection_quality_reasons'] = selection_quality['reasons']
+            anchor_reason = _user_answerability_sampling_anchor_reason(row)
+            if anchor_reason:
+                record['provenance']['user_answerability_sampling_anchor'] = anchor_reason
             candidate_records.append(record)
             seq += 1
         selected_records = select_quality_screened_direct_records(candidate_records, count)
