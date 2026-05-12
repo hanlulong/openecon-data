@@ -115,7 +115,9 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
         if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             return (
                 1 if risk_rank >= 2 else 0,
+                0 if popularity > 0 else 1,
                 -int(popularity),
+                -specificity,
                 len(str(record.get('query') or '')),
                 str(record.get('id') or ''),
             )

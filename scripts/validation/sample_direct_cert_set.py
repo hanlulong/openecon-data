@@ -131,7 +131,9 @@ def _select_quality_screened_records(records: list[dict], count: int) -> list[di
         if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             return (
                 risk_rank,
+                0 if popularity > 0 else 1,
                 -int(popularity),
+                -specificity,
                 len(str(record.get('query') or '')),
                 len(reasons),
                 str(record.get('id') or ''),
