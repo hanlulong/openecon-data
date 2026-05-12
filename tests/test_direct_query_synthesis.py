@@ -327,6 +327,44 @@ def test_user_answerability_statscan_keeps_exact_table_title_without_high_risk()
     assert audit["risk_level"] != "high"
 
 
+def test_user_answerability_oecd_keeps_exact_dataflow_title_without_high_risk():
+    title = (
+        "Share of young adults who are not employment nor in formal education or training (NEET), "
+        "by country of birth and age at migration"
+    )
+    row = {
+        "id": 1,
+        "provider": "OECD",
+        "code": "OECD_DSD_EAG_LSO_EA@DF_LSO_TRANS_MIGR",
+        "name": title,
+        "description": "",
+        "category": "OECD Dataflow",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "OECD",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "OECD_DSD_EAG_LSO_EA@DF_LSO_TRANS_MIGR",
+                "source_provider": "OECD",
+                "category": "OECD Dataflow",
+            },
+        }
+    )
+
+    assert title in query
+    assert "OECD_DSD_EAG_LSO_EA" not in query
+    assert query.endswith("from OECD")
+    assert audit["risk_level"] != "high"
+
+
 def test_user_answerability_direct_record_preserves_unit_in_origin_and_gold_tags():
     row = {
         "id": 1,

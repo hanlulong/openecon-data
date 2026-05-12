@@ -1622,6 +1622,10 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         provider_upper in {'STATSCAN', 'STATISTICS CANADA'}
         and bool(name)
         and not re.fullmatch(r'\d{8,10}', name.strip())
+    ) or (
+        provider_upper == 'OECD'
+        and bool(name)
+        and not re.fullmatch(r'[A-Z0-9_@]{1,40}', name.strip())
     )
     if preserve_provider_title and name:
         # Some providers expose many similarly named public tables/datasets that
@@ -2728,6 +2732,36 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'acronym_dense',
                 'country_scope_conflict',
                 'methodology_dense',
+                'multi_modifier_title',
+            }
+        ]
+    exact_oecd_title_query = (
+        provider_upper == 'OECD'
+        and origin_name
+        and (
+            _normal_title_key(origin_name) in _normal_title_key(query)
+            or _title_token_coverage(origin_name, query) >= 0.90
+        )
+        and re.search(r'\bfrom\s+OECD$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_oecd_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # OECD public dataflow titles are often long and dimension-rich.  Treat
+        # exact title prompts as user-supplied provider-native evidence and let
+        # runtime/adjudication decide the result instead of preblocking on
+        # generic length/acronym/subgroup heuristics.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'acronym_dense',
+                'provider_title_like',
+                'country_scope_conflict',
+                'micro_demographic_slice',
+                'education_subgroup_slice',
+                'socioeconomic_slice',
+                'survey_micro_slice',
                 'multi_modifier_title',
             }
         ]
