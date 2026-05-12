@@ -803,10 +803,37 @@ def top_tokens(*parts: str, limit: int = 6) -> list[str]:
     text = ' '.join(part for part in parts if part)
     tokens = []
     seen = set()
+    stopwords = {
+        'the',
+        'and',
+        'for',
+        'with',
+        'from',
+        'into',
+        'onto',
+        'than',
+        'that',
+        'this',
+        'those',
+        'these',
+        'their',
+        'there',
+        'where',
+        'which',
+        'would',
+        'could',
+        'should',
+        'below',
+        'above',
+        'among',
+        'using',
+        'based',
+        'adjusted',
+    }
     for token in re.findall(r'[A-Za-z0-9]+', text.lower()):
         if len(token) <= 2:
             continue
-        if token in {'series', 'indicator', 'index', 'rate', 'data', 'table'}:
+        if token in stopwords or token in {'series', 'indicator', 'index', 'rate', 'data', 'table'}:
             continue
         if token not in seen:
             seen.add(token)
@@ -1133,12 +1160,13 @@ def natural_phrase_from_name(name: str, description: str = '') -> str:
     if not kept:
         kept = parts[:2]
 
-    if description and re.fullmatch(r'[A-Z]{1,3}', kept[0].upper()):
+    if description and len(kept) == 1 and re.fullmatch(r'[A-Z]{1,3}', kept[0].upper()):
         contextual = description_context_phrase(description)
         if contextual:
             return contextual
 
     head = kept[0]
+    head_is_acronym = re.fullmatch(r'[A-Z]{2,5}', head.strip()) is not None
     prefixes: list[str] = []
     suffixes: list[str] = []
     for part in kept[1:]:
@@ -1150,7 +1178,10 @@ def natural_phrase_from_name(name: str, description: str = '') -> str:
             suffixes.append(part)
             continue
         if len(lowered.split()) <= 2 and not re.search(r'[()]', lowered):
-            prefixes.append(part)
+            if head_is_acronym:
+                suffixes.append(part)
+            else:
+                prefixes.append(part)
             continue
         suffixes.append(part)
 
@@ -1330,6 +1361,225 @@ def _default_user_answerability_country(provider: str, provider_upper: str, cate
     return preferred_default_country_for_record(provider_upper, category, name, defaults, choice)
 
 
+def _normal_title_key(value: str) -> str:
+    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
+
+
+def _title_token_coverage(origin_title: str, query: str) -> float:
+    origin_tokens = [
+        token
+        for token in re.findall(r'[a-z0-9]+', str(origin_title or '').lower())
+        if len(token) > 1
+    ]
+    if not origin_tokens:
+        return 0.0
+    query_tokens = set(
+        token
+        for token in re.findall(r'[a-z0-9]+', str(query or '').lower())
+        if len(token) > 1
+    )
+    if not query_tokens:
+        return 0.0
+    return sum(1 for token in origin_tokens if token in query_tokens) / len(origin_tokens)
+
+
+def _looks_like_eurostat_dataset_code(value: str) -> bool:
+    return re.fullmatch(r'[A-Z][A-Z0-9_]{3,}', str(value or '').strip(), flags=re.IGNORECASE) is not None
+
+
+def _metadata_unit_from_raw(raw_value: Any) -> str:
+    if not raw_value:
+        return ''
+    try:
+        parsed = json.loads(str(raw_value))
+    except Exception:
+        return ''
+    if not isinstance(parsed, dict):
+        return ''
+    return str(parsed.get('unit') or '').strip()
+
+
+def _metadata_frequency_from_raw(raw_value: Any) -> str:
+    if not raw_value:
+        return ''
+    try:
+        parsed = json.loads(str(raw_value))
+    except Exception:
+        return ''
+    if not isinstance(parsed, dict):
+        return ''
+    return str(parsed.get('frequency') or parsed.get('frequency_short') or '').strip()
+
+
+def _row_unit(row: dict[str, Any], origin: dict[str, Any]) -> str:
+    return (
+        str(row.get('unit') or '').strip()
+        or str(origin.get('unit') or '').strip()
+        or _metadata_unit_from_raw(origin.get('raw_metadata') or row.get('raw_metadata'))
+    )
+
+
+def _row_frequency(row: dict[str, Any], origin: dict[str, Any]) -> str:
+    return (
+        str(row.get('frequency') or '').strip()
+        or str(origin.get('frequency') or '').strip()
+        or _metadata_frequency_from_raw(origin.get('raw_metadata') or row.get('raw_metadata'))
+    )
+
+
+@lru_cache(maxsize=32)
+def _provider_title_units(provider: str, db_path_text: str = str(DEFAULT_DB)) -> dict[str, list[dict[str, str]]]:
+    provider = str(provider or '').strip()
+    if not provider:
+        return {}
+    db_path = Path(db_path_text)
+    if not db_path.exists():
+        return {}
+    try:
+        con = sqlite3.connect(str(db_path))
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            'SELECT code, name, unit, frequency, raw_metadata FROM indicators WHERE provider = ?',
+            (provider,),
+        ).fetchall()
+        con.close()
+    except Exception:
+        return {}
+
+    by_title: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        name = str(row['name'] or '')
+        key = _normal_title_key(name)
+        if not key:
+            continue
+        unit = str(row['unit'] or '').strip() or _metadata_unit_from_raw(row['raw_metadata'])
+        frequency = str(row['frequency'] or '').strip() or _metadata_frequency_from_raw(row['raw_metadata'])
+        by_title.setdefault(key, []).append(
+            {
+                'code': str(row['code'] or '').strip(),
+                'unit': unit,
+                'frequency': frequency,
+                'name': name.strip(),
+            }
+        )
+    return by_title
+
+
+def _unit_disambiguator_for_duplicate_title(
+    row: dict[str, Any],
+    *,
+    provider: str,
+    name: str,
+    phrase: str,
+    origin: dict[str, Any],
+) -> str:
+    """Return unit text when a provider-native title maps to multiple codes.
+
+    User-answerability certification should not mark an arbitrary runtime pick
+    as correct when the sampled title is duplicated in the provider catalog and
+    the query omits the measurement unit that distinguishes the rows.  The unit
+    is catalog metadata, not a semantic shortcut: it makes the user prompt
+    explicit enough for adjudication.
+    """
+    title_key = _normal_title_key(name)
+    if not title_key:
+        return ''
+    matches = _provider_title_units(provider).get(title_key) or []
+    distinct_codes = {str(match.get('code') or '').upper() for match in matches if match.get('code')}
+    if len(distinct_codes) <= 1:
+        return ''
+    distinct_units = {
+        _normal_title_key(str(match.get('unit') or ''))
+        for match in matches
+        if str(match.get('unit') or '').strip()
+    }
+    if len(distinct_units) <= 1:
+        return ''
+    unit = _row_unit(row, origin)
+    if not unit:
+        code = str(row.get('code') or origin.get('source_indicator_code') or '').strip().upper()
+        unit = next(
+            (
+                str(match.get('unit') or '').strip()
+                for match in matches
+                if str(match.get('code') or '').strip().upper() == code
+            ),
+            '',
+        )
+    if not unit:
+        return ''
+    unit_tokens = set(re.findall(r'[a-z0-9]+', unit.lower()))
+    phrase_tokens = set(re.findall(r'[a-z0-9]+', str(phrase or '').lower()))
+    informative_unit_tokens = {token for token in unit_tokens if len(token) > 2 and token not in {'per', 'the', 'and'}}
+    if informative_unit_tokens and informative_unit_tokens <= phrase_tokens:
+        return ''
+    return re.sub(r'\s+', ' ', re.sub(r'[;:]+', ' ', unit)).strip(' ,;')
+
+
+def _append_unit_disambiguator(phrase: str, unit: str) -> str:
+    if not unit:
+        return phrase
+    return re.sub(r'\s+', ' ', f"{phrase} in {unit}").strip()
+
+
+def _frequency_disambiguator_for_duplicate_title(
+    row: dict[str, Any],
+    *,
+    provider: str,
+    name: str,
+    phrase: str,
+    origin: dict[str, Any],
+) -> str:
+    """Return frequency text when a duplicated title differs by cadence.
+
+    This is prompt disambiguation, not a provider-code shortcut.  FRED and
+    similar catalogs often publish the same title/unit at monthly, weekly, or
+    daily frequencies; a real user must specify cadence if they want a
+    particular public series.
+    """
+    title_key = _normal_title_key(name)
+    if not title_key:
+        return ''
+    matches = _provider_title_units(provider).get(title_key) or []
+    distinct_codes = {str(match.get('code') or '').upper() for match in matches if match.get('code')}
+    if len(distinct_codes) <= 1:
+        return ''
+    distinct_frequencies = {
+        _normal_title_key(str(match.get('frequency') or ''))
+        for match in matches
+        if str(match.get('frequency') or '').strip()
+    }
+    if len(distinct_frequencies) <= 1:
+        return ''
+    frequency = _row_frequency(row, origin)
+    if not frequency:
+        code = str(row.get('code') or origin.get('source_indicator_code') or '').strip().upper()
+        frequency = next(
+            (
+                str(match.get('frequency') or '').strip()
+                for match in matches
+                if str(match.get('code') or '').strip().upper() == code
+            ),
+            '',
+        )
+    if not frequency:
+        return ''
+    frequency_tokens = set(re.findall(r'[a-z0-9]+', frequency.lower()))
+    phrase_tokens = set(re.findall(r'[a-z0-9]+', str(phrase or '').lower()))
+    informative_frequency_tokens = {
+        token for token in frequency_tokens if len(token) > 2 and token not in {'the', 'and'}
+    }
+    if informative_frequency_tokens and informative_frequency_tokens <= phrase_tokens:
+        return ''
+    return re.sub(r'\s+', ' ', re.sub(r'[;:]+', ' ', frequency)).strip(' ,;')
+
+
+def _append_frequency_disambiguator(phrase: str, frequency: str) -> str:
+    if not frequency:
+        return phrase
+    return re.sub(r'\s+', ' ', f"{phrase} ({frequency})").strip()
+
+
 def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
     """Build a real-user-style query from catalog evidence without requiring replay of legacy codes.
 
@@ -1361,7 +1611,26 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
             choice = inferred_country
     phrase = natural_phrase_from_name(name, description) or name or description or code
     provider_label = _provider_query_label(provider_upper, provider)
-    if len(phrase) > 120 or len(phrase.split()) > 18:
+    preserve_provider_title = (
+        provider_upper == 'WORLDBANK'
+        and str(category or '').strip().lower() == 'world development indicators'
+    ) or (
+        provider_upper == 'EUROSTAT'
+        and bool(name)
+        and not _looks_like_eurostat_dataset_code(name)
+    ) or (
+        provider_upper in {'STATSCAN', 'STATISTICS CANADA'}
+        and bool(name)
+        and not re.fullmatch(r'\d{8,10}', name.strip())
+    )
+    if preserve_provider_title and name:
+        # Some providers expose many similarly named public tables/datasets that
+        # differ only in late title qualifiers.  Collapsing those titles to top
+        # tokens creates ambiguous prompts and can certify a wrong neighboring
+        # surface.  Keep the provider-native title as the real-user question text
+        # and let exact-title resolution/adjudication decide outcome.
+        phrase = name
+    if (len(phrase) > 120 or len(phrase.split()) > 18) and not preserve_provider_title:
         # The user-answerability target must not turn a frozen catalog title
         # into a giant legacy-row replay prompt.  When a title is too dense,
         # use the row only as sampling context and ask for the core concept
@@ -1375,6 +1644,27 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
                 limit=6,
             )
         )
+
+    phrase = _append_unit_disambiguator(
+        phrase,
+        _unit_disambiguator_for_duplicate_title(
+            row,
+            provider=provider,
+            name=name,
+            phrase=phrase,
+            origin=origin,
+        ),
+    )
+    phrase = _append_frequency_disambiguator(
+        phrase,
+        _frequency_disambiguator_for_duplicate_title(
+            row,
+            provider=provider,
+            name=name,
+            phrase=phrase,
+            origin=origin,
+        ),
+    )
 
     if provider_upper == 'COINGECKO':
         asset = name.strip()
@@ -1406,8 +1696,16 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         phrase = description_context_phrase(description) or f"{provider_label} indicator {phrase}"
     if provider_upper == 'OECD' and re.fullmatch(r'[A-Z0-9_@]{1,40}', phrase):
         phrase = description_context_phrase(description) or f"OECD indicator {phrase}"
-    if provider_upper == 'EUROSTAT' and re.fullmatch(r'[A-Z][A-Z0-9_]{3,}', phrase):
+    if provider_upper == 'EUROSTAT' and _looks_like_eurostat_dataset_code(phrase):
         phrase = description_context_phrase(description) or f"Eurostat dataset {phrase}"
+    if provider_upper == 'WORLDBANK':
+        # WorldBank has a native all-country surface.  Do not inject an
+        # arbitrary default country into user-answerability prompts unless the
+        # catalog evidence itself carries an intrinsic country scope.  Random
+        # default countries turn otherwise answerable provider-native series
+        # into false no-data failures for sparse education/food-price surfaces.
+        prefix = '' if query_mentions_country(phrase) or not inferred_country else f"{choice} "
+        return f"{prefix}{phrase} from {provider_label}".strip()
 
     prefix = '' if query_mentions_country(phrase) else f"{choice} "
     return f"{prefix}{phrase} from {provider_label}".strip()
@@ -2330,6 +2628,84 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'multi_modifier_title',
             }
         ]
+    exact_worldbank_title_query = (
+        provider_upper == 'WORLDBANK'
+        and origin_name
+        and _normal_title_key(origin_name) in _normal_title_key(query)
+        and re.search(r'\bfrom\s+World\s+Bank$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_worldbank_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # A provider-native WorldBank title is a valid user-answerability probe
+        # when the prompt itself carries the title.  Length/subgroup words are
+        # not final semantic authority; runtime replay and adjudication must
+        # decide whether the public provider returns the requested series.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'provider_title_like',
+                'education_subgroup_slice',
+                'micro_demographic_slice',
+                'multi_modifier_title',
+            }
+        ]
+    exact_fred_title_query = (
+        provider_upper == 'FRED'
+        and origin_name
+        and (
+            _normal_title_key(origin_name) in _normal_title_key(query)
+            or _title_token_coverage(origin_name, query) >= 0.90
+        )
+        and re.search(r'\bfrom\s+FRED$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_fred_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # FRED publishes many provider-native titles that are long because they
+        # encode accounting sector/instrument/cadence.  If the user prompt
+        # carries that exact public title, prompt length/acronyms are not final
+        # semantic authority; runtime plus adjudication owns correctness.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'acronym_dense',
+                'provider_title_like',
+                'country_scope_conflict',
+                'multi_modifier_title',
+            }
+        ]
+    exact_eurostat_title_query = (
+        provider_upper == 'EUROSTAT'
+        and origin_name
+        and _normal_title_key(origin_name) in _normal_title_key(query)
+        and re.search(r'\bfrom\s+Eurostat$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_eurostat_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Eurostat title families are densely qualified and many valid
+        # dataflows only differ in late title modifiers.  In the
+        # user-answerability lane, an exact provider-native title is the
+        # evidence the user supplied, not a rule-based semantic judgment.  Do
+        # not preblock solely because the exact public title is long,
+        # punctuation-heavy, acronym-heavy, scope-word-heavy, or has many
+        # modifiers.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'acronym_dense',
+                'provider_title_like',
+                'country_scope_conflict',
+                'micro_demographic_slice',
+                'education_subgroup_slice',
+                'socioeconomic_slice',
+                'survey_micro_slice',
+                'multi_modifier_title',
+            }
+        ]
     exact_oecd_code_query = (
         provider_upper == 'OECD'
         and origin_code_upper
@@ -2382,6 +2758,33 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'long_query',
                 'education_subgroup_slice',
                 'socioeconomic_slice',
+                'multi_modifier_title',
+            }
+        ]
+    exact_statscan_title_query = (
+        provider_upper in {'STATSCAN', 'STATISTICS CANADA'}
+        and origin_name
+        and _normal_title_key(origin_name) in _normal_title_key(query)
+        and re.search(r'\bfrom\s+(?:StatsCan|Statistics\s+Canada)$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_statscan_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Statistics Canada table titles are often long, survey/dimension-rich
+        # public labels.  In user-answerability certification, an exact public
+        # table title should go through runtime + adjudication rather than being
+        # preblocked by generic prompt-shape heuristics.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'acronym_dense',
+                'provider_title_like',
+                'country_scope_conflict',
+                'micro_demographic_slice',
+                'education_subgroup_slice',
+                'socioeconomic_slice',
+                'survey_micro_slice',
                 'multi_modifier_title',
             }
         ]

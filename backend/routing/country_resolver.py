@@ -751,6 +751,18 @@ class CountryResolver:
             # "(current US$)" or "U.S. dollars"; those are not country scope.
             return re.match(r"\s*(?:\$|dollars?\b)", query[match_end:], flags=re.IGNORECASE) is not None
 
+        def _is_world_denominator_context(match_start: int) -> bool:
+            # "share of world" / "% of world" in indicator titles describes a
+            # denominator or unit, not a requested World aggregate geography.
+            preceding = query_lower[max(0, match_start - 48):match_start]
+            return bool(
+                re.search(
+                    r"(?:share|percent(?:age)?|proportion|ratio|%)\s+of\s+$",
+                    preceding,
+                    flags=re.IGNORECASE,
+                )
+            )
+
         for alias in sorted_aliases:
             code = cls.COUNTRY_ALIASES[alias]
             alias_lower = alias.lower()
@@ -774,6 +786,8 @@ class CountryResolver:
             pattern = rf"(?<!\w){re.escape(alias_lower)}(?!\w)"
             for match in re.finditer(pattern, query_lower):
                 if code == "US" and _is_us_currency_unit(match.end()):
+                    continue
+                if code == "1W" and _is_world_denominator_context(match.start()):
                     continue
                 pos = match.start()
                 if code not in country_positions or pos < country_positions[code]:

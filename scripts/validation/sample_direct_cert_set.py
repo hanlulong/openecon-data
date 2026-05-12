@@ -55,9 +55,19 @@ def build_record(
     provider = str(row['provider'])
     name = str(row.get('name') or '').strip()
     description = str(row.get('description') or '').strip()
-    transform = infer_transform_family(name, description, str(row.get('unit') or ''), str(row.get('code') or ''))
+    unit = str(row.get('unit') or '').strip()
+    transform = infer_transform_family(name, description, unit, str(row.get('code') or ''))
     scope = infer_scope_family(provider, row.get('coverage'))
-    tokens = top_tokens(name, description, str(row.get('category') or ''), str(row.get('subcategory') or ''))
+    tokens = top_tokens(
+        name,
+        description,
+        str(row.get('category') or ''),
+        str(row.get('subcategory') or ''),
+    )
+    unit_tokens = [token for token in top_tokens(unit, limit=2) if token != 'economic'] if unit else []
+    required_concept_tags = tokens[:4] + [
+        token for token in unit_tokens if token not in tokens[:4]
+    ][:2]
     sampling_probability = (provider_sample_count / provider_count) if provider_count else None
     selection_weight = (1.0 / sampling_probability) if sampling_probability else None
     return {
@@ -78,6 +88,7 @@ def build_record(
             'description': description,
             'category': row.get('category'),
             'subcategory': row.get('subcategory'),
+            'unit': unit or None,
             'coverage': row.get('coverage'),
             'frequency': row.get('frequency'),
             'keywords': row.get('keywords'),
@@ -99,7 +110,7 @@ def build_record(
         },
         'gold': {
             'evaluation_target': certification_target,
-            'required_concept_tags': tokens[:4],
+            'required_concept_tags': required_concept_tags,
             'required_transform_tags': [transform],
             'required_country_scope': None,
             'required_time_scope': None,

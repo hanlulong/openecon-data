@@ -171,6 +171,76 @@ def test_exact_title_match_accepts_short_imf_weo_titles() -> None:
     assert looks_exact is True
 
 
+def test_exact_title_match_rejects_ambiguous_duplicate_imf_title_without_unit() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "NGDPDPC",
+                    "name": "GDP per capita, current prices",
+                    "unit": "U.S. dollars per capita",
+                    "category": "WEO",
+                },
+                {
+                    "provider": "IMF",
+                    "code": "PPPPC",
+                    "name": "GDP per capita, current prices",
+                    "unit": "Purchasing power parity; international dollars per capita",
+                    "category": "WEO",
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match("Germany GDP per capita current prices from IMF", "IMF")
+        looks_exact = looks_like_exact_provider_title_match(
+            "Germany GDP per capita current prices from IMF",
+            "IMF",
+        )
+
+    assert match is None
+    assert looks_exact is True
+
+
+def test_exact_title_match_uses_unit_to_disambiguate_duplicate_imf_title() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            assert "GDP per capita current prices" in search_inputs
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "NGDPDPC",
+                    "name": "GDP per capita, current prices",
+                    "unit": "U.S. dollars per capita",
+                    "category": "WEO",
+                },
+                {
+                    "provider": "IMF",
+                    "code": "PPPPC",
+                    "name": "GDP per capita, current prices",
+                    "unit": "Purchasing power parity; international dollars per capita",
+                    "category": "WEO",
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "Germany GDP per capita current prices in U.S. dollars per capita from IMF",
+            "IMF",
+        )
+
+    assert match is not None
+    assert match["code"] == "NGDPDPC"
+
+
 def test_exact_title_match_prefers_base_worldbank_series_over_unrequested_quintile_variant() -> None:
     class _Lookup:
         def exact_name_matches(self, search_inputs, provider=None, limit=20):
@@ -224,6 +294,31 @@ def test_exact_title_match_uses_normalized_title_lookup_for_comma_variants(tmp_p
 
     assert match is not None
     assert match["code"] == "SL.UEM.TOTL.MA.NE.ZS"
+    assert looks_exact is True
+
+
+def test_exact_title_match_ignores_appended_frequency_disambiguator(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="FRED",
+            code="DTWEXM",
+            name="Nominal Major Currencies U.S. Dollar Index (Goods Only) (DISCONTINUED)",
+            popularity=10,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = (
+        "US Nominal Major Currencies U.S. Dollar Index (Goods Only) "
+        "(DISCONTINUED) (Daily) from FRED"
+    )
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "FRED")
+        looks_exact = looks_like_exact_provider_title_match(query, "FRED")
+
+    assert match is not None
+    assert match["code"] == "DTWEXM"
     assert looks_exact is True
 
 

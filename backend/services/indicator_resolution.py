@@ -411,10 +411,11 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
     query_country_codes = _extract_country_codes_from_text(query_text)
 
     best_candidate: Optional[Dict[str, Any]] = None
-    best_rank = (-999, -1, -999, -1, -999)
+    best_rank = (-999, -1, -999, -999, -1, -999)
+    ranked_matches: list[tuple[tuple[int, int, int, int, int, int], dict[str, Any]]] = []
     seen_codes = set()
 
-    def _unit_compatibility_rank(query: str, name: str) -> int:
+    def _unit_compatibility_rank(query: str, name: str, unit: str = "") -> int:
         """Prefer exact-title candidates with the same measurement family.
 
         WorldBank and other broad catalogs often contain near-duplicate title
@@ -442,15 +443,31 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         name_is_count = bool(name_tokens & count_cues)
         name_is_ratio = bool(name_tokens & ratio_cues)
 
+        base_rank = 0
         if query_wants_count and name_is_count and not name_is_ratio:
-            return 2
-        if query_wants_ratio and name_is_ratio and not name_is_count:
-            return 2
-        if query_wants_count and name_is_ratio and not name_is_count:
-            return -2
-        if query_wants_ratio and name_is_count and not name_is_ratio:
-            return -2
-        return 0
+            base_rank = 2
+        elif query_wants_ratio and name_is_ratio and not name_is_count:
+            base_rank = 2
+        elif query_wants_count and name_is_ratio and not name_is_count:
+            base_rank = -2
+        elif query_wants_ratio and name_is_count and not name_is_ratio:
+            base_rank = -2
+
+        unit_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", str(unit or "").lower())
+            if len(token) > 2 and token not in {"and", "the", "per"}
+        }
+        if not unit_tokens:
+            return base_rank
+        unit_specific_tokens = unit_tokens - name_tokens
+        if not unit_specific_tokens:
+            return base_rank
+        query_unit_overlap = len(query_tokens & unit_specific_tokens)
+        if query_unit_overlap <= 0:
+            return base_rank
+        missing_specific_tokens = len(unit_specific_tokens - query_tokens)
+        return base_rank + query_unit_overlap * 3 - missing_specific_tokens
 
     candidates_by_input: list[tuple[str, dict[str, Any]]] = []
     exact_candidates_found = False
@@ -567,12 +584,46 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             query_token_len = min(query_token_lengths) if query_token_lengths else len(normalized_text.split())
             name_token_len = len(normalized_name.split())
             token_delta = abs(name_token_len - query_token_len)
-            unit_rank = _unit_compatibility_rank(normalized_text, normalized_name)
+            unit_rank = _unit_compatibility_rank(
+                normalized_text,
+                normalized_name,
+                str(candidate.get("unit") or ""),
+            )
             shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
-            rank = (unit_rank, country_rank, -token_delta, shared_tokens, -name_token_len)
+            popularity = int(candidate.get("popularity") or 0)
+            rank = (unit_rank, country_rank, -token_delta, popularity, shared_tokens, -name_token_len)
+            ranked_matches.append((rank, candidate))
             if rank > best_rank:
                 best_candidate = candidate
                 best_rank = rank
+    if ranked_matches:
+        top_matches = [
+            candidate
+            for rank, candidate in ranked_matches
+            if rank == best_rank
+        ]
+        top_codes = {
+            str(candidate.get("code") or "").strip().upper()
+            for candidate in top_matches
+            if str(candidate.get("code") or "").strip()
+        }
+        top_title_unit_signatures = {
+            (
+                re.sub(r"[^a-z0-9]+", " ", str(candidate.get("name") or "").lower()).strip(),
+                re.sub(r"[^a-z0-9]+", " ", str(candidate.get("unit") or "").lower()).strip(),
+            )
+            for candidate in top_matches
+        }
+        if len(top_codes) > 1:
+            if len(top_title_unit_signatures) <= 1:
+                return best_candidate
+            # A provider-native exact title can legitimately map to multiple
+            # series that differ only by unit or measurement convention (for
+            # example IMF WEO GDP per-capita current-price variants).  Do not
+            # silently certify whichever catalog row happens to sort first; the
+            # user must provide a unit/code or get a clarification/no-decision
+            # path rather than a confident but arbitrary answer.
+            return None
     return best_candidate
 
 
@@ -629,6 +680,21 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         ):
             queue.append(without_leading_transform)
 
+        without_trailing_frequency = re.sub(
+            r"\s+\((?:daily|weekly(?:,\s*ending\s+[a-z]+)?|biweekly|"
+            r"monthly|quarterly|semiannual|semi-annual|annual|yearly)"
+            r"\)\s*$",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        ).strip(" ,;:-")
+        if (
+            without_trailing_frequency
+            and without_trailing_frequency != candidate
+            and without_trailing_frequency not in seen
+        ):
+            queue.append(without_trailing_frequency)
+
         # Strip a leading country alias only when it appears as a plain prefix.
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
             stripped_country = re.sub(
@@ -669,6 +735,26 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             without_definition = re.sub(r"\s+", " ", without_definition).strip(" ,;:-")
             if without_definition and without_definition != candidate and without_definition not in seen:
                 queue.append(without_definition)
+            unit_suffix = re.search(
+                r"\s+in\s+(?P<unit>[^,;:]+)$",
+                candidate,
+                flags=re.IGNORECASE,
+            )
+            if unit_suffix:
+                unit_text = unit_suffix.group("unit")
+                if re.search(
+                    r"\b(?:u\.?s\.?|us|dollars?|international|currency|percent|percentage|"
+                    r"capita|parity|ppp|index|constant|current|national|millions?|billions?)\b",
+                    unit_text,
+                    flags=re.IGNORECASE,
+                ):
+                    without_unit_suffix = candidate[: unit_suffix.start()].strip(" ,;:-")
+                    if (
+                        without_unit_suffix
+                        and without_unit_suffix != candidate
+                        and without_unit_suffix not in seen
+                    ):
+                        queue.append(without_unit_suffix)
 
         if provider_key == "COINGECKO":
             stripped_crypto_suffix = re.sub(

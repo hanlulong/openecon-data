@@ -55,6 +55,23 @@ class ParameterValidator:
         if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):
             provider = intent.apiProvider.upper()
 
+            # Provider-native exact title/code requests already identify a
+            # concrete public series/table.  Applying a generic "last N years"
+            # window can erase valid historical/survey-only tables (for example
+            # Statistics Canada 2002 school-health products) even though the user
+            # supplied the exact public title.  Let the provider return its
+            # native latest/available observations unless the user explicitly
+            # requested a date range.
+            if (
+                intent.parameters.get("__exact_indicator_title_match")
+                or intent.parameters.get("__exact_provider_code_match")
+            ):
+                logger.debug(
+                    "Skipping default time period for exact provider-native %s request",
+                    provider,
+                )
+                return
+
             # IMPORTANT: Do NOT apply default dates to providers that only support current data:
             # - ExchangeRate: Free tier only provides current exchange rates
             # - CoinGecko: Requires explicit days parameter for historical data

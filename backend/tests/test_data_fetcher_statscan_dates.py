@@ -9,6 +9,7 @@ from backend.services.data_fetcher import (
     _fetch_from_statscan,
     _restore_semantic_indicator_label_for_generic_metadata,
 )
+from backend.services.parameter_validator import ParameterValidator
 from backend.tests.utils import run
 
 
@@ -31,6 +32,31 @@ def _sample_statscan_series() -> NormalizedData:
 
 
 class StatsCanDateDispatchTests(unittest.TestCase):
+    def test_exact_statscan_title_request_does_not_get_recent_default_dates(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=[
+                "Health behaviour in school-aged children 2002, student response to question: "
+                "In the last 12 months, how many times did you travel away on holiday with your family?"
+            ],
+            parameters={
+                "indicator": "13100290",
+                "__semantic_indicator_label": "Health behaviour in school-aged children 2002",
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery=(
+                "Canada Health behaviour in school-aged children 2002, student response to question: "
+                "In the last 12 months, how many times did you travel away on holiday with your family? "
+                "from Statistics Canada"
+            ),
+        )
+
+        ParameterValidator.apply_default_time_periods(intent)
+
+        self.assertNotIn("startDate", intent.parameters)
+        self.assertNotIn("endDate", intent.parameters)
+
     def test_dynamic_dispatch_preserves_requested_start_and_end_dates(self) -> None:
         statscan_provider = SimpleNamespace(
             PRODUCT_ID_CACHE={},

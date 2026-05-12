@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import scripts.validation.common as common
 from scripts.validation.common import (
     audit_direct_query_shape,
     CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
@@ -36,6 +37,134 @@ def test_default_query_for_row_naturalizes_imf_indicator_names():
     assert "isic rev" not in query.lower()
 
 
+def test_user_answerability_query_adds_unit_for_duplicate_provider_title(monkeypatch):
+    monkeypatch.setattr(
+        common,
+        "_provider_title_units",
+        lambda provider: {
+            "gdp per capita current prices": [
+                {
+                    "code": "NGDPDPC",
+                    "unit": "U.S. dollars per capita",
+                    "name": "GDP per capita, current prices",
+                },
+                {
+                    "code": "PPPPC",
+                    "unit": "Purchasing power parity; international dollars per capita",
+                    "name": "GDP per capita, current prices",
+                },
+            ]
+        },
+    )
+    row = {
+        "provider": "IMF",
+        "code": "NGDPDPC",
+        "name": "GDP per capita, current prices",
+        "unit": "U.S. dollars per capita",
+        "category": "WEO",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert "U.S. dollars per capita" in query
+    assert query.endswith("from IMF")
+
+
+def test_user_answerability_query_adds_frequency_for_duplicate_provider_title(monkeypatch):
+    monkeypatch.setattr(
+        common,
+        "_provider_title_units",
+        lambda provider: {
+            "deposits all commercial banks": [
+                {
+                    "code": "DPSACBW027SBOG",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Weekly, Ending Wednesday",
+                    "name": "Deposits, All Commercial Banks",
+                },
+                {
+                    "code": "DPSACBM027NBOG",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Monthly",
+                    "name": "Deposits, All Commercial Banks",
+                },
+            ]
+        },
+    )
+    row = {
+        "provider": "FRED",
+        "code": "DPSACBW027SBOG",
+        "name": "Deposits, All Commercial Banks",
+        "unit": "Billions of U.S. Dollars",
+        "frequency": "Weekly, Ending Wednesday",
+        "category": "Search: bank",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert "Weekly, Ending Wednesday" in query
+    assert query.endswith("from FRED")
+
+
+def test_user_answerability_fred_exact_title_with_frequency_is_not_high_risk(monkeypatch):
+    title = "Deposits, All Commercial Banks"
+    monkeypatch.setattr(
+        common,
+        "_provider_title_units",
+        lambda provider: {
+            "deposits all commercial banks": [
+                {
+                    "code": "DPSACBW027SBOG",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Weekly, Ending Wednesday",
+                    "name": title,
+                },
+                {
+                    "code": "DPSACBM027NBOG",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Monthly",
+                    "name": title,
+                },
+            ]
+        },
+    )
+    row = {
+        "provider": "FRED",
+        "code": "DPSACBW027SBOG",
+        "name": title,
+        "unit": "Billions of U.S. Dollars",
+        "frequency": "Weekly, Ending Wednesday",
+        "category": "Search: bank",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "FRED",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "DPSACBW027SBOG",
+                "source_provider": "FRED",
+                "category": "Search: bank",
+            },
+        }
+    )
+
+    assert "Weekly, Ending Wednesday" in query
+    assert audit["risk_level"] != "high"
+
+
 def test_user_answerability_direct_record_asks_user_need_not_legacy_worldbank_code():
     row = {
         "id": 1,
@@ -62,6 +191,166 @@ def test_user_answerability_direct_record_asks_user_need_not_legacy_worldbank_co
     assert "NY.GDP.MKTP.CD" not in record["query"]
     assert record["gold"]["legacy_source_indicator_code_required"] is False
     assert record["provenance"]["legacy_catalog_replay_required"] is False
+
+
+def test_user_answerability_worldbank_query_does_not_inject_arbitrary_country():
+    row = {
+        "id": 1,
+        "provider": "WorldBank",
+        "code": "CoHD_v_ss",
+        "name": "Cost of vegetables relative to the starchy staples in a least-cost healthy diet",
+        "description": "",
+        "category": "Food Prices for Nutrition",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "Cost of vegetables relative to the starchy staples in a least-cost healthy diet from World Bank"
+    assert not query.startswith(("United States ", "Germany ", "Brazil ", "India ", "China "))
+
+
+def test_user_answerability_worldbank_wdi_keeps_exact_title_without_high_risk():
+    title = (
+        "Learning poverty: Share of Female Children at the End-of-Primary age below "
+        "minimum reading proficiency adjusted by Out-of-School Children (%)"
+    )
+    row = {
+        "id": 1,
+        "provider": "WorldBank",
+        "code": "SE.LPV.PRIM.FE",
+        "name": title,
+        "description": "",
+        "category": "World Development Indicators",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "WorldBank",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "SE.LPV.PRIM.FE",
+                "source_provider": "WorldBank",
+                "category": "World Development Indicators",
+            },
+        }
+    )
+
+    assert title in query
+    assert query.endswith("from World Bank")
+    assert audit["risk_level"] != "high"
+
+
+def test_user_answerability_eurostat_keeps_exact_title_without_high_risk():
+    title = (
+        "Employed persons by level of difficulty to take one or two hours off at short notice, "
+        "educational attainment level and professional status (2019)"
+    )
+    row = {
+        "id": 1,
+        "provider": "Eurostat",
+        "code": "LFSO_19FXWT04",
+        "name": title,
+        "description": "",
+        "category": "Eurostat Dataset",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "Eurostat",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "LFSO_19FXWT04",
+                "source_provider": "Eurostat",
+                "category": "Eurostat Dataset",
+            },
+        }
+    )
+
+    assert title in query
+    assert "one or two hours off at short notice" in query
+    assert "LFSO_19FXWT04" not in query
+    assert query.endswith("from Eurostat")
+    assert audit["risk_level"] != "high"
+
+
+def test_user_answerability_statscan_keeps_exact_table_title_without_high_risk():
+    title = (
+        "Body mass index (BMI), by age group and sex, household population aged 18 and over "
+        "excluding pregnant women, Canada, provinces, territories, health regions (January 2000 "
+        "boundaries) and peer groups"
+    )
+    row = {
+        "id": 1,
+        "provider": "StatsCan",
+        "code": "13100554",
+        "name": title,
+        "description": "",
+        "category": "Statistics Canada Table",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "StatsCan",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "13100554",
+                "source_provider": "StatsCan",
+                "category": "Statistics Canada Table",
+            },
+        }
+    )
+
+    assert title in query
+    assert "13100554" not in query
+    assert query.endswith("from Statistics Canada")
+    assert audit["risk_level"] != "high"
+
+
+def test_user_answerability_direct_record_preserves_unit_in_origin_and_gold_tags():
+    row = {
+        "id": 1,
+        "provider": "IMF",
+        "code": "NGDPDPC",
+        "name": "GDP per capita, current prices",
+        "description": "Gross domestic product per person.",
+        "unit": "U.S. dollars per capita",
+        "category": "WEO",
+    }
+
+    record = build_record(
+        row,
+        1,
+        provider_count=100,
+        provider_sample_count=10,
+        snapshot_id="snap",
+        seed=7,
+        holdout_split="unit",
+        dataset_tier="unit",
+    )
+
+    assert record["origin"]["unit"] == "U.S. dollars per capita"
+    assert "dollars" in record["gold"]["required_concept_tags"]
 
 
 def test_legacy_catalog_replay_direct_record_can_still_carry_exact_worldbank_code():

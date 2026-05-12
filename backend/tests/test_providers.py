@@ -714,7 +714,7 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 2)
         self.assertIn("/country/BR/indicator/w_F_skl", calls[0]["url"])
-        self.assertIn("/sources/80/country/BR/series/w_F_skl", calls[1]["url"])
+        self.assertIn("/sources/80/country/BRA/series/w_F_skl", calls[1]["url"])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata.seriesId, "w_F_skl:TRD")
         self.assertEqual(results[0].metadata.country, "Brazil")
@@ -729,9 +729,11 @@ class ProviderTests(unittest.TestCase):
             def __init__(self, response):
                 self.response = response
                 self.urls = []
+                self.params = []
 
             async def get(self, url, *, params=None, **_kwargs):
                 self.urls.append(str(url))
+                self.params.append(dict(params or {}))
                 self.response.request = MockAsyncResponse([], request_url=str(url)).request
                 return self.response
 
@@ -761,6 +763,7 @@ class ProviderTests(unittest.TestCase):
         self.assertTrue(client.urls)
         self.assertIn("/country/all/indicator/NY.GDP.MKTP.CD", client.urls[0])
         self.assertNotIn("/country/ALL/", client.urls[0])
+        self.assertEqual(client.params[0].get("MRNEV"), 1)
 
     def test_worldbank_exact_short_catalog_code_uses_source_endpoint_when_generic_empty(self) -> None:
         provider = WorldBankProvider()
@@ -948,6 +951,82 @@ class ProviderTests(unittest.TestCase):
             any("source lastupdated" in note for note in (monthly.metadata.notes or []))
         )
 
+    def test_worldbank_source_endpoint_converts_iso2_country_to_iso3(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            async def get(self, url, *, params=None, **_kwargs):
+                calls.append({"url": str(url), "params": dict(params or {})})
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        generic_missing = MockAsyncResponse(
+            [
+                {
+                    "message": [
+                        {
+                            "id": "175",
+                            "key": "Invalid format",
+                            "value": "The indicator was not found. It may have been deleted or archived.",
+                        }
+                    ]
+                }
+            ]
+        )
+        source_response = MockAsyncResponse(
+            {
+                "page": 1,
+                "pages": 1,
+                "per_page": 1000,
+                "total": 1,
+                "lastupdated": "2025-12-18",
+                "source": {
+                    "id": "88",
+                    "name": "Food Prices for Nutrition",
+                    "data": [
+                        {
+                            "variable": [
+                                {"concept": "Country", "id": "USA", "value": "United States"},
+                                {
+                                    "concept": "Series",
+                                    "id": "CoHD_v_ss",
+                                    "value": "Cost of vegetables relative to the starchy staples in a least-cost healthy diet",
+                                },
+                                {"concept": "Classification", "id": "FPN 4.1", "value": "FPN 4.1"},
+                                {"concept": "Time", "id": "YR2023", "value": "2023"},
+                            ],
+                            "value": 1.23,
+                        },
+                    ],
+                },
+            }
+        )
+        lookup = MagicMock()
+        lookup.get.return_value = {
+            "provider": "WorldBank",
+            "code": "CoHD_v_ss",
+            "raw_metadata": json.dumps({"source": {"id": "88", "value": "Food Prices for Nutrition"}}),
+        }
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_missing, source_response])), \
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
+             patch("backend.providers.worldbank._wb_record_success"):
+            results = run(provider.fetch_indicator("CoHD_v_ss", country="US"))
+
+        record_failure.assert_not_called()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/sources/88/country/USA/series/CoHD_v_ss", calls[1]["url"])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata.country, "United States")
+        self.assertEqual(results[0].data[0].value, 1.23)
+
     def test_worldbank_all_country_fetches_remaining_pages(self) -> None:
         provider = WorldBankProvider()
 
@@ -994,7 +1073,9 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual({result.metadata.country for result in results}, {"United States", "Canada"})
         self.assertEqual(len(client.calls), 2)
         self.assertNotIn("page", client.calls[0]["params"])
+        self.assertEqual(client.calls[0]["params"].get("MRNEV"), 1)
         self.assertEqual(client.calls[1]["params"].get("page"), 2)
+        self.assertEqual(client.calls[1]["params"].get("MRNEV"), 1)
 
     def test_worldbank_resolve_indicator_prefers_exact_provider_title_match(self) -> None:
         provider = WorldBankProvider(metadata_search_service=None)

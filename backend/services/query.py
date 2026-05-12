@@ -410,6 +410,42 @@ class QueryService:
             return None
         return f"{start_year:04d}-01-01", f"{end_year:04d}-12-31"
 
+    @staticmethod
+    def _explicit_code_residual_is_country_scope(text: str, token: str) -> bool:
+        """Return True when removing an embedded code leaves only country scope.
+
+        The explicit provider-code fast path is mechanical exact-input
+        transport.  It should accept ``Germany SH.TBS.INCD from World Bank`` or
+        ``United States PCPI_CP_01_BY2010_IX from IMF`` where the non-code
+        remainder is just geography, but it must not promote abbreviations that
+        appear inside units or prose (for example ``U.S. dollars``) into final
+        provider-code authority.
+        """
+        if not token:
+            return False
+        residual = re.sub(
+            rf"(?<![A-Za-z0-9_@.\-]){re.escape(str(token))}(?![A-Za-z0-9_@.\-])",
+            " ",
+            str(text or ""),
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        residual = re.sub(r"\s+", " ", residual).strip(" ,;:")
+        return not residual or bool(CountryResolver.normalize(residual))
+
+    @staticmethod
+    def _unsafe_dot_only_explicit_code_token(provider: str, candidate: str) -> bool:
+        """Reject dotted abbreviation tokens that are not provider-native codes."""
+        provider_upper = normalize_provider_name(provider)
+        token = str(candidate or "").strip()
+        if provider_upper != "IMF":
+            return False
+        # The local IMF executable catalog uses DataMapper-style identifiers
+        # with letters/digits/underscores, not dot-delimited abbreviations. A
+        # dot-only token such as "U.S." in "U.S. dollars" is unit/country prose,
+        # not an explicit provider code.
+        return "." in token and "_" not in token and not any(ch.isdigit() for ch in token)
+
     def _build_explicit_provider_code_intent(self, query: str) -> Optional[ParsedIntent]:
         """Fast path for raw queries that are just a provider code plus provider mention."""
         explicit_provider = normalize_provider_name(self._detect_explicit_provider(query) or "")
@@ -450,18 +486,21 @@ class QueryService:
                 statscan_label = label or statscan_exact_product_id
                 candidate = statscan_exact_product_id
         if not self._looks_like_provider_indicator_code(explicit_provider, candidate):
-            code_candidates = [
-                token if explicit_provider in {"WORLDBANK", "COINGECKO"} else token.upper()
-                for token in re.findall(
-                    r"(?<![A-Za-z0-9_@.\-])[A-Za-z][A-Za-z0-9_@.\-]{2,}(?![A-Za-z0-9_@.\-])",
-                    str(query or ""),
-                )
-                if ("_" in token or "." in token or "@" in token or "-" in token)
-                and self._looks_like_provider_indicator_code(
-                    explicit_provider,
-                    token if explicit_provider == "WORLDBANK" else token.upper(),
-                )
-            ]
+            code_candidates = []
+            for token in re.findall(
+                r"(?<![A-Za-z0-9_@.\-])[A-Za-z][A-Za-z0-9_@.\-]{2,}(?![A-Za-z0-9_@.\-])",
+                str(query or ""),
+            ):
+                normalized_token = token if explicit_provider in {"WORLDBANK", "COINGECKO"} else token.upper()
+                if not ("_" in token or "." in token or "@" in token or "-" in token):
+                    continue
+                if self._unsafe_dot_only_explicit_code_token(explicit_provider, normalized_token):
+                    continue
+                if not self._looks_like_provider_indicator_code(explicit_provider, normalized_token):
+                    continue
+                if not self._explicit_code_residual_is_country_scope(stripped_original, token):
+                    continue
+                code_candidates.append(normalized_token)
             if explicit_provider == "IMF":
                 code_candidates.extend(
                     self._imf_uppercase_catalog_code_tokens(str(query or ""), stripped)
@@ -499,6 +538,13 @@ class QueryService:
             explicit_provider == "COINGECKO"
             and candidate in coingecko_catalog_slugs
         )
+        if (
+            not catalog_backed_worldbank_code
+            and not catalog_backed_fred_code
+            and not catalog_backed_coingecko_slug
+            and self._unsafe_dot_only_explicit_code_token(explicit_provider, candidate)
+        ):
+            return None
         if (
             not catalog_backed_worldbank_code
             and not catalog_backed_fred_code

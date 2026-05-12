@@ -619,6 +619,36 @@ class WorldBankProvider(BaseProvider):
         return {}
 
     @staticmethod
+    def _source_endpoint_country_code(country_code: str) -> str:
+        """Normalize countries for WorldBank source-specific endpoints.
+
+        The standard `/country/{code}/indicator/{indicator}` endpoint accepts
+        ISO2 country codes such as `US`, but the documented
+        `/sources/{source}/country/{code}/series/{indicator}` endpoint expects
+        ISO3 codes for individual countries (`USA`).  Keep aggregate/all
+        surfaces intact and only convert concrete countries.
+        """
+        code = str(country_code or "").strip()
+        if not code:
+            return code
+        if code.lower() == "all":
+            return "all"
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            iso3 = CountryResolver.to_iso3(code)
+            if iso3:
+                return iso3
+            iso2 = CountryResolver.normalize(code)
+            if iso2:
+                iso3 = CountryResolver.to_iso3(iso2)
+                if iso3:
+                    return iso3
+        except Exception:
+            return code
+        return code
+
+    @staticmethod
     def _source_time_point(
         time_var: dict[str, Any],
         last_updated: str,
@@ -709,7 +739,10 @@ class WorldBankProvider(BaseProvider):
         if not source_id or not indicator_code:
             return []
 
-        batch_codes = ";".join(country_codes or ["all"])
+        batch_codes = ";".join(
+            self._source_endpoint_country_code(country_code)
+            for country_code in (country_codes or ["all"])
+        )
         url = f"{self.base_url}/sources/{source_id}/country/{batch_codes}/series/{indicator_code}"
         params = {"format": "json", "per_page": 1000}
         if start_date and end_date:
@@ -1051,6 +1084,14 @@ class WorldBankProvider(BaseProvider):
         params = {"format": "json", "per_page": min(per_page, 10000)}
         if date_param:
             params["date"] = date_param
+        elif exact_indicator_request and "all" in resolved_codes:
+            # Official WorldBank API v2 supports MRNEV ("most recent non-empty
+            # values").  For exact no-country/no-date requests, fetching every
+            # historical all-country observation can require multi-page 17k+
+            # record responses and time out before any answer is returned.  A
+            # real user asking an exact indicator with no date/country needs a
+            # current answerable slice, not exhaustive archival replay.
+            params["MRNEV"] = 1
 
         # Track total fetch time to enforce a time budget for the entire operation.
         # This prevents cascading timeouts (batch + fallback + alternatives)

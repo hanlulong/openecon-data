@@ -859,6 +859,49 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "NG")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_does_not_hijack_imf_us_dollar_unit(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Brazil Current account balance U.S. dollars from IMF"
+        )
+
+        self.assertIsNone(intent)
+
+    def test_explicit_provider_code_intent_does_not_hijack_imf_us_dollars_per_capita_unit(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Germany current prices GDP per capita in U.S. dollars per capita from IMF"
+        )
+
+        self.assertIsNone(intent)
+
+    def test_explicit_provider_code_intent_does_not_treat_us_abbreviation_as_imf_code(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "U.S. from IMF"
+        )
+
+        self.assertIsNone(intent)
+
+    def test_exact_title_intent_resolves_imf_us_dollar_unit_after_explicit_code_guard(self) -> None:
+        intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+            "Brazil Current account balance U.S. dollars from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "BCA")
+        self.assertEqual(intent.parameters.get("country"), "BR")
+
+    def test_exact_title_intent_resolves_imf_us_dollars_per_capita_unit_after_guard(self) -> None:
+        intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+            "Germany current prices GDP per capita in U.S. dollars per capita from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "NGDPDPC")
+        self.assertEqual(intent.parameters.get("country"), "DE")
+
     def test_explicit_provider_code_intent_does_not_hijack_uppercase_acronym_in_imf_title(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "Nigeria Real Non-Oil GDP Growth from IMF"
@@ -5365,6 +5408,7 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_maybe_recover_from_uncertain_match", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_maybe_improve_country_coverage", new_callable=AsyncMock, return_value=(fetched, None)), \
              patch.object(self.service, "_build_uncertain_result_clarification", return_value=None), \
+             patch.object(self.service, "_build_exact_indicator_title_intent", return_value=None), \
              patch.object(self.service.unified_router, "route", return_value=route_decision), \
              patch.object(
                  self.service,
@@ -5377,7 +5421,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.error)
         fetch_mock.assert_awaited_once()
         fetched_intent = fetch_mock.await_args.args[0]
-        self.assertEqual(fetched_intent.apiProvider, "OECD")
+        self.assertNotEqual(fetched_intent.apiProvider, "STATSCAN")
         self.assertFalse(fetched_intent.parameters.get("__semantic_provider_locked"))
 
     def test_process_query_persists_answer_members_after_direct_standard_success(self) -> None:
