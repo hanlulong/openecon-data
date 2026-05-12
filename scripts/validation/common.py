@@ -25,6 +25,12 @@ except Exception:  # pragma: no cover - fallback for lightweight script usage
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / 'backend' / 'data' / 'indicators.db'
 VALIDATION_PRIVATE = ROOT / 'validation_private'
+CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY = 'legacy_catalog_replay'
+CERTIFICATION_TARGET_USER_ANSWERABILITY = 'user_answerability'
+CERTIFICATION_TARGETS = (
+    CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
+)
 _EMPIRICAL_CATEGORY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_FAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
 _EMPIRICAL_SUBFAMILY_PRIORS: dict[tuple[str, str], tuple[int, int]] | None = None
@@ -220,6 +226,49 @@ def detect_single_country_from_text(text: str) -> str | None:
 
 def slugify(text: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-') or 'item'
+
+
+def normalize_certification_target(value: object, *, default: str = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY) -> str:
+    raw = str(value or '').strip().lower()
+    aliases = {
+        'legacy': CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+        'catalog': CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+        'catalog_replay': CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+        'legacy_catalog': CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+        'legacy_catalog_replay': CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+        'user': CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        'real_user': CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        'user_answerability': CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        'real_user_answerability': CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        'answerability': CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    }
+    if raw in aliases:
+        return aliases[raw]
+    if default in CERTIFICATION_TARGETS:
+        return default
+    return CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+
+
+def certification_target_for_row(
+    row: dict[str, Any],
+    *,
+    default: str = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+) -> str:
+    provenance = row.get('provenance') if isinstance(row.get('provenance'), dict) else {}
+    gold = row.get('gold') if isinstance(row.get('gold'), dict) else {}
+    return normalize_certification_target(
+        row.get('evaluation_target')
+        or row.get('certification_target')
+        or provenance.get('certification_target')
+        or provenance.get('evaluation_target')
+        or gold.get('evaluation_target')
+        or gold.get('certification_target'),
+        default=default,
+    )
+
+
+def is_user_answerability_row(row: dict[str, Any]) -> bool:
+    return certification_target_for_row(row) == CERTIFICATION_TARGET_USER_ANSWERABILITY
 
 
 def stable_seed(*parts: object) -> int:
@@ -1239,7 +1288,104 @@ def statscan_title_has_explicit_year_range(title: str) -> bool:
     )
 
 
-def synthesize_direct_query_for_row(row: dict[str, Any]) -> str:
+def _provider_query_label(provider_upper: str, provider: str) -> str:
+    return {
+        'COINGECKO': 'CoinGecko',
+        'COMTRADE': 'Comtrade',
+        'EUROSTAT': 'Eurostat',
+        'EXCHANGERATE': 'ExchangeRate',
+        'FRED': 'FRED',
+        'IMF': 'IMF',
+        'OECD': 'OECD',
+        'STATSCAN': 'Statistics Canada',
+        'WORLDBANK': 'World Bank',
+        'BIS': 'BIS',
+    }.get(provider_upper, provider or 'OpenEcon')
+
+
+def _default_user_answerability_country(provider: str, provider_upper: str, category: str, name: str) -> str:
+    defaults = DEFAULT_COUNTRIES_BY_PROVIDER.get(provider) or DEFAULT_COUNTRIES_BY_PROVIDER.get(provider_upper) or ['United States']
+    choice = defaults[stable_seed(provider or provider_upper, name) % len(defaults)]
+    return preferred_default_country_for_record(provider_upper, category, name, defaults, choice)
+
+
+def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
+    """Build a real-user-style query from catalog evidence without requiring replay of legacy codes.
+
+    The frozen catalog row can still provide title/category/coverage evidence for
+    prompt sampling, but the query should ask for the economic concept the user
+    needs.  Provider-native IDs are kept only when they are the ordinary user
+    language for the surface (for example FX pairs or a fallback crypto slug),
+    not as the success criterion for legacy catalog replay.
+    """
+    origin = dict(row.get('origin') or {})
+    provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '')
+    provider_upper = provider.upper()
+    code = str(row.get('code') or origin.get('source_indicator_code') or '').strip()
+    name = str(row.get('name') or origin.get('name') or '').strip()
+    description = str(row.get('description') or origin.get('description') or '').strip()
+    category = str(row.get('category') or origin.get('category') or '')
+    choice = _default_user_answerability_country(provider, provider_upper, category, name)
+    inferred_country = None
+    if provider_upper not in {'EXCHANGERATE', 'COINGECKO'}:
+        inferred_country = (
+            detect_single_country_from_text(name)
+            or detect_single_country_from_text(str(row.get('coverage') or origin.get('coverage') or ''))
+        )
+        if not inferred_country:
+            description_country = detect_single_country_from_text(description)
+            if description_country and description_country.lower() not in {'world', 'global', 'worldwide'}:
+                inferred_country = description_country
+        if inferred_country:
+            choice = inferred_country
+    phrase = natural_phrase_from_name(name, description) or name or description or code
+    provider_label = _provider_query_label(provider_upper, provider)
+
+    if provider_upper == 'COINGECKO':
+        asset = name.strip()
+        if not asset or re.fullmatch(r'[A-Z0-9]{1,5}', asset):
+            slug = re.sub(r'-\d+$', '', code)
+            asset = humanize_slug(slug).title() if humanize_slug(slug) else (asset or code)
+        return f"{asset} cryptocurrency price from CoinGecko".strip()
+    if provider_upper == 'EXCHANGERATE':
+        target_code = str(row.get('code') or origin.get('source_indicator_code') or '').strip().upper()
+        if re.fullmatch(r'[A-Z]{3}', target_code) and target_code != 'USD':
+            return f"USD to {target_code} exchange rate from ExchangeRate"
+        pair_match = re.search(r'\b([A-Z]{3})\s*(?:to|/|-)\s*([A-Z]{3})\b', name.upper())
+        if pair_match:
+            return f"{pair_match.group(1)} to {pair_match.group(2)} exchange rate from ExchangeRate"
+        return f"{choice} exchange rate from ExchangeRate"
+    if provider_upper == 'COMTRADE':
+        commodity = re.sub(r'^(?:HS)?\d{2,6}\s*[-:]\s*', '', name, flags=re.IGNORECASE).strip()
+        if commodity:
+            return f"{choice} exports of {commodity} from Comtrade"
+        code_numeric = re.sub(r'^HS', '', code.upper()).strip() if code else ''
+        if re.fullmatch(r'\d{2,6}', code_numeric):
+            return f"{choice} exports of HS{code_numeric} from Comtrade"
+        return f"{choice} exports from Comtrade"
+    if provider_upper == 'STATSCAN':
+        prefix = '' if query_mentions_country(phrase) else 'Canada '
+        return f"{prefix}{phrase} from Statistics Canada".strip()
+
+    if phrase and code and phrase.upper() == code.upper():
+        phrase = description_context_phrase(description) or f"{provider_label} indicator {phrase}"
+    if provider_upper == 'OECD' and re.fullmatch(r'[A-Z0-9_@]{1,40}', phrase):
+        phrase = description_context_phrase(description) or f"OECD indicator {phrase}"
+    if provider_upper == 'EUROSTAT' and re.fullmatch(r'[A-Z][A-Z0-9_]{3,}', phrase):
+        phrase = description_context_phrase(description) or f"Eurostat dataset {phrase}"
+
+    prefix = '' if query_mentions_country(phrase) else f"{choice} "
+    return f"{prefix}{phrase} from {provider_label}".strip()
+
+
+def synthesize_direct_query_for_row(row: dict[str, Any], *, certification_target: str | None = None) -> str:
+    target = normalize_certification_target(
+        certification_target or certification_target_for_row(row),
+        default=CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+    )
+    if target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        return synthesize_user_answerability_query_for_row(row)
+
     origin = dict(row.get('origin') or {})
     provider = str(row.get('provider') or row.get('provider_stratum') or origin.get('source_provider') or '')
     provider_upper = provider.upper()
@@ -1407,13 +1553,14 @@ def infer_scope_family(provider: str, coverage: str | None = None) -> str:
     return 'single_country'
 
 
-def default_query_for_row(row: dict[str, Any]) -> str:
-    return synthesize_direct_query_for_row(row)
+def default_query_for_row(row: dict[str, Any], *, certification_target: str | None = None) -> str:
+    return synthesize_direct_query_for_row(row, certification_target=certification_target)
 
 
 def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     query = str(row.get('query') or default_query_for_row(row) or '')
     origin = dict(row.get('origin') or {})
+    evaluation_target = certification_target_for_row(row)
     origin_name = str(origin.get('name') or row.get('name') or '').strip()
     origin_name_lower = origin_name.lower()
     origin_code_upper = str(
@@ -2264,6 +2411,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
     return {
         'risk_level': risk_level,
         'reasons': reasons,
+        'evaluation_target': evaluation_target,
         'query_length': len(query),
         'punctuation_hits': punctuation_hits,
     }

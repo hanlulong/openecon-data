@@ -12,6 +12,30 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-score-summary.json'
 DEFAULT_FLOOR_POLICY = ROOT / 'validation' / 'manifests' / 'claim_gate_policy-v1.json'
+CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY = 'legacy_catalog_replay'
+CERTIFICATION_TARGET_USER_ANSWERABILITY = 'user_answerability'
+
+
+def normalize_certification_target(value: object, *, default: str = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY) -> str:
+    raw = str(value or '').strip().lower()
+    if raw in {'user', 'real_user', 'user_answerability', 'real_user_answerability', 'answerability'}:
+        return CERTIFICATION_TARGET_USER_ANSWERABILITY
+    if raw in {'legacy', 'catalog', 'catalog_replay', 'legacy_catalog', 'legacy_catalog_replay'}:
+        return CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+    return default
+
+
+def certification_target_for_session(session: dict[str, Any]) -> str:
+    provenance = session.get('provenance') if isinstance(session.get('provenance'), dict) else {}
+    gold = session.get('gold') if isinstance(session.get('gold'), dict) else {}
+    return normalize_certification_target(
+        session.get('evaluation_target')
+        or session.get('certification_target')
+        or provenance.get('certification_target')
+        or provenance.get('evaluation_target')
+        or gold.get('evaluation_target')
+        or gold.get('certification_target')
+    )
 
 
 def iter_jsonl(path: Path):
@@ -363,10 +387,13 @@ def main() -> int:
     counts_by_type = Counter()
     counts_by_tier = Counter()
     counts_by_split = Counter()
+    counts_by_evaluation_target = Counter()
     provisional_pass_by_type = Counter()
     provisional_pass_by_split = Counter()
+    provisional_pass_by_evaluation_target = Counter()
     adjudicated_pass_by_type = Counter()
     adjudicated_pass_by_split = Counter()
+    adjudicated_pass_by_evaluation_target = Counter()
     direct_provider_counts = Counter()
     direct_provider_pass_counts = Counter()
     direct_provider_adjudicated_pass_counts = Counter()
@@ -413,6 +440,7 @@ def main() -> int:
         kind = dataset_type(session)
         tier = str(session.get('dataset_tier') or '<missing>')
         split = str((session.get('provenance') or {}).get('holdout_split') or '<missing>')
+        evaluation_target = certification_target_for_session(session)
         provider = str(session.get('provider_stratum') or (session.get('origin') or {}).get('source_provider') or '<missing>')
         family = family_for_session(session, kind)
         rows = sorted(raw_by_session.get(sid, []), key=lambda r: int(r.get('round_index') or 0))
@@ -491,6 +519,7 @@ def main() -> int:
             'dataset_type': kind,
             'dataset_tier': tier,
             'holdout_split': split,
+            'evaluation_target': evaluation_target,
             'provider_stratum': provider,
             'family_stratum': family,
             'design_stratum': design_stratum,
@@ -517,12 +546,15 @@ def main() -> int:
         counts_by_type[kind] += 1
         counts_by_tier[tier] += 1
         counts_by_split[split] += 1
+        counts_by_evaluation_target[evaluation_target] += 1
         if provisional_pass:
             provisional_pass_by_type[kind] += 1
             provisional_pass_by_split[split] += 1
+            provisional_pass_by_evaluation_target[evaluation_target] += 1
         if adjudicated_pass:
             adjudicated_pass_by_type[kind] += 1
             adjudicated_pass_by_split[split] += 1
+            adjudicated_pass_by_evaluation_target[evaluation_target] += 1
         if supportability_blocked:
             supportability_blocked_total += 1
             supportability_blocked_by_provider[provider] += 1
@@ -741,6 +773,10 @@ def main() -> int:
                 split: ratio(provisional_pass_by_split[split], counts_by_split[split]) or 0.0
                 for split in counts_by_split
             },
+            'by_evaluation_target': {
+                target: ratio(provisional_pass_by_evaluation_target[target], counts_by_evaluation_target[target]) or 0.0
+                for target in counts_by_evaluation_target
+            },
         },
         'adjudicated_session_success': {
             'overall_unweighted': ratio(sum(1 for r in session_results if r['adjudicated_pass'] is True), adjudicated_records_total) if adjudicated_records_total else None,
@@ -751,6 +787,13 @@ def main() -> int:
             'by_split': {
                 split: ratio(adjudicated_pass_by_split[split], sum(1 for r in session_results if r['holdout_split'] == split and r['adjudicated_pass'] is not None))
                 for split in counts_by_split
+            },
+            'by_evaluation_target': {
+                target: ratio(
+                    adjudicated_pass_by_evaluation_target[target],
+                    sum(1 for r in session_results if r['evaluation_target'] == target and r['adjudicated_pass'] is not None),
+                )
+                for target in counts_by_evaluation_target
             },
         },
         'direct_weighted_provisional_success': direct_weighted_success,
@@ -830,6 +873,21 @@ def main() -> int:
         claim_grade_blockers.append(f'required strata failed: {", ".join(failing_strata)}')
     if missing_required_strata:
         claim_grade_blockers.append(f'required strata missing: {", ".join(missing_required_strata)}')
+    required_evaluation_target = normalize_certification_target(
+        (floor_policy or {}).get('certification_target'),
+        default='',
+    )
+    if required_evaluation_target:
+        mismatched_targets = {
+            target: count
+            for target, count in sorted(counts_by_evaluation_target.items())
+            if target != required_evaluation_target
+        }
+        if mismatched_targets:
+            rendered = ', '.join(f'{target}={count}' for target, count in mismatched_targets.items())
+            claim_grade_blockers.append(
+                f'certification target mismatch: policy requires {required_evaluation_target}; observed {rendered}'
+            )
     if wrong_confident_answer_rate is None or unnecessary_clarification_rate is None or ambiguity_resolution_success is None:
         claim_grade_blockers.append('semantic metrics are still proxy-backed, not final claim-grade semantic measures')
     claim_grade_ready = len(claim_grade_blockers) == 0
@@ -844,6 +902,7 @@ def main() -> int:
             if adjudication_path is not None and adjudication_path.exists()
             else 'provisional_structural'
         ),
+        'certification_target': required_evaluation_target or (next(iter(counts_by_evaluation_target)) if len(counts_by_evaluation_target) == 1 else None),
         'claim_grade_ready': claim_grade_ready,
         'claim_grade_blockers': claim_grade_blockers,
         'snapshot_id': snapshot_ids.pop() if len(snapshot_ids) == 1 else None,
@@ -859,6 +918,7 @@ def main() -> int:
             'dataset_types': dict(counts_by_type),
             'dataset_tiers': dict(counts_by_tier),
             'holdout_splits': dict(counts_by_split),
+            'evaluation_targets': dict(counts_by_evaluation_target),
             'adjudicated_session_count': adjudicated_records_total,
         },
         'metrics': metrics,

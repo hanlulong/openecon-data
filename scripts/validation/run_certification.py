@@ -19,7 +19,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import (  # noqa: E402
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
     audit_direct_query_shape,
+    certification_target_for_row,
     imf_catalog_surface_supportability_reason,
     worldbank_source_id_for_code,
 )
@@ -78,6 +80,13 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     block the claim until the framework grows true support.
     """
     if detect_dataset_type(row) != 'direct':
+        return None
+
+    if certification_target_for_row(row) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Real-user certification evaluates the actual user prompt against the
+        # live answer path. Legacy catalog-code supportability screens remain
+        # useful for inventory replay, but they must not make an answerability
+        # run fail before the user query is attempted.
         return None
 
     origin = dict(row.get('origin') or {})
@@ -449,6 +458,7 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
     record = {
         'session_id': row['id'],
         'dataset_type': dataset_type,
+        'evaluation_target': certification_target_for_row(row),
         'round_index': round_index,
         'query': query,
         'status_code': resp.status_code,
@@ -514,6 +524,7 @@ def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, que
     return {
         'session_id': row.get('id'),
         'dataset_type': dataset_type,
+        'evaluation_target': certification_target_for_row(row),
         'round_index': round_index,
         'query': query,
         'status_code': None,
@@ -543,6 +554,7 @@ def record_supportability_blocked(
     return {
         'session_id': row.get('id'),
         'dataset_type': dataset_type,
+        'evaluation_target': certification_target_for_row(row),
         'round_index': round_index,
         'query': query,
         'status_code': None,
@@ -585,6 +597,7 @@ def record_runtime_unavailable(
     return {
         'session_id': row.get('id'),
         'dataset_type': dataset_type,
+        'evaluation_target': certification_target_for_row(row),
         'round_index': round_index,
         'query': query,
         'status_code': None,

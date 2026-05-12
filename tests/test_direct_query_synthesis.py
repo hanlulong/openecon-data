@@ -4,6 +4,8 @@ import json
 
 from scripts.validation.common import (
     audit_direct_query_shape,
+    CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
     category_success_adjustment,
     detect_single_country_from_text,
     default_query_for_row,
@@ -16,6 +18,7 @@ from scripts.validation.common import (
     provider_subfamily_key,
     subfamily_success_adjustment,
 )
+from scripts.validation.sample_direct_cert_set import build_record
 
 
 def test_default_query_for_row_naturalizes_imf_indicator_names():
@@ -31,6 +34,61 @@ def test_default_query_for_row_naturalizes_imf_indicator_names():
     assert "producer price index" in query.lower()
     assert "from imf" in query.lower()
     assert "isic rev" not in query.lower()
+
+
+def test_user_answerability_direct_record_asks_user_need_not_legacy_worldbank_code():
+    row = {
+        "id": 1,
+        "provider": "WorldBank",
+        "code": "NY.GDP.MKTP.CD",
+        "name": "GDP (current US$)",
+        "description": "GDP at purchaser's prices is the sum of gross value added.",
+        "category": "World Development Indicators",
+    }
+
+    record = build_record(
+        row,
+        1,
+        provider_count=100,
+        provider_sample_count=10,
+        snapshot_id="snap",
+        seed=7,
+        holdout_split="unit",
+        dataset_tier="unit",
+    )
+
+    assert record["evaluation_target"] == CERTIFICATION_TARGET_USER_ANSWERABILITY
+    assert record["query"].endswith("from World Bank")
+    assert "NY.GDP.MKTP.CD" not in record["query"]
+    assert record["gold"]["legacy_source_indicator_code_required"] is False
+    assert record["provenance"]["legacy_catalog_replay_required"] is False
+
+
+def test_legacy_catalog_replay_direct_record_can_still_carry_exact_worldbank_code():
+    row = {
+        "id": 1,
+        "provider": "WorldBank",
+        "code": "NY.GDP.MKTP.CD",
+        "name": "GDP (current US$)",
+        "description": "GDP at purchaser's prices is the sum of gross value added.",
+        "category": "World Development Indicators",
+    }
+
+    record = build_record(
+        row,
+        1,
+        provider_count=100,
+        provider_sample_count=10,
+        snapshot_id="snap",
+        seed=7,
+        holdout_split="unit",
+        dataset_tier="unit",
+        certification_target=CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+    )
+
+    assert record["evaluation_target"] == CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
+    assert record["query"] == "NY.GDP.MKTP.CD from World Bank"
+    assert record["gold"]["legacy_source_indicator_code_required"] is True
 
 
 def test_default_query_for_row_uses_imf_exact_code_for_public_sdmx_aggregate_trade():
@@ -1055,6 +1113,26 @@ def test_unsupported_direct_surface_reason_uses_imf_provider_native_code_metadat
 
         assert "imf_query_only_public_surface_family" not in audit["reasons"]
         assert unsupported_direct_surface_reason(row, audit) == "imf_non_weo_public_surface_unsupported"
+
+
+def test_user_answerability_does_not_preblock_on_legacy_imf_code_metadata() -> None:
+    from scripts.validation.run_certification import unsupported_direct_surface_reason
+
+    row = {
+        "provider": "IMF",
+        "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        "query": "Brazil producer price index from IMF",
+        "type": "direct",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "PMP_ISIC3_C_IX",
+            "name": "Import Price Index, Mining and quarrying, Index",
+            "category": "INDICATOR",
+        },
+    }
+    audit = audit_direct_query_shape(row)
+
+    assert unsupported_direct_surface_reason(row, audit) is None
 
 
 def test_audit_direct_query_shape_keeps_broad_imf_ppi_query_executable() -> None:

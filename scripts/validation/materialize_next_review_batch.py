@@ -11,7 +11,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validation.common import DEFAULT_DB, provider_family_key, sample_indicator_rows, write_jsonl  # noqa: E402
+from scripts.validation.common import (  # noqa: E402
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    CERTIFICATION_TARGETS,
+    DEFAULT_DB,
+    provider_family_key,
+    sample_indicator_rows,
+    write_jsonl,
+)
 from scripts.validation.common import audit_direct_query_shape, direct_query_specificity_score, family_success_adjustment  # noqa: E402
 from scripts.validation.sample_direct_cert_set import build_record as build_direct_record  # noqa: E402
 from scripts.validation.sample_multiround_cert_set import (  # noqa: E402
@@ -50,6 +57,22 @@ def snapshot_id(snapshot: dict) -> str:
 
 def normalize_provider_name(value: str) -> str:
     return str(value or '').strip()
+
+
+def apply_certification_target(record: dict, certification_target: str) -> dict:
+    record['evaluation_target'] = certification_target
+    provenance = record.setdefault('provenance', {})
+    if isinstance(provenance, dict):
+        provenance['certification_target'] = certification_target
+    gold = record.get('gold')
+    if isinstance(gold, dict):
+        gold['evaluation_target'] = certification_target
+    for round_case in record.get('rounds') or []:
+        if isinstance(round_case, dict):
+            round_gold = round_case.setdefault('gold', {})
+            if isinstance(round_gold, dict):
+                round_gold['evaluation_target'] = certification_target
+    return record
 
 
 def direct_oversample_count(provider: str, count: int, provider_population: int) -> int:
@@ -158,6 +181,7 @@ def materialize_direct(
     holdout_split: str,
     dataset_tier: str,
     db_path: Path,
+    certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
 ) -> list[dict]:
     rows = []
     seq = 1
@@ -181,6 +205,7 @@ def materialize_direct(
                 seed=seed,
                 holdout_split=holdout_split,
                 dataset_tier=dataset_tier,
+                certification_target=certification_target,
             )
             record['id'] = f"batch-direct-{provider.lower()}-{seq:06d}"
             quality = audit_direct_query_shape(record)
@@ -201,6 +226,7 @@ def materialize_multiround(
     seed: int,
     holdout_split: str,
     dataset_tier: str,
+    certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
 ) -> list[dict]:
     rows = []
     counters = {name: 0 for name in MULTI_BUILDERS}
@@ -214,14 +240,17 @@ def materialize_multiround(
             session = builder(counters[family])
             session['id'] = f"batch-{family}-{counters[family]:06d}"
             rows.append(
-                annotate_multiround(
-                    session,
-                    snapshot_id=snapshot_id(snapshot_meta),
-                    seed=seed,
-                    holdout_split=holdout_split,
-                    dataset_tier=dataset_tier,
-                    family_total_count=max(int(target.get('target_n') or count), count),
-                    family_sample_count=count,
+                apply_certification_target(
+                    annotate_multiround(
+                        session,
+                        snapshot_id=snapshot_id(snapshot_meta),
+                        seed=seed,
+                        holdout_split=holdout_split,
+                        dataset_tier=dataset_tier,
+                        family_total_count=max(int(target.get('target_n') or count), count),
+                        family_sample_count=count,
+                    ),
+                    certification_target,
                 )
             )
     return rows
@@ -234,6 +263,7 @@ def materialize_ambiguity(
     seed: int,
     holdout_split: str,
     dataset_tier: str,
+    certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
 ) -> list[dict]:
     rows = []
     counters = {name: 0 for name in FAMILY_TEMPLATES}
@@ -247,18 +277,21 @@ def materialize_ambiguity(
             query, behavior, outcomes = templates[counters[family] % len(templates)]
             counters[family] += 1
             rows.append(
-                make_ambiguity_record(
-                    family,
-                    counters[family],
-                    query,
-                    behavior,
-                    outcomes,
-                    snapshot_id=snapshot_id(snapshot_meta),
-                    seed=seed,
-                    holdout_split=holdout_split,
-                    dataset_tier=dataset_tier,
-                    family_total_count=total_target,
-                    family_sample_count=count,
+                apply_certification_target(
+                    make_ambiguity_record(
+                        family,
+                        counters[family],
+                        query,
+                        behavior,
+                        outcomes,
+                        snapshot_id=snapshot_id(snapshot_meta),
+                        seed=seed,
+                        holdout_split=holdout_split,
+                        dataset_tier=dataset_tier,
+                        family_total_count=total_target,
+                        family_sample_count=count,
+                    ),
+                    certification_target,
                 )
             )
     return rows
@@ -273,6 +306,12 @@ def main() -> int:
     parser.add_argument('--seed', type=int, default=20260415)
     parser.add_argument('--dataset-tier', default='dev')
     parser.add_argument('--holdout-split', default='batch_review')
+    parser.add_argument(
+        '--certification-target',
+        choices=CERTIFICATION_TARGETS,
+        default=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        help='Direct rows default to real user answerability; legacy_catalog_replay is inventory-only replay.',
+    )
     args = parser.parse_args()
 
     batch_plan = load_json(args.batch_plan.resolve())
@@ -293,6 +332,7 @@ def main() -> int:
         holdout_split=args.holdout_split,
         dataset_tier=args.dataset_tier,
         db_path=args.db_path,
+        certification_target=args.certification_target,
     )
     multiround_rows = materialize_multiround(
         multiround_targets,
@@ -300,6 +340,7 @@ def main() -> int:
         seed=args.seed,
         holdout_split=args.holdout_split,
         dataset_tier=args.dataset_tier,
+        certification_target=args.certification_target,
     )
     ambiguity_rows = materialize_ambiguity(
         ambiguity_targets,
@@ -307,6 +348,7 @@ def main() -> int:
         seed=args.seed,
         holdout_split=args.holdout_split,
         dataset_tier=args.dataset_tier,
+        certification_target=args.certification_target,
     )
 
     direct_path = output_dir / 'next_batch_direct.jsonl'
@@ -327,6 +369,7 @@ def main() -> int:
                 'multiround_records': len(multiround_rows),
                 'ambiguity_records': len(ambiguity_rows),
                 'batch_size': len(direct_rows) + len(multiround_rows) + len(ambiguity_rows),
+                'certification_target': args.certification_target,
             },
             indent=2,
         )

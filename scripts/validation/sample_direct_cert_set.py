@@ -13,6 +13,9 @@ if str(ROOT) not in sys.path:
 
 from scripts.validation.common import (
     audit_direct_query_shape,
+    CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    CERTIFICATION_TARGETS,
     DEFAULT_DB,
     default_query_for_row,
     direct_query_specificity_score,
@@ -27,13 +30,24 @@ from scripts.validation.common import (
 DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
 DEFAULT_OUTPUT = ROOT / 'validation_private' / 'datasets' / 'dev' / 'direct-cert-candidates.jsonl'
-SAMPLER_VERSION = 'direct_sampler_v1'
+SAMPLER_VERSION = 'direct_sampler_v2'
 DEFAULT_OVERSAMPLE_FACTOR = 8
 DEFAULT_OVERSAMPLE_CAP = 20000
 DEFAULT_OVERSAMPLE_BUFFER = 500
 
 
-def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_count: int, snapshot_id: str, seed: int, holdout_split: str, dataset_tier: str) -> dict:
+def build_record(
+    row: dict,
+    seq: int,
+    *,
+    provider_count: int,
+    provider_sample_count: int,
+    snapshot_id: str,
+    seed: int,
+    holdout_split: str,
+    dataset_tier: str,
+    certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
+) -> dict:
     provider = str(row['provider'])
     name = str(row.get('name') or '').strip()
     description = str(row.get('description') or '').strip()
@@ -45,12 +59,13 @@ def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_co
     return {
         'id': f'direct-{provider.lower()}-{seq:06d}',
         'dataset_tier': dataset_tier,
+        'evaluation_target': certification_target,
         'provider_stratum': provider,
         'query_family': 'direct_single_series',
         'transform_family': transform,
         'scope_family': scope,
         'ambiguity_class': 'clearly_answerable',
-        'query': default_query_for_row(row),
+        'query': default_query_for_row(row, certification_target=certification_target),
         'origin': {
             'indicator_id': row.get('id'),
             'source_indicator_code': row.get('code'),
@@ -74,9 +89,12 @@ def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_co
             'selection_weight': selection_weight,
             'holdout_split': holdout_split,
             'seed': seed,
+            'certification_target': certification_target,
             'generation_mode': 'provider_weighted_with_floor',
+            'legacy_catalog_replay_required': certification_target == CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
         },
         'gold': {
+            'evaluation_target': certification_target,
             'required_concept_tags': tokens[:4],
             'required_transform_tags': [transform],
             'required_country_scope': None,
@@ -87,6 +105,14 @@ def build_record(row: dict, seq: int, *, provider_count: int, provider_sample_co
             'clarification_allowed': False,
             'forbidden_tags': None,
             'forbidden_scopes': None,
+            'legacy_source_indicator_code_required': certification_target == CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+            'legacy_catalog_row_replay_required': certification_target == CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
+            'answer_acceptance_criteria': [
+                'answer satisfies the user intent expressed in the query',
+                'answer uses an accepted provider or an explicitly equivalent source',
+                'answer respects requested country, time, transform, and decomposition scope',
+                'legacy source_indicator_code is not required unless the query itself asks for that code',
+            ],
             'human_review_required': True,
         },
     }
@@ -143,6 +169,12 @@ def main() -> int:
     parser.add_argument('--oversample-factor', type=int, default=DEFAULT_OVERSAMPLE_FACTOR)
     parser.add_argument('--oversample-cap', type=int, default=DEFAULT_OVERSAMPLE_CAP)
     parser.add_argument('--oversample-buffer', type=int, default=DEFAULT_OVERSAMPLE_BUFFER)
+    parser.add_argument(
+        '--certification-target',
+        choices=CERTIFICATION_TARGETS,
+        default=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        help='Evaluate real user answerability by default; use legacy_catalog_replay only for inventory replay.',
+    )
     args = parser.parse_args()
 
     strata = read_json(args.strata.resolve())
@@ -177,6 +209,7 @@ def main() -> int:
                 seed=args.seed,
                 holdout_split=args.holdout_split,
                 dataset_tier=args.dataset_tier,
+                certification_target=args.certification_target,
             )
             quality = audit_direct_query_shape(record)
             record['provenance']['query_quality_risk'] = quality['risk_level']
@@ -194,6 +227,7 @@ def main() -> int:
         'snapshot_id': snapshot_id,
         'dataset_tier': args.dataset_tier,
         'holdout_split': args.holdout_split,
+        'certification_target': args.certification_target,
     }, indent=2))
     return 0
 

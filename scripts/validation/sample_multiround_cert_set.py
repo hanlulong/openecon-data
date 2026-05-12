@@ -11,7 +11,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validation.common import read_json, write_jsonl
+from scripts.validation.common import (
+    CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    CERTIFICATION_TARGETS,
+    read_json,
+    write_jsonl,
+)
 
 DEFAULT_STRATA = ROOT / 'validation' / 'manifests' / 'strata_definition-v2.json'
 DEFAULT_SNAPSHOT = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
@@ -42,10 +47,12 @@ def annotate(
     dataset_tier: str,
     family_total_count: int,
     family_sample_count: int,
+    certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
 ) -> dict:
     sampling_probability = (family_sample_count / family_total_count) if family_total_count else None
     selection_weight = (1.0 / sampling_probability) if sampling_probability else None
     session['dataset_tier'] = dataset_tier
+    session['evaluation_target'] = certification_target
     session['provenance'] = {
         'snapshot_id': snapshot_id,
         'sampler_version': SAMPLER_VERSION,
@@ -53,8 +60,14 @@ def annotate(
         'selection_weight': selection_weight,
         'holdout_split': holdout_split,
         'seed': seed,
+        'certification_target': certification_target,
         'generation_mode': 'risk_weighted_template_bootstrap',
     }
+    for round_case in session.get('rounds') or []:
+        if isinstance(round_case, dict):
+            gold = round_case.setdefault('gold', {})
+            if isinstance(gold, dict):
+                gold['evaluation_target'] = certification_target
     return session
 
 
@@ -167,6 +180,12 @@ def main() -> int:
     parser.add_argument('--seed', type=int, default=20260414)
     parser.add_argument('--dataset-tier', default='dev')
     parser.add_argument('--holdout-split', default='candidate')
+    parser.add_argument(
+        '--certification-target',
+        choices=CERTIFICATION_TARGETS,
+        default=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        help='Evaluate whether the real user gets the needed answer.',
+    )
     args = parser.parse_args()
 
     strata = read_json(args.strata.resolve())
@@ -191,6 +210,7 @@ def main() -> int:
                     dataset_tier=args.dataset_tier,
                     family_total_count=count,
                     family_sample_count=scaled_count,
+                    certification_target=args.certification_target,
                 )
             )
 
@@ -202,6 +222,7 @@ def main() -> int:
         'families': counters,
         'scale': args.scale,
         'snapshot_id': snapshot_id,
+        'certification_target': args.certification_target,
     }, indent=2))
     return 0
 

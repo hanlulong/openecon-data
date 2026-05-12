@@ -149,6 +149,60 @@ def test_score_certification_exposes_supportability_blockers(tmp_path: Path):
     assert any("supportability-blocked certification sessions" in item for item in report["claim_grade_blockers"])
 
 
+def test_score_certification_reports_user_answerability_target(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-fred-user",
+                "dataset_tier": "cert_holdout",
+                "evaluation_target": "user_answerability",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                    "certification_target": "user_answerability",
+                },
+            }
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {"session_id": "direct-fred-user", "round_index": 1, "status_code": 200, "series_count": 1, "error": None}
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["certification_target"] == "user_answerability"
+    assert report["snapshot"]["evaluation_targets"] == {"user_answerability": 1}
+    assert report["session_results"][0]["evaluation_target"] == "user_answerability"
+    assert report["metrics"]["provisional_structural_session_success"]["by_evaluation_target"] == {
+        "user_answerability": 1.0
+    }
+    assert not any("certification target mismatch" in item for item in report["claim_grade_blockers"])
+
+
 def test_score_certification_supportability_block_overrides_stale_adjudicated_pass(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"

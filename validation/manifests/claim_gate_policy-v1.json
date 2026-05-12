@@ -2,6 +2,9 @@
   "$schema": "https://openecon.ai/schemas/validation/claim_gate_policy.schema.json",
   "version": 1,
   "policy_name": "claim_gate_policy_v1",
+  "certification_target": "user_answerability",
+  "certification_target_description": "Claim gate certifies whether a real user gets the needed answer for the prompt, not whether every frozen legacy catalog row/code can be replayed.",
+  "legacy_catalog_replay_scope": "inventory_and_provider_supportability_diagnostic_only",
   "snapshot_manifest_path": "validation/manifests/catalog_snapshot-2026-04-14.json",
   "strata_manifest_path": "validation/manifests/strata_definition-v1.json",
   "claim_thresholds": {
