@@ -2263,6 +2263,7 @@ class IMFProvider(BaseProvider):
                 or "." in exact_code_candidate
                 or any(ch.isdigit() for ch in exact_code_candidate)
             )
+            or re.fullmatch(r"[A-Z]{2}", exact_code_candidate)
         )
         exact_code_has_namespace = (
             "_" in exact_code_candidate

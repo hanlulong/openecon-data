@@ -1786,6 +1786,27 @@ class ProviderTests(unittest.TestCase):
         assert label is not None
         self.assertIn("terms of trade", label.lower())
 
+    def test_imf_two_letter_weo_catalog_code_bypasses_metadata_discovery(self) -> None:
+        provider = IMFProvider(metadata_search_service=None)
+
+        class _Lookup:
+            def get(self, provider_name: str, code: str):
+                if provider_name == "IMF" and code == "LP":
+                    return {
+                        "code": "LP",
+                        "category": "WEO",
+                        "name": "Population",
+                    }
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            code, label = run(provider._resolve_indicator_code("LP"))
+
+        self.assertEqual(code, "LP")
+        self.assertIsNotNone(label)
+        assert label is not None
+        self.assertIn("population", label.lower())
+
     def test_imf_non_datamapper_trade_code_uses_public_sdmx_v21(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 

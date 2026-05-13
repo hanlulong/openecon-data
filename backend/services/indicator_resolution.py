@@ -1682,6 +1682,26 @@ async def resolve_indicator_for_fetch(
     if (
         not has_explicit_code
         and exact_match_locked
+        and provider == "IMF"
+        and existing_indicator
+    ):
+        try:
+            from .indicator_database import get_indicator_lookup
+
+            indicator_entry = get_indicator_lookup().get("IMF", existing_indicator.upper())
+            has_explicit_code = (
+                bool(indicator_entry)
+                and str(indicator_entry.get("category") or "").strip().upper() == "WEO"
+            )
+        except Exception as exc:
+            logger.debug(
+                "IMF exact WEO code catalog check skipped for %s: %s",
+                existing_indicator,
+                exc,
+            )
+    if (
+        not has_explicit_code
+        and exact_match_locked
         and provider in {"WORLDBANK", "WORLD BANK"}
         and existing_indicator
     ):

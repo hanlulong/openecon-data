@@ -859,6 +859,48 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "NG")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_fetch_data_keeps_two_letter_imf_weo_exact_code(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["total population"],
+            parameters={
+                "country": "China",
+                "indicator": "LP",
+                "__exact_provider_code_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="China Total population of a country, region, or group from IMF",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_mock.await_args.kwargs.get("indicator"), "LP")
+
+    def test_fetch_data_strips_default_window_for_imf_exact_code_without_time_scope(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["total population"],
+            parameters={
+                "country": "China",
+                "indicator": "LP",
+                "startDate": "2021-05-14",
+                "endDate": "2026-05-13",
+                "__exact_provider_code_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="China Total population of a country, region, or group from IMF",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_mock.await_args.kwargs.get("indicator"), "LP")
+        self.assertIsNone(fetch_mock.await_args.kwargs.get("start_year"))
+        self.assertIsNone(fetch_mock.await_args.kwargs.get("end_year"))
+
     def test_explicit_provider_code_intent_does_not_hijack_imf_us_dollar_unit(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "Brazil Current account balance U.S. dollars from IMF"

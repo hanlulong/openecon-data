@@ -2131,7 +2131,7 @@ async def fetch_data(
     # dispatch/cache materialization so sparse/stale exact series are not
     # blocked by a recent default window. Explicit time scopes remain strict.
     if (
-        provider in {"FRED", "WORLDBANK", "WORLD BANK", "STATSCAN", "STATISTICS CANADA"}
+        provider in {"FRED", "WORLDBANK", "WORLD BANK", "STATSCAN", "STATISTICS CANADA", "IMF"}
         and is_exact_match_locked(params)
         and not _query_has_explicit_time_scope(intent.originalQuery or "")
         and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
