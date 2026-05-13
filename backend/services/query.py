@@ -308,7 +308,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-05-13.7"
+    CACHE_KEY_VERSION = "2026-05-13.8"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(

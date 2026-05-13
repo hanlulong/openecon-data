@@ -723,6 +723,190 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(provider._looks_like_worldbank_indicator_code("GDP"))  # pylint: disable=protected-access
         self.assertFalse(provider._looks_like_worldbank_indicator_code("household income"))  # pylint: disable=protected-access
 
+    def test_worldbank_alternatives_prefer_executable_exact_title_wdi_row(self) -> None:
+        provider = WorldBankProvider()
+
+        def row(code: str, name: str, source_id: str, source_name: str) -> dict:
+            return {
+                "provider": "WorldBank",
+                "code": code,
+                "name": name,
+                "raw_metadata": json.dumps(
+                    {"source": {"id": source_id, "value": source_name}}
+                ),
+            }
+
+        primary = row("6.0.GDP_growth", "GDP growth (annual %)", "37", "LAC Equity Lab")
+        archived = row(
+            "NY.GDP.MKTP.KN.87.ZG",
+            "GDP growth (annual %)",
+            "57",
+            "WDI Database Archives",
+        )
+        executable_wdi = row(
+            "NY.GDP.MKTP.KD.ZG",
+            "GDP growth (annual %)",
+            "2",
+            "World Development Indicators",
+        )
+        adjacent_topic = row(
+            "NV.AGR.PCAP.KD.ZG",
+            "Real agricultural GDP per capita growth rate (%)",
+            "11",
+            "Africa Development Indicators",
+        )
+
+        lookup = MagicMock()
+        lookup.get.return_value = primary
+        lookup.search.return_value = []
+        lookup.exact_name_matches.return_value = [primary, archived, executable_wdi]
+        db = MagicMock()
+        db.search.side_effect = [
+            [adjacent_topic, primary],
+            [archived, executable_wdi, adjacent_topic],
+        ]
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch("backend.services.indicator_database.get_indicator_database", return_value=db):
+            alternatives = run(
+                provider._get_alternative_indicators(  # pylint: disable=protected-access
+                    "GDP growth rate",
+                    "6.0.GDP_growth",
+                    limit=3,
+                )
+            )
+
+        self.assertEqual(alternatives[0], "NY.GDP.MKTP.KD.ZG")
+        self.assertNotIn("6.0.GDP_growth", alternatives)
+        self.assertIn("NY.GDP.MKTP.KN.87.ZG", alternatives)
+
+    def test_worldbank_natural_label_no_data_tries_executable_alternative(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            async def get(self, url, *, params=None, **_kwargs):
+                calls.append({"url": str(url), "params": dict(params or {})})
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        primary_empty = MockAsyncResponse(
+            [
+                {"page": 0, "pages": 0, "per_page": 0, "total": 0, "sourceid": None},
+                None,
+            ]
+        )
+        alternative_data = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {
+                            "id": "NY.GDP.MKTP.KD.ZG",
+                            "value": "GDP growth (annual %)",
+                        },
+                        "country": {"id": "CAN", "value": "Canada"},
+                        "countryiso3code": "CAN",
+                        "date": "2023",
+                        "value": 1.2,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 1,
+                    }
+                ],
+            ]
+        )
+        client = RecordingClient([primary_empty, alternative_data])
+
+        async def resolve_indicator(indicator: str) -> str:
+            if indicator == "GDP growth rate":
+                return "6.0.GDP_growth"
+            return indicator
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch.object(provider, "_resolve_indicator_code", new=AsyncMock(side_effect=resolve_indicator)), \
+             patch.object(provider, "_get_alternative_indicators", new=AsyncMock(return_value=["NY.GDP.MKTP.KD.ZG"])):
+            results = run(
+                provider.fetch_indicator(
+                    "GDP growth rate",
+                    country="CA",
+                    start_date="2023-01-01",
+                    end_date="2023-12-31",
+                )
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/country/CA/indicator/6.0.GDP_growth", calls[0]["url"])
+        self.assertIn("/country/CA/indicator/NY.GDP.MKTP.KD.ZG", calls[1]["url"])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata.seriesId, "NY.GDP.MKTP.KD.ZG")
+        self.assertEqual(results[0].metadata.country, "Canada")
+        self.assertEqual(results[0].data[0].value, 1.2)
+
+    def test_worldbank_llm_resolved_code_no_data_can_try_executable_alternative(self) -> None:
+        provider = WorldBankProvider()
+        calls = []
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+
+            async def get(self, url, *, params=None, **_kwargs):
+                calls.append({"url": str(url), "params": dict(params or {})})
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        primary_empty = MockAsyncResponse(
+            [
+                {"page": 0, "pages": 0, "per_page": 0, "total": 0, "sourceid": None},
+                None,
+            ]
+        )
+        alternative_data = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {
+                            "id": "NY.GDP.MKTP.KD.ZG",
+                            "value": "GDP growth (annual %)",
+                        },
+                        "country": {"id": "CAN", "value": "Canada"},
+                        "countryiso3code": "CAN",
+                        "date": "2023",
+                        "value": 1.2,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 1,
+                    }
+                ],
+            ]
+        )
+        client = RecordingClient([primary_empty, alternative_data])
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
+             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
+             patch.object(provider, "_get_alternative_indicators", new=AsyncMock(return_value=["NY.GDP.MKTP.KD.ZG"])):
+            results = run(
+                provider.fetch_indicator(
+                    "6.0.GDP_growth",
+                    country="CA",
+                    _allow_semantic_alternatives=True,
+                )
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/country/CA/indicator/6.0.GDP_growth", calls[0]["url"])
+        self.assertIn("/country/CA/indicator/NY.GDP.MKTP.KD.ZG", calls[1]["url"])
+        self.assertEqual(results[0].metadata.seriesId, "NY.GDP.MKTP.KD.ZG")
+        self.assertEqual(results[0].metadata.country, "Canada")
+
     def test_worldbank_exact_source_indicator_uses_source_series_endpoint(self) -> None:
         provider = WorldBankProvider()
         calls = []

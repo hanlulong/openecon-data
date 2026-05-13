@@ -1061,6 +1061,10 @@ async def fetch_from_provider_dispatch(
         resolved_indicator = worldbank_request.get("indicator") or params.get("indicator")
         request_country = worldbank_request.get("country") or params.get("country")
         request_countries = worldbank_request.get("countries") or params.get("countries")
+        allow_semantic_alternatives = bool(
+            str(params.get("__semantic_authority") or "") == "llm_adjudication"
+            and not is_exact_match_locked(params)
+        )
         logger.info(
             "WorldBank dispatch: indicator=%s, country=%s, countries=%s, startDate=%s",
             resolved_indicator,
@@ -1082,6 +1086,7 @@ async def fetch_from_provider_dispatch(
                     countries=request_countries,
                     start_date=params.get("startDate"),
                     end_date=params.get("endDate"),
+                    _allow_semantic_alternatives=allow_semantic_alternatives,
                 )
                 all_data.extend(data if isinstance(data, list) else [data])
             return all_data
@@ -1093,6 +1098,7 @@ async def fetch_from_provider_dispatch(
                 countries=request_countries,
                 start_date=params.get("startDate"),
                 end_date=params.get("endDate"),
+                _allow_semantic_alternatives=allow_semantic_alternatives,
             )
             if isinstance(wb_result, list):
                 logger.info(f"WorldBank returned: {len(wb_result)} series, data_pts={[len(r.data) for r in wb_result if r]}")

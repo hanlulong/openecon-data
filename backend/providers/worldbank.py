@@ -540,22 +540,108 @@ class WorldBankProvider(BaseProvider):
         helps ALL queries hitting unavailable indicators.
         """
         try:
-            from ..services.indicator_database import get_indicator_lookup
+            from ..services.indicator_database import (
+                get_indicator_database,
+                get_indicator_lookup,
+            )
             lookup = get_indicator_lookup()
-            results = lookup.search(indicator, provider='WorldBank', limit=limit + 1)
+            db = get_indicator_database()
 
-            # Return alternative codes, excluding the primary one we already tried
-            alternatives = []
-            for r in results:
-                code = r.get('code')
-                if code and code != primary_code and code not in alternatives:
-                    alternatives.append(code)
-                    if len(alternatives) >= limit:
-                        break
-            return alternatives
+            primary_row = lookup.get("WorldBank", primary_code)
+            primary_title = str((primary_row or {}).get("name") or "").strip()
+            primary_title_norm = self._normalize_indicator_title(primary_title)
+            requested_title_norm = self._normalize_indicator_title(indicator)
+
+            candidates: list[dict[str, Any]] = []
+            seen_codes: set[str] = set()
+            order = 0
+
+            def add_rows(rows: list[dict[str, Any]] | None) -> None:
+                nonlocal order
+                for row in rows or []:
+                    if not isinstance(row, dict):
+                        continue
+                    code = str(row.get("code") or "").strip()
+                    if not code or code == primary_code or code in seen_codes:
+                        continue
+                    candidate = dict(row)
+                    candidate["_alternative_order"] = order
+                    order += 1
+                    seen_codes.add(code)
+                    candidates.append(candidate)
+
+            # Keep the existing ranked lookup path, then supplement it with
+            # provider-native exact-title and raw FTS rows.  The raw DB path is
+            # intentionally not semantically authoritative; it only broadens the
+            # retry candidates after the selected provider-native code returned
+            # no data.
+            broad_limit = max(limit * 4, 20)
+            add_rows(lookup.search(indicator, provider="WorldBank", limit=broad_limit))
+
+            if primary_title:
+                add_rows(
+                    lookup.exact_name_matches(
+                        [primary_title],
+                        provider="WorldBank",
+                        limit=broad_limit,
+                    )
+                )
+
+            raw_limit = max(limit * 20, 80)
+            add_rows(db.search(indicator, provider="WorldBank", limit=raw_limit))
+            if primary_title and primary_title != indicator:
+                add_rows(db.search(primary_title, provider="WorldBank", limit=raw_limit))
+
+            def candidate_rank(row: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
+                code = str(row.get("code") or "")
+                name_norm = self._normalize_indicator_title(str(row.get("name") or ""))
+                source_id, source_name = self._indicator_row_source(row)
+                source_name_lower = source_name.lower()
+
+                exact_primary_title = int(bool(primary_title_norm and name_norm == primary_title_norm))
+                exact_requested_title = int(bool(requested_title_norm and name_norm == requested_title_norm))
+                generic_wdi_source = int(
+                    source_id == "2" or source_name_lower == "world development indicators"
+                )
+                non_archive_source = int("archive" not in source_name_lower)
+                dotted_provider_code = int("." in code)
+                # Negative order preserves upstream rank when provider-native
+                # evidence is otherwise tied.
+                return (
+                    exact_primary_title,
+                    exact_requested_title,
+                    generic_wdi_source,
+                    non_archive_source,
+                    dotted_provider_code,
+                    -int(row.get("_alternative_order") or 0),
+                )
+
+            candidates.sort(key=candidate_rank, reverse=True)
+            return [str(row.get("code")) for row in candidates[:limit]]
         except Exception as e:
             logger.debug(f"Could not get alternative indicators: {e}")
             return []
+
+    @staticmethod
+    def _normalize_indicator_title(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    @staticmethod
+    def _indicator_row_source(row: dict[str, Any]) -> tuple[str, str]:
+        raw = row.get("raw_metadata")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = None
+        if isinstance(raw, dict):
+            source = raw.get("source")
+            if isinstance(source, dict):
+                return (
+                    str(source.get("id") or "").strip(),
+                    str(source.get("value") or source.get("name") or "").strip(),
+                )
+        return "", ""
 
     @staticmethod
     def _looks_like_worldbank_indicator_code(indicator: str) -> bool:
@@ -988,6 +1074,7 @@ class WorldBankProvider(BaseProvider):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         _skip_alternatives: bool = False,  # Internal flag to prevent recursion
+        _allow_semantic_alternatives: bool = False,
     ) -> List[NormalizedData]:
         # Circuit breaker: skip WB entirely when API is confirmed down
         if not _wb_is_available():
@@ -996,11 +1083,24 @@ class WorldBankProvider(BaseProvider):
                 f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
             )
         catalog_source_id = self._indicator_source_id(indicator)
+        resolved_from_semantic_adjudication = bool(_allow_semantic_alternatives)
         exact_indicator_request = bool(
-            self._looks_like_worldbank_indicator_code(indicator)
-            or catalog_source_id
+            (self._looks_like_worldbank_indicator_code(indicator) or catalog_source_id)
+            and not resolved_from_semantic_adjudication
         )
         indic = await self._resolve_indicator_code(indicator)
+        semantic_resolved_request = bool(
+            _allow_semantic_alternatives
+            and catalog_source_id
+            and str(indic).strip() == str(indicator or "").strip()
+        )
+        if semantic_resolved_request:
+            # A catalog-backed code that came from upstream LLM/metadata
+            # adjudication is provider-native, but it is not literal user input.
+            # If that exact code returns no data, allow the normal executable
+            # alternative path to try same-title public WDI rows instead of
+            # fail-closing on a non-executable source-specific code.
+            exact_indicator_request = False
         if not catalog_source_id or str(indic).strip() != str(indicator or "").strip():
             catalog_source_id = self._indicator_source_id(indic)
         country_list = countries or ([country] if country else ["all"])
@@ -1222,11 +1322,22 @@ class WorldBankProvider(BaseProvider):
         # batch processing loop below handles all countries together.
         # Skip fallback if time budget already exceeded (avoids cascading timeouts).
         _elapsed_so_far = _time.perf_counter() - _fetch_start
-        skip_duplicate_all_country_fallback = (
+        skip_duplicate_country_fallback = (
             len(country_list) == 1
             and self._country_code(str(country_list[0])) == "all"
         )
-        if not payload and not skip_duplicate_all_country_fallback and _elapsed_so_far < _FETCH_BUDGET_S:
+        if (
+            len(country_list) == 1
+            and not exact_indicator_request
+            and not prefer_parallel_small_group
+        ):
+            # For a natural-label single-country request, the "batch" URL and
+            # per-country fallback URL are identical.  Do not spend the whole
+            # budget retrying the same unavailable primary indicator before
+            # the executable-alternative path can run.
+            skip_duplicate_country_fallback = True
+
+        if not payload and not skip_duplicate_country_fallback and _elapsed_so_far < _FETCH_BUDGET_S:
             remaining_budget = _FETCH_BUDGET_S - _elapsed_so_far
             accumulated_records = []
             fallback_meta = None
@@ -1266,8 +1377,8 @@ class WorldBankProvider(BaseProvider):
                     "WorldBank per-country fallback timed out after %.1fs",
                     _time.perf_counter() - _fetch_start,
                 )
-        elif not payload and skip_duplicate_all_country_fallback:
-            logger.info("WorldBank skipping per-country fallback: all-country request already attempted")
+        elif not payload and skip_duplicate_country_fallback:
+            logger.info("WorldBank skipping duplicate per-country fallback: primary request already attempted")
         elif not payload:
             logger.info(
                 "WorldBank skipping per-country fallback: time budget exceeded (%.1fs)",
