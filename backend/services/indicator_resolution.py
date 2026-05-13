@@ -340,6 +340,11 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
     min_name_len = 4 if provider_key == "COINGECKO" else 24
     if provider_key == "IMF":
         min_name_len = 8
+    if provider_key == "WORLDBANK":
+        # World Bank public source catalogs include short exact titles such as
+        # "Terms of Trade".  Treat a literal provider-scoped title as exact user
+        # input; the strict matcher below still rejects suffix/generic partials.
+        min_name_len = 8
 
     candidates = []
     seen_codes = set()
@@ -407,6 +412,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         # "Real GDP growth" and "Population".  These are exact title matches,
         # not semantic concept-to-code shortcuts, so allow them through the
         # existing provider-scoped exact-title path.
+        min_name_len = 8
+    if provider_key == "WORLDBANK":
+        # World Bank non-WDI public sources expose concise provider-native
+        # titles (for example "Terms of Trade") that should be resolved as
+        # literal exact-title requests instead of falling through to a search
+        # result list.  This stays provider-scoped and exact-title only.
         min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
 

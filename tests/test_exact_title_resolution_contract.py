@@ -297,6 +297,52 @@ def test_exact_title_match_uses_normalized_title_lookup_for_comma_variants(tmp_p
     assert looks_exact is True
 
 
+def test_exact_title_match_accepts_short_worldbank_public_source_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="WorldBank",
+            code="TOT",
+            name="Terms of Trade",
+            category="Global Economic Monitor",
+            popularity=10,
+            raw_metadata='{"source": {"id": "15", "value": "Global Economic Monitor"}}',
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "Terms of Trade from World Bank"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "WorldBank")
+        looks_exact = looks_like_exact_provider_title_match(query, "WorldBank")
+
+    assert match is not None
+    assert match["code"] == "TOT"
+    assert looks_exact is True
+
+
+def test_exact_title_match_rejects_short_worldbank_partial_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="WorldBank",
+            code="TOT",
+            name="Terms of Trade",
+            category="Global Economic Monitor",
+            popularity=10,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "Trade from World Bank"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "WorldBank")
+        looks_exact = looks_like_exact_provider_title_match(query, "WorldBank")
+
+    assert match is None
+    assert looks_exact is False
+
+
 def test_exact_title_match_ignores_appended_frequency_disambiguator(tmp_path) -> None:
     db = IndicatorDatabase(tmp_path / "indicators.db")
     assert db.insert_indicator(
