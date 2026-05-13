@@ -4,6 +4,7 @@ import asyncio
 import logging
 import json
 import re
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
@@ -654,6 +655,83 @@ class OECDProvider(BaseProvider):
 
         if not filled:
             return "all"
+        return ".".join(key_parts)
+
+    @staticmethod
+    def _oecd_ref_area_code_for_structure(
+        structure_metadata: Optional[Dict[str, Any]],
+        country_code: Optional[str],
+    ) -> Optional[str]:
+        """Return the provider-native REF_AREA code for a specific OECD dataflow.
+
+        Most OECD dataflows use ISO alpha-3 REF_AREA values, but some migrated
+        SDMX surfaces still advertise ISO alpha-2 values in their content
+        constraints (for example national-accounts IDC tables use ``DE`` rather
+        than ``DEU``).  Use the dataflow's provider-native constraint metadata
+        to choose the exact request code instead of assuming one global country
+        code convention.
+        """
+        requested = str(country_code or "").strip().upper()
+        if not requested or not structure_metadata:
+            return country_code
+
+        valid_ref_areas = {
+            str(value or "").strip().upper()
+            for value in (structure_metadata.get("valid_values_by_dimension") or {}).get("REF_AREA") or []
+            if str(value or "").strip()
+        }
+        if not valid_ref_areas or requested in valid_ref_areas:
+            return requested
+
+        try:
+            from ..routing.country_resolver import CountryResolver
+
+            iso2 = CountryResolver.to_iso2(requested)
+            if iso2 and iso2.upper() in valid_ref_areas:
+                return iso2.upper()
+        except Exception:
+            pass
+
+        return requested
+
+    @staticmethod
+    def _build_oecd_relaxed_key_from_structure(
+        structure_metadata: Dict[str, Any],
+        country_code: Optional[str],
+        frequency: Optional[str] = None,
+    ) -> Optional[str]:
+        """Build a low-specificity provider-native key for availability retry.
+
+        This is used only after OECD's advertised DEFAULT annotations produce
+        no records.  It keeps mechanical request constraints (REF_AREA and, when
+        known, FREQ) but relaxes optional default dimensions so the response can
+        reveal which provider-native combinations actually have observations.
+        """
+        dimensions = structure_metadata.get("dimensions") or []
+        if not dimensions:
+            return None
+
+        key_parts = [""] * len(dimensions)
+        filled = False
+        country_dims = {"REF_AREA", "geo", "COUNTRY"}
+        frequency_value = str(frequency or "").strip()
+
+        for array_idx, dim in enumerate(dimensions):
+            if not isinstance(dim, dict):
+                continue
+            dim_id = str(dim.get("id") or "")
+            position = dim.get("position", array_idx)
+            if not isinstance(position, int) or position < 0 or position >= len(key_parts):
+                position = array_idx
+            if dim_id in country_dims and country_code:
+                key_parts[position] = str(country_code)
+                filled = True
+            elif dim_id == "FREQ" and frequency_value:
+                key_parts[position] = frequency_value
+                filled = True
+
+        if not filled:
+            return None
         return ".".join(key_parts)
 
     @staticmethod
@@ -1335,7 +1413,13 @@ class OECDProvider(BaseProvider):
         data_base_url = self.base_url
         structure_metadata = await self._get_oecd_dataflow_structure(agency, dataflow, version)
         filter_key = None
+        structure_defaults_for_selection: Dict[str, str] = {}
+        relaxed_default_retry = False
         if structure_metadata and structure_metadata.get("dimensions"):
+            country_code = self._oecd_ref_area_code_for_structure(
+                structure_metadata,
+                country_code,
+            )
             if country_code:
                 country_constraint_error = self._oecd_country_constraint_error(
                     structure_metadata,
@@ -1350,6 +1434,7 @@ class OECDProvider(BaseProvider):
             defaults = dict(structure_metadata.get("default_values") or {})
             if expected_freq and "FREQ" not in defaults:
                 defaults["frequency"] = expected_freq
+            structure_defaults_for_selection = dict(defaults)
             defaults = defaults or None
             filter_key = self._build_oecd_key_from_structure(
                 structure_metadata,
@@ -1422,44 +1507,76 @@ class OECDProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         http_client = get_http_client()
 
-        async def fetch_with_retry():
-            try:
-                # Use 50s timeout - OECD SDMX API can be very slow for complex queries
-                # Research shows OECD has 60 requests/hour rate limit, so we need patience
-                response = await http_client.get(
-                    url,
-                    params=params,
-                    headers={"Accept": "application/vnd.sdmx.data+json; version=2.0.0"},
-                    timeout=50.0,
-                )
+        async def _request_oecd_data(request_url: str) -> Dict[str, Any]:
+            async def fetch_with_retry():
+                try:
+                    # Use 50s timeout - OECD SDMX API can be very slow for complex queries
+                    # Research shows OECD has 60 requests/hour rate limit, so we need patience
+                    response = await http_client.get(
+                        request_url,
+                        params=params,
+                        headers={"Accept": "application/vnd.sdmx.data+json; version=2.0.0"},
+                        timeout=50.0,
+                    )
 
-                # Check for rate limiting BEFORE raise_for_status
-                if response.status_code == 429:
-                    # Record rate limit error for circuit breaker
-                    record_provider_rate_limit_error("OECD")
-                    response.raise_for_status()  # This will trigger retry logic
+                    # Check for rate limiting BEFORE raise_for_status
+                    if response.status_code == 429:
+                        # Record rate limit error for circuit breaker
+                        record_provider_rate_limit_error("OECD")
+                        response.raise_for_status()  # This will trigger retry logic
 
-                response.raise_for_status()
+                    response.raise_for_status()
 
-                # Success! Record it to reset circuit breaker
-                record_provider_success("OECD")
-                return response.json()
-            finally:
-                # Record this request for rate limiting purposes
-                record_provider_request("OECD")
+                    # Success! Record it to reset circuit breaker
+                    record_provider_success("OECD")
+                    return response.json()
+                finally:
+                    # Record this request for rate limiting purposes
+                    record_provider_request("OECD")
+
+            return await retry_async(
+                fetch_with_retry,
+                max_attempts=3,  # More attempts for slow OECD API
+                initial_delay=3.0,  # Start with 3s delay
+                backoff_factor=2.0,  # Exponential backoff
+                jitter=2.0,  # Add 0-2s random jitter
+            )
 
         # Use retry_async with exponential backoff and jitter for OECD:
         # - 3 attempts (original + 2 retries)
         # - Exponential backoff: 3s → 6s → 12s
         # - Jitter: 0-2s random added to avoid thundering herd
         # Total worst case: 50s + 5s + 50s + 8s + 50s = ~163s (but rare)
-        data = await retry_async(
-            fetch_with_retry,
-            max_attempts=3,  # More attempts for slow OECD API
-            initial_delay=3.0,  # Start with 3s delay
-            backoff_factor=2.0,  # Exponential backoff
-            jitter=2.0,  # Add 0-2s random jitter
-        )
+        try:
+            data = await _request_oecd_data(url)
+        except DataNotAvailableError:
+            relaxed_frequency = (
+                structure_defaults_for_selection.get("FREQ")
+                or structure_defaults_for_selection.get("frequency")
+                or expected_freq
+            )
+            relaxed_key = (
+                self._build_oecd_relaxed_key_from_structure(
+                    structure_metadata,
+                    country_code,
+                    relaxed_frequency,
+                )
+                if structure_metadata
+                else None
+            )
+            if not relaxed_key or relaxed_key == filter_key:
+                raise
+            relaxed_url = f"{data_base_url}/data/{agency},{dataflow},{version}/{relaxed_key}"
+            logger.info(
+                "OECD default key returned no records for %s/%s; retrying relaxed provider-native key %s",
+                country_code,
+                dataflow,
+                relaxed_key,
+            )
+            data = await _request_oecd_data(relaxed_url)
+            filter_key = relaxed_key
+            url = relaxed_url
+            relaxed_default_retry = True
 
         # Parse SDMX-JSON 2.0 format
         # Check if data is None before accessing
@@ -1476,6 +1593,39 @@ class OECDProvider(BaseProvider):
             raise DataNotAvailableError(f"Empty dataset received for {country_code} {indicator}")
 
         observations = dataset.get("observations", {})
+        if not observations and not relaxed_default_retry:
+            relaxed_frequency = (
+                structure_defaults_for_selection.get("FREQ")
+                or structure_defaults_for_selection.get("frequency")
+                or expected_freq
+            )
+            relaxed_key = (
+                self._build_oecd_relaxed_key_from_structure(
+                    structure_metadata,
+                    country_code,
+                    relaxed_frequency,
+                )
+                if structure_metadata
+                else None
+            )
+            if relaxed_key and relaxed_key != filter_key:
+                relaxed_url = f"{data_base_url}/data/{agency},{dataflow},{version}/{relaxed_key}"
+                logger.info(
+                    "OECD default key returned an empty dataset for %s/%s; "
+                    "retrying relaxed provider-native key %s",
+                    country_code,
+                    dataflow,
+                    relaxed_key,
+                )
+                data = await _request_oecd_data(relaxed_url)
+                filter_key = relaxed_key
+                url = relaxed_url
+                relaxed_default_retry = True
+                datasets = data.get("data", {}).get("dataSets", [])
+                dataset = datasets[0] if datasets else None
+                if dataset is not None:
+                    observations = dataset.get("observations", {})
+
         if not observations:
             raise DataNotAvailableError(f"No observations found for {country_code} {indicator}")
 
@@ -1582,6 +1732,27 @@ class OECDProvider(BaseProvider):
         data_points = []
         observations_checked = 0
         observations_filtered_out = 0
+        selection_defaults = dict(structure_defaults_for_selection or {})
+        if selection_defaults.get("frequency") and "FREQ" not in selection_defaults:
+            selection_defaults["FREQ"] = selection_defaults["frequency"]
+        ignored_selection_defaults = {
+            "LASTNPERIODS",
+            "LASTNOBSERVATIONS",
+            "TIME_PERIOD_START",
+            "TIME_PERIOD_END",
+            "frequency",
+        }
+
+        def _default_value_matches(dim_id: str, value_id: str) -> bool:
+            default_value = str(selection_defaults.get(dim_id) or "").strip()
+            if not default_value or dim_id in ignored_selection_defaults:
+                return False
+            allowed_values = {
+                part.strip().upper()
+                for part in default_value.split("+")
+                if part.strip()
+            }
+            return bool(allowed_values) and value_id.upper() in allowed_values
 
         for obs_key, obs_value in observations.items():
             # obs_key is like "0:0:0:0:0:0" representing dimension indices
@@ -1651,6 +1822,24 @@ class OECDProvider(BaseProvider):
             value = obs_value[0] if isinstance(obs_value, list) and obs_value else obs_value
 
             if value is not None:
+                series_key_parts = []
+                default_match_score = 0
+                for dim_idx, dim in enumerate(dimensions):
+                    if dim_idx == time_dim_index:
+                        continue
+                    dim_id = str(dim.get("id") or "")
+                    value_id = ""
+                    if dim_idx < len(indices) and indices[dim_idx] is not None:
+                        dim_values = dim.get("values", []) or []
+                        if indices[dim_idx] < len(dim_values):
+                            dim_value = dim_values[indices[dim_idx]]
+                            if isinstance(dim_value, dict):
+                                value_id = str(dim_value.get("id") or dim_value.get("value") or "")
+                    if dim_id:
+                        series_key_parts.append((dim_id, value_id))
+                        if value_id and _default_value_matches(dim_id, value_id):
+                            default_match_score += 1
+
                 # Convert time period to ISO date
                 # OECD returns formats like "2020", "2020-Q1", "2020-01"
                 time_period = str(time_period)
@@ -1666,7 +1855,14 @@ class OECDProvider(BaseProvider):
                     # Annual: 2020
                     date_str = f"{time_period}-01-01"
 
-                data_points.append({"date": date_str, "value": float(value)})
+                data_points.append(
+                    {
+                        "date": date_str,
+                        "value": float(value),
+                        "_series_key": tuple(series_key_parts),
+                        "_default_match_score": default_match_score,
+                    }
+                )
 
         logger.info(f"📊 Filtering results:")
         logger.info(f"   Observations checked: {observations_checked}")
@@ -1692,6 +1888,37 @@ class OECDProvider(BaseProvider):
 
         # Sort by date
         data_points.sort(key=lambda x: x["date"])
+
+        if data_points and selection_defaults:
+            points_by_series: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
+            for point in data_points:
+                points_by_series[point.get("_series_key")].append(point)
+            if len(points_by_series) > 1:
+                scored_series = []
+                for series_key, points in points_by_series.items():
+                    score = max(
+                        int(point.get("_default_match_score") or 0)
+                        for point in points
+                    )
+                    scored_series.append(
+                        (
+                            score,
+                            len(points),
+                            str(series_key),
+                            series_key,
+                        )
+                    )
+                best_score, best_count, _best_sort_key, best_series_key = max(scored_series)
+                if best_score > 0:
+                    logger.info(
+                        "OECD selected provider-default-conforming series after %srequest: "
+                        "score=%s observations=%s series=%s",
+                        "relaxed " if relaxed_default_retry else "",
+                        best_score,
+                        best_count,
+                        best_series_key,
+                    )
+                    data_points = points_by_series[best_series_key]
 
         # CRITICAL: Deduplicate data points when dimension filtering fails
         # This handles the case where OECD returns multiple countries/measures
@@ -1751,6 +1978,10 @@ class OECDProvider(BaseProvider):
                     f"✅ Deduplication: {len(data_points)} → {len(deduplicated)} data points"
                 )
                 data_points = deduplicated
+
+        for point in data_points:
+            point.pop("_series_key", None)
+            point.pop("_default_match_score", None)
 
         # Determine unit and frequency from data or indicator type
         unit = ""

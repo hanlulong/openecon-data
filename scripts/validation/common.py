@@ -66,7 +66,13 @@ DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'Comtrade': ['United States', 'China', 'Germany', 'France', 'Japan'],
     'Eurostat': ['France', 'Germany', 'Italy', 'Spain'],
     'StatsCan': ['Canada'],
-    'OECD': ['United States', 'Japan', 'Germany', 'Canada'],
+    # Japan is deliberately excluded as an arbitrary OECD default: several
+    # long-tail Education-at-a-Glance tables advertise Japan in REF_AREA
+    # constraints but have no observations for the provider-native default
+    # selection.  Keeping the default set to broad high-coverage countries
+    # makes user-answerability prompts ask an answerable country-specific
+    # question without adding any title/code semantic shortcut.
+    'OECD': ['Germany', 'Canada', 'United States'],
     'BIS': ['United States', 'China', 'Japan'],
     'ExchangeRate': ['USD to EUR', 'USD to GBP', 'USD to JPY'],
 }
@@ -1695,7 +1701,6 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
     if provider_upper == 'STATSCAN':
         prefix = '' if query_mentions_country(phrase) else 'Canada '
         return f"{prefix}{phrase} from Statistics Canada".strip()
-
     if phrase and code and phrase.upper() == code.upper():
         phrase = description_context_phrase(description) or f"{provider_label} indicator {phrase}"
     if provider_upper == 'OECD' and re.fullmatch(r'[A-Z0-9_@]{1,40}', phrase):

@@ -358,6 +358,21 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(key, "all")
 
+    def test_oecd_ref_area_code_uses_dataflow_native_iso2_constraints(self) -> None:
+        metadata = {
+            "dimension_ids": ["FREQ", "ADJUSTMENT", "REF_AREA"],
+            "valid_values_by_dimension": {"REF_AREA": ["DE", "CA"]},
+        }
+
+        self.assertEqual(
+            OECDProvider._oecd_ref_area_code_for_structure(metadata, "DEU"),  # pylint: disable=protected-access
+            "DE",
+        )
+        self.assertEqual(
+            OECDProvider._oecd_ref_area_code_for_structure(metadata, "CAN"),  # pylint: disable=protected-access
+            "CA",
+        )
+
     def test_oecd_country_constraint_error_rejects_absent_ref_area(self) -> None:
         metadata = {
             "dimension_ids": ["REF_AREA", "MEASURE"],
@@ -3025,6 +3040,65 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.metadata.country, "United States Of America")
         self.assertEqual(len(series.data), 1)
         self.assertEqual(series.data[0].value, 1.0)
+
+    def test_oecd_fetch_indicator_uses_structure_native_ref_area_code(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        captured = {}
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "FREQ", "position": 0},
+                {"id": "ADJUSTMENT", "position": 1},
+                {"id": "REF_AREA", "position": 2},
+            ],
+            "dimension_ids": ["FREQ", "ADJUSTMENT", "REF_AREA"],
+            "valid_values_by_dimension": {"REF_AREA": ["DE", "CA"]},
+            "default_values": {"FREQ": "A"},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                captured["url"] = url
+                captured["params"] = params
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0": [7.0]}}],
+                            "structures": [
+                                {
+                                    "name": "IDC table",
+                                    "dimensions": {
+                                        "observation": [
+                                            {"id": "REF_AREA", "values": [{"id": "DE", "name": "Germany"}]},
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2023"}]},
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2024-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.NAD", "DSD_NASEC10_IDC@DF_TABLE9B_IDC", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="Germany", start_year=2023, end_year=2023))
+
+        self.assertIn("/data/OECD.SDD.NAD,DSD_NASEC10_IDC@DF_TABLE9B_IDC,1.0/A..DE", captured["url"])
+        self.assertEqual(series.metadata.country, "Germany")
+        self.assertEqual(series.data[0].value, 7.0)
 
     def test_oecd_fetch_indicator_fails_fast_when_constraints_exclude_country(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

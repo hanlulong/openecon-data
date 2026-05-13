@@ -548,6 +548,30 @@ def test_default_query_for_row_carries_statscan_product_id_with_title_evidence()
     assert query == "24100026 Travel price index quarterly from StatsCan"
 
 
+def test_user_answerability_oecd_query_uses_high_coverage_default_country():
+    row = {
+        "provider": "OECD",
+        "provider_stratum": "OECD",
+        "evaluation_target": "user_answerability",
+        "origin": {
+            "source_provider": "OECD",
+            "source_indicator_code": "OECD_DSD_EAG_LSO_EA@DF_LSO_EARN_REL_BEL",
+            "name": (
+                "Earnings of workers relative to the earnings of workers with "
+                "below upper secondary educational attainment, by age group, "
+                "gender and educational attainment level"
+            ),
+            "description": "This dataset contains data on relative earnings of workers.",
+        },
+    }
+
+    query = default_query_for_row(row, certification_target="user_answerability")
+
+    assert query.endswith("from OECD")
+    assert query.startswith(("United States ", "Germany ", "Canada "))
+    assert not query.startswith("Japan ")
+
+
 def test_default_query_for_row_keeps_statscan_dimension_titles_natural():
     row = {
         "provider": "StatsCan",
@@ -799,7 +823,7 @@ def test_default_query_for_row_enriches_generic_oecd_title_from_description():
 
     query = default_query_for_row(row)
 
-    assert query == "Japan DSD_HEALTH_EMP_REAC@DF_PHYS from OECD"
+    assert query == "United States DSD_HEALTH_EMP_REAC@DF_PHYS from OECD"
 
 
 def test_default_query_for_row_does_not_prepend_country_when_imf_title_already_names_one():
