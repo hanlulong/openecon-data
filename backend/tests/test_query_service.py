@@ -310,6 +310,36 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.intent.apiProvider, "FRED")
         self.assertEqual(response.data[0].metadata.seriesId, "DCOILBRENTEU")
 
+    def test_fred_contract_guard_ignores_non_country_parser_noise(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["Brent oil price"],
+            parameters={
+                "country": "1W",
+                "indicator": "DCOILBRENTEU",
+                "__semantic_authority": "llm_adjudication",
+            },
+            clarificationNeeded=False,
+            originalQuery="Brent oil price",
+        )
+
+        async def fake_fetch_series(params: dict[str, Any]):
+            self.assertEqual(params.get("indicator"), "DCOILBRENTEU")
+            return sample_series_with(
+                indicator="Crude Oil Prices: Brent - Europe",
+                series_id="DCOILBRENTEU",
+                source="FRED",
+                unit="Dollars per Barrel",
+            )
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", side_effect=fake_fetch_series):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "DCOILBRENTEU")
+
     def test_select_indicator_query_uses_original_when_cues_mismatch(self) -> None:
         intent = ParsedIntent(
             apiProvider="World Bank",
@@ -5838,6 +5868,192 @@ class QueryServiceTests(unittest.TestCase):
             {member.indicator_label for member in persisted.active_answer_members},
             {"GDP growth rate"},
         )
+
+    def test_collective_answer_member_delta_reuses_provider_code_after_first_member_resolves(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-answer-members-shared-code")
+        state = ConversationState(
+            indicator="GDP growth rate",
+            turn_number=5,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=5,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP growth rate",
+                    provider_code="NY.GDP.MKTP.KD.ZG",
+                    series_id="NY.GDP.MKTP.KD.ZG",
+                    country="Japan",
+                    countries=["Japan"],
+                    source_turn=5,
+                ),
+            ],
+            recent_answer_members=[],
+        )
+        delta = FollowUpDelta(
+            changed_indicator="GDP per capita",
+            delta_type="indicator_switch",
+            raw_query="Switch to GDP per capita",
+        )
+        captured_intents: list[ParsedIntent] = []
+
+        async def _fake_fetch(intent: ParsedIntent):
+            captured_intents.append(intent)
+            country = (intent.parameters or {}).get("country")
+            if country == "Japan" and intent.indicators != ["NY.GDP.PCAP.CD"]:
+                raise DataNotAvailableError("Japan needs shared provider-native code")
+            return [
+                sample_series_with(
+                    source="World Bank",
+                    indicator="GDP per capita (current US$)",
+                    country=country,
+                    series_id="NY.GDP.PCAP.CD",
+                )
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Switch to GDP per capita",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.error)
+        self.assertEqual(captured_intents[0].indicators, ["GDP per capita"])
+        self.assertEqual(captured_intents[1].indicators, ["NY.GDP.PCAP.CD"])
+        self.assertEqual(captured_intents[1].parameters.get("indicator"), "NY.GDP.PCAP.CD")
+        self.assertEqual(
+            [series.metadata.country for series in (response.data or [])],
+            ["CA", "JP"],
+        )
+        updated_state = conversation_manager.get_conversation_state(response.conversationId)
+        assert updated_state is not None
+        self.assertFalse(updated_state.provider_locked)
+
+    def test_collective_answer_member_delta_preserves_previous_active_members_in_recent_on_add_back(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-collective-add-back-preserves-recent")
+        state = ConversationState(
+            indicator="GDP per capita",
+            turn_number=7,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=7,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="Japan",
+                    countries=["Japan"],
+                    source_turn=7,
+                ),
+            ],
+            recent_answer_members=[],
+        )
+        delta = FollowUpDelta(
+            added_countries=["DE"],
+            delta_type="additive_country",
+            raw_query="Add Germany back",
+        )
+
+        async def _fake_fetch(intent: ParsedIntent):
+            params = intent.parameters or {}
+            countries = params.get("countries") or ([params.get("country")] if params.get("country") else [])
+            return [
+                sample_series_with(
+                    source="World Bank",
+                    indicator="GDP per capita",
+                    country=country,
+                    series_id="NY.GDP.PCAP.CD",
+                )
+                for country in countries
+            ]
+
+        with patch.object(self.service, "_fetch_data", new=AsyncMock(side_effect=_fake_fetch)), \
+             patch.object(self.service, "_verify_execution_result", new=AsyncMock(return_value=None)), \
+             patch.object(self.service, "_needs_indicator_clarification", return_value=False):
+            response = run(
+                self.service._execute_collective_answer_member_delta(  # pylint: disable=protected-access
+                    query="Add Germany back",
+                    conversation_id=conv_id,
+                    tracker=None,
+                    state=state,
+                    delta=delta,
+                )
+            )
+
+        assert response is not None
+        self.assertFalse(response.error)
+        persisted = conversation_manager.get_conversation_state(response.conversationId)
+        assert persisted is not None
+        recent_keys = {
+            key
+            for member in (persisted.recent_answer_members or [])
+            for key in self.service._member_country_keys(member)  # pylint: disable=protected-access
+        }
+        self.assertTrue({"CA", "JP"} <= recent_keys)
+
+    def test_collective_added_country_reuses_provider_code_template_for_same_indicator(self) -> None:
+        state = ConversationState(
+            indicator="GDP per capita",
+            turn_number=7,
+            active_answer_members=[
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="Canada",
+                    countries=["Canada"],
+                    source_turn=7,
+                ),
+                AnswerSetMember(
+                    provider="WORLDBANK",
+                    indicator_label="GDP per capita",
+                    provider_code="NY.GDP.PCAP.CD",
+                    series_id="NY.GDP.PCAP.CD",
+                    country="Japan",
+                    countries=["Japan"],
+                    source_turn=7,
+                ),
+            ],
+            recent_answer_members=[],
+        )
+        delta = FollowUpDelta(
+            added_countries=["DE"],
+            delta_type="additive_country",
+            raw_query="Add Germany back",
+        )
+
+        members = self.service._select_collective_answer_members(  # pylint: disable=protected-access
+            state,
+            delta,
+            "GDP per capita",
+        )
+
+        germany = next(member for member in members if "DE" in self.service._member_country_keys(member))  # pylint: disable=protected-access
+        self.assertEqual(germany.provider_code, "NY.GDP.PCAP.CD")
+        self.assertEqual(germany.series_id, "NY.GDP.PCAP.CD")
 
     def test_build_collective_member_intent_preserves_provider_code_in_params_for_stable_members(self) -> None:
         state = ConversationState(

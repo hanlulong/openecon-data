@@ -308,7 +308,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-05-13.8"
+    CACHE_KEY_VERSION = "2026-05-13.9"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -2562,6 +2562,36 @@ class QueryService:
                     continue
                 member = _coerce_member_for_country(str(country))
                 if member is not None:
+                    if (
+                        not delta.changed_indicator
+                        and getattr(member, "provider_code", None) is None
+                        and getattr(member, "series_id", None) is None
+                    ):
+                        provider_key = normalize_provider_name(str(getattr(member, "provider", "") or ""))
+                        label_key = str(getattr(member, "indicator_label", "") or collective_indicator_label or "").strip().lower()
+                        templates = [
+                            candidate
+                            for candidate in (active_members + recent_members)
+                            if normalize_provider_name(str(getattr(candidate, "provider", "") or "")) == provider_key
+                            and str(getattr(candidate, "indicator_label", "") or "").strip().lower() == label_key
+                            and (
+                                getattr(candidate, "provider_code", None)
+                                or getattr(candidate, "series_id", None)
+                            )
+                        ]
+                        if templates:
+                            template = max(
+                                templates,
+                                key=lambda candidate: int(getattr(candidate, "source_turn", 0) or 0),
+                            )
+                            member.provider_code = str(
+                                getattr(template, "provider_code", None)
+                                or getattr(template, "series_id", None)
+                            )
+                            member.series_id = str(
+                                getattr(template, "series_id", None)
+                                or getattr(template, "provider_code", None)
+                            )
                     members.append(member)
                     existing_keys.update(self._member_country_keys(member))
 
@@ -2624,6 +2654,7 @@ class QueryService:
         )
         if not indicator_changed and indicator_token:
             params["indicator"] = indicator_token
+            params["__exact_provider_code_match"] = True
 
         return ParsedIntent(
             apiProvider=str(getattr(member, "provider", "") or getattr(state, "provider", "") or "WorldBank"),
@@ -2658,6 +2689,8 @@ class QueryService:
 
         combined_data: List[NormalizedData] = []
         failed_members: List[str] = []
+        shared_resolution_codes: Dict[tuple[str, str], str] = {}
+        shared_label_key = collective_indicator_label.lower()
 
         for member in target_members:
             member_query = self._collective_member_query(
@@ -2673,6 +2706,27 @@ class QueryService:
                 delta=delta,
                 collective_indicator_label=collective_indicator_label,
             )
+            member_provider_key = normalize_provider_name(
+                str(getattr(member, "provider", "") or member_intent.apiProvider or "")
+            )
+            shared_code = shared_resolution_codes.get((member_provider_key, shared_label_key))
+            if shared_code and delta.changed_indicator:
+                # A collection-wide transform should resolve one provider's
+                # target indicator once, then apply that provider-native code
+                # consistently to the remaining preserved members.  This is
+                # not semantic final authority: the first member already passed
+                # normal retrieval/fetch/verification, and the reused value is
+                # the provider-native series code returned by that success.
+                member_intent.indicators = [shared_code]
+                member_intent.parameters = {
+                    **dict(member_intent.parameters or {}),
+                    "indicator": shared_code,
+                    "__delta_indicator_changed": False,
+                    "__semantic_indicator_label": collective_indicator_label,
+                    "__semantic_authority": "llm_adjudication",
+                    "__exact_provider_code_match": True,
+                    "__decision_source": "collective_shared_resolution",
+                }
             member_countries = self._member_country_list(member)
             member_scope = ", ".join(member_countries) or str(getattr(member, "provider", "") or "member")
 
@@ -2752,6 +2806,24 @@ class QueryService:
                     failed_members.append(member_scope)
                     continue
 
+            if delta.changed_indicator and collective_indicator_label:
+                returned_provider_key = normalize_provider_name(
+                    str(getattr(getattr(member_data[0], "metadata", None), "source", "") or "")
+                )
+                resolution_provider_key = returned_provider_key or normalize_provider_name(
+                    str(member_intent.apiProvider or member_provider_key or "")
+                )
+                returned_codes = {
+                    str(getattr(getattr(series, "metadata", None), "seriesId", "") or "").strip()
+                    for series in member_data
+                    if str(getattr(getattr(series, "metadata", None), "seriesId", "") or "").strip()
+                }
+                if resolution_provider_key and len(returned_codes) == 1:
+                    shared_resolution_codes.setdefault(
+                        (resolution_provider_key, shared_label_key),
+                        next(iter(returned_codes)),
+                    )
+
             combined_data.extend(member_data)
 
         if failed_members:
@@ -2784,6 +2856,19 @@ class QueryService:
             response_params["country"] = response_countries[0]
         elif response_countries:
             response_params["countries"] = response_countries
+        if len(target_members) == 1:
+            member_code = str(
+                getattr(target_members[0], "provider_code", None)
+                or getattr(target_members[0], "series_id", None)
+                or ""
+            ).strip()
+            if member_code and not delta.changed_indicator:
+                response_params["indicator"] = member_code
+                response_params["__delta_resolved"] = True
+                response_params["__delta_indicator_changed"] = False
+                response_params["__semantic_authority"] = "llm_adjudication"
+                response_params["__exact_provider_code_match"] = True
+                response_params["__decision_source"] = "collective_single_member_addition"
         if delta.changed_start_date or getattr(state, "start_date", None):
             response_params["startDate"] = delta.changed_start_date or getattr(state, "start_date", None)
         if delta.changed_end_date or getattr(state, "end_date", None):
@@ -2827,8 +2912,38 @@ class QueryService:
             updated_state.countries = response_countries
         updated_state.provider = None if response_provider == "MULTI" else response_provider
         updated_state.routed_provider = updated_state.provider
-        updated_state.provider_locked = response_provider != "MULTI"
+        updated_state.provider_locked = (
+            response_provider != "MULTI"
+            and len(target_members) <= 1
+        )
         update_answer_members_from_data(updated_state, combined_data, intent=response_intent)
+        if delta.added_countries and combined_data:
+            current_members = list(getattr(updated_state, "active_answer_members", None) or [])
+            recent_members = list(getattr(updated_state, "recent_answer_members", None) or [])
+            current_keys = {
+                key
+                for member in current_members
+                for key in self._member_country_keys(member)
+            }
+            updated_recent = list(recent_members)
+            for previous_member in (getattr(state, "active_answer_members", None) or []):
+                previous_keys = self._member_country_keys(previous_member)
+                if any(key in current_keys for key in previous_keys):
+                    continue
+                updated_recent.append(previous_member.model_copy(deep=True))
+            if updated_recent:
+                deduped_recent: Dict[tuple[str, str, str], Any] = {}
+                order: List[tuple[str, str, str]] = []
+                for member in updated_recent[-24:]:
+                    provider_key = normalize_provider_name(str(getattr(member, "provider", "") or ""))
+                    label_key = str(getattr(member, "indicator_label", "") or "").strip().lower()
+                    country_key = ",".join(self._member_country_keys(member))
+                    key = (provider_key, label_key, country_key)
+                    deduped_recent[key] = member
+                    if key in order:
+                        order = [existing for existing in order if existing != key]
+                    order.append(key)
+                updated_state.recent_answer_members = [deduped_recent[key] for key in order[-24:]]
         conversation_manager.set_conversation_state(conv_id, updated_state)
 
         conv_id = conversation_manager.add_message_safe(
@@ -3368,6 +3483,33 @@ class QueryService:
             axis,
             query[:80],
         )
+
+    def _canonicalize_statscan_dimension_axis_for_response(
+        self,
+        intent: Optional[ParsedIntent],
+    ) -> None:
+        """Expose a user-facing decomposition axis after provider execution.
+
+        StatsCan's provider metadata often calls the underlying dimension
+        ``Sex``.  The conversation-state contract canonicalizes this as
+        ``Gender`` for follow-up reasoning and user-facing state.  Keep the
+        provider-native axis through fetch execution, then canonicalize the
+        returned intent so response metadata and persisted state agree.
+        """
+        if intent is None:
+            return
+        if normalize_provider_name(intent.apiProvider or "") != "STATSCAN":
+            return
+        if str(intent.decompositionType or "").strip().lower() != "dimension":
+            return
+        params = dict(intent.parameters or {})
+        axis = str(params.get("__statscan_decomposition_axis") or "").strip().lower()
+        if axis in {"sex", "gender"}:
+            params["__statscan_decomposition_axis"] = "Gender"
+            intent.parameters = params
+        elif axis in {"age", "age group", "age groups", "ages"}:
+            params["__statscan_decomposition_axis"] = "Age group"
+            intent.parameters = params
 
     async def _maybe_expand_statscan_dimension_decomposition_entities(
         self,
@@ -4911,6 +5053,7 @@ class QueryService:
                         message=verification_error,
                         processing_steps=tracker.to_list(),
                     )
+                self._canonicalize_statscan_dimension_axis_for_response(intent)
                 self._persist_verified_conversation_state(
                     conv_id,
                     _pending_conv_state,

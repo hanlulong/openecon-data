@@ -29,6 +29,7 @@ from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
 from ..services.time_range_defaults import apply_default_time_range
 from ..utils.processing_steps import get_processing_tracker
+from ..routing.country_resolver import CountryResolver
 
 if TYPE_CHECKING:
     from ..providers.fred import FREDProvider
@@ -43,6 +44,31 @@ if TYPE_CHECKING:
     from ..providers.coingecko import CoinGeckoProvider
 
 logger = logging.getLogger(__name__)
+
+_KNOWN_COUNTRY_ALIASES = {
+    alias
+    for alias in CountryResolver.COUNTRY_ALIASES
+    if len(alias) > 2 or alias.isalpha()
+}
+_KNOWN_ISO2_COUNTRIES = {
+    code
+    for alias, code in CountryResolver.COUNTRY_ALIASES.items()
+    if alias.lower() == code.lower() and code.isalpha()
+}
+
+
+def _normalize_known_country_to_iso2(country: Any) -> Optional[str]:
+    """Normalize only real known countries; reject parser-noise tokens."""
+    text = str(country or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered not in _KNOWN_COUNTRY_ALIASES and text.upper() not in _KNOWN_ISO2_COUNTRIES:
+        return None
+    normalized = CountryResolver.normalize(text)
+    if normalized in _KNOWN_ISO2_COUNTRIES:
+        return normalized
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +347,13 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
     country_scope = list(raw_country_list)
     if not country_scope and params.get("country"):
         country_scope = [params.get("country")]
+    if provider_norm == "FRED":
+        normalized_scope = []
+        for country in country_scope:
+            normalized = _normalize_known_country_to_iso2(country)
+            if normalized is not None:
+                normalized_scope.append(normalized)
+        country_scope = normalized_scope
 
     start_year, end_year = _years_from_params(params)
     contract: dict[str, Any] = {
@@ -389,10 +422,9 @@ def _fred_requested_country_scope(provider_request: dict[str, Any], params: dict
     """Return the requested country scope for a FRED dispatch/cache identity."""
     raw_scope = provider_request.get("country_scope")
     if isinstance(raw_scope, list):
-        scope = [str(country).strip() for country in raw_scope if str(country or "").strip()]
-    else:
-        scope = []
+        return [str(country).strip() for country in raw_scope if str(country or "").strip()]
 
+    scope = []
     if not scope:
         countries = params.get("countries")
         if isinstance(countries, list):
@@ -404,9 +436,37 @@ def _fred_requested_country_scope(provider_request: dict[str, Any], params: dict
     return scope
 
 
+def _fred_exact_title_targets_country(
+    params: dict[str, Any],
+    intent: Optional[ParsedIntent],
+    iso2: str,
+) -> bool:
+    """Return whether an exact FRED title itself names the requested country."""
+    if not params.get("__exact_indicator_title_match"):
+        return False
+
+    title_parts = [str(indicator or "") for indicator in (intent.indicators if intent else [])]
+    if params.get("__semantic_indicator_label"):
+        title_parts.append(str(params.get("__semantic_indicator_label") or ""))
+    title_text = " ".join(part for part in title_parts if part).lower()
+    if not title_text:
+        return False
+
+    aliases = [
+        alias
+        for alias, code in CountryResolver.COUNTRY_ALIASES.items()
+        if code == iso2 and len(alias) > 2
+    ]
+    return any(
+        re.search(rf"\b{re.escape(alias.lower())}\b", title_text)
+        for alias in aliases
+    )
+
+
 def _raise_if_fred_country_scope_unsupported(
     provider_request: dict[str, Any],
     params: dict[str, Any],
+    intent: Optional[ParsedIntent] = None,
 ) -> None:
     """Fail closed when a FRED request asks for non-US geography.
 
@@ -419,13 +479,20 @@ def _raise_if_fred_country_scope_unsupported(
     if not requested_scope:
         return
 
-    from ..services.provider_fallback import normalize_country_to_iso2
-
-    unsupported = [
-        country
-        for country in requested_scope
-        if (normalize_country_to_iso2(country) or str(country).strip().upper()) != "US"
-    ]
+    unsupported = []
+    for country in requested_scope:
+        normalized = _normalize_known_country_to_iso2(country)
+        # Some parser paths store non-geographic tokens (for example FRED
+        # frequency strings such as "1W") in the country slot.  The FRED
+        # contract guard should fail closed only for real non-US country
+        # scopes, not for unrelated parser noise.
+        if normalized is None:
+            continue
+        if normalized == "US":
+            continue
+        if _fred_exact_title_targets_country(params, intent, normalized):
+            continue
+        unsupported.append(country)
     if not unsupported:
         return
 
@@ -1028,7 +1095,7 @@ async def fetch_from_provider_dispatch(
 
     if provider == "FRED":
         fred_request = dict(execution_plan.provider_request or {})
-        _raise_if_fred_country_scope_unsupported(fred_request, params)
+        _raise_if_fred_country_scope_unsupported(fred_request, params, intent)
         # Ensure params has indicator set
         if not params.get("indicator") and intent.indicators:
             params = {**params, "indicator": intent.indicators[0]}
@@ -2251,6 +2318,7 @@ async def fetch_data(
         _raise_if_fred_country_scope_unsupported(
             dict(execution_plan.provider_request or {}),
             params,
+            intent,
         )
 
     cached = await svc._get_from_cache(execution_plan.provider, execution_plan.params)
