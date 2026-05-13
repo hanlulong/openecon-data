@@ -288,6 +288,30 @@ def test_user_answerability_eurostat_keeps_exact_title_without_high_risk():
     assert audit["risk_level"] != "high"
 
 
+def test_user_answerability_eurostat_eu_coverage_does_not_inject_arbitrary_country():
+    title = (
+        "Relative prevalence rate of work-related health problems by severity, "
+        "diagnosis group, permanency of the job, length of service in the enterprise "
+        "and NACE Rev. 1.1 activity"
+    )
+    row = {
+        "id": 1,
+        "provider": "Eurostat",
+        "code": "HSW_HP_SVCLN",
+        "name": title,
+        "description": title,
+        "category": "Eurostat Dataset",
+        "coverage": "EU",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == f"{title} from Eurostat"
+
+
 def test_user_answerability_statscan_keeps_exact_table_title_without_high_risk():
     title = (
         "Body mass index (BMI), by age group and sex, household population aged 18 and over "
@@ -598,6 +622,27 @@ def test_user_answerability_oecd_query_uses_high_coverage_default_country():
     assert not query.startswith("Japan ")
 
 
+def test_user_answerability_oecd_distribution_rows_use_canada_default_country():
+    row = {
+        "provider": "OECD",
+        "provider_stratum": "OECD",
+        "evaluation_target": "user_answerability",
+        "origin": {
+            "source_provider": "OECD",
+            "source_indicator_code": "OECD_DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE",
+            "name": "Population in the National Accounts: distribution of people in income quintiles by age",
+            "description": "This dataset presents the number of individuals belonging to households in each quintile broken down by age group.",
+        },
+    }
+
+    query = default_query_for_row(row, certification_target="user_answerability")
+
+    assert query == (
+        "Canada Population in the National Accounts: distribution of people "
+        "in income quintiles by age from OECD"
+    )
+
+
 def test_default_query_for_row_keeps_statscan_dimension_titles_natural():
     row = {
         "provider": "StatsCan",
@@ -849,7 +894,7 @@ def test_default_query_for_row_enriches_generic_oecd_title_from_description():
 
     query = default_query_for_row(row)
 
-    assert query == "United States DSD_HEALTH_EMP_REAC@DF_PHYS from OECD"
+    assert query == "Germany DSD_HEALTH_EMP_REAC@DF_PHYS from OECD"
 
 
 def test_default_query_for_row_does_not_prepend_country_when_imf_title_already_names_one():

@@ -253,12 +253,13 @@ class EurostatProvider(BaseProvider):
                 continue
             query_params[dim_key] = str(value)
 
-        def latest_all_available_params() -> Dict[str, str]:
+        def latest_default_time_params() -> Dict[str, str]:
             bounded_params = dict(query_params)
             # Some exact Eurostat datasets are quarterly/monthly or mixed-frequency.
             # If no geography/time was requested, use Eurostat's provider-native
             # latest-period filter and avoid imposing our inferred annual freq.
-            bounded_params.pop("freq", None)
+            if no_geo_filter:
+                bounded_params.pop("freq", None)
             bounded_params.pop("sinceTimePeriod", None)
             bounded_params["lastTimePeriod"] = "1"
             return bounded_params
@@ -276,7 +277,7 @@ class EurostatProvider(BaseProvider):
             payload = await fetch_payload(effective_query_params)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 413 and no_geo_filter and used_default_time_range:
-                effective_query_params = latest_all_available_params()
+                effective_query_params = latest_default_time_params()
                 try:
                     payload = await fetch_payload(effective_query_params)
                 except httpx.HTTPStatusError as retry_error:
@@ -303,8 +304,8 @@ class EurostatProvider(BaseProvider):
                 raise
 
         data_points, frequency = self._parse_dataset(payload, dataset_code)
-        if not data_points and no_geo_filter and used_default_time_range:
-            retry_params = latest_all_available_params()
+        if not data_points and used_default_time_range:
+            retry_params = latest_default_time_params()
             if retry_params != effective_query_params:
                 try:
                     retry_payload = await fetch_payload(retry_params)

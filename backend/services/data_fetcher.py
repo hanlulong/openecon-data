@@ -354,7 +354,7 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
                 "start_year",
                 "end_year",
             }
-            and not str(key).startswith("__")
+            and not str(key).startswith("_")
         }
 
     if provider_norm == "STATSCAN":
@@ -1697,6 +1697,7 @@ async def _fetch_from_eurostat(
         indicator
         and re.search(rf"(?<![A-Z0-9_]){re.escape(indicator)}(?![A-Z0-9_])", original_query, flags=re.IGNORECASE)
     )
+    exact_provider_surface_requested = exact_dataset_code_requested or is_exact_match_locked(params)
     explicit_time_scope = _query_has_explicit_time_scope(original_query)
     current_year = datetime.utcnow().year
     default_recent_start_year = current_year - 5
@@ -1794,7 +1795,7 @@ async def _fetch_from_eurostat(
         return series_list
 
     # Single country query (default to EU aggregate if not specified)
-    single_country = country_param if country_param else ("__ALL__" if exact_dataset_code_requested else "EU27_2020")
+    single_country = country_param if country_param else ("__ALL__" if exact_provider_surface_requested else "EU27_2020")
     series = await _fetch_indicator_with_sparse_history_retry(single_country)
     return [series]
 

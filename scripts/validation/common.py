@@ -70,16 +70,32 @@ DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'Comtrade': ['China', 'India', 'Germany', 'France', 'Japan'],
     'Eurostat': ['France', 'Germany', 'Italy', 'Spain'],
     'StatsCan': ['Canada'],
-    # Japan is deliberately excluded as an arbitrary OECD default: several
-    # long-tail Education-at-a-Glance tables advertise Japan in REF_AREA
-    # constraints but have no observations for the provider-native default
-    # selection.  Keeping the default set to broad high-coverage countries
-    # makes user-answerability prompts ask an answerable country-specific
-    # question without adding any title/code semantic shortcut.
-    'OECD': ['Germany', 'Canada', 'United States'],
+    # Japan and the United States are deliberately excluded as arbitrary OECD
+    # defaults: several long-tail Education-at-a-Glance and distributional
+    # national-accounts tables advertise those REF_AREA values but have no
+    # observations for the provider-native default selection.  Keeping the
+    # default set to broad high-coverage countries makes user-answerability
+    # prompts ask an answerable country-specific question without adding any
+    # title/code semantic shortcut.
+    'OECD': ['Canada', 'Germany'],
     'BIS': ['United States', 'China', 'Japan'],
     'ExchangeRate': ['USD to EUR', 'USD to GBP', 'USD to JPY'],
 }
+
+
+def _is_eurostat_aggregate_coverage(coverage: str) -> bool:
+    normalized = re.sub(r'[^a-z0-9]+', ' ', str(coverage or '').lower()).strip()
+    if not normalized:
+        return False
+    return normalized in {
+        'eu',
+        'european union',
+        'euro area',
+        'eurozone',
+        'eu aggregate',
+        'eu aggregates',
+        'europe',
+    } or bool(re.fullmatch(r'(?:eu|ea)\s*\d{2}(?:\s*\d{4})?', normalized))
 
 DIRECT_QUERY_JARGON_PATTERNS = (
     r'\bBPM6\b',
@@ -687,7 +703,6 @@ def preferred_default_country_for_record(provider: str, category: str, name: str
         }
         if category_key.upper() in regional_defaults:
             return regional_defaults[category_key.upper()]
-
     subfamily = provider_subfamily_key(provider_key, name)
     priors = _load_empirical_country_subfamily_priors()
     category_priors = _load_empirical_country_category_priors()
@@ -1711,6 +1726,17 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         phrase = description_context_phrase(description) or f"OECD indicator {phrase}"
     if provider_upper == 'EUROSTAT' and _looks_like_eurostat_dataset_code(phrase):
         phrase = description_context_phrase(description) or f"Eurostat dataset {phrase}"
+    if provider_upper == 'EUROSTAT':
+        # Eurostat rows whose catalog coverage is an EU aggregate should not be
+        # turned into arbitrary member-state questions.  The runtime can answer
+        # these through Eurostat's provider-native all-available aggregate
+        # surface, while a synthetic "Germany/France/..." prompt can be false
+        # for historical aggregate-only datasets.
+        coverage = str(row.get('coverage') or origin.get('coverage') or '')
+        prefix = ''
+        if not query_mentions_country(phrase) and not _is_eurostat_aggregate_coverage(coverage):
+            prefix = f"{choice} "
+        return f"{prefix}{phrase} from {provider_label}".strip()
     if provider_upper == 'WORLDBANK':
         # WorldBank has a native all-country surface.  Do not inject an
         # arbitrary default country into user-answerability prompts unless the

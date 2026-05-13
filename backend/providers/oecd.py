@@ -735,6 +735,34 @@ class OECDProvider(BaseProvider):
         return ".".join(key_parts)
 
     @staticmethod
+    def _oecd_expected_frequency_for_structure(
+        structure_metadata: Optional[Dict[str, Any]],
+        expected_freq: Optional[str],
+    ) -> Optional[str]:
+        """Reconcile heuristic cadence hints with provider-native FREQ values.
+
+        Some OECD dataflow IDs contain text fragments such as ``UNEMP`` even
+        when the public structure is annual-only.  A heuristic monthly hint must
+        not override the dataflow's own content constraints; otherwise the
+        request key asks for a non-existent FREQ and returns false no-data.
+        """
+        candidate = str(expected_freq or "").strip().upper()
+        if not structure_metadata:
+            return candidate or None
+        valid_freqs = {
+            str(value or "").strip().upper()
+            for value in (structure_metadata.get("valid_values_by_dimension") or {}).get("FREQ") or []
+            if str(value or "").strip()
+        }
+        if not valid_freqs:
+            return candidate or None
+        if candidate and candidate in valid_freqs:
+            return candidate
+        if len(valid_freqs) == 1:
+            return next(iter(valid_freqs))
+        return None
+
+    @staticmethod
     def _oecd_country_constraint_error(
         structure_metadata: Optional[Dict[str, Any]],
         country_code: str,
@@ -857,15 +885,37 @@ class OECDProvider(BaseProvider):
             or (request_start is not None and valid_end is not None and request_start > valid_end)
         )
         if no_overlap:
-            if valid_start is not None:
-                params["startPeriod"] = str(valid_start)
             if valid_end is not None:
+                params["startPeriod"] = str(valid_end)
                 params["endPeriod"] = str(valid_end)
+            elif valid_start is not None:
+                params["startPeriod"] = str(valid_start)
             return
 
         if request_start is not None and valid_start is not None and request_start < valid_start:
             params["startPeriod"] = str(valid_start)
         if request_end is not None and valid_end is not None and request_end > valid_end:
+            params["endPeriod"] = str(valid_end)
+
+        if (
+            str(params.get("startPeriod") or "") == str(params.get("endPeriod") or "")
+            and str(params.get("startPeriod") or "").strip()
+        ):
+            # OECD's API can reject broad high-dimensional downloads even when a
+            # dataflow's provider-default selection is narrow.  For generated
+            # default windows, prefer the latest advertised observation year
+            # over a multi-year pull; explicit user ranges bypass this method.
+            return
+
+        default_end = str((structure_metadata.get("default_values") or {}).get("TIME_PERIOD_END") or "").strip()
+        default_end_year = cls._year_from_oecd_period(default_end)
+        if default_end_year is not None:
+            params["startPeriod"] = str(default_end_year)
+            params["endPeriod"] = str(default_end_year)
+            return
+
+        if valid_end is not None:
+            params["startPeriod"] = str(valid_end)
             params["endPeriod"] = str(valid_end)
 
     def _country_code(self, country: str) -> str:
@@ -1416,6 +1466,18 @@ class OECDProvider(BaseProvider):
         structure_defaults_for_selection: Dict[str, str] = {}
         relaxed_default_retry = False
         if structure_metadata and structure_metadata.get("dimensions"):
+            adjusted_expected_freq = self._oecd_expected_frequency_for_structure(
+                structure_metadata,
+                expected_freq,
+            )
+            if adjusted_expected_freq != expected_freq:
+                logger.info(
+                    "OECD adjusted expected frequency for %s from %s to %s using structure metadata",
+                    dataflow,
+                    expected_freq,
+                    adjusted_expected_freq,
+                )
+                expected_freq = adjusted_expected_freq
             country_code = self._oecd_ref_area_code_for_structure(
                 structure_metadata,
                 country_code,

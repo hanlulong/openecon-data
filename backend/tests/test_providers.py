@@ -4,10 +4,11 @@ import asyncio
 import json
 import httpx
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.providers import comtrade as comtrade_module
-from backend.models import NormalizedData
+from backend.models import DataPoint, ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from backend.providers.comtrade import ComtradeProvider
 from backend.providers.fred import FREDProvider
 from backend.providers.worldbank import WorldBankProvider
@@ -296,6 +297,18 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(key, "CAN._T._T._T.A")
 
+    def test_oecd_frequency_hint_uses_structure_native_frequency(self) -> None:
+        metadata = {
+            "valid_values_by_dimension": {"FREQ": ["A"]},
+        }
+
+        frequency = OECDProvider._oecd_expected_frequency_for_structure(  # pylint: disable=protected-access
+            metadata,
+            "M",
+        )
+
+        self.assertEqual(frequency, "A")
+
     def test_oecd_default_annotations_parse_provider_values(self) -> None:
         defaults = OECDProvider._parse_oecd_default_annotations(  # pylint: disable=protected-access
             [
@@ -440,8 +453,35 @@ class ProviderTests(unittest.TestCase):
             metadata,
         )
 
-        self.assertEqual(params["startPeriod"], "2015")
+        self.assertEqual(params["startPeriod"], "2019")
         self.assertEqual(params["endPeriod"], "2019")
+
+    def test_oecd_default_time_window_prefers_latest_provider_year(self) -> None:
+        params = {
+            "dimensionAtObservation": "AllDimensions",
+            "startPeriod": "2021",
+            "endPeriod": "2026",
+        }
+        metadata = {
+            "default_values": {"TIME_PERIOD_END": "2024"},
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "2015-01-01T00:00:00"},
+                        "endPeriod": {"period": "2024-12-31T00:00:00"},
+                    },
+                }
+            ],
+        }
+
+        OECDProvider._clamp_default_time_params_to_oecd_constraints(  # pylint: disable=protected-access
+            params,
+            metadata,
+        )
+
+        self.assertEqual(params["startPeriod"], "2024")
+        self.assertEqual(params["endPeriod"], "2024")
 
     def test_fred_series_id_explicit_codes_passthrough(self) -> None:
         """Test that explicit FRED series codes pass through directly."""
@@ -2853,6 +2893,146 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("sinceTimePeriod", retry_params)
         self.assertEqual(retry_params.get("lastTimePeriod"), "1")
 
+    def test_eurostat_country_default_empty_window_retries_latest_period(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        empty_response = MockAsyncResponse(
+            {
+                "value": {},
+                "dimension": {
+                    "freq": {"category": {"index": {"A": 0}, "label": {"A": "Annual"}}},
+                    "geo": {"category": {"index": {"ES": 0}, "label": {"ES": "Spain"}}},
+                    "time": {"category": {"index": {}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 0],
+                "updated": "2026-02-03",
+            }
+        )
+        latest_response = MockAsyncResponse(
+            {
+                "value": {"0": 225.0},
+                "dimension": {
+                    "freq": {"category": {"index": {"A": 0}, "label": {"A": "Annual"}}},
+                    "geo": {"category": {"index": {"ES": 0}, "label": {"ES": "Spain"}}},
+                    "time": {"category": {"index": {"2016": 0}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 1],
+                "updated": "2026-02-03",
+            }
+        )
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                response = empty_response if len(self.calls) == 1 else latest_response
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        client = RecordingClient()
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="LFSO_16YMGNEDNC", country="Spain"))
+
+        self.assertEqual(len(series.data), 1)
+        self.assertEqual(series.data[0].date, "2016-01-01")
+        self.assertEqual(series.metadata.country, "ES")
+        self.assertEqual(series.metadata.apiUrl and "lastTimePeriod=1" in series.metadata.apiUrl, True)
+        self.assertEqual(len(client.calls), 2)
+        _, first_params = client.calls[0]
+        _, retry_params = client.calls[1]
+        self.assertEqual(first_params.get("geo"), "ES")
+        self.assertEqual(first_params.get("freq"), "A")
+        self.assertIn("sinceTimePeriod", first_params)
+        self.assertEqual(retry_params.get("geo"), "ES")
+        self.assertEqual(retry_params.get("freq"), "A")
+        self.assertNotIn("sinceTimePeriod", retry_params)
+        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+
+    def test_eurostat_dispatch_exact_title_without_country_uses_all_available(self) -> None:
+        from backend.services.data_fetcher import _fetch_from_eurostat
+
+        class RecordingEurostatProvider:
+            def __init__(self):
+                self.calls = []
+
+            async def fetch_indicator(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                return NormalizedData(
+                    metadata=Metadata(
+                        source="Eurostat",
+                        indicator="Historical aggregate table",
+                        country=kwargs.get("country"),
+                        frequency="annual",
+                        unit="percent",
+                        seriesId=kwargs.get("indicator"),
+                    ),
+                    data=[DataPoint(date="1999-01-01", value=1.0)],
+                )
+
+        provider = RecordingEurostatProvider()
+        svc = SimpleNamespace(eurostat_provider=provider)
+        params = {
+            "indicator": "hsw_hp_svcln",
+            "__exact_indicator_title_match": True,
+            "__original_query": "Historical aggregate table from Eurostat",
+        }
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["Historical aggregate table"],
+            parameters=params,
+            clarificationNeeded=False,
+            originalQuery="Historical aggregate table from Eurostat",
+        )
+        plan = ExecutionPlan(
+            provider="EUROSTAT",
+            candidate_id="hsw_hp_svcln",
+            fetch_strategy="single_series",
+            params=params,
+            provider_request={
+                "dataset_code": "hsw_hp_svcln",
+                "country_scope": [],
+                "start_year": None,
+                "end_year": None,
+                "filters": {},
+            },
+        )
+
+        series = run(_fetch_from_eurostat(svc, intent, params, plan))
+
+        self.assertEqual(len(series), 1)
+        self.assertEqual(provider.calls[0]["country"], "__ALL__")
+
+    def test_eurostat_provider_request_drops_internal_single_underscore_flags(self) -> None:
+        from backend.services.data_fetcher import materialize_execution_plan
+
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT",
+            indicators=["INN_CIS10_MRK"],
+            parameters={
+                "indicator": "INN_CIS10_MRK",
+                "country": "FR",
+                "_ranking_scope_expanded": True,
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="INN_CIS10_MRK from Eurostat",
+        )
+
+        plan = materialize_execution_plan(
+            None,
+            provider="EUROSTAT",
+            intent=intent,
+            params=intent.parameters,
+        )
+
+        filters = plan.provider_request["filters"]
+        self.assertNotIn("_ranking_scope_expanded", filters)
+        self.assertNotIn("__semantic_provider_locked", filters)
+
     def test_eurostat_all_available_413_retries_latest_without_inferred_freq(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)
 
@@ -3120,6 +3300,69 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("/data/OECD.SDD.NAD,DSD_NASEC10_IDC@DF_TABLE9B_IDC,1.0/A..DE", captured["url"])
         self.assertEqual(series.metadata.country, "Germany")
         self.assertEqual(series.data[0].value, 7.0)
+
+    def test_oecd_fetch_indicator_does_not_request_invalid_monthly_frequency(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        captured = {}
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "FREQ", "position": 1},
+            ],
+            "dimension_ids": ["REF_AREA", "FREQ"],
+            "valid_values_by_dimension": {"REF_AREA": ["USA"], "FREQ": ["A"]},
+            "default_values": {},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                captured["url"] = url
+                captured["params"] = params
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0:0": [4.2]}}],
+                            "structures": [
+                                {
+                                    "name": "Annual unemployment by field",
+                                    "dimensions": {
+                                        "observation": [
+                                            {"id": "REF_AREA", "values": [{"id": "USA", "name": "United States"}]},
+                                            {"id": "FREQ", "values": [{"id": "A", "name": "Annual"}]},
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2024"}]},
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2024-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.EDU.IMEP", "DSD_EAG_LSO_EA@DF_LSO_NEAC_UNEMP_FIELD", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="USA", start_year=2024, end_year=2024))
+
+        self.assertIn(
+            "/data/OECD.EDU.IMEP,DSD_EAG_LSO_EA@DF_LSO_NEAC_UNEMP_FIELD,1.0/USA.A",
+            captured["url"],
+        )
+        self.assertNotIn("USA.M", captured["url"])
+        self.assertEqual(series.metadata.frequency, "annual")
+        self.assertEqual(series.data[0].value, 4.2)
 
     def test_oecd_fetch_indicator_fails_fast_when_constraints_exclude_country(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
