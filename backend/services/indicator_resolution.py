@@ -203,6 +203,31 @@ def _looks_like_provider_indicator_code_local(provider: str, indicator: str) -> 
     return False
 
 
+def _imf_catalog_entry_supports_exact_code(candidate: str, metadata: Any) -> bool:
+    """Return whether an IMF catalog hit is safe as exact DataMapper code.
+
+    IMF's local catalog contains terse natural acronyms (for example ``GDP``)
+    that are not the public WEO DataMapper series users expect when they ask
+    natural-language questions like "Germany GDP from IMF".  Treat catalog hits
+    as exact-code authority only when the code has provider-native namespace
+    syntax or belongs to executable DataMapper categories already supported by
+    the IMF provider.  Otherwise the normal selector/provider metadata path
+    must decide.
+    """
+    if not metadata:
+        return False
+    code_upper = str(candidate or "").strip().upper()
+    if not code_upper:
+        return False
+    has_namespace = (
+        "_" in code_upper
+        or "." in code_upper
+        or any(ch.isdigit() for ch in code_upper)
+    )
+    category = str(metadata.get("category") or "").strip().upper()
+    return bool(has_namespace or category == "WEO" or category.endswith("REO"))
+
+
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
 # ---------------------------------------------------------------------------
@@ -1672,7 +1697,11 @@ async def resolve_indicator_for_fetch(
             try:
                 from .indicator_database import get_indicator_lookup
 
-                catalog_exact_match = bool(get_indicator_lookup().get(provider, candidate_indicator.upper()))
+                indicator_entry = get_indicator_lookup().get(provider, candidate_indicator.upper())
+                catalog_exact_match = _imf_catalog_entry_supports_exact_code(
+                    candidate_indicator,
+                    indicator_entry,
+                )
             except Exception as exc:
                 logger.debug(
                     "IMF parsed-code catalog check skipped for %s: %s",
@@ -1825,6 +1854,11 @@ async def resolve_indicator_for_fetch(
     original_selector_query = (_effective_original_query(intent) or "").strip()
     if provider in {"STATSCAN", "STATISTICS CANADA"}:
         selector_query = (indicator_query or original_selector_query).strip()
+    elif is_provider_locked(intent.parameters or {}) and not is_exact_match_locked(intent.parameters or {}):
+        if len(intent.indicators or []) > 1:
+            selector_query = (original_selector_query or indicator_query or "").strip()
+        else:
+            selector_query = (indicator_query or original_selector_query).strip()
     else:
         # For follow-ups, use resolvedQuery (e.g. "GDP per capita India")
         # rather than the raw follow-up text (e.g. "show from IMF instead").
@@ -1974,11 +2008,15 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         if provider_locked:
             # Provider locking means "do not switch providers"; for StatsCan it
             # should not force geography/date words back into indicator
-            # selection.  Other providers still prefer the full original query
-            # because prior semantic labels can be polluted by fallback state.
+            # selection.  For non-exact provider-locked requests, prefer the
+            # parsed/distilled indicator phrase over the full query so country
+            # and provider words do not pollute candidate retrieval. Exact
+            # provider-native codes/titles return before this selector path.
             if _normalize_provider_name(intent.apiProvider or "") in {"STATSCAN", "STATISTICS CANADA"}:
                 return semantic_indicator_label or distilled_original or original_query
-            return original_query or distilled_original or semantic_indicator_label
+            if len(intent.indicators or []) > 1:
+                return original_query or distilled_original or semantic_indicator_label
+            return semantic_indicator_label or distilled_original or original_query
         return semantic_indicator_label or distilled_original or original_query
 
     # If the indicator looks like a provider-specific code, never use it
@@ -1986,7 +2024,7 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
     provider = _normalize_provider_name(intent.apiProvider or "")
     if provider and svc._looks_like_provider_indicator_code(provider, indicator_query):
         logger.info(
-            "🔎 Indicator '%s' looks like a %s-specific code. Using original query for resolution.",
+            "🔎 Indicator '%s' looks like a %s-specific code. Using parsed/distilled query for resolution.",
             indicator_query,
             provider,
         )

@@ -137,6 +137,39 @@ def test_score_ambiguity_requires_ordered_score_evidence() -> None:
     assert not IndicatorSelector._scores_are_ambiguous([0.88, 0.82, 0.80])
 
 
+def test_imf_candidate_order_prefers_public_datamapper_surface(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    class _Lookup:
+        def get(self, provider: str, code: str):
+            assert provider == "IMF"
+            return {
+                "GDP": {"category": "CF"},
+                "BFD_GDP": {"category": "CF"},
+                "NGDPD": {"category": "WEO"},
+                "TTT": {"category": "AFRREO"},
+            }.get(code)
+
+    monkeypatch.setattr(
+        "backend.services.indicator_database.get_indicator_lookup",
+        lambda: _Lookup(),
+    )
+
+    candidates, scores = selector._prioritize_candidates_by_provider_surface(  # pylint: disable=protected-access
+        [
+            ("GDP", "Nominal GDP"),
+            ("BFD_GDP", "Net foreign direct investment (% of GDP)"),
+            ("NGDPD", "GDP, current prices"),
+            ("TTT", "Terms of trade"),
+        ],
+        [0.55, 0.55, 0.69, 0.60],
+        "IMF",
+    )
+
+    assert [code for code, _name in candidates] == ["NGDPD", "TTT", "BFD_GDP", "GDP"]
+    assert scores == [0.69, 0.60, 0.55, 0.55]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query,provider,wrong_code,wrong_title,correct_code,correct_title",

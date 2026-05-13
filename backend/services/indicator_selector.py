@@ -306,9 +306,67 @@ class IndicatorSelector:
                 if len(merged_candidates) >= top_k:
                     break
 
-            return merged_candidates, merged_scores
+            return self._prioritize_candidates_by_provider_surface(
+                merged_candidates,
+                merged_scores,
+                provider,
+            )
 
         return [], []
+
+    def _prioritize_candidates_by_provider_surface(
+        self,
+        candidates: List[tuple[str, str]],
+        scores: List[float],
+        provider: str,
+    ) -> tuple[List[tuple[str, str]], List[float]]:
+        """Prefer candidates from public executable provider surfaces.
+
+        This is candidate ordering only; the LLM still adjudicates the final
+        indicator.  For IMF, the local catalog includes legacy/auxiliary rows
+        whose short codes can look like good natural-language answers but are
+        not the public DataMapper WEO/regional surfaces used by the runtime.
+        Exact user-supplied codes still pass through the provider separately.
+        """
+        if provider.upper() != "IMF" or not candidates:
+            return candidates, scores
+
+        try:
+            from .indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+        except Exception as exc:
+            logger.debug("IMF candidate prioritization skipped: %s", exc)
+            return candidates, scores
+
+        def _rank(item: tuple[int, tuple[str, str], float]) -> tuple[int, int]:
+            index, (code, _name), _score = item
+            try:
+                metadata = lookup.get("IMF", code)
+            except Exception:
+                metadata = None
+            category = str((metadata or {}).get("category") or "").strip().upper()
+            code_text = str(code or "").strip().upper()
+            has_namespace = (
+                "_" in code_text
+                or "." in code_text
+                or any(ch.isdigit() for ch in code_text)
+            )
+            if category == "WEO":
+                surface_rank = 0
+            elif category.endswith("REO"):
+                surface_rank = 1
+            elif has_namespace:
+                surface_rank = 2
+            else:
+                surface_rank = 3
+            return surface_rank, index
+
+        paired = list(zip(range(len(candidates)), candidates, scores))
+        paired.sort(key=_rank)
+        return [candidate for _idx, candidate, _score in paired], [
+            score for _idx, _candidate, score in paired
+        ]
 
     def _get_candidates_fts5(
         self, query: str, provider: str, top_k: int = 20,
@@ -362,7 +420,7 @@ class IndicatorSelector:
             # Build a lookup map: (provider, code) -> metadata row
             placeholders = ",".join(["?"] * len(codes))
             cur.execute(
-                f"SELECT code, frequency, unit, end_date FROM indicators "
+                f"SELECT code, frequency, unit, end_date, category FROM indicators "
                 f"WHERE provider = ? AND code IN ({placeholders})",
                 [provider] + codes,
             )
@@ -372,6 +430,7 @@ class IndicatorSelector:
                     "frequency": row["frequency"] or "",
                     "unit": row["unit"] or "",
                     "end_date": row["end_date"] or "",
+                    "category": row["category"] or "",
                 }
             conn.close()
         except Exception as e:
@@ -401,6 +460,7 @@ class IndicatorSelector:
                 "frequency": meta.get("frequency", ""),
                 "unit": meta.get("unit", ""),
                 "end_date": end_date,
+                "category": meta.get("category", ""),
                 "discontinued": discontinued,
             })
 
@@ -426,6 +486,8 @@ class IndicatorSelector:
                 meta_parts.append(item["frequency"])
             if item["unit"]:
                 meta_parts.append(item["unit"])
+            if item.get("category"):
+                meta_parts.append(f"category: {item['category']}")
             if item["end_date"]:
                 meta_parts.append(f"last data: {item['end_date'][:10]}")
             if item["discontinued"]:

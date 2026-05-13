@@ -308,7 +308,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-05-13.9"
+    CACHE_KEY_VERSION = "2026-05-13.10"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -772,12 +772,12 @@ class QueryService:
         Queries such as ``Nigeria TTT from IMF`` are still explicit provider-code
         requests even though the code has no underscore/digit namespace. Keep
         this narrow: only original uppercase alphanumeric tokens that already
-        exist in the local IMF catalog and are served by a regional outlook
-        DataMapper category are accepted. Natural-language words are intentionally not
-        uppercased and reinterpreted as codes here.  The non-code remainder
-        must be empty or just a recognized country phrase, so natural titles
-        like ``Nigeria Real Non-Oil GDP Growth from IMF`` do not get hijacked by
-        the embedded ``GDP`` acronym.
+        exist in the local IMF catalog and are served by executable DataMapper
+        categories (WEO or regional outlook) are accepted. Natural-language
+        words are intentionally not uppercased and reinterpreted as codes here.
+        The non-code remainder must be empty or just a recognized country
+        phrase, so natural titles like ``Nigeria Real Non-Oil GDP Growth from
+        IMF`` do not get hijacked by the embedded ``GDP`` acronym.
         """
         tokens = [
             match.group(0)
@@ -812,7 +812,7 @@ class QueryService:
             if not metadata:
                 continue
             category = str(metadata.get("category") or "").strip().upper()
-            if category.endswith("REO"):
+            if category == "WEO" or category.endswith("REO"):
                 matches.append(token)
         return matches
 

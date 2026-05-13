@@ -927,6 +927,58 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("country"), "NG")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_extracts_imf_weo_code_with_country_context(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Germany NGDPD from IMF"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "IMF")
+        self.assertEqual(intent.parameters.get("indicator"), "NGDPD")
+        self.assertEqual(intent.parameters.get("country"), "DE")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_does_not_exact_lock_broad_imf_gdp(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Germany GDP from IMF"
+        )
+
+        self.assertIsNone(intent)
+
+    def test_resolve_indicator_for_fetch_does_not_exact_lock_broad_imf_gdp_acronym(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["GDP"],
+            parameters={"country": "DE", "__semantic_provider_locked": True},
+            clarificationNeeded=False,
+            originalQuery="Germany GDP from IMF",
+        )
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code="NGDPD",
+                    name="GDP, current prices",
+                    source="llm_pick",
+                )
+            ),
+        ) as selector_mock:
+            params = run(
+                self.service._resolve_indicator_for_fetch(  # pylint: disable=protected-access
+                    "IMF",
+                    intent,
+                    dict(intent.parameters or {}),
+                )
+            )
+
+        selector_mock.assert_awaited_once()
+        self.assertEqual(selector_mock.await_args.args[0], "GDP")
+        self.assertEqual(params.get("indicator"), "NGDPD")
+        self.assertEqual(params.get("__semantic_authority"), "llm_adjudication")
+        self.assertEqual(params.get("__decision_source"), "llm_pick")
+
     def test_fetch_data_keeps_two_letter_imf_weo_exact_code(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
