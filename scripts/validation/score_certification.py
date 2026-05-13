@@ -58,6 +58,64 @@ def structural_pass(result: dict[str, Any]) -> bool:
     return int(result.get('status_code') or 0) == 200 and not result.get('error') and int(result.get('series_count') or 0) > 0
 
 
+def expected_fail_closed_provider_country_pass(
+    session: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> bool:
+    """Return True when gold expects a clear provider/country no-data answer.
+
+    Real-user answerability is not always "return a populated series".  If a
+    user explicitly asks an impossible provider/country combination, the correct
+    answer is a fail-closed explanation with no substituted data.  This function
+    only activates from explicit gold metadata; it is not a semantic matching
+    shortcut.
+    """
+    gold = session.get('gold') if isinstance(session.get('gold'), dict) else {}
+    expected = str(gold.get('expected_outcome') or '').strip().lower()
+    if expected != 'fail_closed_provider_country_unavailable':
+        return False
+    if certification_target_for_session(session) != CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        return False
+    if not rows:
+        return False
+    if any(int(row.get('status_code') or 0) != 200 for row in rows):
+        return False
+    if any(int(row.get('series_count') or 0) > 0 for row in rows):
+        return False
+    if any(row.get('providers') or row.get('series_ids') for row in rows):
+        return False
+
+    forbidden_countries = {
+        str(country).strip().lower()
+        for country in (gold.get('must_not_return_countries') or [])
+        if str(country or '').strip()
+    }
+    returned_countries = {
+        str(country).strip().lower()
+        for row in rows
+        for country in (row.get('countries') or [])
+        if str(country or '').strip()
+    }
+    if forbidden_countries and returned_countries.intersection(forbidden_countries):
+        return False
+    if returned_countries:
+        return False
+
+    evidence = ' '.join(
+        str(row.get(key) or '')
+        for row in rows
+        for key in ('error', 'message')
+    ).lower()
+    return (
+        'data_not_available' in evidence
+        and (
+            'provider/country not available' in evidence
+            or 'only covers united states' in evidence
+            or 'country scope' in evidence
+        )
+    )
+
+
 def clarification_path_pass(rows: list[dict[str, Any]]) -> bool:
     return bool(rows) and all(
         int(row.get('status_code') or 0) == 200 and not row.get('error')
@@ -465,10 +523,14 @@ def main() -> int:
         expected_clarification = expected_clarification_for_session(session, kind)
         design_stratum = design_stratum_for_session(session, kind)
         all_pass = bool(rows) and all(structural_pass(r) for r in rows)
+        expected_fail_closed_pass = (
+            kind == 'direct'
+            and expected_fail_closed_provider_country_pass(session, rows)
+        )
         provisional_pass = (
             clarification_path_pass(rows) and session_clarification_detected
             if expected_clarification is True
-            else all_pass
+            else (all_pass or expected_fail_closed_pass)
         )
         any_error = next((r.get('error') for r in rows if r.get('error')), None)
         snapshot_id = str((session.get('provenance') or {}).get('snapshot_id') or '').strip()
@@ -510,7 +572,7 @@ def main() -> int:
             all_pass=all_pass,
             expected_clarification=expected_clarification,
             session_clarification_detected=session_clarification_detected,
-            session_answer_present=session_answer_present,
+            session_answer_present=session_answer_present or expected_fail_closed_pass,
         )
         if replay_conflict is not None:
             adjudicated_replay_conflicts.append(f'{sid}: {replay_conflict}')
@@ -524,6 +586,7 @@ def main() -> int:
             'family_stratum': family,
             'design_stratum': design_stratum,
             'provisional_structural_pass': provisional_pass,
+            'expected_fail_closed_pass': expected_fail_closed_pass,
             'final_label': final_label,
             'final_failure_class': final_failure_class,
             'adjudicated_pass': adjudicated_pass,
@@ -591,7 +654,7 @@ def main() -> int:
                 wrong_confident_weight_total += weight
         if kind == 'direct':
             direct_provider_counts[provider] += 1
-            if all_pass:
+            if provisional_pass:
                 direct_provider_pass_counts[provider] += 1
             if adjudicated_pass:
                 direct_provider_adjudicated_pass_counts[provider] += 1

@@ -203,6 +203,78 @@ def test_score_certification_reports_user_answerability_target(tmp_path: Path):
     assert not any("certification target mismatch" in item for item in report["claim_grade_blockers"])
 
 
+def test_score_certification_accepts_expected_fail_closed_provider_country_answer(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-fred-non-us-contract",
+                "dataset_tier": "contract_guard",
+                "evaluation_target": "user_answerability",
+                "provider_stratum": "FRED",
+                "query": "Canada GDP from FRED",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "contract_guard",
+                    "selection_weight": 1.0,
+                    "certification_target": "user_answerability",
+                },
+                "gold": {
+                    "clarification_expected": False,
+                    "expected_outcome": "fail_closed_provider_country_unavailable",
+                    "must_not_return_countries": ["US", "United States"],
+                },
+            }
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "direct-fred-non-us-contract",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 0,
+                "error": "data_not_available",
+                "message": (
+                    "📭 **Provider/Country Not Available**\n"
+                    "FRED only covers United States country scope."
+                ),
+                "providers": [],
+                "countries": [],
+                "series_ids": [],
+            }
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    session = report["session_results"][0]
+    assert session["expected_fail_closed_pass"] is True
+    assert session["provisional_structural_pass"] is True
+    assert report["strata"]["direct_provider_success"]["FRED"]["pass_rate"] == 1.0
+    assert report["metrics"]["provisional_structural_session_success"]["by_evaluation_target"] == {
+        "user_answerability": 1.0
+    }
+
+
 def test_score_certification_supportability_block_overrides_stale_adjudicated_pass(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"
