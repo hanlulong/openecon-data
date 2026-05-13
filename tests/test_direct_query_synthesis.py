@@ -598,7 +598,7 @@ def test_default_query_for_row_carries_statscan_product_id_with_title_evidence()
     assert query == "24100026 Travel price index quarterly from StatsCan"
 
 
-def test_user_answerability_oecd_query_uses_high_coverage_default_country():
+def test_user_answerability_oecd_query_uses_provider_native_default_scope():
     row = {
         "provider": "OECD",
         "provider_stratum": "OECD",
@@ -618,11 +618,11 @@ def test_user_answerability_oecd_query_uses_high_coverage_default_country():
     query = default_query_for_row(row, certification_target="user_answerability")
 
     assert query.endswith("from OECD")
-    assert query.startswith(("United States ", "Germany ", "Canada "))
-    assert not query.startswith("Japan ")
+    assert query.startswith("Earnings of workers relative to")
+    assert not query.startswith(("United States ", "Germany ", "Canada ", "Japan "))
 
 
-def test_user_answerability_oecd_distribution_rows_use_canada_default_country():
+def test_user_answerability_oecd_distribution_rows_do_not_inject_arbitrary_country():
     row = {
         "provider": "OECD",
         "provider_stratum": "OECD",
@@ -638,7 +638,7 @@ def test_user_answerability_oecd_distribution_rows_use_canada_default_country():
     query = default_query_for_row(row, certification_target="user_answerability")
 
     assert query == (
-        "Canada Population in the National Accounts: distribution of people "
+        "Population in the National Accounts: distribution of people "
         "in income quintiles by age from OECD"
     )
 

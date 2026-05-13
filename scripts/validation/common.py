@@ -1745,6 +1745,13 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         # into false no-data failures for sparse education/food-price surfaces.
         prefix = '' if query_mentions_country(phrase) or not inferred_country else f"{choice} "
         return f"{prefix}{phrase} from {provider_label}".strip()
+    if provider_upper == 'OECD':
+        # OECD dataflows carry provider-native default scopes in their SDMX
+        # structure metadata.  User-answerability prompts should ask for the
+        # table/concept a user needs, not inject an arbitrary country whose
+        # default slice may be unpopulated for long-tail tables.  Explicit or
+        # intrinsic country mentions are still preserved above.
+        return f"{phrase} from {provider_label}".strip()
 
     prefix = '' if query_mentions_country(phrase) else f"{choice} "
     return f"{prefix}{phrase} from {provider_label}".strip()

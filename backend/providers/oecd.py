@@ -827,6 +827,76 @@ class OECDProvider(BaseProvider):
         except ValueError:
             return None
 
+    @staticmethod
+    def _period_code_from_oecd_period(period: Any, frequency: Optional[str] = None) -> Optional[str]:
+        """Return an OECD API period code while preserving provider cadence.
+
+        OECD structure constraints often publish full ISO timestamps even for
+        monthly or quarterly data.  The data endpoint expects SDMX period codes
+        such as ``2026-02`` or ``2025-Q4``; collapsing everything to the year
+        can create a false empty response for high-frequency dataflows.
+        """
+        text = str(period or "").strip()
+        if not text:
+            return None
+        if re.search(r"\d{4}-Q[1-4]", text, flags=re.IGNORECASE):
+            match = re.search(r"(\d{4})-Q([1-4])", text, flags=re.IGNORECASE)
+            return f"{match.group(1)}-Q{match.group(2)}" if match else None
+        match = re.search(r"(\d{4})(?:-(\d{2}))?", text)
+        if not match:
+            return None
+        year = match.group(1)
+        month_text = match.group(2)
+        freq = str(frequency or "").strip().upper()
+        if freq == "M" and month_text:
+            return f"{year}-{month_text}"
+        if freq == "Q" and month_text:
+            try:
+                quarter = ((int(month_text) - 1) // 3) + 1
+            except ValueError:
+                quarter = 1
+            quarter = min(max(quarter, 1), 4)
+            return f"{year}-Q{quarter}"
+        return year
+
+    @classmethod
+    def _period_range_from_structure(
+        cls,
+        structure_metadata: Dict[str, Any],
+        frequency: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return provider-native start/end period codes from time constraints."""
+        for entry in structure_metadata.get("time_ranges") or []:
+            if not isinstance(entry, dict):
+                continue
+            time_range = entry.get("timeRange")
+            if not isinstance(time_range, dict):
+                continue
+            start_info = time_range.get("startPeriod", {})
+            end_info = time_range.get("endPeriod", {})
+            start_value = start_info.get("period") if isinstance(start_info, dict) else start_info
+            end_value = end_info.get("period") if isinstance(end_info, dict) else end_info
+            start_period = cls._period_code_from_oecd_period(start_value, frequency)
+            end_period = cls._period_code_from_oecd_period(end_value, frequency)
+            if start_period or end_period:
+                return start_period, end_period
+        return None, None
+
+    @staticmethod
+    def _time_param_frequency_from_structure(structure_metadata: Dict[str, Any]) -> Optional[str]:
+        defaults = dict(structure_metadata.get("default_values") or {})
+        candidate = str(defaults.get("FREQ") or defaults.get("frequency") or "").strip().upper()
+        if candidate:
+            return candidate
+        valid_freqs = {
+            str(value or "").strip().upper()
+            for value in (structure_metadata.get("valid_values_by_dimension") or {}).get("FREQ") or []
+            if str(value or "").strip()
+        }
+        if len(valid_freqs) == 1:
+            return next(iter(valid_freqs))
+        return None
+
     @classmethod
     def _valid_year_range_from_structure(
         cls,
@@ -869,15 +939,20 @@ class OECDProvider(BaseProvider):
         valid_start, valid_end = cls._valid_year_range_from_structure(structure_metadata)
         if valid_start is None and valid_end is None:
             return
+        period_frequency = cls._time_param_frequency_from_structure(structure_metadata)
+        valid_start_period, valid_end_period = cls._period_range_from_structure(
+            structure_metadata,
+            period_frequency,
+        )
 
         request_start = cls._year_from_oecd_period(params.get("startPeriod"))
         request_end = cls._year_from_oecd_period(params.get("endPeriod"))
 
         if request_start is None and request_end is None:
             if valid_start is not None:
-                params["startPeriod"] = str(valid_start)
+                params["startPeriod"] = str(valid_start_period or valid_start)
             if valid_end is not None:
-                params["endPeriod"] = str(valid_end)
+                params["endPeriod"] = str(valid_end_period or valid_end)
             return
 
         no_overlap = (
@@ -886,16 +961,17 @@ class OECDProvider(BaseProvider):
         )
         if no_overlap:
             if valid_end is not None:
-                params["startPeriod"] = str(valid_end)
-                params["endPeriod"] = str(valid_end)
+                end_period = str(valid_end_period or valid_end)
+                params["startPeriod"] = end_period
+                params["endPeriod"] = end_period
             elif valid_start is not None:
-                params["startPeriod"] = str(valid_start)
+                params["startPeriod"] = str(valid_start_period or valid_start)
             return
 
         if request_start is not None and valid_start is not None and request_start < valid_start:
-            params["startPeriod"] = str(valid_start)
+            params["startPeriod"] = str(valid_start_period or valid_start)
         if request_end is not None and valid_end is not None and request_end > valid_end:
-            params["endPeriod"] = str(valid_end)
+            params["endPeriod"] = str(valid_end_period or valid_end)
 
         if (
             str(params.get("startPeriod") or "") == str(params.get("endPeriod") or "")
@@ -908,15 +984,16 @@ class OECDProvider(BaseProvider):
             return
 
         default_end = str((structure_metadata.get("default_values") or {}).get("TIME_PERIOD_END") or "").strip()
-        default_end_year = cls._year_from_oecd_period(default_end)
-        if default_end_year is not None:
-            params["startPeriod"] = str(default_end_year)
-            params["endPeriod"] = str(default_end_year)
+        default_end_period = cls._period_code_from_oecd_period(default_end, period_frequency)
+        if default_end_period is not None:
+            params["startPeriod"] = str(default_end_period)
+            params["endPeriod"] = str(default_end_period)
             return
 
         if valid_end is not None:
-            params["startPeriod"] = str(valid_end)
-            params["endPeriod"] = str(valid_end)
+            end_period = str(valid_end_period or valid_end)
+            params["startPeriod"] = end_period
+            params["endPeriod"] = end_period
 
     def _country_code(self, country: str) -> str:
         """Normalize country code to OECD format (ISO alpha-3).
@@ -1441,6 +1518,7 @@ class OECDProvider(BaseProvider):
                 params["startPeriod"] = str(start_year)
             if end_year:
                 params["endPeriod"] = str(end_year)
+        provider_default_time_params = dict(params) if used_default_time_range else None
 
         # Determine expected frequency based on indicator type and dataflow.
         # This is used both for optional key defaults and later metadata labels.
@@ -1551,6 +1629,12 @@ class OECDProvider(BaseProvider):
         # Construct URL
         # OECD SDMX API requires the FULL dataflow ID including DSD_XXX@DF_XXX format
         url = f"{data_base_url}/data/{agency},{dataflow},{version}/{filter_key}"
+        primary_filter_key = filter_key
+        primary_url = url
+        default_time_params_were_clamped = (
+            provider_default_time_params is not None
+            and params != provider_default_time_params
+        )
 
         # STEP 1: Wait for rate limiter before making request
         # This prevents hitting rate limits in the first place by enforcing delays
@@ -1569,14 +1653,18 @@ class OECDProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         http_client = get_http_client()
 
-        async def _request_oecd_data(request_url: str) -> Dict[str, Any]:
+        async def _request_oecd_data(
+            request_url: str,
+            request_params: Optional[Dict[str, str]] = None,
+        ) -> Dict[str, Any]:
             async def fetch_with_retry():
                 try:
+                    active_params = request_params if request_params is not None else params
                     # Use 50s timeout - OECD SDMX API can be very slow for complex queries
                     # Research shows OECD has 60 requests/hour rate limit, so we need patience
                     response = await http_client.get(
                         request_url,
-                        params=params,
+                        params=active_params,
                         headers={"Accept": "application/vnd.sdmx.data+json; version=2.0.0"},
                         timeout=50.0,
                     )
@@ -1688,6 +1776,80 @@ class OECDProvider(BaseProvider):
                 if dataset is not None:
                     observations = dataset.get("observations", {})
 
+        if (
+            not observations
+            and provider_default_time_params is not None
+            and default_time_params_were_clamped
+        ):
+            # OECD content constraints can advertise a latest period that has
+            # no observations for a specific country/default dimension
+            # combination.  If the single-period request is empty, replay the
+            # same provider-native key sequence with the original generated
+            # default window before declaring no data.  Explicit user dates do
+            # not enter this path.
+            logger.info(
+                "OECD latest-period default window returned no observations for %s/%s; "
+                "retrying original generated default window",
+                country_code,
+                dataflow,
+            )
+            default_window_data = await _request_oecd_data(
+                primary_url,
+                request_params=provider_default_time_params,
+            )
+            default_datasets = default_window_data.get("data", {}).get("dataSets", [])
+            default_dataset = default_datasets[0] if default_datasets else None
+            default_observations = (
+                default_dataset.get("observations", {})
+                if isinstance(default_dataset, dict)
+                else {}
+            )
+
+            if not default_observations and structure_metadata:
+                relaxed_frequency = (
+                    structure_defaults_for_selection.get("FREQ")
+                    or structure_defaults_for_selection.get("frequency")
+                    or expected_freq
+                )
+                default_relaxed_key = self._build_oecd_relaxed_key_from_structure(
+                    structure_metadata,
+                    country_code,
+                    relaxed_frequency,
+                )
+                if default_relaxed_key and default_relaxed_key != primary_filter_key:
+                    default_relaxed_url = (
+                        f"{data_base_url}/data/{agency},{dataflow},{version}/{default_relaxed_key}"
+                    )
+                    logger.info(
+                        "OECD generated default window returned an empty dataset for %s/%s; "
+                        "retrying relaxed provider-native key %s with the same window",
+                        country_code,
+                        dataflow,
+                        default_relaxed_key,
+                    )
+                    default_window_data = await _request_oecd_data(
+                        default_relaxed_url,
+                        request_params=provider_default_time_params,
+                    )
+                    default_datasets = default_window_data.get("data", {}).get("dataSets", [])
+                    default_dataset = default_datasets[0] if default_datasets else None
+                    default_observations = (
+                        default_dataset.get("observations", {})
+                        if isinstance(default_dataset, dict)
+                        else {}
+                    )
+                    if default_observations:
+                        filter_key = default_relaxed_key
+                        url = default_relaxed_url
+                        relaxed_default_retry = True
+
+            if default_observations:
+                data = default_window_data
+                datasets = default_datasets
+                dataset = default_dataset
+                observations = default_observations
+                params = dict(provider_default_time_params)
+
         if not observations:
             raise DataNotAvailableError(f"No observations found for {country_code} {indicator}")
 
@@ -1789,6 +1951,12 @@ class OECDProvider(BaseProvider):
                     if expected_transform in val_id or "GRW" in val_id or "GROWTH" in val_id:
                         transform_value_indices.append(val_idx)
 
+        response_country_code = country_code
+        if not response_country_code and country_dim_index is not None:
+            country_values = dimensions[country_dim_index].get("values", []) or []
+            if len(country_values) == 1 and isinstance(country_values[0], dict):
+                response_country_code = str(country_values[0].get("id") or "").strip() or None
+
         # Parse observations with enhanced filtering
         logger.info(f"📈 Total observations in API response: {len(observations)}")
         data_points = []
@@ -1815,6 +1983,14 @@ class OECDProvider(BaseProvider):
                 if part.strip()
             }
             return bool(allowed_values) and value_id.upper() in allowed_values
+
+        def _ref_area_from_series_key(series_key: Any) -> Optional[str]:
+            if not isinstance(series_key, (list, tuple)):
+                return None
+            for dim_id, value_id in series_key:
+                if str(dim_id or "") == "REF_AREA" and str(value_id or "").strip():
+                    return str(value_id).strip()
+            return None
 
         for obs_key, obs_value in observations.items():
             # obs_key is like "0:0:0:0:0:0" representing dimension indices
@@ -1972,6 +2148,7 @@ class OECDProvider(BaseProvider):
                     )
                 best_score, best_count, _best_sort_key, best_series_key = max(scored_series)
                 if best_score > 0:
+                    response_country_code = response_country_code or _ref_area_from_series_key(best_series_key)
                     logger.info(
                         "OECD selected provider-default-conforming series after %srequest: "
                         "score=%s observations=%s series=%s",
@@ -2124,7 +2301,11 @@ class OECDProvider(BaseProvider):
         metadata = Metadata(
             source="OECD",
             indicator=structure.get("name", indicator) if structure else indicator,
-            country=self._country_label(country_code),
+            country=(
+                self._country_label(response_country_code)
+                if response_country_code
+                else "OECD provider default"
+            ),
             frequency=frequency,
             unit=unit,
             lastUpdated=last_updated,

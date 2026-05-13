@@ -374,8 +374,6 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["indicator"] = str(code or "").strip()
         contract["country"] = str(params.get("country") or "").strip() or None
         contract["countries"] = raw_country_list
-        if not contract["country"] and not contract["countries"]:
-            contract["country"] = "OECD"
 
     if provider_norm == "COINGECKO":
         contract["coin_ids"] = _coingecko_contract_coin_ids(params)
@@ -1821,6 +1819,12 @@ async def _fetch_from_oecd(
     countries_param = oecd_request.get("countries") or params.get("countries") or scoped_countries
     request_start_year = oecd_request.get("start_year")
     request_end_year = oecd_request.get("end_year")
+    original_query = str(params.get("__original_query") or intent.originalQuery or "")
+    exact_dataset_code_requested = bool(
+        indicator
+        and re.search(rf"(?<![A-Z0-9_]){re.escape(indicator)}(?![A-Z0-9_])", original_query, flags=re.IGNORECASE)
+    )
+    exact_provider_surface_requested = exact_dataset_code_requested or is_exact_match_locked(params)
 
     # Handle LLM parsing "OECD unemployment" as countries=["ALL_OECD"]
     if countries_param and len(countries_param) == 1:
@@ -1830,10 +1834,18 @@ async def _fetch_from_oecd(
             country_param = "OECD"
             countries_param = []
 
-    # If no country specified, use OECD aggregate
+    # Exact provider-native OECD surfaces can have provider-default REF_AREA
+    # constraints in SDMX structure metadata; preserving that default avoids
+    # injecting arbitrary countries into exact catalog/table requests.  For
+    # broad natural-language OECD questions, keep the legacy OECD aggregate
+    # behavior instead of widening all no-country prompts to provider defaults.
     if not country_param and not countries_param:
-        logger.info("No country specified for OECD query, using OECD aggregate")
-        country_param = "OECD"
+        if exact_provider_surface_requested:
+            logger.info("No country specified for exact OECD surface, using provider-native default scope")
+            country_param = None
+        else:
+            logger.info("No country specified for broad OECD query, using OECD aggregate scope")
+            country_param = "OECD"
 
     # Detect multi-country requests including region names
     expanded_countries: List[str] = []

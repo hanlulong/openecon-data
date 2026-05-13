@@ -483,6 +483,34 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(params["startPeriod"], "2024")
         self.assertEqual(params["endPeriod"], "2024")
 
+    def test_oecd_default_time_window_preserves_monthly_provider_period(self) -> None:
+        params = {
+            "dimensionAtObservation": "AllDimensions",
+            "startPeriod": "2021",
+            "endPeriod": "2026",
+        }
+        metadata = {
+            "default_values": {"FREQ": "M"},
+            "valid_values_by_dimension": {"FREQ": ["M"]},
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "1949-01-01T00:00:00"},
+                        "endPeriod": {"period": "2026-02-01T00:00:00"},
+                    },
+                }
+            ],
+        }
+
+        OECDProvider._clamp_default_time_params_to_oecd_constraints(  # pylint: disable=protected-access
+            params,
+            metadata,
+        )
+
+        self.assertEqual(params["startPeriod"], "2026-02")
+        self.assertEqual(params["endPeriod"], "2026-02")
+
     def test_fred_series_id_explicit_codes_passthrough(self) -> None:
         """Test that explicit FRED series codes pass through directly."""
         provider = FREDProvider(api_key="test-key")
@@ -3363,6 +3391,69 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("/data/OECD.SDD.NAD,DSD_NASEC10_IDC@DF_TABLE9B_IDC,1.0/A..DE", captured["url"])
         self.assertEqual(series.metadata.country, "Germany")
         self.assertEqual(series.data[0].value, 7.0)
+
+    def test_oecd_fetch_indicator_uses_provider_native_default_ref_area_when_unspecified(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        captured = {}
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "FREQ", "position": 0},
+                {"id": "REF_AREA", "position": 1},
+                {"id": "UNIT_MEASURE", "position": 2},
+            ],
+            "dimension_ids": ["FREQ", "REF_AREA", "UNIT_MEASURE"],
+            "valid_values_by_dimension": {"FREQ": ["A"], "REF_AREA": ["CAN"]},
+            "default_values": {"FREQ": "A", "REF_AREA": "CAN", "UNIT_MEASURE": "PS"},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                captured["url"] = url
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0:0:0": [37_448_282.0]}}],
+                            "structures": [
+                                {
+                                    "name": "Population in the National Accounts",
+                                    "dimensions": {
+                                        "observation": [
+                                            {"id": "FREQ", "values": [{"id": "A", "name": "Annual"}]},
+                                            {"id": "REF_AREA", "values": [{"id": "CAN", "name": "Canada"}]},
+                                            {"id": "UNIT_MEASURE", "values": [{"id": "PS", "name": "Persons"}]},
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2019"}]},
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2024-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.NAD", "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country=None, start_year=2019, end_year=2019))
+
+        self.assertIn(
+            "/data/OECD.SDD.NAD,DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE,1.0/A.CAN.PS",
+            captured["url"],
+        )
+        self.assertEqual(series.metadata.country, "Canada")
+        self.assertEqual(series.data[0].value, 37_448_282.0)
 
     def test_oecd_fetch_indicator_does_not_request_invalid_monthly_frequency(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

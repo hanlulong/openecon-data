@@ -8073,6 +8073,42 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "LFS_UNEM_A")
 
+    def test_oecd_fetch_uses_provider_default_scope_when_country_unspecified(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["Population in the National Accounts"],
+            parameters={
+                "indicator": "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE",
+                "__exact_indicator_title_match": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="Population in the National Accounts from OECD",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE")
+        self.assertIsNone(fetch_mock.call_args.kwargs.get("country"))
+
+    def test_oecd_fetch_keeps_aggregate_scope_for_broad_unspecified_country_query(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="OECD",
+            indicators=["unemployment rate"],
+            parameters={"indicator": "LFS_UNEM_A", "__semantic_authority": "llm_adjudication"},
+            clarificationNeeded=False,
+            originalQuery="oecd unemployment rate",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.oecd_provider, "fetch_indicator", return_value=sample_series()) as fetch_mock:
+            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "LFS_UNEM_A")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("country"), "OECD")
+
     def test_imf_fetch_prefers_resolved_indicator_param_for_multi_country_batch(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
