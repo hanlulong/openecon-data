@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from backend.services.indicator_database import Indicator, IndicatorDatabase, IndicatorLookup
 from backend.services.indicator_resolution import (
     build_exact_indicator_title_intent,
+    exact_title_search_inputs,
     find_exact_provider_title_match,
     is_exact_match_locked,
     is_provider_locked,
@@ -319,6 +320,69 @@ def test_exact_title_match_accepts_short_worldbank_public_source_title(tmp_path)
     assert match is not None
     assert match["code"] == "TOT"
     assert looks_exact is True
+
+
+def test_exact_title_match_accepts_short_bis_hyphenated_dataflow_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="BIS",
+            code="BIS_WS_CREDIT_GAP",
+            name="Credit-to-GDP gaps",
+            category="BIS Statistics",
+            popularity=10,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "China Credit-to-GDP gaps from BIS"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "BIS")
+        looks_exact = looks_like_exact_provider_title_match(query, "BIS")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="BIS",
+            countries=["CN"],
+            all_providers=["BIS"],
+        )
+
+    assert match is not None
+    assert match["code"] == "BIS_WS_CREDIT_GAP"
+    assert looks_exact is True
+    assert intent is not None
+    assert intent.parameters["indicator"] == "BIS_WS_CREDIT_GAP"
+    assert intent.parameters["country"] == "CN"
+
+
+def test_exact_title_match_rejects_short_bis_partial_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="BIS",
+            code="BIS_WS_CREDIT_GAP",
+            name="Credit-to-GDP gaps",
+            category="BIS Statistics",
+            popularity=10,
+        )
+    )
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        credit_match = find_exact_provider_title_match("credit from BIS", "BIS")
+        gaps_match = find_exact_provider_title_match("GDP gaps from BIS", "BIS")
+        looks_credit = looks_like_exact_provider_title_match("credit from BIS", "BIS")
+        looks_gaps = looks_like_exact_provider_title_match("GDP gaps from BIS", "BIS")
+
+    assert credit_match is None
+    assert gaps_match is None
+    assert looks_credit is False
+    assert looks_gaps is False
+
+
+def test_exact_title_search_inputs_include_dash_normalized_variant() -> None:
+    variants = exact_title_search_inputs("China Credit-to-GDP gaps from BIS", "BIS")
+
+    assert "Credit to GDP gaps" in variants
 
 
 def test_exact_title_match_rejects_short_worldbank_partial_title(tmp_path) -> None:

@@ -345,6 +345,11 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         # "Terms of Trade".  Treat a literal provider-scoped title as exact user
         # input; the strict matcher below still rejects suffix/generic partials.
         min_name_len = 8
+    if provider_key == "BIS":
+        # BIS exposes concise provider-native titles such as "Credit-to-GDP gaps".
+        # This remains a literal provider-scoped title path; the matcher below
+        # still rejects generic fragments like "credit" or "GDP gaps".
+        min_name_len = 8
 
     candidates = []
     seen_codes = set()
@@ -418,6 +423,11 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         # titles (for example "Terms of Trade") that should be resolved as
         # literal exact-title requests instead of falling through to a search
         # result list.  This stays provider-scoped and exact-title only.
+        min_name_len = 8
+    if provider_key == "BIS":
+        # BIS public dataflow titles can be shorter than the broad exact-title
+        # floor (for example "Credit-to-GDP gaps").  Allow those literal titles
+        # through only inside the existing strict provider-scoped matcher.
         min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
 
@@ -669,7 +679,7 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         seen.add(candidate)
         search_inputs.append(candidate)
 
-        normalized_punctuation = re.sub(r"[,:;()\[\]%/]+", " ", candidate)
+        normalized_punctuation = re.sub(r"[,:;()\[\]%/\-–—]+", " ", candidate)
         normalized_punctuation = re.sub(r"\s+", " ", normalized_punctuation).strip(" ,;:-")
         if (
             normalized_punctuation

@@ -473,7 +473,7 @@ class BISProvider(BaseProvider):
         if indicator_code in ["WS_CBPOL", "WS_LONG_CPI", "WS_XRU", "WS_EER"]:
             frequency = "M"  # Force monthly for these indicators
             logger.info(f"BIS: Forced monthly frequency for {indicator_code}")
-        elif indicator_code in ["WS_TC", "WS_SPP", "WS_CPP", "WS_DPP", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
+        elif indicator_code in ["WS_TC", "WS_SPP", "WS_CPP", "WS_DPP", "WS_DSR", "WS_GLI", "WS_CREDIT_GAP", "WS_DEBT_SEC2_PUB"]:
             frequency = "Q"  # Force quarterly for these indicators
             logger.info(f"BIS: Forced quarterly frequency for {indicator_code}")
 
@@ -625,6 +625,8 @@ class BISProvider(BaseProvider):
                             unit = "index"
                         elif indicator_code in ["WS_XRU", "WS_EER"]:
                             unit = "index"
+                        elif indicator_code == "WS_CREDIT_GAP":
+                            unit = "percentage points"
                         elif indicator_code == "WS_TC":
                             unit = "percent of GDP"
                         elif indicator_code == "WS_SPP":
@@ -655,6 +657,7 @@ class BISProvider(BaseProvider):
                             "WS_EER": "EER",
                             "WS_LONG_CPI": "CPI",
                             "WS_GLI": "GLI",
+                            "WS_CREDIT_GAP": "TOTAL_CREDIT",
                             "WS_DSR": "DSR",
                             "WS_DEBT_SEC2_PUB": "SEC_PUB",
                         }
@@ -673,6 +676,8 @@ class BISProvider(BaseProvider):
                             data_type = "Rate"
                         elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_EER", "WS_SPP"]:
                             data_type = "Index"
+                        elif indicator_code == "WS_CREDIT_GAP":
+                            data_type = "Gap"
                         elif indicator_code in ["WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
                             data_type = "Level"
                         else:
@@ -972,6 +977,14 @@ class BISProvider(BaseProvider):
             preferences = {
                 "DSR_BORROWERS": "P",  # Private non-financial
                 "DSR_ADJUST": "A",     # Adjusted
+            }
+        elif indicator_code == "WS_CREDIT_GAP":
+            # Credit-to-GDP gaps: prefer actual-minus-trend gap, not the
+            # companion ratio/trend series returned by the same provider flow.
+            preferences = {
+                "TC_BORROWERS": "P",  # Private non-financial sector
+                "TC_LENDERS": "A",    # All sectors
+                "CG_DTYPE": "C",      # Credit-to-GDP gaps (actual-trend)
             }
         elif indicator_code == "WS_GLI":
             # Global liquidity indicators: prefer USD denomination, total

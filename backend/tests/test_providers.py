@@ -2406,6 +2406,69 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series_list[0].data[0].value, 1.5)
         self.assertEqual(metadata_stub.keyword, "custom bis")
 
+    def test_bis_credit_gap_uses_quarterly_gap_series(self) -> None:
+        provider = BISProvider(metadata_search_service=None)
+
+        response = MockAsyncResponse(
+            {
+                "data": {
+                    "dataSets": [
+                        {
+                            "series": {
+                                "0:0:0:0:0": {
+                                    "observations": {
+                                        "0": ["201.4"],
+                                    }
+                                },
+                                "0:0:0:0:1": {
+                                    "observations": {
+                                        "0": ["207.8"],
+                                    }
+                                },
+                                "0:0:0:0:2": {
+                                    "observations": {
+                                        "0": ["-6.4"],
+                                    }
+                                },
+                            }
+                        }
+                    ],
+                    "structure": {
+                        "dimensions": {
+                            "series": [
+                                {"id": "FREQ", "values": [{"id": "Q"}]},
+                                {"id": "BORROWERS_CTY", "values": [{"id": "CN"}]},
+                                {"id": "TC_BORROWERS", "values": [{"id": "P"}]},
+                                {"id": "TC_LENDERS", "values": [{"id": "A"}]},
+                                {
+                                    "id": "CG_DTYPE",
+                                    "values": [
+                                        {"id": "A", "name": "Credit-to-GDP ratios (actual data)"},
+                                        {"id": "B", "name": "Credit-to-GDP trend (HP filter)"},
+                                        {"id": "C", "name": "Credit-to-GDP gaps (actual-trend)"},
+                                    ],
+                                },
+                            ],
+                            "observation": [
+                                {"id": "TIME_PERIOD", "values": [{"id": "2025-Q3"}]},
+                            ],
+                        }
+                    },
+                }
+            }
+        )
+
+        with patch("backend.providers.bis.get_http_client", return_value=MockAsyncClient([response])):
+            series_list = run(provider.fetch_indicator(indicator="BIS_WS_CREDIT_GAP", country="CN"))
+
+        self.assertEqual(len(series_list), 1)
+        self.assertEqual(series_list[0].metadata.indicator, "Credit-to-GDP gaps")
+        self.assertEqual(series_list[0].metadata.frequency, "quarterly")
+        self.assertEqual(series_list[0].metadata.unit, "percentage points")
+        self.assertEqual(series_list[0].metadata.dataType, "Gap")
+        self.assertIn("/data/WS_CREDIT_GAP/Q.CN", series_list[0].metadata.apiUrl)
+        self.assertEqual(series_list[0].data[0].value, -6.4)
+
     def test_bis_prefixed_dataflow_codes_are_mechanical_passthrough(self) -> None:
         provider = BISProvider(metadata_search_service=None)
 
