@@ -63,7 +63,11 @@ DEFAULT_COUNTRIES_BY_PROVIDER: dict[str, list[str]] = {
     'IMF': ['United States', 'China', 'Germany', 'Japan', 'India', 'Brazil'],
     'WorldBank': ['United States', 'China', 'India', 'Brazil', 'Japan', 'Germany'],
     'CoinGecko': ['Bitcoin', 'Ethereum', 'Solana', 'Dogecoin'],
-    'Comtrade': ['United States', 'China', 'Germany', 'France', 'Japan'],
+    # Long-tail HS subheadings are reporter-sparse.  Use reporters that are
+    # empirically high coverage in the Comtrade holdout and include India so
+    # arbitrary user-answerability prompts do not over-index on China/US for
+    # niche subheadings with older or sparse reporter availability.
+    'Comtrade': ['China', 'India', 'Germany', 'France', 'Japan'],
     'Eurostat': ['France', 'Germany', 'Italy', 'Spain'],
     'StatsCan': ['Canada'],
     # Japan is deliberately excluded as an arbitrary OECD default: several

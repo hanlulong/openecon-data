@@ -535,6 +535,32 @@ def test_default_query_for_row_naturalizes_comtrade_codes_into_exports_query():
     assert "exports of HS72 from Comtrade" in query
 
 
+def test_user_answerability_comtrade_query_uses_high_coverage_reporter_pool():
+    row = {
+        "provider": "Comtrade",
+        "provider_stratum": "Comtrade",
+        "evaluation_target": "user_answerability",
+        "origin": {
+            "source_provider": "Comtrade",
+            "source_indicator_code": "262020",
+            "name": (
+                "262020 - Ash and residues; (not from the manufacture of iron "
+                "or steel), containing mainly lead"
+            ),
+            "description": (
+                "HS Code 262020: 262020 - Ash and residues; (not from the "
+                "manufacture of iron or steel), containing mainly lead"
+            ),
+            "category": "HS Subheading",
+        },
+    }
+
+    query = default_query_for_row(row, certification_target="user_answerability")
+
+    assert query.startswith("India exports of ")
+    assert query.endswith(" from Comtrade")
+
+
 def test_default_query_for_row_carries_statscan_product_id_with_title_evidence():
     row = {
         "provider": "StatsCan",
