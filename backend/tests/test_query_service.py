@@ -112,6 +112,44 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(cached[0].metadata.indicator, "Real GDP")
 
+    def test_fred_non_us_country_scope_fails_closed_before_fetch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={
+                "country": "CA",
+                "indicator": "GDP",
+                "__exact_provider_code_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada GDP from FRED",
+        )
+
+        with patch.object(
+            self.service.fred_provider,
+            "fetch_series",
+            side_effect=AssertionError("FRED must not fetch US data for Canada"),
+        ):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertIn("FRED only covers United States", str(raised.exception))
+        self.assertIn("CA", str(raised.exception))
+
+    def test_process_query_fred_non_us_country_mismatch_does_not_return_us_data(self) -> None:
+        with patch.object(
+            self.service.fred_provider,
+            "fetch_series",
+            side_effect=AssertionError("FRED must not fetch US data for Canada"),
+        ):
+            response = run(self.service.process_query("Canada GDP from FRED"))
+
+        self.assertEqual(response.error, "data_not_available")
+        self.assertFalse(response.data)
+        self.assertIn("Provider/Country Not Available", response.message or "")
+        self.assertIn("FRED only covers United States", response.message or "")
+        self.assertNotIn("Country/Region Not Recognized", response.message or "")
+
     def test_build_cache_params_adds_version_without_mutating_input(self) -> None:
         raw_params = {"indicator": "NE.IMP.GNFS.ZS", "countries": ["China", "US"]}
 

@@ -385,6 +385,57 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
     return contract
 
 
+def _fred_requested_country_scope(provider_request: dict[str, Any], params: dict[str, Any]) -> list[str]:
+    """Return the requested country scope for a FRED dispatch/cache identity."""
+    raw_scope = provider_request.get("country_scope")
+    if isinstance(raw_scope, list):
+        scope = [str(country).strip() for country in raw_scope if str(country or "").strip()]
+    else:
+        scope = []
+
+    if not scope:
+        countries = params.get("countries")
+        if isinstance(countries, list):
+            scope = [str(country).strip() for country in countries if str(country or "").strip()]
+
+    if not scope and params.get("country"):
+        scope = [str(params.get("country")).strip()]
+
+    return scope
+
+
+def _raise_if_fred_country_scope_unsupported(
+    provider_request: dict[str, Any],
+    params: dict[str, Any],
+) -> None:
+    """Fail closed when a FRED request asks for non-US geography.
+
+    FRED's production provider surface is United-States-only for macro series.
+    Returning the US ``GDP`` series for a user request such as "Canada GDP from
+    FRED" is worse than a no-data answer because it certifies the wrong
+    country.  This is provider contract enforcement, not semantic routing.
+    """
+    requested_scope = _fred_requested_country_scope(provider_request, params)
+    if not requested_scope:
+        return
+
+    from ..services.provider_fallback import normalize_country_to_iso2
+
+    unsupported = [
+        country
+        for country in requested_scope
+        if (normalize_country_to_iso2(country) or str(country).strip().upper()) != "US"
+    ]
+    if not unsupported:
+        return
+
+    raise DataNotAvailableError(
+        "FRED only covers United States country scope for provider-native macro "
+        "series. OpenEcon will not return U.S. FRED data for a non-U.S. "
+        f"country request. requested_country_scope={unsupported}"
+    )
+
+
 def _cache_identity(fetch_strategy: str, provider_request: dict[str, Any], expected_shape: dict[str, Any]) -> dict[str, Any]:
     return {
         "fetch_strategy": fetch_strategy,
@@ -977,6 +1028,7 @@ async def fetch_from_provider_dispatch(
 
     if provider == "FRED":
         fred_request = dict(execution_plan.provider_request or {})
+        _raise_if_fred_country_scope_unsupported(fred_request, params)
         # Ensure params has indicator set
         if not params.get("indicator") and intent.indicators:
             params = {**params, "indicator": intent.indicators[0]}
@@ -2188,6 +2240,12 @@ async def fetch_data(
         intent=intent,
         params=params,
     )
+
+    if provider == "FRED":
+        _raise_if_fred_country_scope_unsupported(
+            dict(execution_plan.provider_request or {}),
+            params,
+        )
 
     cached = await svc._get_from_cache(execution_plan.provider, execution_plan.params)
     if cached:

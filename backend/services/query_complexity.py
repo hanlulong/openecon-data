@@ -362,7 +362,20 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • Try a different provider (World Bank, IMF, or Eurostat)")
             message_parts.append("  • Use more general terms like 'GDP' or 'unemployment'")
 
-        # 3. Country/Region Not Supported
+        # 3. Provider/country contract mismatch
+        elif 'fred only covers united states country scope' in error_lower:
+            message_parts.append("📭 **Provider/Country Not Available**")
+            message_parts.append(
+                "FRED's production macroeconomic series in OpenEcon cover the United States country scope."
+            )
+            message_parts.append("")
+            message_parts.append(f"Provider evidence: {error}")
+            message_parts.append("")
+            message_parts.append("**💡 Suggestions:**")
+            message_parts.append("  • Use FRED for United States series, e.g. 'United States GDP from FRED'")
+            message_parts.append("  • For non-U.S. countries, remove the provider constraint or choose a provider that covers that country")
+
+        # 4. Country/Region Not Supported
         elif 'not a valid country' in error_lower or 'country' in error_lower and 'not' in error_lower:
             message_parts.append("🌍 **Country/Region Not Recognized**")
             message_parts.append(f"{error}")
@@ -372,14 +385,14 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • For regions, specify individual countries")
             message_parts.append("  • Example: Instead of 'Asia', try 'China, Japan, South Korea'")
 
-        # 4. Provider-native data unavailable
+        # 5. Provider-native data unavailable
         elif 'coingecko_price_unavailable' in error_lower:
             message_parts.append("📭 **No CoinGecko Price Available**")
             message_parts.append("CoinGecko recognizes the asset, but its current price endpoint did not provide the requested metric.")
             message_parts.append("")
             message_parts.append(f"Provider evidence: {error}")
 
-        # 5. No Data Found
+        # 6. No Data Found
         elif 'no data found' in error_lower or 'no data available' in error_lower or 'norecordsfound' in error_lower:
             message_parts.append("📭 **No Data Found**")
             message_parts.append("The requested data is not available from this source.")
