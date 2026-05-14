@@ -53,6 +53,7 @@ Keep runtime marker contracts stable and non-destructive when overlays are appli
 - Reuse existing utils and patterns before introducing new abstractions.
 - No new dependencies without explicit request.
 - Keep diffs small, reviewable, and reversible.
+- Critical decisions require written review from at least 3 independent agents before implementation, commit, deploy, or claim-gate/status changes. The lead/orchestrator does not count as one of the three. Critical decisions include architecture or data-model changes; provider/runtime, semantic matching, provider selection, indicator-resolution, validation-surface, certification, sampling, adjudication, threshold, claim-wording, production deploy/rollback, or broadly user-visible multi-file changes. The decision record must include each reviewer’s recommendation, risks or dissent, and the lead’s resolution. Low-risk read-only inspection, docs/status-only updates, mechanical formatting, and test-only reruns are exempt.
 - Do not fix semantic matching, provider selection, or indicator resolution by adding rule-based shortcut guards, keyword maps, or forced overrides. When a match is wrong, remove/demote the rule-based path or improve retrieval/LLM adjudication with regression tests; only mechanical normalization/plumbing rules are allowed.
 - Run lint, typecheck, tests, and static analysis after changes.
 - Final reports must include changed files, simplifications made, and remaining risks.
