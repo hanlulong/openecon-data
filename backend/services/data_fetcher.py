@@ -132,6 +132,34 @@ _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS = {
 }
 
 
+_STATSCAN_MECHANICAL_PRODUCT_AUTHORITIES = {
+    "verified_conversation_state",
+}
+
+
+def _has_statscan_mechanical_dimension_dispatch_authority(params: dict) -> bool:
+    """Allow only mechanical StatsCan coordinate dispatch on a verified table.
+
+    This is intentionally narrower than semantic authority.  A previously
+    verified StatsCan product carried in conversation state may authorize a
+    follow-up to filter/decompose that same provider-native cube by
+    provider-native dimensions.  It must not choose a provider, product, or
+    indicator from natural language.
+    """
+    product_id = str(params.get("__statscan_product_id") or "").strip()
+    if not product_id:
+        return False
+    if len("".join(ch for ch in product_id if ch.isdigit())) < 8:
+        return False
+    if str(params.get("__statscan_product_authority") or "") not in _STATSCAN_MECHANICAL_PRODUCT_AUTHORITIES:
+        return False
+    if not params.get("__delta_resolved"):
+        return False
+    if params.get("__delta_indicator_changed"):
+        return False
+    return bool(params.get("__dimensions") or params.get("__statscan_decomposition_axis"))
+
+
 def _has_provider_map_authority(params: dict) -> bool:
     """Return whether provider-internal maps may be used as API mechanics.
 
@@ -163,6 +191,8 @@ def _assert_provider_map_authority(
     if provider not in _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS:
         return
     if _has_provider_map_authority(params):
+        return
+    if provider == "STATSCAN" and _has_statscan_mechanical_dimension_dispatch_authority(params):
         return
 
     indicator_text = str(
@@ -2420,9 +2450,19 @@ async def fetch_data(
         "__geo_split_child",
         "__delta_resolved",
         "__delta_indicator_changed",
+        "__statscan_product_authority",
         "__semantic_provider_locked",
         "__indicator_options",
     }
+    if _has_statscan_mechanical_dimension_dispatch_authority(params):
+        # These flags are still needed by the dispatch-level no-shortcut gate.
+        # They authorize only a verified StatsCan table coordinate operation,
+        # not a broader semantic provider/indicator map.
+        internal_param_keys = internal_param_keys - {
+            "__delta_resolved",
+            "__delta_indicator_changed",
+            "__statscan_product_authority",
+        }
     if any(key in params for key in internal_param_keys):
         params = {k: v for k, v in params.items() if k not in internal_param_keys}
         intent.parameters = params

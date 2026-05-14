@@ -880,6 +880,7 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
             parameters["indicator"] = state.base_indicator
     if state.statscan_product_id:
         parameters["__statscan_product_id"] = state.statscan_product_id
+        parameters["__statscan_product_authority"] = "verified_conversation_state"
 
     # Indicator: use base_indicator (vector key like "UNEMPLOYMENT_RATE") when
     # dimensions are active, so the StatsCan provider routes correctly.

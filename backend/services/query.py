@@ -186,6 +186,7 @@ from ..services.data_fetcher import (
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
+    _has_statscan_mechanical_dimension_dispatch_authority as _df_has_statscan_mechanical_dimension_dispatch_authority,
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
 )
 from ..services.provider_strategy import (
@@ -4386,6 +4387,7 @@ class QueryService:
                         _delta_intent.parameters["__semantic_provider_locked"] = True
                     if _preserve_statscan_delta_provider and _merged_state.statscan_product_id:
                         _delta_intent.parameters["__statscan_product_id"] = _merged_state.statscan_product_id
+                        _delta_intent.parameters["__statscan_product_authority"] = "verified_conversation_state"
                     _delta_scope_changed = (
                         _delta.changed_country is not None
                         or _delta.changed_countries is not None
@@ -4841,8 +4843,14 @@ class QueryService:
                 intent.apiProvider = "STATSCAN"
                 preserved_params = dict(intent.parameters or {})
                 preserved_params["__semantic_provider_locked"] = True
-                if _current_conv_state and _current_conv_state.statscan_product_id and not preserved_params.get("__statscan_product_id"):
-                    preserved_params["__statscan_product_id"] = _current_conv_state.statscan_product_id
+                if _current_conv_state and _current_conv_state.statscan_product_id:
+                    if not preserved_params.get("__statscan_product_id"):
+                        preserved_params["__statscan_product_id"] = _current_conv_state.statscan_product_id
+                    if (
+                        str(preserved_params.get("__statscan_product_id") or "").strip()
+                        == str(_current_conv_state.statscan_product_id).strip()
+                    ):
+                        preserved_params["__statscan_product_authority"] = "verified_conversation_state"
                 if _current_conv_state and _current_conv_state.indicator and not preserved_params.get("__semantic_indicator_label"):
                     preserved_params["__semantic_indicator_label"] = _current_conv_state.indicator
                 intent.parameters = preserved_params
@@ -7187,6 +7195,8 @@ class QueryService:
         Returns:
             List of NormalizedData objects (one per entity)
         """
+        if intent.decompositionEntities is None:
+            intent.decompositionEntities = []
         logger.info("🔄 Starting query decomposition for %d %s",
                    len(intent.decompositionEntities), intent.decompositionType)
 
@@ -7229,6 +7239,7 @@ class QueryService:
             provider_locked_dimension_request = bool(
                 resolved_params.get("__exact_indicator_title_match")
                 or resolved_params.get("__exact_provider_code_match")
+                or _df_has_statscan_mechanical_dimension_dispatch_authority(resolved_params)
             )
             if (
                 provider_locked_dimension_request

@@ -5425,7 +5425,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(persisted.routed_provider, "STATSCAN")
 
     def test_process_query_preserves_statscan_provider_for_dimension_follow_up_parse(self) -> None:
-        conv_id = conversation_manager.get_or_create("conv-statscan-dimension-follow-up")
+        conv_id = conversation_manager.create_conversation()
         conversation_manager.set_conversation_state(
             conv_id,
             ConversationState(
@@ -5472,13 +5472,18 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.pipeline, "validate_intent", return_value=validation), \
              patch.object(self.service, "_build_post_parse_clarification", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service.unified_router, "route", return_value=RoutingDecision(provider="STATSCAN", confidence=0.9, match_type="state", reasoning="preserve StatsCan", matched_pattern="state")) as route_mock, \
-             patch.object(self.service, "_fetch_data", new_callable=AsyncMock, return_value=[sample_series_with(source="Statistics Canada", indicator="employment rate", country="Canada", series_id="14100287:7.9.1.1.1.1.0.0.0.0")]) as fetch_mock:
+             patch.object(self.service, "_verify_execution_result", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=[
+                 sample_series_with(source="Statistics Canada", indicator="employment rate - Ontario, 25 to 54 years", country="Ontario", series_id="14100287:7.9.1.7.1.1.0.0.0.0")
+             ]) as fetch_multi_dim:
             response = run(self.service.process_query("Show by age group", conversation_id=conv_id))
 
         self.assertFalse(response.error)
-        fetched_intent = fetch_mock.await_args.args[0]
-        self.assertEqual(fetched_intent.apiProvider, "STATSCAN")
-        self.assertEqual(fetched_intent.parameters.get("__statscan_product_id"), "14100287")
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["productId"], "14100287")
+        self.assertEqual(params["axis"], "Age group")
+        self.assertEqual(params["dimensions"], {"Geography": "Ontario"})
 
     def test_should_preserve_statscan_followup_provider_requires_dimension_signal(self) -> None:
         state = ConversationState(
@@ -8559,6 +8564,138 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["periods"], 243)
         self.assertEqual(params["startDate"], "2006-01-01")
         self.assertEqual(params["endDate"], "2026-03-01")
+
+    def test_fetch_data_allows_statscan_verified_delta_dimension_filter_without_semantic_authority(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["Unemployment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "Unemployment rate",
+                "__base_indicator": "Unemployment rate",
+                "__dimensions": {"geography": "Ontario"},
+                "__statscan_product_id": "14100375",
+                "__statscan_product_authority": "verified_conversation_state",
+                "__delta_resolved": True,
+                "__delta_indicator_changed": False,
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only Ontario",
+        )
+
+        returned = sample_series_with(
+            source="Statistics Canada",
+            indicator="Ontario unemployment rate",
+            country="Ontario",
+            series_id="14100375:7.8.1.1.1.0.0.0.0.0",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_categorical_data", new_callable=AsyncMock, return_value=returned) as fetch_categorical:
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(fetch_categorical.await_count, 1)
+        params = fetch_categorical.await_args.args[0]
+        self.assertEqual(params["productId"], "14100375")
+        self.assertEqual(params["dimensions"], {"geography": "Ontario"})
+
+    def test_fetch_data_blocks_statscan_delta_dimension_filter_without_verified_product_authority(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["Unemployment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "Unemployment rate",
+                "__base_indicator": "Unemployment rate",
+                "__dimensions": {"geography": "Ontario"},
+                "__statscan_product_id": "14100375",
+                "__delta_resolved": True,
+                "__delta_indicator_changed": False,
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only Ontario",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_categorical_data", new_callable=AsyncMock) as fetch_categorical:
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_categorical.await_count, 0)
+        self.assertIn("No-shortcut path blocked provider-internal map dispatch", str(raised.exception))
+
+    def test_fetch_data_blocks_statscan_stale_product_when_delta_indicator_changed(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["Employment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "Employment rate",
+                "__base_indicator": "Employment rate",
+                "__dimensions": {"geography": "Ontario"},
+                "__statscan_product_id": "14100375",
+                "__statscan_product_authority": "verified_conversation_state",
+                "__delta_resolved": True,
+                "__delta_indicator_changed": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Show only Ontario employment rate",
+        )
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.statscan_provider, "fetch_categorical_data", new_callable=AsyncMock) as fetch_categorical:
+            with self.assertRaises(DataNotAvailableError):
+                run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(fetch_categorical.await_count, 0)
+
+    def test_decompose_and_aggregate_statscan_verified_delta_dimension_uses_batch(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["Unemployment rate"],
+            parameters={
+                "country": "CA",
+                "indicator": "Unemployment rate",
+                "__base_indicator": "Unemployment rate",
+                "__dimensions": {"geography": "Ontario"},
+                "__statscan_product_id": "14100375",
+                "__statscan_product_authority": "verified_conversation_state",
+                "__statscan_decomposition_axis": "Age group",
+                "__delta_resolved": True,
+                "__delta_indicator_changed": False,
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            originalQuery="Show by age group",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="Ontario unemployment rate - 25 to 54 years",
+                country="Ontario",
+                series_id="14100375:7.8.1.7.1.0.0.0.0.0",
+            )
+        ]
+
+        with patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=returned) as fetch_multi_dim, \
+             patch.object(self.service, "_execute_sub_query", new_callable=AsyncMock, side_effect=AssertionError("should use provider-native batch dispatch")):
+            data = run(
+                self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                    "Show by age group",
+                    intent,
+                    "conv-statscan-verified-delta-dimension",
+                )
+            )
+
+        self.assertEqual(data, returned)
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["productId"], "14100375")
+        self.assertEqual(params["axis"], "Age group")
+        self.assertEqual(params["dimensions"], {"geography": "Ontario"})
 
     def test_fetch_data_preserves_statscan_required_dimension_supportability_block(self) -> None:
         intent = ParsedIntent(
