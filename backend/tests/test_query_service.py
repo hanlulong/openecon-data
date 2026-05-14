@@ -3989,6 +3989,55 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(intent.clarificationNeeded)
         self.assertIsNone(intent.clarificationQuestions)
 
+    def test_maybe_promote_statscan_axis_decomposition_cleans_axis_grammar_from_indicator(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["employment by"],
+            parameters={"country": "CA"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Which breakdown members?"],
+            originalQuery="Ontario employment by gender",
+            needsDecomposition=True,
+            decompositionType="gender",
+        )
+
+        self.service._maybe_promote_statscan_axis_decomposition_from_query(  # pylint: disable=protected-access
+            "Ontario employment by gender",
+            intent,
+        )
+
+        self.assertEqual(intent.indicators, ["employment"])
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "employment")
+        self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+        self.assertFalse(intent.clarificationNeeded)
+        self.assertIsNone(intent.clarificationQuestions)
+
+    def test_maybe_promote_statscan_axis_decomposition_preserves_exact_title_label(self) -> None:
+        title = "First names at birth by sex at birth, selected indicators"
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=[title],
+            parameters={
+                "country": "CA",
+                "__statscan_product_id": "17100147",
+                "__exact_indicator_title_match": True,
+                "__semantic_indicator_label": title,
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada selected indicators First names at birth by sex at birth from Statistics Canada",
+            needsDecomposition=True,
+            decompositionType="sex",
+        )
+
+        self.service._maybe_promote_statscan_axis_decomposition_from_query(  # pylint: disable=protected-access
+            intent.originalQuery,
+            intent,
+        )
+
+        self.assertEqual(intent.indicators, [title])
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), title)
+        self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+
     def test_process_query_promotes_statscan_by_sex_query_to_dimension_decomposition(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-statscan-by-sex-dimension")
         intent = ParsedIntent(

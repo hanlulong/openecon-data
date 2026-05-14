@@ -3459,15 +3459,47 @@ class QueryService:
         intent.decompositionType = "dimension"
         params["__statscan_decomposition_axis"] = axis
         params["__semantic_provider_locked"] = True
-        if axis == "Sex" and intent.indicators:
+        can_refine_indicator_label = not (
+            params.get("__exact_indicator_title_match")
+            or params.get("__statscan_product_id")
+        )
+        if can_refine_indicator_label and intent.indicators:
             cleaned_indicators = []
             for indicator in intent.indicators:
-                cleaned = re.sub(
-                    r"\b(male|female|males|females|sex|gender)\b",
-                    " ",
-                    str(indicator or ""),
-                    flags=re.IGNORECASE,
-                )
+                cleaned = str(indicator or "")
+                if axis == "Sex":
+                    cleaned = re.sub(
+                        r"\bby\s+(?:sex|gender)\b(?!\s+(?:at|of|in|on)\b)",
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                    cleaned = re.sub(
+                        r"\b(?:male|female|males|females)\b",
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                    cleaned = re.sub(
+                        r"\b(?:sex|gender)\s*$",
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                elif axis == "Age group":
+                    cleaned = re.sub(
+                        r"\bby\s+(?:age(?:\s+groups?)?|ages)\b",
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                    cleaned = re.sub(
+                        r"\b(?:age\s+groups?|ages)\s*$",
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                cleaned = re.sub(r"\bby\s*$", " ", cleaned, flags=re.IGNORECASE)
                 cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;-")
                 if cleaned:
                     cleaned_indicators.append(cleaned)
