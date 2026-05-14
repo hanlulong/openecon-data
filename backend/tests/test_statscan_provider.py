@@ -987,6 +987,63 @@ class TestFetchMultiDimensionData:
         assert len(age_members) >= 2
         assert any("Ontario" in result.metadata.indicator for result in results)
         assert any("25 to 54 years" in result.metadata.indicator for result in results)
+        assert {result.metadata.country for result in results} == {"Ontario"}
+
+    @pytest.mark.asyncio
+    async def test_multi_dimension_fetch_reports_fixed_geography_in_metadata_country(self, monkeypatch, statscan_provider):
+        metadata = _get_labour_metadata(statscan_provider)
+        captured_requests = []
+
+        class _MockResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [
+                    {
+                        "status": "SUCCESS",
+                        "object": {
+                            "coordinate": request["coordinate"],
+                            "vectorDataPoint": [
+                                {
+                                    "refPer": "2025-01-01",
+                                    "value": 100.0 + idx,
+                                    "frequencyCode": 6,
+                                    "scalarFactorCode": 0,
+                                    "releaseTime": "2026-01-01",
+                                }
+                            ],
+                        },
+                    }
+                    for idx, request in enumerate(captured_requests[0])
+                ]
+
+        class _MockClient:
+            async def post(self, url, json=None, **kwargs):
+                captured_requests.append(json)
+                return _MockResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        statscan_provider._cube_metadata_cache["14100287"] = metadata
+
+        results = await statscan_provider.fetch_multi_dimension_data(
+            {
+                "productId": "14100287",
+                "indicator": "EMPLOYMENT",
+                "indicatorLabel": "employment",
+                "axis": "Gender",
+                "dimensions": {"geography": "Ontario"},
+                "periods": 24,
+            }
+        )
+
+        assert len(results) == 2
+        assert {result.metadata.country for result in results} == {"Ontario"}
+        assert all(result.metadata.indicator.startswith("employment - Ontario, ") for result in results)
+        geo_idx = next(i for i, d in enumerate(metadata["dimension"]) if "geogr" in d["dimensionNameEn"].lower())
+        assert {request["coordinate"].split(".")[geo_idx] for request in captured_requests[0]} == {"7"}
 
     @pytest.mark.asyncio
     async def test_high_cardinality_required_dimension_without_aggregate_fails_closed(self, monkeypatch, statscan_provider):

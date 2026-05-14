@@ -3345,6 +3345,7 @@ class StatsCanProvider(BaseProvider):
         display_indicator = str(params.get("indicatorLabel") or indicator).strip() or indicator
         axis_hint = str(params.get("axis") or "").strip()
         fixed_dimensions = self._normalize_dimension_filters(params.get("dimensions", {}) or {})
+        geography_label = str(fixed_dimensions.get("geography") or "").strip()
         periods = params.get("periods", 20)
         start_date = params.get("startDate")
         end_date = params.get("endDate")
@@ -3501,7 +3502,7 @@ class StatsCanProvider(BaseProvider):
             metadata = Metadata(
                 source="Statistics Canada",
                 indicator=indicator_name,
-                country="Canada",
+                country=geography_label or "Canada",
                 frequency=frequency,
                 unit=unit if unit else "persons",
                 lastUpdated=(vector_data[-1].get("releaseTime") or "") if vector_data else "",
