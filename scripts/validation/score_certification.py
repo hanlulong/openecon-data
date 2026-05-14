@@ -294,6 +294,46 @@ def label_is_success(label: Any) -> bool | None:
     return None
 
 
+DIRECT_ANSWER_ACCEPTANCE_OUTCOMES = {
+    'direct_answer_correct',
+    'dominant_direct_answer_correct',
+}
+
+
+def _normalize_outcome_label(value: Any) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def adjudication_accepts_direct_answer(adjudication_row: dict[str, Any] | None) -> bool:
+    """Return True when human adjudication explicitly accepts a direct answer.
+
+    Ambiguity templates are intentionally conservative and sometimes mark a
+    prompt as "clarify" before real provider evidence is available. The claim
+    target is real-user answerability, so a reviewed row may pass via a
+    correctly sourced dominant direct answer. This function only reads the
+    manual adjudication outcome; it does not infer correctness from query text
+    or provider-specific keyword rules.
+    """
+    if not adjudication_row:
+        return False
+
+    values: list[Any] = []
+    for key in ('accepted_outcome', 'final_outcome', 'adjudicated_outcome'):
+        if key in adjudication_row:
+            values.append(adjudication_row.get(key))
+    for key in ('accepted_outcomes', 'acceptable_outcomes', 'adjudicated_outcomes'):
+        raw = adjudication_row.get(key)
+        if isinstance(raw, list):
+            values.extend(raw)
+        elif raw is not None:
+            values.append(raw)
+
+    return any(
+        _normalize_outcome_label(value) in DIRECT_ANSWER_ACCEPTANCE_OUTCOMES
+        for value in values
+    )
+
+
 def canonical_failure_class(value: Any) -> str | None:
     if value is None:
         return None
@@ -338,12 +378,15 @@ def adjudicated_replay_conflict_reason(
     expected_clarification: bool | None,
     session_clarification_detected: bool,
     session_answer_present: bool,
+    adjudicated_direct_answer_accepted: bool = False,
 ) -> str | None:
     if adjudicated_pass is not True:
         return None
     if kind == 'multiround' and not all_pass:
         return 'adjudicated pass conflicts with multiround replay (one or more turns failed structural replay)'
     if expected_clarification is True and not session_clarification_detected:
+        if adjudicated_direct_answer_accepted and session_answer_present:
+            return None
         return 'adjudicated pass expected clarification but replay did not clarify'
     if expected_clarification is False:
         if session_clarification_detected:
@@ -539,6 +582,7 @@ def main() -> int:
         adjudication_row = adjudication_records.get(sid)
         final_label = adjudication_row.get('final_label') if adjudication_row else None
         adjudicated_pass = label_is_success(final_label)
+        adjudicated_direct_answer_accepted = adjudication_accepts_direct_answer(adjudication_row)
         final_failure_class = canonical_failure_class(adjudication_row.get('failure_class')) if adjudication_row else None
         supportability_overrode_adjudication = False
         if supportability_blocked and adjudicated_pass is True:
@@ -573,6 +617,7 @@ def main() -> int:
             expected_clarification=expected_clarification,
             session_clarification_detected=session_clarification_detected,
             session_answer_present=session_answer_present or expected_fail_closed_pass,
+            adjudicated_direct_answer_accepted=adjudicated_direct_answer_accepted,
         )
         if replay_conflict is not None:
             adjudicated_replay_conflicts.append(f'{sid}: {replay_conflict}')
@@ -590,6 +635,7 @@ def main() -> int:
             'final_label': final_label,
             'final_failure_class': final_failure_class,
             'adjudicated_pass': adjudicated_pass,
+            'adjudicated_direct_answer_accepted': adjudicated_direct_answer_accepted,
             'expected_clarification': expected_clarification,
             'clarification_detected': session_clarification_detected,
             'answer_present_without_clarification': session_answer_present,

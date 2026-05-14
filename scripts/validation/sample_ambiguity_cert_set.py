@@ -26,7 +26,7 @@ SAMPLER_VERSION = 'ambiguity_sampler_v1'
 FAMILY_TEMPLATES = {
     'transform_ambiguity': [
         ('US GDP', 'direct_answer', ['direct_answer_correct']),
-        ('Canada employment', 'clarify', ['clarification_with_correct_options', 'multiround_clarification_to_correct_answer']),
+        ('Canada employment', 'direct_answer', ['direct_answer_correct']),
         ('Germany inflation', 'direct_answer', ['direct_answer_correct']),
     ],
     'provider_ambiguity': [

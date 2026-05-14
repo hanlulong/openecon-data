@@ -935,12 +935,20 @@ def test_multiround_and_ambiguity_samplers_emit_selection_weights(tmp_path: Path
     )
 
     multiround_row = json.loads(multiround_output.read_text(encoding="utf-8").splitlines()[0])
-    ambiguity_row = json.loads(ambiguity_output.read_text(encoding="utf-8").splitlines()[0])
+    ambiguity_rows = [
+        json.loads(line)
+        for line in ambiguity_output.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    ambiguity_row = ambiguity_rows[0]
+    canada_employment = next(row for row in ambiguity_rows if row["query"] == "Canada employment")
 
     assert multiround_row["provenance"]["sampling_probability"] is not None
     assert multiround_row["provenance"]["selection_weight"] is not None
     assert ambiguity_row["provenance"]["sampling_probability"] is not None
     assert ambiguity_row["provenance"]["selection_weight"] is not None
+    assert canada_employment["expected_behavior"] == "direct_answer"
+    assert canada_employment["gold"]["acceptable_outcomes"] == ["direct_answer_correct"]
 
 
 def test_certify_claim_surfaces_production_score_blockers(tmp_path: Path):
@@ -1878,3 +1886,89 @@ def test_score_certification_blocks_claim_grade_when_adjudicated_pass_conflicts_
     assert report["strata"]["adjudicated_replay_conflicts"] == [
         "amb-clarify-000001: adjudicated pass expected clarification but replay did not clarify"
     ]
+
+
+def test_score_certification_accepts_reviewed_direct_answer_for_clarify_gold(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    output_path = tmp_path / "score.json"
+    adjudication_path = tmp_path / "adjudication.jsonl"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "amb-transform-000001",
+                "dataset_tier": "cert_holdout",
+                "expected_behavior": "clarify",
+                "query": "Canada employment",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                    "family": "transform_ambiguity",
+                },
+                "gold": {
+                    "acceptable_outcomes": [
+                        "clarification_with_correct_options",
+                        "multiround_clarification_to_correct_answer",
+                    ],
+                    "human_review_required": True,
+                },
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "amb-transform-000001",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 1,
+                "error": None,
+                "clarification_detected": False,
+                "response_text_present": False,
+                "countries": ["Canada"],
+                "indicators": ["employment"],
+                "series_ids": ["14100375:1.3.1.1.1.0.0.0.0.0"],
+                "api_urls": ["https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"],
+                "source_urls": ["https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410037501"],
+            },
+        ],
+    )
+    write_jsonl(
+        adjudication_path,
+        [
+            {
+                "session_id": "amb-transform-000001",
+                "final_label": "pass",
+                "accepted_outcome": "direct_answer_correct",
+                "notes": "Direct national employment answer accepted after human review.",
+            },
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    session = report["session_results"][0]
+    assert session["adjudicated_pass"] is True
+    assert session["adjudicated_direct_answer_accepted"] is True
+    assert session["adjudicated_replay_conflict"] is None
+    assert report["metrics"]["adjudicated_replay_conflict_count"] == 0
+    assert not any("adjudicated replay conflicts" in item for item in report["claim_grade_blockers"])
