@@ -112,7 +112,38 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertEqual(cached[0].metadata.indicator, "Real GDP")
 
-    def test_fred_non_us_country_scope_fails_closed_before_fetch(self) -> None:
+    def test_fred_non_us_country_scope_uses_country_aware_search(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["GDP"],
+            parameters={
+                "country": "CA",
+                "indicator": "GDP",
+                "__exact_provider_code_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Canada GDP from FRED",
+        )
+        canada_series = sample_series_with(
+            indicator="Gross Domestic Product for Canada",
+            country="Canada",
+            series_id="MKTGDPCAA646NWDB",
+        )
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=canada_series) as fetch_mock:
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(result[0].metadata.country, "Canada")
+        self.assertEqual(result[0].metadata.seriesId, "MKTGDPCAA646NWDB")
+        self.assertNotEqual(result[0].metadata.seriesId, "GDP")
+        fetch_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fetch_params["indicator"], "Canada GDP")
+        self.assertTrue(fetch_params["__fred_country_scope_discovery"])
+        self.assertNotIn("__exact_provider_code_match", fetch_params)
+
+    def test_fred_non_us_country_scope_rejects_wrong_country_result(self) -> None:
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["GDP"],
@@ -125,30 +156,31 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="Canada GDP from FRED",
         )
 
-        with patch.object(
-            self.service.fred_provider,
-            "fetch_series",
-            side_effect=AssertionError("FRED must not fetch US data for Canada"),
-        ):
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()):
             with self.assertRaises(DataNotAvailableError) as raised:
                 run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertIn("FRED only covers United States", str(raised.exception))
-        self.assertIn("CA", str(raised.exception))
+        self.assertIn("does not match the requested country scope", str(raised.exception))
+        self.assertIn("GDP", str(raised.exception))
 
-    def test_process_query_fred_non_us_country_mismatch_does_not_return_us_data(self) -> None:
-        with patch.object(
-            self.service.fred_provider,
-            "fetch_series",
-            side_effect=AssertionError("FRED must not fetch US data for Canada"),
-        ):
+    def test_process_query_fred_non_us_country_scope_returns_verified_fred_series(self) -> None:
+        canada_series = sample_series_with(
+            indicator="Gross Domestic Product for Canada",
+            country="Canada",
+            series_id="MKTGDPCAA646NWDB",
+        )
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=canada_series):
             response = run(self.service.process_query("Canada GDP from FRED"))
 
-        self.assertEqual(response.error, "data_not_available")
-        self.assertFalse(response.data)
-        self.assertIn("Provider/Country Not Available", response.message or "")
-        self.assertIn("FRED only covers United States", response.message or "")
-        self.assertNotIn("Country/Region Not Recognized", response.message or "")
+        self.assertIsNone(response.error)
+        self.assertTrue(response.data)
+        self.assertEqual(response.data[0].metadata.source, "FRED")
+        self.assertEqual(response.data[0].metadata.country, "Canada")
+        self.assertNotEqual(response.data[0].metadata.seriesId, "GDP")
 
     def test_build_cache_params_adds_version_without_mutating_input(self) -> None:
         raw_params = {"indicator": "NE.IMP.GNFS.ZS", "countries": ["China", "US"]}
@@ -1247,7 +1279,15 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
              patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
-             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+             patch.object(
+                 self.service.fred_provider,
+                 "fetch_series",
+                 return_value=sample_series_with(
+                     indicator="Openness at Current Prices for Spain",
+                     country="Spain",
+                     series_id="OPENCPESA156NUPN",
+                 ),
+             ) as fetch_mock:
             result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(len(result), 1)
@@ -1282,7 +1322,11 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
              patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
-             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series_with(
+                 indicator="Openness at Current Prices for Spain",
+                 country="Spain",
+                 series_id="OPENCPESA156NUPN",
+             )) as fetch_mock:
             result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(len(result), 1)

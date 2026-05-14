@@ -463,18 +463,195 @@ def _fred_exact_title_targets_country(
     )
 
 
+def _country_aliases_for_iso2(iso2: str) -> list[str]:
+    normalized = str(iso2 or "").strip().upper()
+    if not normalized:
+        return []
+    aliases = [
+        alias
+        for alias, code in CountryResolver.COUNTRY_ALIASES.items()
+        if code == normalized and len(alias) > 2
+    ]
+    return sorted(set(aliases), key=len, reverse=True)
+
+
+def _country_label_for_iso2(iso2: str, fallback: Any = None) -> str:
+    fallback_text = str(fallback or "").strip()
+    if fallback_text and len(fallback_text) > 2 and fallback_text.upper() != str(iso2 or "").upper():
+        return fallback_text
+    aliases = _country_aliases_for_iso2(iso2)
+    return aliases[0].title() if aliases else str(iso2 or fallback_text or "").upper()
+
+
+def _text_targets_country(text: str, iso2: str) -> bool:
+    text_lower = str(text or "").lower()
+    if not text_lower:
+        return False
+    return any(
+        re.search(rf"\b{re.escape(alias.lower())}\b", text_lower)
+        for alias in _country_aliases_for_iso2(iso2)
+    )
+
+
+def _fred_catalog_series_targets_country(series_id: Any, iso2: str) -> bool:
+    """Return whether local provider-native FRED metadata names the country."""
+    code = str(series_id or "").strip()
+    if not code:
+        return False
+    try:
+        from ..services.indicator_database import get_indicator_lookup
+
+        metadata = get_indicator_lookup().get("FRED", code)
+    except Exception:
+        metadata = None
+    if not metadata:
+        return False
+    text = " ".join(
+        str(metadata.get(key) or "")
+        for key in ("name", "description", "title")
+    )
+    return _text_targets_country(text, iso2)
+
+
+def _fred_country_context_query(
+    params: dict[str, Any],
+    intent: Optional[ParsedIntent],
+    raw_country: Any,
+    iso2: str,
+) -> str:
+    """Build provider-search text from query/country context, not hardcoded maps."""
+    original_query = str(
+        params.get("__original_query")
+        or (intent.originalQuery if intent else "")
+        or ""
+    ).strip()
+    if original_query:
+        query_text = re.sub(
+            r"\b(?:from|use|using|via)\s+fred\b",
+            " ",
+            original_query,
+            flags=re.IGNORECASE,
+        )
+        query_text = re.sub(r"\s+", " ", query_text).strip(" ,;:")
+        if query_text:
+            return query_text
+
+    country_label = _country_label_for_iso2(iso2, raw_country)
+    indicator = str(
+        params.get("__semantic_indicator_label")
+        or params.get("indicator")
+        or ((intent.indicators or [""])[0] if intent and intent.indicators else "")
+        or ""
+    ).strip()
+    return re.sub(r"\s+", " ", f"{country_label} {indicator}").strip()
+
+
+def _prepare_fred_country_scope_params(
+    provider_request: dict[str, Any],
+    params: dict[str, Any],
+    intent: Optional[ParsedIntent] = None,
+) -> dict[str, Any]:
+    """Allow FRED non-US requests to use provider-native series discovery.
+
+    This does not map countries or concepts to specific FRED codes.  It only
+    demotes an unsafe exact-code candidate when provider-native metadata does
+    not prove that the selected series targets the requested non-US country, so
+    FRED catalog/search retrieval can choose a country-scoped candidate.
+    """
+    if params.get("__fred_country_scope_discovery"):
+        return params
+
+    requested_scope = _fred_requested_country_scope(provider_request, params)
+    normalized_scope = [
+        (country, _normalize_known_country_to_iso2(country))
+        for country in requested_scope
+    ]
+    non_us_scope = [
+        (country, iso2)
+        for country, iso2 in normalized_scope
+        if iso2 and iso2 != "US"
+    ]
+    if len(non_us_scope) != 1:
+        return params
+
+    raw_country, iso2 = non_us_scope[0]
+    selected_series = (
+        provider_request.get("series_id")
+        or params.get("seriesId")
+        or params.get("series_id")
+        or params.get("indicator")
+    )
+    if _fred_exact_title_targets_country(params, intent, iso2) or _fred_catalog_series_targets_country(selected_series, iso2):
+        return params
+
+    search_query = _fred_country_context_query(params, intent, raw_country, iso2)
+    if not search_query:
+        return params
+
+    prepared = dict(params)
+    prepared["indicator"] = search_query
+    prepared["__semantic_indicator_label"] = search_query
+    prepared["__fred_country_scope_discovery"] = True
+    prepared["__fred_requested_country"] = iso2
+    prepared.pop("seriesId", None)
+    prepared.pop("series_id", None)
+    prepared.pop("__exact_provider_code_match", None)
+    prepared.pop("__exact_indicator_title_match", None)
+    return prepared
+
+
+def _validate_fred_country_scope_result(
+    series_list: list[NormalizedData],
+    provider_request: dict[str, Any],
+    params: dict[str, Any],
+) -> None:
+    requested_scope = _fred_requested_country_scope(provider_request, params)
+    normalized_scope = [
+        _normalize_known_country_to_iso2(country)
+        for country in requested_scope
+    ]
+    non_us_scope = [iso2 for iso2 in normalized_scope if iso2 and iso2 != "US"]
+    if len(non_us_scope) != 1:
+        return
+
+    requested_iso2 = non_us_scope[0]
+    for series in series_list:
+        metadata = getattr(series, "metadata", None)
+        result_country = _normalize_known_country_to_iso2(getattr(metadata, "country", None))
+        result_text = " ".join(
+            str(value or "")
+            for value in (
+                getattr(metadata, "indicator", None),
+                getattr(metadata, "description", None),
+                getattr(metadata, "notes", None),
+            )
+        )
+        if result_country == requested_iso2 or _text_targets_country(result_text, requested_iso2):
+            continue
+        raise DataNotAvailableError(
+            "Selected FRED series does not match the requested country scope. "
+            f"requested_country_scope={requested_scope} "
+            f"returned_country={getattr(metadata, 'country', None)!r} "
+            f"series_id={getattr(metadata, 'seriesId', None)!r}"
+        )
+
+
 def _raise_if_fred_country_scope_unsupported(
     provider_request: dict[str, Any],
     params: dict[str, Any],
     intent: Optional[ParsedIntent] = None,
 ) -> None:
-    """Fail closed when a FRED request asks for non-US geography.
+    """Fail closed when a FRED exact request asks for unsupported geography.
 
-    FRED's production provider surface is United-States-only for macro series.
-    Returning the US ``GDP`` series for a user request such as "Canada GDP from
-    FRED" is worse than a no-data answer because it certifies the wrong
-    country.  This is provider contract enforcement, not semantic routing.
+    FRED contains both U.S. and international series. Returning the U.S. ``GDP``
+    series for a request such as "Canada GDP from FRED" is worse than a no-data
+    answer, but the guard must be series-level rather than provider-level:
+    non-U.S. FRED series are allowed only when provider-native title/catalog
+    metadata proves the selected series targets the requested country.
     """
+    if params.get("__fred_country_scope_discovery"):
+        return
+
     requested_scope = _fred_requested_country_scope(provider_request, params)
     if not requested_scope:
         return
@@ -492,13 +669,21 @@ def _raise_if_fred_country_scope_unsupported(
             continue
         if _fred_exact_title_targets_country(params, intent, normalized):
             continue
+        selected_series = (
+            provider_request.get("series_id")
+            or params.get("seriesId")
+            or params.get("series_id")
+            or params.get("indicator")
+        )
+        if _fred_catalog_series_targets_country(selected_series, normalized):
+            continue
         unsupported.append(country)
     if not unsupported:
         return
 
     raise DataNotAvailableError(
-        "FRED only covers United States country scope for provider-native macro "
-        "series. OpenEcon will not return U.S. FRED data for a non-U.S. "
+        "Selected FRED series does not match the requested country scope. "
+        "OpenEcon will not return U.S.-scoped FRED data for a non-U.S. "
         f"country request. requested_country_scope={unsupported}"
     )
 
@@ -1095,6 +1280,15 @@ async def fetch_from_provider_dispatch(
 
     if provider == "FRED":
         fred_request = dict(execution_plan.provider_request or {})
+        prepared_params = _prepare_fred_country_scope_params(fred_request, params, intent)
+        if prepared_params != params:
+            params = prepared_params
+            fred_request = dict(materialize_execution_plan(
+                execution_plan,
+                provider=provider,
+                intent=intent,
+                params=params,
+            ).provider_request or {})
         _raise_if_fred_country_scope_unsupported(fred_request, params, intent)
         # Ensure params has indicator set
         if not params.get("indicator") and intent.indicators:
@@ -1110,6 +1304,7 @@ async def fetch_from_provider_dispatch(
                 }
                 series = await svc.fred_provider.fetch_series(indicator_params)
                 all_series.append(series)
+            _validate_fred_country_scope_result(all_series, fred_request, params)
             return all_series
         else:
             fred_params = {
@@ -1121,6 +1316,7 @@ async def fetch_from_provider_dispatch(
             if fred_params.get("series_id") and fred_params.get("series_id") != fred_params.get("indicator"):
                 fred_params.pop("series_id", None)
             series = await svc.fred_provider.fetch_series(fred_params)
+            _validate_fred_country_scope_result([series], fred_request, fred_params)
             return [series]
 
     if provider in {"WORLDBANK", "WORLD BANK"}:
@@ -2306,6 +2502,12 @@ async def fetch_data(
                     changed = True
             if changed:
                 intent.parameters = params
+
+    if provider == "FRED":
+        prepared_params = _prepare_fred_country_scope_params({}, params, intent)
+        if prepared_params != params:
+            params = prepared_params
+            intent.parameters = params
 
     execution_plan = materialize_execution_plan(
         execution_plan,

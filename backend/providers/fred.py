@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import get_settings
 from ..models import Metadata, NormalizedData
+from ..routing.country_resolver import CountryResolver
 from ..utils.retry import DataNotAvailableError
 from ..services.http_pool import get_http_client
 from .base import BaseProvider
@@ -50,6 +51,52 @@ def _parse_iso_date(value: Any) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except (TypeError, ValueError):
         return None
+
+
+def _country_aliases_for_iso2(iso2: str) -> list[str]:
+    """Return human-readable aliases for an ISO2 code, longest first."""
+    normalized = str(iso2 or "").strip().upper()
+    if not normalized:
+        return []
+    aliases = [
+        alias
+        for alias, code in CountryResolver.COUNTRY_ALIASES.items()
+        if code == normalized and len(alias) > 2
+    ]
+    return sorted(set(aliases), key=len, reverse=True)
+
+
+def _country_label_for_iso2(iso2: str) -> str:
+    aliases = _country_aliases_for_iso2(iso2)
+    return aliases[0].title() if aliases else iso2.upper()
+
+
+def _text_targets_country(text: str, iso2: str) -> bool:
+    """Return whether provider-native text explicitly names a country."""
+    text_lower = str(text or "").lower()
+    if not text_lower:
+        return False
+    for alias in _country_aliases_for_iso2(iso2):
+        if re.search(rf"\b{re.escape(alias.lower())}\b", text_lower):
+            return True
+    return False
+
+
+def _infer_country_from_fred_info(info: Dict[str, Any]) -> str:
+    """Infer country scope from FRED's provider-native series title.
+
+    FRED contains both U.S. domestic series and international series published
+    by upstream sources.  The provider API does not expose a normalized country
+    field, but international series titles commonly carry explicit scope such as
+    "Gross Domestic Product for Canada".  Treat that provider-native title text
+    as mechanical country-scope metadata; otherwise preserve the historical U.S.
+    default for domestic FRED series.
+    """
+    title = str(info.get("title") or "")
+    for iso2 in sorted(set(CountryResolver.COUNTRY_ALIASES.values())):
+        if _text_targets_country(title, iso2):
+            return _country_label_for_iso2(iso2)
+    return "US"
 
 
 class FREDProvider(BaseProvider):
@@ -629,7 +676,7 @@ class FREDProvider(BaseProvider):
         metadata = Metadata(
             source="FRED",
             indicator=info["title"],
-            country="US",
+            country=_infer_country_from_fred_info(info),
             frequency=self._map_frequency(info["frequency"]),
             unit=unit,
             lastUpdated=info.get("last_updated", ""),

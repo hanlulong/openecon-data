@@ -574,6 +574,38 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result.data[0].value, 100.0)
         self.assertIsNone(result.data[1].value)
 
+    def test_fred_fetch_series_infers_country_from_provider_title(self) -> None:
+        provider = FREDProvider(api_key="test-key")
+
+        responses = [
+            MockAsyncResponse(
+                {
+                    "seriess": [
+                        {
+                            "title": "Gross Domestic Product for Canada",
+                            "units": "Current U.S. Dollars",
+                            "frequency": "Annual",
+                            "last_updated": "2026-01-01",
+                        }
+                    ]
+                }
+            ),
+            MockAsyncResponse(
+                {
+                    "observations": [
+                        {"date": "2024-01-01", "value": "100"},
+                    ]
+                }
+            ),
+        ]
+
+        with patch("backend.providers.fred.get_http_client", return_value=MockAsyncClient(responses)):
+            result = run(provider.fetch_series({"seriesId": "MKTGDPCAA646NWDB"}))
+
+        self.assertEqual(result.metadata.source, "FRED")
+        self.assertEqual(result.metadata.seriesId, "MKTGDPCAA646NWDB")
+        self.assertEqual(result.metadata.country, "Canada")
+
     def test_fred_exact_stale_series_skips_default_observation_window(self) -> None:
         provider = FREDProvider(api_key="test-key")
         calls: list[dict] = []

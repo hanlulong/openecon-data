@@ -363,17 +363,20 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • Use more general terms like 'GDP' or 'unemployment'")
 
         # 3. Provider/country contract mismatch
-        elif 'fred only covers united states country scope' in error_lower:
+        elif (
+            'selected fred series does not match the requested country scope' in error_lower
+            or 'fred only covers united states country scope' in error_lower
+        ):
             message_parts.append("📭 **Provider/Country Not Available**")
             message_parts.append(
-                "FRED's production macroeconomic series in OpenEcon cover the United States country scope."
+                "The selected FRED series could not be verified against the requested country scope."
             )
             message_parts.append("")
             message_parts.append(f"Provider evidence: {error}")
             message_parts.append("")
             message_parts.append("**💡 Suggestions:**")
-            message_parts.append("  • Use FRED for United States series, e.g. 'United States GDP from FRED'")
-            message_parts.append("  • For non-U.S. countries, remove the provider constraint or choose a provider that covers that country")
+            message_parts.append("  • Try a provider-native FRED series ID that names the requested country")
+            message_parts.append("  • Or remove the provider constraint so OpenEcon can choose another source")
 
         # 4. Country/Region Not Supported
         elif 'not a valid country' in error_lower or 'country' in error_lower and 'not' in error_lower:
