@@ -63,6 +63,33 @@ def test_extract_response_signals_counts_nested_datasets_with_values():
     assert signals["series_ids"] == ["GDP", "NGDP"]
 
 
+def test_extract_response_signals_preserves_answer_surface_metadata():
+    module = load_module()
+
+    signals = module.extract_response_signals(
+        {
+            "data": [
+                {
+                    "metadata": {
+                        "source": "Statistics Canada",
+                        "country": "Ontario",
+                        "indicator": "employment - Ontario, Men+",
+                        "seriesId": "14100375:7.3.1.2.1.0.0.0.0.0",
+                        "apiUrl": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods",
+                        "sourceUrl": "https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410037501",
+                    },
+                    "data": [{"date": "2025-01-01", "value": 100.0}],
+                }
+            ]
+        }
+    )
+
+    assert signals["countries"] == ["Ontario"]
+    assert signals["indicators"] == ["employment - Ontario, Men+"]
+    assert signals["api_urls"] == ["https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"]
+    assert signals["source_urls"] == ["https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410037501"]
+
+
 def test_progress_sidecar_paths_and_summary(tmp_path: Path):
     module = load_module()
 

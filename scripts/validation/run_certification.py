@@ -390,6 +390,9 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
     providers = set()
     countries = set()
     series_ids = set()
+    indicators = set()
+    api_urls = set()
+    source_urls = set()
     for dataset in datasets:
         metadata = dataset.get('metadata') or {}
         provider = str(metadata.get('source') or metadata.get('provider') or '').strip()
@@ -398,9 +401,18 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
         country = str(metadata.get('country') or '').strip()
         if country:
             countries.add(country)
+        indicator = str(metadata.get('indicator') or metadata.get('name') or '').strip()
+        if indicator:
+            indicators.add(indicator)
         series_id = str(metadata.get('seriesId') or metadata.get('series_id') or '').strip()
         if series_id:
             series_ids.add(series_id)
+        api_url = str(metadata.get('apiUrl') or metadata.get('api_url') or '').strip()
+        if api_url:
+            api_urls.add(api_url)
+        source_url = str(metadata.get('sourceUrl') or metadata.get('source_url') or '').strip()
+        if source_url:
+            source_urls.add(source_url)
     clarification_options = resp_json.get('clarificationOptions') or []
     clarification_questions = resp_json.get('clarificationQuestions') or []
     return {
@@ -412,6 +424,9 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
         'providers': sorted(providers),
         'countries': sorted(countries),
         'series_ids': sorted(series_ids),
+        'indicators': sorted(indicators),
+        'api_urls': sorted(api_urls),
+        'source_urls': sorted(source_urls),
     }
 
 
@@ -469,6 +484,9 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
         'providers': response_signals['providers'],
         'countries': response_signals['countries'],
         'series_ids': response_signals['series_ids'],
+        'indicators': response_signals.get('indicators', []),
+        'api_urls': response_signals.get('api_urls', []),
+        'source_urls': response_signals.get('source_urls', []),
         'clarification_detected': response_signals['clarification_detected'],
         'clarification_options_count': response_signals['clarification_options_count'],
         'clarification_questions_count': response_signals['clarification_questions_count'],
