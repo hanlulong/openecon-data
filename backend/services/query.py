@@ -7262,7 +7262,6 @@ class QueryService:
                 self._infer_statscan_product_id_for_followup(conversation_id, intent)
                 or resolved_params.get("__statscan_product_id")
                 or resolved_params.get("productId")
-                or resolved_params.get("indicator")
             )
             product_id = self._extract_statscan_product_id(product_id)
             provider_locked_dimension_request = bool(

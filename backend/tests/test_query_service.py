@@ -8874,6 +8874,63 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100375")
         self.assertEqual(intent.parameters.get("__statscan_product_authority"), "llm_adjudication")
 
+    def test_decompose_statscan_first_turn_axis_uses_selected_product_not_indicator_fallback(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["employment"],
+            parameters={
+                "country": "CA",
+                "indicator": "employment",
+                "__statscan_decomposition_axis": "Sex",
+                "__semantic_indicator_label": "employment",
+                "__statscan_product_id": "14100375",
+                "__statscan_product_authority": "llm_adjudication",
+                "__semantic_authority": "llm_adjudication",
+                "__original_query": "Ontario employment by gender",
+                "__semantic_provider_locked": True,
+                "startDate": "2021-05-15",
+                "endDate": "2026-05-14",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=["Men+", "Women+"],
+            originalQuery="Ontario employment by gender",
+        )
+
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment - Ontario, Men+",
+                country="Ontario",
+                series_id="14100375:7.3.1.2.1.0.0.0.0.0",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment - Ontario, Women+",
+                country="Ontario",
+                series_id="14100375:7.3.1.3.1.0.0.0.0.0",
+            ),
+        ]
+
+        with patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_infer_statscan_product_id_for_followup", return_value=None), \
+             patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, side_effect=AssertionError("should not rank semantic indicator fallback candidates")), \
+             patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=returned) as fetch_multi_dim:
+            data = run(
+                self.service._decompose_and_aggregate(  # pylint: disable=protected-access
+                    "Ontario employment by gender",
+                    intent,
+                    "conv-statscan-first-turn-axis-selected-product",
+                )
+            )
+
+        self.assertEqual(data, returned)
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["productId"], "14100375")
+        self.assertEqual(params["axis"], "Sex")
+
     def test_fetch_data_preserves_statscan_required_dimension_supportability_block(self) -> None:
         intent = ParsedIntent(
             apiProvider="StatsCan",
