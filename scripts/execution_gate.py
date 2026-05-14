@@ -20,6 +20,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = ROOT / ".omx" / "reports"
 STATE_DIR = ROOT / ".omx" / "state" / "sessions"
+GLOBAL_RALPH_STATE_PATH = ROOT / ".omx" / "state" / "ralph-state.json"
 GATE_PATH = REPORTS_DIR / "execution-gate.json"
 RED_FAMILIES_PATH = REPORTS_DIR / "red-families.json"
 PLAN_OBJECTIVE_STATUS_PATH = REPORTS_DIR / "plan-objective-status.json"
@@ -76,11 +77,14 @@ def _utc_now() -> str:
 
 
 def _find_active_ralph_state() -> dict[str, Any] | None:
-    if not STATE_DIR.exists():
-        return None
-
     latest: tuple[int, float, dict[str, Any]] | None = None
-    for state_file in STATE_DIR.glob("*/ralph-state.json"):
+    state_files: list[Path] = []
+    if STATE_DIR.exists():
+        state_files.extend(STATE_DIR.glob("*/ralph-state.json"))
+    if GLOBAL_RALPH_STATE_PATH.exists():
+        state_files.append(GLOBAL_RALPH_STATE_PATH)
+
+    for state_file in state_files:
         try:
             payload = json.loads(state_file.read_text())
         except Exception:

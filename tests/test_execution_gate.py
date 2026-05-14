@@ -198,8 +198,34 @@ def test_find_active_ralph_state_returns_none_when_only_terminal_active_files_ex
     )
 
     monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
+    monkeypatch.setattr(module, "GLOBAL_RALPH_STATE_PATH", tmp_path / "missing-global-ralph-state.json")
 
     assert module._find_active_ralph_state() is None  # pylint: disable=protected-access
+
+
+def test_find_active_ralph_state_reads_global_ralph_state(tmp_path, monkeypatch):
+    module = load_execution_gate_module()
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    global_state = tmp_path / "state" / "ralph-state.json"
+    global_state.parent.mkdir()
+    global_state.write_text(
+        json.dumps(
+            {
+                "active": True,
+                "current_phase": "executing_goal_until_complete",
+                "driving_plan": ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md",
+            }
+        )
+    )
+
+    monkeypatch.setattr(module, "STATE_DIR", sessions_dir)
+    monkeypatch.setattr(module, "GLOBAL_RALPH_STATE_PATH", global_state)
+
+    payload = module._find_active_ralph_state()  # pylint: disable=protected-access
+
+    assert payload is not None
+    assert payload.get("driving_plan") == ".omx/plans/plan-reach-99-all-330k-indicators-consensus.md"
 
 
 def test_find_active_ralph_state_prefers_plan_bearing_state_over_newer_planless_state(tmp_path, monkeypatch):
