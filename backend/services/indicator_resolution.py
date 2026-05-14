@@ -1689,6 +1689,17 @@ async def resolve_indicator_for_fetch(
             merged["__semantic_indicator_label"] = semantic_label
         return merged
 
+    def _statscan_selected_product_extra(indicator_value: str, authority: str) -> Dict[str, str]:
+        if provider not in {"STATSCAN", "STATISTICS CANADA"}:
+            return {}
+        product_id = str(indicator_value or "").strip()
+        if not product_id:
+            return {}
+        return {
+            "__statscan_product_id": product_id,
+            "__statscan_product_authority": authority,
+        }
+
     existing_indicator = str(params.get("indicator") or "").strip()
     if provider == "IMF" and not existing_indicator and len(intent.indicators or []) == 1:
         candidate_indicator = str((intent.indicators or [""])[0] or "").strip()
@@ -1777,24 +1788,34 @@ async def resolve_indicator_for_fetch(
             existing_indicator,
             __semantic_authority="exact_user_input",
             __decision_source="exact_code",
+            **_statscan_selected_product_extra(existing_indicator, "exact_user_input"),
         )
         intent.parameters = params
         return params
 
+    existing_semantic_authority = str(params.get("__semantic_authority") or "")
     if (
         has_explicit_code
-        and str(params.get("__semantic_authority") or "") == "llm_adjudication"
+        and existing_semantic_authority in {"llm_adjudication", "post_fetch_semantic_judge"}
         and not is_placeholder_indicator_code(existing_indicator)
     ):
         # Do not let deterministic semantic plausibility rules overrule or
-        # supply final semantic authority.  An LLM-adjudicated code has already
-        # passed the candidate-evidence selector; downstream fetch/verification
+        # supply final semantic authority.  A selector/post-fetch-adjudicated
+        # code has already passed an evidence gate; downstream fetch/verification
         # may still fail closed, but rule code must not make the semantic
-        # accept/reject decision here.
+        # accept/reject decision here or remap the selected product.
         params = _apply_indicator_with_semantic_label(
             existing_indicator,
-            __semantic_authority="llm_adjudication",
-            __decision_source=str(params.get("__decision_source") or "llm_pick"),
+            __semantic_authority=existing_semantic_authority,
+            __decision_source=str(
+                params.get("__decision_source")
+                or ("llm_pick" if existing_semantic_authority == "llm_adjudication" else "post_fetch_semantic_judge")
+            ),
+            **(
+                _statscan_selected_product_extra(existing_indicator, "llm_adjudication")
+                if existing_semantic_authority == "llm_adjudication"
+                else {}
+            ),
         )
         intent.parameters = params
         return params
@@ -1825,6 +1846,7 @@ async def resolve_indicator_for_fetch(
             existing_indicator,
             __semantic_authority="exact_user_input",
             __decision_source="exact_code",
+            **_statscan_selected_product_extra(existing_indicator, "exact_user_input"),
         )
         intent.parameters = params
         return params
@@ -1872,12 +1894,14 @@ async def resolve_indicator_for_fetch(
         )
         exact_match = find_exact_provider_title_match(exact_title_query, provider)
         if exact_match and exact_match.get("code"):
+            exact_code = str(exact_match["code"])
             params = _apply_indicator_with_semantic_label(
-                str(exact_match["code"]),
+                exact_code,
                 __semantic_indicator_label=str(exact_match.get("name") or exact_title_query),
                 __semantic_authority="exact_user_input",
                 __decision_source="exact_title",
                 __exact_indicator_title_match=True,
+                **_statscan_selected_product_extra(exact_code, "exact_user_input"),
             )
             intent.parameters = params
             return params
@@ -1919,6 +1943,7 @@ async def resolve_indicator_for_fetch(
                         __semantic_authority="llm_adjudication",
                         __decision_source="llm_pick",
                         __indicator_selection_source=selection.source,
+                        **_statscan_selected_product_extra(selection.code, "llm_adjudication"),
                     )
                     if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
                         logger.info(

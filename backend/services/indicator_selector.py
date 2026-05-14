@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import Settings
+from ..utils.providers import normalize_provider_name
 
 # Indicators database path
 _INDICATORS_DB = Path(__file__).parent.parent / "data" / "indicators.db"
@@ -261,12 +262,17 @@ class IndicatorSelector:
         """
 
         # 1. Run BOTH retrievals in parallel-ish (sequential but cheap)
+        # Normalize runtime aliases to the provider names stored in the 330K
+        # catalog/embedding metadata.  Without this, canonical runtime names such
+        # as STATSCAN miss the StatsCan embedding partition and silently degrade
+        # to lexical-only retrieval.
+        retrieval_provider = self._catalog_provider_name(provider)
         embedding_candidates: List[tuple[str, str]] = []
         embedding_scores: List[float] = []
         try:
             from .embedding_retrieval import get_embedding_retrieval
             er = get_embedding_retrieval()
-            results = er.search(query, provider=provider, top_k=top_k)
+            results = er.search(query, provider=retrieval_provider, top_k=top_k)
             if results:
                 embedding_candidates = [(r["code"], r["name"]) for r in results]
                 embedding_scores = [r.get("score", 0.0) for r in results]
@@ -276,7 +282,7 @@ class IndicatorSelector:
         # FTS5 retrieval — uses bm25 lexical matching, complements embeddings
         fts5_candidates: List[tuple[str, str]] = []
         try:
-            fts5_candidates = self._get_candidates_fts5(query, provider, top_k=20)
+            fts5_candidates = self._get_candidates_fts5(query, retrieval_provider, top_k=20)
         except Exception as e:
             logger.debug("FTS5 retrieval failed: %s", e)
 
@@ -309,10 +315,18 @@ class IndicatorSelector:
             return self._prioritize_candidates_by_provider_surface(
                 merged_candidates,
                 merged_scores,
-                provider,
+                retrieval_provider,
             )
 
         return [], []
+
+    @staticmethod
+    def _catalog_provider_name(provider: str) -> str:
+        """Return the provider spelling used by indicators.db/embeddings."""
+        canonical = normalize_provider_name(provider or "")
+        return {
+            "STATSCAN": "StatsCan",
+        }.get(canonical, provider)
 
     def _prioritize_candidates_by_provider_surface(
         self,
@@ -328,7 +342,7 @@ class IndicatorSelector:
         not the public DataMapper WEO/regional surfaces used by the runtime.
         Exact user-supplied codes still pass through the provider separately.
         """
-        if provider.upper() != "IMF" or not candidates:
+        if normalize_provider_name(provider or "") != "IMF" or not candidates:
             return candidates, scores
 
         try:
@@ -422,7 +436,7 @@ class IndicatorSelector:
             cur.execute(
                 f"SELECT code, frequency, unit, end_date, category FROM indicators "
                 f"WHERE provider = ? AND code IN ({placeholders})",
-                [provider] + codes,
+                [self._catalog_provider_name(provider)] + codes,
             )
             meta_map: Dict[str, Dict[str, Any]] = {}
             for row in cur.fetchall():

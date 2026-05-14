@@ -134,28 +134,36 @@ _PROVIDER_INTERNAL_SEMANTIC_MAP_PROVIDERS = {
 
 _STATSCAN_MECHANICAL_PRODUCT_AUTHORITIES = {
     "verified_conversation_state",
+    "llm_adjudication",
+    "exact_user_input",
 }
 
 
 def _has_statscan_mechanical_dimension_dispatch_authority(params: dict) -> bool:
     """Allow only mechanical StatsCan coordinate dispatch on a verified table.
 
-    This is intentionally narrower than semantic authority.  A previously
-    verified StatsCan product carried in conversation state may authorize a
-    follow-up to filter/decompose that same provider-native cube by
-    provider-native dimensions.  It must not choose a provider, product, or
-    indicator from natural language.
+    This is intentionally narrower than generic semantic authority.  A
+    previously verified StatsCan product carried in conversation state may
+    authorize a follow-up to filter/decompose that same provider-native cube.
+    A first-turn product selected by exact provider-native input or
+    IndicatorSelector LLM adjudication may also authorize provider-native
+    coordinate dispatch.  This predicate must not choose a provider, product,
+    or indicator from natural language.
     """
     product_id = str(params.get("__statscan_product_id") or "").strip()
     if not product_id:
         return False
     if len("".join(ch for ch in product_id if ch.isdigit())) < 8:
         return False
-    if str(params.get("__statscan_product_authority") or "") not in _STATSCAN_MECHANICAL_PRODUCT_AUTHORITIES:
+    product_authority = str(params.get("__statscan_product_authority") or "")
+    if product_authority not in _STATSCAN_MECHANICAL_PRODUCT_AUTHORITIES:
         return False
-    if not params.get("__delta_resolved"):
-        return False
-    if params.get("__delta_indicator_changed"):
+    if product_authority == "verified_conversation_state":
+        if not params.get("__delta_resolved"):
+            return False
+        if params.get("__delta_indicator_changed"):
+            return False
+    elif product_authority != str(params.get("__semantic_authority") or ""):
         return False
     return bool(params.get("__dimensions") or params.get("__statscan_decomposition_axis"))
 
@@ -1590,6 +1598,44 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         return None
 
     dimension_decomposition_axis = str(params.get("__statscan_decomposition_axis") or "").strip()
+
+    if dimension_decomposition_axis and state_product_id:
+        query_text = str(
+            params.get("__original_query")
+            or intent.originalQuery
+            or intent.resolvedQuery
+            or ""
+        )
+        indicator_label = str(
+            params.get("__semantic_indicator_label")
+            or (intent.indicators[0] if intent.indicators else indicator)
+            or indicator
+            or ""
+        )
+        if query_text and hasattr(svc.statscan_provider, "extract_dimension_modifiers"):
+            try:
+                cube_metadata = await svc.statscan_provider._get_cube_metadata(state_product_id)
+                metadata_dimensions = svc.statscan_provider.extract_dimension_modifiers(
+                    query_text,
+                    indicator_label,
+                    state_product_id,
+                    cube_metadata,
+                )
+                if metadata_dimensions:
+                    # User-supplied/materialized dimensions remain authoritative;
+                    # metadata extraction only fills fixed coordinates such as
+                    # Geography=Ontario from the already-selected cube.
+                    dimensions = {**metadata_dimensions, **(dimensions or {})}
+                    params["dimensions"] = dimensions
+                    logger.info(
+                        "StatsCan: fixed dimensions from selected cube metadata: %s",
+                        dimensions,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "StatsCan selected-cube dimension modifier extraction skipped: %s",
+                    exc,
+                )
 
     # EARLY DISPATCH: When __dimensions comes from the delta/merge path,
     # route directly to fetch_with_dimensions or fetch_multi_province_data.

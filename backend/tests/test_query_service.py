@@ -4045,7 +4045,7 @@ class QueryServiceTests(unittest.TestCase):
             {"type": "dimension", "entities": ["Males", "Females"], "axis": "Gender"},
         )
 
-    def test_maybe_expand_statscan_dimension_entities_can_fallback_to_semantic_product_for_axis(self) -> None:
+    def test_maybe_expand_statscan_dimension_entities_does_not_discover_semantic_product_for_axis(self) -> None:
         intent = ParsedIntent(
             apiProvider="STATSCAN",
             indicators=["20100056"],
@@ -4062,10 +4062,8 @@ class QueryServiceTests(unittest.TestCase):
         )
 
         async def _fake_get_members(product_id, axis_keyword):
-            if str(product_id) == "20100056":
-                return []
-            if str(product_id) == "14100287":
-                return [(6, "25 to 54 years"), (7, "55 years and over")]
+            self.assertEqual(axis_keyword, "age")
+            self.assertEqual(str(product_id), "20100056")
             return []
 
         metadata_service = Mock()
@@ -4076,13 +4074,14 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service.statscan_provider, "get_dimension_members", new_callable=AsyncMock, side_effect=_fake_get_members):
             run(
                 self.service._maybe_expand_statscan_dimension_decomposition_entities(  # pylint: disable=protected-access
-                    "conv-statscan-semantic-axis-fallback",
+                    "conv-statscan-semantic-axis-no-fallback",
                     intent,
                 )
             )
 
-        self.assertEqual(intent.decompositionEntities, ["25 to 54 years", "55 years and over"])
-        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100287")
+        self.assertIsNone(intent.decompositionEntities)
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "20100056")
+        metadata_service.discover_product_for_indicator.assert_not_called()
 
     def test_decompose_and_aggregate_statscan_provinces_preserves_followup_product_id_when_resolver_drifts(self) -> None:
         intent = ParsedIntent(
@@ -7184,6 +7183,57 @@ class QueryServiceTests(unittest.TestCase):
         assert pending is not None
         self.assertEqual(pending.get("kind"), "missing_decomposition_entities")
 
+    def test_post_parse_clarification_does_not_ask_for_statscan_axis_members(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-statscan-axis-no-member-clarification")
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=["employment"],
+            parameters={
+                "country": "CA",
+                "__statscan_decomposition_axis": "Sex",
+                "__semantic_provider_locked": True,
+                "__semantic_indicator_label": "employment",
+            },
+            clarificationNeeded=False,
+            originalQuery="Ontario employment by gender",
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=None,
+        )
+        parse_result = ParseRouteResult(
+            intent=intent,
+            explicit_provider=None,
+            routed_provider="STATSCAN",
+            validation_warning=None,
+        )
+        validation = ValidationResult(
+            is_multi_indicator=False,
+            is_valid=True,
+            validation_error=None,
+            suggestions=None,
+            is_confident=True,
+            confidence_reason=None,
+        )
+
+        with patch.object(
+            self.service,
+            "_build_prefetch_indicator_choice_clarification",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            clarification = run(
+                self.service._build_post_parse_clarification(  # pylint: disable=protected-access
+                    conversation_id=conv_id,
+                    query="Ontario employment by gender",
+                    parse_result=parse_result,
+                    validation=validation,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
+        self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
+
     def test_post_parse_clarification_skips_exact_provider_code_match(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-exact-code-post-parse")
         intent = ParsedIntent(
@@ -8696,6 +8746,84 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params["productId"], "14100375")
         self.assertEqual(params["axis"], "Age group")
         self.assertEqual(params["dimensions"], {"geography": "Ontario"})
+
+    def test_fetch_data_statscan_first_turn_axis_uses_selector_product_and_metadata_dimensions(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="StatsCan",
+            indicators=["employment"],
+            parameters={
+                "country": "CA",
+                "__statscan_decomposition_axis": "Sex",
+                "__semantic_indicator_label": "employment",
+                "__semantic_provider_locked": True,
+                "startDate": "2021-05-15",
+                "endDate": "2026-05-14",
+            },
+            clarificationNeeded=False,
+            needsDecomposition=True,
+            decompositionType="dimension",
+            decompositionEntities=None,
+            originalQuery="Ontario employment by gender",
+        )
+
+        class _FakeSelector:
+            async def select(self, query: str, provider: str):
+                assert query == "employment"
+                assert provider == "STATSCAN"
+                return SelectionResult(
+                    code="14100375",
+                    name="Employment and unemployment rate, annual",
+                    source="llm_pick",
+                )
+
+        cube_metadata = {
+            "dimension": [
+                {
+                    "dimensionNameEn": "Geography",
+                    "member": [
+                        {"memberId": 1, "memberNameEn": "Canada"},
+                        {"memberId": 7, "memberNameEn": "Ontario"},
+                    ],
+                },
+                {
+                    "dimensionNameEn": "Gender",
+                    "member": [
+                        {"memberId": 1, "memberNameEn": "Total - Gender"},
+                        {"memberId": 2, "memberNameEn": "Men+"},
+                        {"memberId": 3, "memberNameEn": "Women+"},
+                    ],
+                },
+            ],
+        }
+        returned = [
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment - Ontario, Men+",
+                country="Ontario",
+                series_id="14100375:7.2",
+            ),
+            sample_series_with(
+                source="Statistics Canada",
+                indicator="employment - Ontario, Women+",
+                country="Ontario",
+                series_id="14100375:7.3",
+            ),
+        ]
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.dict("sys.modules", {"backend.services.indicator_selector": SimpleNamespace(IndicatorSelector=lambda: _FakeSelector())}), \
+             patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, return_value=cube_metadata), \
+             patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=returned) as fetch_multi_dim:
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(data, returned)
+        self.assertEqual(fetch_multi_dim.await_count, 1)
+        params = fetch_multi_dim.await_args.args[0]
+        self.assertEqual(params["productId"], "14100375")
+        self.assertEqual(params["axis"], "Sex")
+        self.assertEqual(params["dimensions"], {"geography": "Ontario"})
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "14100375")
+        self.assertEqual(intent.parameters.get("__statscan_product_authority"), "llm_adjudication")
 
     def test_fetch_data_preserves_statscan_required_dimension_supportability_block(self) -> None:
         intent = ParsedIntent(

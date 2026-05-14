@@ -137,6 +137,36 @@ def test_score_ambiguity_requires_ordered_score_evidence() -> None:
     assert not IndicatorSelector._scores_are_ambiguous([0.88, 0.82, 0.80])
 
 
+
+def test_get_candidates_uses_catalog_provider_alias_for_statscan(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+    seen: list[tuple[str, str]] = []
+
+    class _FakeEmbeddingRetrieval:
+        def search(self, query: str, provider: str, top_k: int):  # noqa: ANN001
+            seen.append(("embedding", provider))
+            return []
+
+    monkeypatch.setattr(
+        "backend.services.embedding_retrieval.get_embedding_retrieval",
+        lambda: _FakeEmbeddingRetrieval(),
+    )
+
+    def fake_fts(query: str, provider: str, top_k: int):  # noqa: ANN001
+        seen.append(("fts", provider))
+        return []
+
+    monkeypatch.setattr(selector, "_get_candidates_fts5", fake_fts)
+
+    candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
+        "employment",
+        "STATSCAN",
+    )
+
+    assert candidates == []
+    assert scores == []
+    assert seen == [("embedding", "StatsCan"), ("fts", "StatsCan")]
+
 def test_imf_candidate_order_prefers_public_datamapper_surface(monkeypatch) -> None:
     selector = IndicatorSelector(settings=SimpleNamespace())
 

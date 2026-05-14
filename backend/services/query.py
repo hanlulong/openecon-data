@@ -3547,14 +3547,11 @@ class QueryService:
             if normalized and normalized not in candidate_product_ids:
                 candidate_product_ids.append(normalized)
 
-        if semantic_label and hasattr(self.statscan_provider, "_statscan_metadata_service") and self.statscan_provider._statscan_metadata_service:
-            try:
-                discovered_product = await self.statscan_provider._statscan_metadata_service.discover_product_for_indicator(semantic_label.lower())
-                normalized_discovered = self._extract_statscan_product_id(discovered_product)
-                if normalized_discovered and normalized_discovered not in candidate_product_ids:
-                    candidate_product_ids.append(normalized_discovered)
-            except Exception as exc:
-                logger.debug("StatsCan semantic product discovery failed for '%s': %s", semantic_label, exc)
+        # Do not discover a StatsCan product from the semantic label here.
+        # Product/table authority must come from exact provider-native input,
+        # verified conversation state, or retrieval + LLM adjudication.  This
+        # helper may only enumerate axis members after such product evidence
+        # is already present.
 
         members = []
         product_id = None

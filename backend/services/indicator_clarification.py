@@ -1965,6 +1965,17 @@ def build_missing_decomposition_entities_clarification(
     if not intent or not intent.needsDecomposition or intent.decompositionEntities:
         return None
 
+    params = dict(intent.parameters or {})
+    if (
+        normalize_provider_name(intent.apiProvider or "") == "STATSCAN"
+        and str(params.get("__statscan_decomposition_axis") or "").strip()
+    ):
+        # StatsCan axis decomposition members are provider-native metadata.
+        # Do not ask the user to name members such as Men+/Women+; require the
+        # downstream selector/exact-code path to establish product authority,
+        # then enumerate non-aggregate members from the selected cube.
+        return None
+
     decomp_type = str(intent.decompositionType or "").strip().lower()
     category_like_types = {
         "category",
