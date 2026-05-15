@@ -2322,14 +2322,35 @@ async def build_prefetch_indicator_choice_clarification(
 
     provider = normalize_provider_name(intent.apiProvider or "")
     current_indicator = str(params.get("indicator") or "").strip()
-    if (
+    current_indicator_is_provider_code = bool(
         current_indicator
         and looks_like_provider_indicator_code(provider, current_indicator)
+    )
+    current_indicator_name = str(
+        params.get("__semantic_indicator_label")
+        or (intent.indicators[0] if intent.indicators else "")
+        or current_indicator
+    )
+    if (
+        current_indicator_is_provider_code
         and _is_resolved_indicator_plausible(
-            qs, provider, indicator_query, current_indicator,
+            qs,
+            provider,
+            indicator_query,
+            current_indicator,
+            current_indicator_name,
         )
     ):
         return None
+    if current_indicator and not current_indicator_is_provider_code:
+        # Parsed/cached intents may carry a plain-English metric phrase in the
+        # provider-code slot.  That text is useful semantic evidence, but it is
+        # not final provider-native authority and must not prevent the generic
+        # retrieval -> LLM selector from resolving a real executable code.
+        params.setdefault("__semantic_indicator_label", current_indicator)
+        params.pop("indicator", None)
+        intent.parameters = params
+        current_indicator = ""
 
     option_budget = (
         CandidateEvidenceBuilder.MAX_CLARIFICATION_LIMIT

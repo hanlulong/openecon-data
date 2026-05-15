@@ -3533,6 +3533,82 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__semantic_authority"), "llm_adjudication")
         self.assertEqual(intent.parameters.get("__decision_source"), "llm_pick")
 
+    def test_build_prefetch_indicator_choice_clarification_resolves_plaintext_indicator_param(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["unemployment rate"],
+            parameters={"country": "US", "indicator": "unemployment rate"},
+            clarificationNeeded=False,
+            originalQuery="US unemployment rate",
+        )
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            AsyncMock(return_value=SelectionResult(code="UNRATE", name="Unemployment Rate", source="llm_pick")),
+        ), patch(
+            "backend.services.indicator_clarification._is_resolved_indicator_plausible",
+            return_value=True,
+        ), patch.object(
+            self.service,
+            "_collect_indicator_choice_options",
+            side_effect=AssertionError("plain-text indicator params should run selector before collecting options"),
+        ):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-plaintext-indicator-param",
+                    query="US unemployment rate",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
+        self.assertEqual(intent.parameters.get("indicator"), "UNRATE")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "US unemployment rate")
+        self.assertEqual(intent.parameters.get("__semantic_authority"), "llm_adjudication")
+        self.assertEqual(intent.parameters.get("__decision_source"), "llm_pick")
+
+    def test_build_prefetch_indicator_choice_clarification_keeps_existing_provider_code_primary(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["unemployment rate"],
+            parameters={
+                "country": "US",
+                "indicator": "UNRATE",
+                "__semantic_authority": "llm_adjudication",
+                "__decision_source": "llm_pick",
+            },
+            clarificationNeeded=False,
+            originalQuery="US unemployment rate",
+        )
+
+        with patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            AsyncMock(side_effect=AssertionError("provider-native indicator code should not rerun selector")),
+        ), patch(
+            "backend.services.indicator_clarification._is_resolved_indicator_plausible",
+            return_value=True,
+        ), patch.object(
+            self.service,
+            "_collect_indicator_choice_options",
+            side_effect=AssertionError("provider-native indicator code should not collect cross-provider options"),
+        ):
+            clarification = run(
+                self.service._build_prefetch_indicator_choice_clarification(  # pylint: disable=protected-access
+                    conversation_id="conv-prefetch-existing-provider-code",
+                    query="US unemployment rate",
+                    intent=intent,
+                    explicit_provider=None,
+                    is_multi_indicator=False,
+                    processing_steps=None,
+                )
+            )
+
+        self.assertIsNone(clarification)
+        self.assertEqual(intent.parameters.get("indicator"), "UNRATE")
+
     def test_build_prefetch_indicator_choice_clarification_outcome_stage_clarifies_when_primary_and_alternative_are_both_executable(self) -> None:
         self.service.settings.use_outcome_decision_stage = True
         conv_id = conversation_manager.get_or_create("conv-prefetch-outcome-stage")
