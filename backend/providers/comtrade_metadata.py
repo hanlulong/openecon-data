@@ -5,12 +5,177 @@ This module contains comprehensive mappings for UN Comtrade API:
 - Country codes (ISO 2-letter, ISO 3-letter, full names → numeric codes)
 - Flow types
 - Classification systems
+- Provider-native HS reference lookup helpers
 
 Generated based on ISO 3166 standards and UN Comtrade API documentation.
 Last updated: 2025-11-10
 """
 
-from typing import Dict
+from functools import lru_cache
+import json
+import logging
+import re
+import urllib.request
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+COMTRADE_HS_REFERENCE_URL = "https://comtradeapi.un.org/files/v1/app/reference/HS.json"
+COMTRADE_HS_REFERENCE_TIMEOUT_SECONDS = 8.0
+
+
+class HSReferenceAmbiguityError(ValueError):
+    """Raised when current provider-native HS metadata still leaves a title tied."""
+
+
+def _strip_hs_reference_code_prefix(text: str) -> str:
+    """Remove a leading HS code prefix from provider reference text."""
+
+    return re.sub(r"^\s*\d{2,6}\s*[-:]\s*", "", str(text or "")).strip()
+
+
+def normalize_hs_reference_title(text: str) -> str:
+    """Normalize provider-native HS reference text for literal title matching."""
+
+    stripped = _strip_hs_reference_code_prefix(text)
+    return re.sub(r"[^a-z0-9]+", " ", stripped.lower()).strip()
+
+
+def _meaningful_hs_tokens(text: str) -> list[str]:
+    """Return non-trivial alphanumeric tokens from an HS title surface."""
+
+    return [
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", str(text or ""))
+        if len(token) > 1
+    ]
+
+
+def looks_like_hs_reference_heading(text: str) -> bool:
+    """Return True for concrete HS heading/subheading prose.
+
+    This is intentionally a shape gate, not a commodity classifier: specific HS
+    titles are comma/semicolon-heavy provider-native surfaces with enough
+    literal tokens to compare against the official HS reference. Short generic
+    labels such as "exports", "fish", or "live fresh chilled" must keep the
+    normal broad/TOTAL or fail-closed paths.
+    """
+
+    value = str(text or "").strip()
+    return bool((";" in value or "," in value) and len(_meaningful_hs_tokens(value)) >= 6)
+
+
+def _load_hs_reference_rows_from_url() -> Tuple[Dict[str, Any], ...]:
+    request = urllib.request.Request(
+        COMTRADE_HS_REFERENCE_URL,
+        headers={"User-Agent": "OpenEcon-Comtrade-HS-Reference/1.0"},
+    )
+    with urllib.request.urlopen(  # noqa: S310 - official public provider metadata URL.
+        request,
+        timeout=COMTRADE_HS_REFERENCE_TIMEOUT_SECONDS,
+    ) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    rows = payload.get("results") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return tuple()
+    normalized_rows: list[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("id") or "").strip()
+        text = str(row.get("text") or "").strip()
+        if not code or not text:
+            continue
+        normalized_rows.append(dict(row))
+    return tuple(normalized_rows)
+
+
+@lru_cache(maxsize=1)
+def get_hs_reference_rows() -> Tuple[Dict[str, Any], ...]:
+    """Return current provider-native HS reference rows.
+
+    The endpoint is UN Comtrade's own public reference metadata.  If it is
+    unavailable, callers must fall back to existing catalog evidence or fail
+    closed; this helper intentionally returns an empty tuple rather than
+    guessing from local semantic maps.
+    """
+
+    try:
+        return _load_hs_reference_rows_from_url()
+    except Exception as exc:  # pragma: no cover - network failure path.
+        logger.warning("Unable to load Comtrade HS reference metadata: %s", exc)
+        return tuple()
+
+
+def get_hs_reference_entry(code: str) -> Optional[Dict[str, Any]]:
+    """Return provider-native HS reference metadata for a code when available."""
+
+    normalized_code = str(code or "").strip()
+    if not normalized_code:
+        return None
+    for row in get_hs_reference_rows():
+        if str(row.get("id") or "").strip() == normalized_code:
+            return dict(row)
+    return None
+
+
+def hs_reference_title_for_code(code: str) -> Optional[str]:
+    """Return the current provider-native HS reference title for a code."""
+
+    entry = get_hs_reference_entry(code)
+    if not entry:
+        return None
+    text = str(entry.get("text") or "").strip()
+    return text or None
+
+
+def resolve_hs_reference_code(title: str) -> Optional[str]:
+    """Resolve a literal HS title against provider-native reference metadata.
+
+    This function is deliberately exact-title only.  It does not map commodity
+    concepts to codes.  A unique normalized provider reference title can select
+    a code; missing or tied provider metadata returns ``None`` or raises an
+    ambiguity error so the Comtrade provider can fail closed.
+    """
+
+    value = str(title or "").strip()
+    if not value:
+        return None
+
+    # Explicit provider-native codes remain mechanical passthrough even when a
+    # title suffix is present ("030742 - ...").  The code itself is the user
+    # supplied Comtrade surface, not a semantic shortcut.
+    code_prefix = re.match(r"^\s*(?P<code>\d{2,6})\s*[-:]\s*(?P<title>.+)$", value)
+    if code_prefix:
+        code = code_prefix.group("code")
+        if get_hs_reference_entry(code) is not None:
+            return code
+
+    if not looks_like_hs_reference_heading(value):
+        return None
+
+    normalized_query = normalize_hs_reference_title(value)
+    if not normalized_query:
+        return None
+
+    matches: list[Dict[str, Any]] = []
+    for row in get_hs_reference_rows():
+        code = str(row.get("id") or "").strip()
+        if not (code.isdigit() and 2 <= len(code) <= 6):
+            continue
+        row_title = str(row.get("text") or "").strip()
+        if normalize_hs_reference_title(row_title) == normalized_query:
+            matches.append(dict(row))
+
+    if not matches:
+        return None
+
+    match_codes = sorted({str(row.get("id") or "").strip() for row in matches})
+    if len(match_codes) > 1:
+        raise HSReferenceAmbiguityError(
+            "provider HS reference contains multiple rows with the same literal title"
+        )
+    return match_codes[0]
 
 # Comprehensive country mappings: All variants → UN Comtrade numeric code
 # Based on ISO 3166-1 alpha-2, alpha-3, and common names

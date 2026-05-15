@@ -1559,7 +1559,8 @@ class ProviderTests(unittest.TestCase):
                 ]
 
         lookup = _Lookup()
-        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        with patch("backend.providers.comtrade_metadata.get_hs_reference_rows", return_value=()), \
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
             code = ComtradeProvider._commodity_code(  # pylint: disable=protected-access
                 "exports of Yarn of carded wool, not put up for retail sale"
             )
@@ -1575,11 +1576,58 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(code, "730422")
 
-    def test_comtrade_commodity_code_fails_closed_for_ambiguous_subheading_title(self) -> None:
-        with self.assertRaises(DataNotAvailableError):
-            ComtradeProvider._commodity_code(  # pylint: disable=protected-access
+    def test_comtrade_commodity_code_uses_provider_hs_reference_for_stale_duplicate_title(self) -> None:
+        hs_rows = (
+            {
+                "id": "030741",
+                "text": "030741 - -- Live, fresh or chilled",
+                "parent": "0307",
+                "isLeaf": "1",
+                "aggrLevel": 6,
+                "standardUnitAbbr": "kg",
+            },
+            {
+                "id": "030742",
+                "text": "030742 - Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled",
+                "parent": "0307",
+                "isLeaf": "1",
+                "aggrLevel": 6,
+                "standardUnitAbbr": "kg",
+            },
+        )
+
+        with patch("backend.providers.comtrade_metadata.get_hs_reference_rows", return_value=hs_rows):
+            code = ComtradeProvider._commodity_code(  # pylint: disable=protected-access
                 "Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled"
             )
+
+        self.assertEqual(code, "030742")
+
+    def test_comtrade_commodity_code_fails_closed_for_provider_hs_reference_tie(self) -> None:
+        hs_rows = (
+            {
+                "id": "030741",
+                "text": "030741 - Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled",
+                "parent": "0307",
+                "isLeaf": "1",
+                "aggrLevel": 6,
+                "standardUnitAbbr": "kg",
+            },
+            {
+                "id": "030742",
+                "text": "030742 - Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled",
+                "parent": "0307",
+                "isLeaf": "1",
+                "aggrLevel": 6,
+                "standardUnitAbbr": "kg",
+            },
+        )
+
+        with self.assertRaises(DataNotAvailableError):
+            with patch("backend.providers.comtrade_metadata.get_hs_reference_rows", return_value=hs_rows):
+                ComtradeProvider._commodity_code(  # pylint: disable=protected-access
+                    "Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled"
+                )
 
     def test_comtrade_fetch_single_reporter_retries_timeout_then_succeeds(self) -> None:
         provider = ComtradeProvider(api_key="demo")

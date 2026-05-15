@@ -686,6 +686,48 @@ def _countries_outside_exact_title(
     return filtered
 
 
+def _with_provider_native_comtrade_hs_metadata(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Overlay current Comtrade HS reference text for exact-title matching.
+
+    The local indicator catalog can contain stale or duplicated HS titles.  UN
+    Comtrade's own HS reference metadata is the provider-native title surface;
+    use it to compare literal pasted titles while preserving fail-closed
+    behavior when the provider reference is unavailable or tied.
+    """
+
+    provider = _normalize_provider_name(str(candidate.get("provider") or ""))
+    if provider != "COMTRADE":
+        return dict(candidate)
+    code = str(candidate.get("code") or "").strip()
+    if not code:
+        return dict(candidate)
+    try:
+        from ..providers.comtrade_metadata import get_hs_reference_entry
+
+        entry = get_hs_reference_entry(code)
+    except Exception:
+        entry = None
+    if not entry:
+        return dict(candidate)
+    reference_title = str(entry.get("text") or "").strip()
+    if not reference_title:
+        return dict(candidate)
+    enriched = dict(candidate)
+    enriched["name"] = reference_title
+    unit = str(entry.get("standardUnitAbbr") or "").strip()
+    if unit and unit.lower() != "n/a":
+        enriched["unit"] = unit
+    enriched["raw_metadata"] = {
+        **(
+            dict(enriched.get("raw_metadata") or {})
+            if isinstance(enriched.get("raw_metadata"), dict)
+            else {}
+        ),
+        "comtrade_hs_reference": dict(entry),
+    }
+    return enriched
+
+
 def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool:
     """Return True when `text` closely matches a provider-native indicator title.
 
@@ -757,7 +799,8 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
             except Exception:
                 continue
 
-    for candidate in candidates:
+    for raw_candidate in candidates:
+        candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
         candidate_name = str(candidate.get("name") or "").strip().lower()
         normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
         if not normalized_name or len(normalized_name) < min_name_len:
@@ -985,7 +1028,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
 
     if exact_name_candidates:
         strict_exact_by_code: dict[str, dict[str, Any]] = {}
-        for candidate in exact_name_candidates:
+        for raw_candidate in exact_name_candidates:
+            candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
             code = str(candidate.get("code") or "").strip()
             if not code:
                 continue
@@ -1035,7 +1079,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         if len(strict_exact_by_code) == 1:
             return next(iter(strict_exact_by_code.values()))
 
-    for search_text, candidate in candidates_by_input:
+    for search_text, raw_candidate in candidates_by_input:
+        candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
         code = str(candidate.get("code") or "")
         if code in seen_codes:
             continue

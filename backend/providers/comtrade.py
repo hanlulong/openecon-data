@@ -15,7 +15,9 @@ from ..services.http_pool import get_http_client
 from ..models import DataPoint, Metadata, NormalizedData
 from .comtrade_metadata import (
     COUNTRY_CODE_MAPPINGS,
+    HSReferenceAmbiguityError,
     HS_CODE_MAPPINGS,
+    resolve_hs_reference_code,
 )
 # Country/region group definitions consolidated in CountryResolver (single source of truth).
 # Previously imported: EU27_COUNTRY_CODES, REGION_EXPANSIONS, G7_COUNTRY_CODES,
@@ -320,6 +322,15 @@ class ComtradeProvider(BaseProvider):
         """Resolve literal HS heading/subheading titles from provider catalog evidence."""
 
         from ..utils.retry import DataNotAvailableError
+
+        try:
+            reference_code = resolve_hs_reference_code(commodity)
+        except HSReferenceAmbiguityError as exc:
+            raise DataNotAvailableError(
+                "comtrade_hs_subheading_ambiguous: provider HS reference contains multiple indistinguishable HS headings"
+            ) from exc
+        if reference_code:
+            return reference_code
 
         candidates: list[dict[str, Any]] = []
         seen_codes: set[str] = set()

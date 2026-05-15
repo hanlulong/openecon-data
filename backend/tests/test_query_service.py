@@ -1747,6 +1747,84 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].metadata.seriesId, "COMTRADE:IN:030742:exports")
 
+    def test_exact_comtrade_heading_uses_provider_hs_reference_code_for_dispatch(self) -> None:
+        heading = "Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled"
+        query = f"India exports of {heading} from Comtrade"
+        stale_catalog_rows = [
+            {
+                "code": "030741",
+                "provider": "Comtrade",
+                "name": f"030741 - {heading}",
+            },
+            {
+                "code": "030742",
+                "provider": "Comtrade",
+                "name": f"030742 - {heading}",
+            },
+        ]
+
+        def _hs_reference_entry(code: str):
+            if code == "030741":
+                return {
+                    "id": "030741",
+                    "text": "030741 - -- Live, fresh or chilled",
+                    "parent": "0307",
+                    "isLeaf": "1",
+                    "aggrLevel": 6,
+                    "standardUnitAbbr": "kg",
+                }
+            if code == "030742":
+                return {
+                    "id": "030742",
+                    "text": f"030742 - {heading}",
+                    "parent": "0307",
+                    "isLeaf": "1",
+                    "aggrLevel": 6,
+                    "standardUnitAbbr": "kg",
+                }
+            return None
+
+        lookup = Mock(
+            exact_name_matches=Mock(return_value=[]),
+            search=Mock(return_value=stale_catalog_rows),
+        )
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch("backend.providers.comtrade_metadata.get_hs_reference_entry", side_effect=_hs_reference_entry):
+            intent = self.service._build_exact_indicator_title_intent(query)  # pylint: disable=protected-access
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertFalse(intent.clarificationNeeded)
+        self.assertEqual(intent.parameters.get("indicator"), "030742")
+        self.assertEqual(intent.parameters.get("commodity"), "030742")
+        self.assertEqual(intent.parameters.get("flow"), "X")
+
+        returned = sample_series_with(
+            source="UN Comtrade",
+            indicator="Exports - 030742",
+            series_id="COMTRADE:IN:030742:exports",
+            country="India",
+        )
+
+        async def _fake_fetch_trade_data(**kwargs):
+            self.assertEqual(kwargs.get("commodity"), "030742")
+            self.assertEqual(kwargs.get("flow"), "X")
+            self.assertEqual(kwargs.get("reporter"), "IN")
+            return [returned]
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, side_effect=_fake_fetch_trade_data):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "COMTRADE:IN:030742:exports")
+
     def test_fetch_data_keeps_generic_comtrade_indicator_without_commodity(self) -> None:
         intent = ParsedIntent(
             apiProvider="COMTRADE",
