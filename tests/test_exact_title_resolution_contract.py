@@ -148,6 +148,71 @@ def test_exact_title_match_uses_exact_name_lookup_when_fts_misses_short_titles()
     assert looks_exact is True
 
 
+def test_worldbank_exact_name_match_accepts_unit_text_inside_title() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=20):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider in {"WorldBank", "WORLDBANK"}
+            return [
+                {
+                    "provider": "WorldBank",
+                    "code": "DT.ODA.DACD.RFGE.CD",
+                    "name": "Gross ODA aid disbursement for refugees in donor countries,  DAC donors total (current US$)",
+                    "unit": "",
+                }
+            ]
+
+    query = "Gross ODA aid disbursement for refugees in donor countries DAC donors total (current US$) from World Bank"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "WorldBank")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="WorldBank",
+            countries=[],
+        )
+
+    assert match is not None
+    assert match["code"] == "DT.ODA.DACD.RFGE.CD"
+    assert intent is not None
+    assert intent.parameters["indicator"] == "DT.ODA.DACD.RFGE.CD"
+    assert intent.parameters["__exact_indicator_title_match"] is True
+
+
+def test_exact_title_intent_drops_countries_that_only_appear_inside_title() -> None:
+    title = (
+        "Country-by-country reporting (CbCR) - Aggregate totals by the effective "
+        "tax rate of the MNE group and by tax jurisdiction  - Corporate tax statistics"
+    )
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=20):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "OECD"
+            return [
+                {
+                    "provider": "OECD",
+                    "code": "DSD_CBCR@DF_CBCRIII",
+                    "name": title,
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        intent = build_exact_indicator_title_intent(
+            f"{title} from OECD",
+            explicit_provider="OECD",
+            countries=["ME"],
+        )
+
+    assert intent is not None
+    assert intent.parameters["indicator"] == "DSD_CBCR@DF_CBCRIII"
+    assert "country" not in intent.parameters
+    assert "countries" not in intent.parameters
+
+
 def test_exact_title_unit_suffix_does_not_strip_national_accounts_title_text() -> None:
     title = "Population in the National Accounts distribution of people in income quintiles by age from OECD"
 

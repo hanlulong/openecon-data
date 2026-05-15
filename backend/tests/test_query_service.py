@@ -501,6 +501,41 @@ class QueryServiceTests(unittest.TestCase):
         self.assertFalse(response.clarificationNeeded)
         self.assertEqual(len(response.data or []), 1)
 
+    def test_process_query_skips_auto_pro_mode_for_exact_title_fast_path(self) -> None:
+        fast_path_intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD"],
+            parameters={
+                "indicator": "MELIPRVSUSCOUNTY24005",
+                "__semantic_indicator_label": "Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD",
+                "__semantic_provider_locked": True,
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            confidence=0.99,
+            recommendedChartType="line",
+            queryType="data_fetch",
+            originalQuery="US Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD",
+        )
+
+        with patch.object(self.service, "_build_explicit_provider_code_intent", return_value=None), \
+             patch.object(self.service, "_build_exact_indicator_title_intent", return_value=fast_path_intent) as exact_title_mock, \
+             patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": True, "complexity_factors": ["many dimensions"]}) as complexity_mock, \
+             patch.object(self.service, "_execute_pro_mode", new_callable=AsyncMock, side_effect=AssertionError("exact title should not be sent to Pro Mode")), \
+             patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, side_effect=AssertionError("LLM parse should be skipped")), \
+             patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()):
+            response = run(
+                self.service.process_query(
+                    "US Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD"
+                )
+            )
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertEqual(len(response.data or []), 1)
+        exact_title_mock.assert_called()
+        complexity_mock.assert_not_called()
+
     def test_process_query_refreshes_stale_intent_cache_with_exact_comtrade_title(self) -> None:
         query = (
             "China exports of Fabrics, woven; of cotton, unbleached, "

@@ -4665,11 +4665,17 @@ class QueryService:
 
             if auto_pro_mode and _query_type in (None, "new_query"):
                 early_explicit_code_intent = self._build_explicit_provider_code_intent(query)
-                if early_explicit_code_intent is not None:
+                early_exact_title_intent = (
+                    self._build_exact_indicator_title_intent(query)
+                    if early_explicit_code_intent is None
+                    else None
+                )
+                early_shortcut_intent = early_explicit_code_intent or early_exact_title_intent
+                if early_shortcut_intent is not None:
                     logger.info(
-                        "Skipping auto Pro Mode for explicit provider-code query: %s/%s",
-                        early_explicit_code_intent.apiProvider,
-                        (early_explicit_code_intent.parameters or {}).get("indicator"),
+                        "Skipping auto Pro Mode for exact provider surface query: %s/%s",
+                        early_shortcut_intent.apiProvider,
+                        (early_shortcut_intent.parameters or {}).get("indicator"),
                     )
                     early_complexity = {"pro_mode_required": False, "complexity_factors": []}
                 else:

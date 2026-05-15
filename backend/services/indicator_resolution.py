@@ -465,7 +465,12 @@ def build_exact_indicator_title_intent(
     if provider == "COINGECKO":
         params["coinIds"] = [code]
 
-    countries = [] if provider in {"STATSCAN", "STATISTICS CANADA"} else list(countries or [])
+    countries = [] if provider in {"STATSCAN", "STATISTICS CANADA"} else _countries_outside_exact_title(
+        query,
+        provider,
+        name,
+        list(countries or []),
+    )
     if len(countries) == 1:
         params["country"] = countries[0]
     elif len(countries) > 1:
@@ -488,6 +493,91 @@ def build_exact_indicator_title_intent(
         decompositionEntities=None,
         useProMode=False,
     )
+
+
+def _exact_surface_tokens(text: str) -> list[str]:
+    """Return lowercase alphanumeric tokens for exact-title wrapper checks."""
+
+    return re.findall(r"[a-z0-9]+", str(text or "").lower())
+
+
+def _remove_first_token_sequence(tokens: list[str], needle: list[str]) -> list[str]:
+    """Remove the first contiguous ``needle`` sequence from ``tokens``."""
+
+    if not tokens or not needle or len(needle) > len(tokens):
+        return tokens[:]
+    limit = len(tokens) - len(needle) + 1
+    for idx in range(limit):
+        if tokens[idx : idx + len(needle)] == needle:
+            return tokens[:idx] + tokens[idx + len(needle) :]
+    return tokens[:]
+
+
+def _contains_token_sequence(tokens: list[str], needle: list[str]) -> bool:
+    """Return True when ``needle`` appears as a contiguous token sequence."""
+
+    if not tokens or not needle or len(needle) > len(tokens):
+        return False
+    limit = len(tokens) - len(needle) + 1
+    return any(tokens[idx : idx + len(needle)] == needle for idx in range(limit))
+
+
+def _countries_outside_exact_title(
+    query: str,
+    provider: str,
+    exact_title: str,
+    countries: list[str],
+) -> list[str]:
+    """Keep only geography mentions that are outside the matched exact title.
+
+    Exact provider-title requests can contain country-looking tokens as part of
+    the provider-native title itself (for example OECD's ``MNE`` acronym, which
+    also happens to be Montenegro's ISO-3 code).  Those title-internal tokens
+    are metadata, not a requested geography filter.  Conversely, a leading
+    scope such as ``Canada GDP from World Bank`` must remain a country filter.
+    """
+
+    if not countries:
+        return []
+
+    residual_tokens = _exact_surface_tokens(query)
+    title_variants = [exact_title]
+    title_variants.extend(exact_title_search_inputs(exact_title, provider))
+    title_variants = sorted(
+        {
+            " ".join(_exact_surface_tokens(variant))
+            for variant in title_variants
+            if _exact_surface_tokens(variant)
+        },
+        key=lambda value: len(value.split()),
+        reverse=True,
+    )
+    for variant in title_variants:
+        next_tokens = _remove_first_token_sequence(residual_tokens, variant.split())
+        if next_tokens != residual_tokens:
+            residual_tokens = next_tokens
+            break
+
+    filtered: list[str] = []
+    seen_codes: set[str] = set()
+    for country in countries:
+        code = CountryResolver.normalize(str(country)) or str(country or "").strip().upper()
+        if not code or code in seen_codes:
+            continue
+        aliases = [
+            alias
+            for alias, alias_code in CountryResolver.COUNTRY_ALIASES.items()
+            if alias_code == code
+        ]
+        aliases.append(code)
+        if any(
+            _contains_token_sequence(residual_tokens, _exact_surface_tokens(alias))
+            for alias in aliases
+            if _exact_surface_tokens(alias)
+        ):
+            filtered.append(country)
+            seen_codes.add(code)
+    return filtered
 
 
 def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool:
@@ -714,11 +804,13 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
 
     candidates_by_input: list[tuple[str, dict[str, Any]]] = []
     exact_candidates_found = False
+    exact_name_candidates: list[dict[str, Any]] = []
     try:
         exact_name_matches = getattr(lookup, "exact_name_matches", None)
         if callable(exact_name_matches):
             for candidate in exact_name_matches(search_inputs, provider=provider_name, limit=20):
                 candidates_by_input.append((str(candidate.get("name") or ""), candidate))
+                exact_name_candidates.append(candidate)
                 exact_candidates_found = True
     except Exception:
         pass
@@ -783,6 +875,36 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                         candidates_by_input.extend((search_text, dict(row)) for row in cursor.fetchall())
                 except Exception:
                     continue
+
+    if exact_name_candidates:
+        strict_exact_by_code: dict[str, dict[str, Any]] = {}
+        for candidate in exact_name_candidates:
+            code = str(candidate.get("code") or "").strip()
+            if not code:
+                continue
+            candidate_name = str(candidate.get("name") or "").strip().lower()
+            normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
+            if not normalized_name or len(normalized_name) < min_name_len:
+                continue
+            if not any(
+                normalized_query == normalized_name
+                or _is_close_exact_title_match(normalized_query, normalized_name)
+                or _is_permutation_exact_title_match(normalized_query, normalized_name)
+                for normalized_query in exact_query_norms
+                if normalized_query
+            ):
+                continue
+            if explicit_unit_tokens:
+                candidate_unit_text = " ".join(
+                    str(value or "")
+                    for value in (candidate.get("name"), candidate.get("unit"))
+                )
+                candidate_unit_tokens = _exact_title_unit_tokens(candidate_unit_text)
+                if not explicit_unit_tokens <= candidate_unit_tokens:
+                    continue
+            strict_exact_by_code.setdefault(code.upper(), dict(candidate))
+        if len(strict_exact_by_code) == 1:
+            return next(iter(strict_exact_by_code.values()))
 
     for search_text, candidate in candidates_by_input:
         code = str(candidate.get("code") or "")
