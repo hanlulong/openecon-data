@@ -1948,6 +1948,47 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "MELIPRVSUSCOUNTY24005")
         self.assertEqual(intent.indicators, ["Market Hotness: Median Listing Price Versus the United States in Baltimore County, MD"])
 
+    def test_build_exact_indicator_title_intent_resolves_fred_title_with_unit_suffix(self) -> None:
+        title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
+
+        class _Lookup:
+            def search(self, text, provider=None, limit=5):
+                return []
+
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                assert provider == "FRED"
+                if title not in search_inputs:
+                    return []
+                return [
+                    {
+                        "code": "PRS85006092",
+                        "provider": "FRED",
+                        "name": title,
+                        "unit": "Percent Change at Annual Rate",
+                        "popularity": 56,
+                    },
+                    {
+                        "code": "OPHNFB",
+                        "provider": "FRED",
+                        "name": title,
+                        "unit": "Index 2017=100",
+                        "popularity": 69,
+                    },
+                ]
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                f"US {title} in Index 2017=100 from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "OPHNFB")
+        self.assertEqual(intent.parameters.get("country"), "US")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+        self.assertFalse(intent.clarificationNeeded)
+
     def test_build_exact_indicator_title_intent_handles_country_prefixed_fred_stale_title(self) -> None:
         lookup_results = [
             {

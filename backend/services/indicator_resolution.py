@@ -50,10 +50,88 @@ _GDP_RATIO_PATTERNS = (
     "as share of gdp",
 )
 
+_EXACT_TITLE_UNIT_SUFFIX_CUE_RE = re.compile(
+    r"\b(?:dollars?|currency|percent(?:age)?|index|capita|parity|ppp|"
+    r"constant|current|national|millions?|billions?|thousands?|trillions?|"
+    r"chained|base|units?)\b|\b\d{4}\s*=\s*100\b",
+    flags=re.IGNORECASE,
+)
+_EXACT_TITLE_UNIT_TOKEN_STOPWORDS = {
+    "and",
+    "the",
+    "per",
+    "of",
+    "at",
+    "from",
+    "for",
+    "in",
+    "to",
+}
+
+
+def _normalize_exact_title_unit_text(text: str) -> str:
+    """Normalize unit text for exact-title unit compatibility."""
+
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
 
 def _has_ratio_cue(text: str) -> bool:
     """Check if text contains a GDP ratio pattern (e.g., '% of GDP')."""
     return any(pattern in text for pattern in _GDP_RATIO_PATTERNS)
+
+
+def _trailing_exact_title_unit_suffix(text: str) -> Optional[str]:
+    """Return a mechanical trailing unit phrase from an exact-title query.
+
+    This is deliberately provider-neutral and narrow: it only recognizes
+    trailing ``in <unit>`` phrases that contain measurement/unit cues.  It is
+    not a semantic indicator shortcut; the stripped title still has to match a
+    provider catalog title through the exact-title path.
+    """
+
+    unit_suffix = re.search(
+        r"\s+in\s+(?P<unit>[^,;:]+)$",
+        str(text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if not unit_suffix:
+        return None
+    unit_text = unit_suffix.group("unit").strip()
+    unit_text = re.sub(
+        r"\s+\b(?:from|via|use)\s+[a-z][a-z0-9 ._-]*$",
+        "",
+        unit_text,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not unit_text or not _EXACT_TITLE_UNIT_SUFFIX_CUE_RE.search(unit_text):
+        return None
+    return unit_text
+
+
+def _strip_trailing_exact_title_unit_suffix(text: str) -> Optional[str]:
+    """Strip a mechanical trailing exact-title unit suffix when present."""
+
+    if not _trailing_exact_title_unit_suffix(text):
+        return None
+    unit_suffix = re.search(
+        r"\s+in\s+(?P<unit>[^,;:]+)$",
+        str(text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if not unit_suffix:
+        return None
+    stripped = str(text or "")[: unit_suffix.start()].strip(" ,;:-")
+    return stripped or None
+
+
+def _exact_title_unit_tokens(text: str) -> set[str]:
+    """Normalize explicit unit text for catalog-unit compatibility checks."""
+
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(text or "").lower())
+        if token not in _EXACT_TITLE_UNIT_TOKEN_STOPWORDS
+    }
 
 # Indicator cues that require strict precision matching (no fuzzy fallback).
 _STRICT_PRECISION_CUES = {
@@ -455,6 +533,14 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         # through only inside the existing strict provider-scoped matcher.
         min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
+    explicit_unit_tokens: set[str] = set()
+    explicit_unit_normalized = ""
+    for search_input in search_inputs:
+        unit_suffix_text = _trailing_exact_title_unit_suffix(search_input)
+        if unit_suffix_text:
+            explicit_unit_tokens = _exact_title_unit_tokens(unit_suffix_text)
+            explicit_unit_normalized = _normalize_exact_title_unit_text(unit_suffix_text)
+            break
 
     best_candidate: Optional[Dict[str, Any]] = None
     best_rank = (-999, -1, -999, -999, -1, -999)
@@ -504,6 +590,19 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             for token in re.findall(r"[a-z0-9]+", str(unit or "").lower())
             if len(token) > 2 and token not in {"and", "the", "per"}
         }
+        if explicit_unit_tokens:
+            exact_unit_tokens = _exact_title_unit_tokens(unit)
+            candidate_unit_normalized = _normalize_exact_title_unit_text(unit)
+            if not exact_unit_tokens:
+                return -100
+            if explicit_unit_normalized and candidate_unit_normalized == explicit_unit_normalized:
+                return base_rank + 100
+            unit_overlap = len(explicit_unit_tokens & exact_unit_tokens)
+            if unit_overlap <= 0:
+                return -100
+            missing_requested_tokens = len(explicit_unit_tokens - exact_unit_tokens)
+            extra_candidate_tokens = len(exact_unit_tokens - explicit_unit_tokens)
+            return base_rank + unit_overlap * 5 - missing_requested_tokens * 4 - extra_candidate_tokens * 2
         if not unit_tokens:
             return base_rank
         unit_specific_tokens = unit_tokens - name_tokens
@@ -660,6 +759,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             )
             for candidate in top_matches
         }
+        if explicit_unit_tokens and best_rank[0] <= -100:
+            return None
         if len(top_codes) > 1:
             if len(top_title_unit_signatures) <= 1:
                 return best_candidate
@@ -740,6 +841,14 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             and without_trailing_frequency not in seen
         ):
             queue.append(without_trailing_frequency)
+
+        without_unit_suffix = _strip_trailing_exact_title_unit_suffix(candidate)
+        if (
+            without_unit_suffix
+            and without_unit_suffix != candidate
+            and without_unit_suffix not in seen
+        ):
+            queue.append(without_unit_suffix)
 
         # Strip a leading country alias only when it appears as a plain prefix.
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):

@@ -432,6 +432,177 @@ def test_exact_title_match_ignores_appended_frequency_disambiguator(tmp_path) ->
     assert looks_exact is True
 
 
+def test_exact_title_match_strips_fred_unit_suffix_and_uses_unit_to_disambiguate() -> None:
+    title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
+
+    class _Lookup:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            self.calls.append(list(search_inputs))
+            if title not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "PRS85006092",
+                    "name": title,
+                    "unit": "Percent Change at Annual Rate",
+                    "popularity": 56,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "OPHNFB",
+                    "name": title,
+                    "unit": "Index 2017=100",
+                    "popularity": 69,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "PRS85006091",
+                    "name": title,
+                    "unit": "Percent Change from Quarter One Year Ago",
+                    "popularity": 40,
+                },
+            ]
+
+    lookup = _Lookup()
+    query = f"US {title} in Index 2017=100 from FRED"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "FRED")
+        looks_exact = looks_like_exact_provider_title_match(query, "FRED")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="FRED",
+            countries=["US"],
+            all_providers=["FRED"],
+        )
+
+    assert match is not None
+    assert match["code"] == "OPHNFB"
+    assert looks_exact is True
+    assert intent is not None
+    assert intent.parameters["indicator"] == "OPHNFB"
+    assert intent.parameters["__semantic_provider_locked"] is True
+    assert intent.parameters["__exact_indicator_title_match"] is True
+    assert intent.clarificationNeeded is False
+    assert any(title in call for call in lookup.calls)
+
+
+def test_exact_title_match_strips_fred_unit_suffix_for_percent_variant() -> None:
+    title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if title not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "OPHNFB",
+                    "name": title,
+                    "unit": "Index 2017=100",
+                    "popularity": 69,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "PRS85006092",
+                    "name": title,
+                    "unit": "Percent Change at Annual Rate",
+                    "popularity": 56,
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            f"US {title} in Percent Change at Annual Rate from FRED",
+            "FRED",
+        )
+
+    assert match is not None
+    assert match["code"] == "PRS85006092"
+
+
+def test_exact_title_match_rejects_fred_mismatched_explicit_unit() -> None:
+    title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if title not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "OPHNFB",
+                    "name": title,
+                    "unit": "Index 2017=100",
+                    "popularity": 69,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "PRS85006092",
+                    "name": title,
+                    "unit": "Percent Change at Annual Rate",
+                    "popularity": 56,
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            f"US {title} in Imaginary Units from FRED",
+            "FRED",
+        )
+
+    assert match is None
+
+
+def test_exact_title_match_does_not_expand_generic_fred_unit_phrase_to_title() -> None:
+    title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "OPHNFB",
+                    "name": title,
+                    "unit": "Index 2017=100",
+                    "popularity": 69,
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "US labor productivity in Index 2017=100 from FRED",
+            "FRED",
+        )
+        looks_exact = looks_like_exact_provider_title_match(
+            "US labor productivity in Index 2017=100 from FRED",
+            "FRED",
+        )
+
+    assert match is None
+    assert looks_exact is False
+
+
 def test_exact_and_provider_lock_helpers_read_shared_flags() -> None:
     params = {
         "__semantic_provider_locked": True,
