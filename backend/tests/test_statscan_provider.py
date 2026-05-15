@@ -449,6 +449,170 @@ async def test_fetch_dynamic_data_exact_product_falls_back_to_valid_coordinate(m
     assert result.metadata.seriesId == "32100322:2.1.0.0.0.0.0.0.0.0"
 
 
+
+
+@pytest.mark.asyncio
+async def test_exact_product_falls_back_to_full_table_csv_when_wds_metadata_times_out(monkeypatch, statscan_provider):
+    csv_payload = (
+        'REF_DATE,GEO,DGUID,Age group,Sex,Characteristics,UOM,UOM_ID,SCALAR_FACTOR,SCALAR_ID,VECTOR,COORDINATE,VALUE,STATUS,SYMBOL,TERMINATED,DECIMALS\n'
+        '2000,Canada,00,"Total, 12 years and over",Both sexes,Percent,Percent,239,units,0,v1,1.1.1,100.0,,,,0\n'
+        '2001,Canada,00,"Total, 12 years and over",Both sexes,Percent,Percent,239,units,0,v1,1.1.1,98.0,,,,0\n'
+    )
+    metadata_payload = (
+        'Cube Title,Product Id,CANSIM Id,URL,Cube Notes,Archive Status,Frequency,Start Reference Period,End Reference Period,Total number of dimensions\n'
+        'Exact title table,13100071,,https://example.test,,,,2000,2001,3\n\n'
+        'Dimension ID,Dimension name,Dimension Notes,Dimension Correction Notes,Dimension Definitions\n'
+        '1,Geography,,,\n'
+        '2,Age group,,,\n'
+        '3,Sex,,,\n\n'
+        'Dimension ID,Member Name,Classification Code,Member ID,Parent Member ID,Terminated,Member Notes,Member Correction Notes,Member Geo Attribute Keys,Member Definitions\n'
+        '1,Canada,,1,,,,,,\n'
+        '2,"Total, 12 years and over",,1,,,,,,\n'
+        '3,Both sexes,,1,,,,,,\n'
+    )
+
+    import io
+    import zipfile
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as archive:
+        archive.writestr('13100071.csv', csv_payload)
+        archive.writestr('13100071_MetaData.csv', metadata_payload)
+
+    class _TimeoutResponse:
+        status_code = 200
+        content = zip_buffer.getvalue()
+
+        def raise_for_status(self):
+            pass
+
+    class _FallbackClient:
+        async def post(self, *args, **kwargs):
+            raise TimeoutError('metadata read timed out')
+
+        async def get(self, *args, **kwargs):
+            return _TimeoutResponse()
+
+    monkeypatch.setattr('backend.providers.statscan.get_http_client', lambda: _FallbackClient())
+
+    result = await statscan_provider.fetch_dynamic_data({
+        'indicator': '13100071',
+        'indicatorLabel': 'Exact title table',
+        'periods': 240,
+    })
+
+    assert result.metadata.source == 'Statistics Canada'
+    assert result.metadata.seriesId == '13100071:1.1.1'
+    assert result.metadata.apiUrl.endswith('(direct full-table CSV fallback)')
+    assert [point.date for point in result.data] == ['2000', '2001']
+    assert [point.value for point in result.data] == [100.0, 98.0]
+
+
+@pytest.mark.asyncio
+async def test_full_table_csv_exact_fallback_uses_first_provider_series_not_semantic_default(monkeypatch, statscan_provider):
+    statscan_provider._cube_metadata_cache["13100071"] = {
+        "dimension": [
+            {
+                "dimensionNameEn": "Geography",
+                "member": [
+                    {"memberId": 1, "memberNameEn": "Canada"},
+                    {"memberId": 7, "memberNameEn": "Ontario"},
+                ],
+            },
+            {
+                "dimensionNameEn": "Sex",
+                "member": [
+                    {"memberId": 1, "memberNameEn": "Both sexes"},
+                    {"memberId": 9, "memberNameEn": "Women+"},
+                ],
+            },
+        ]
+    }
+    rows = [
+        {
+            "REF_DATE": "2000",
+            "GEO": "Ontario",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v7",
+            "COORDINATE": "7.9",
+            "VALUE": "10.0",
+        },
+        {
+            "REF_DATE": "2001",
+            "GEO": "Ontario",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v7",
+            "COORDINATE": "7.9",
+            "VALUE": "11.0",
+        },
+        {
+            "REF_DATE": "2000",
+            "GEO": "Canada",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v1",
+            "COORDINATE": "1.1",
+            "VALUE": "99.0",
+        },
+    ]
+
+    async def fake_rows(product_id):
+        return rows, "https://www150.statcan.gc.ca/n1/tbl/csv/13100071-eng.zip"
+
+    monkeypatch.setattr(statscan_provider, "_get_full_table_csv_rows", fake_rows)
+
+    result = await statscan_provider.fetch_full_table_csv_data({
+        "productId": "13100071",
+        "indicatorLabel": "Exact provider table title",
+        "periods": 10,
+    })
+
+    assert result.metadata.seriesId == "13100071:7.9"
+    assert result.metadata.country == "Ontario"
+    assert [point.date for point in result.data] == ["2000", "2001"]
+    assert [point.value for point in result.data] == [10.0, 11.0]
+
+
+@pytest.mark.asyncio
+async def test_full_table_csv_rejects_oversize_uncompressed_members(monkeypatch, statscan_provider):
+    old_max = statscan_provider.FULL_TABLE_CSV_MAX_BYTES
+    statscan_provider.FULL_TABLE_CSV_MAX_BYTES = 100
+    try:
+        import io
+        import zipfile
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "13100071.csv",
+                "REF_DATE,GEO,COORDINATE,VALUE\n2000,Canada,1.1,1\n" + ("#" * 200),
+            )
+            archive.writestr("13100071_MetaData.csv", "Cube Title\nOversize\n")
+
+        class _OversizeResponse:
+            status_code = 200
+            content = zip_buffer.getvalue()
+
+            def raise_for_status(self):
+                pass
+
+        class _OversizeClient:
+            async def get(self, *args, **kwargs):
+                return _OversizeResponse()
+
+        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _OversizeClient())
+
+        with pytest.raises(DataNotAvailableError, match="exceeds the safe exact-table fallback size"):
+            await statscan_provider._download_full_table_csv_bundle("13100071")
+    finally:
+        statscan_provider.FULL_TABLE_CSV_MAX_BYTES = old_max
+
+
 @pytest.mark.asyncio
 async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch, statscan_provider):
     monkeypatch.setattr(

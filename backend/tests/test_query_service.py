@@ -653,6 +653,39 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__statscan_product_id"), "24100026")
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "24100026")
 
+    def test_exact_statscan_table_title_intent_carries_product_authority(self) -> None:
+        intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+            "Frequency of drinking in the past 12 months, by age group and sex, "
+            "household population aged 12 and over who are current drinkers, "
+            "Canada, provinces, territories, health regions (January 2000 boundaries) "
+            "and peer groups from Statistics Canada"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.parameters.get("indicator"), "13100071")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "13100071")
+        self.assertEqual(intent.parameters.get("__statscan_product_authority"), "exact_user_input")
+        self.assertEqual(intent.parameters.get("__semantic_authority"), "exact_user_input")
+        self.assertEqual(intent.parameters.get("__decision_source"), "exact_title")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+
+    def test_exact_statscan_table_title_intent_treats_table_scope_countries_as_metadata(self) -> None:
+        intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+            "Actions taken over the last three months by business or organization to mitigate "
+            "risks associated with any tariffs applied by the United States on imports from Canada, "
+            "second quarter of 2025 from Statistics Canada"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "STATSCAN")
+        self.assertEqual(intent.parameters.get("indicator"), "33100993")
+        self.assertEqual(intent.parameters.get("__statscan_product_id"), "33100993")
+        self.assertNotIn("country", intent.parameters)
+        self.assertNotIn("countries", intent.parameters)
+
     def test_explicit_provider_code_intent_preserves_year_range_from_title(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "15100032 Population by first official language spoken and geography 1971 to 2021 from StatsCan"
@@ -2270,6 +2303,27 @@ class QueryServiceTests(unittest.TestCase):
             intent.indicators,
             ["Bachelor's Degree or Higher (5-year estimate) in Bristol city, VA"],
         )
+
+    def test_exact_title_frequency_detection_ignores_duration_wrapped_fred_title(self) -> None:
+        lookup_results = [
+            {
+                "code": "HC01ESTVC1751520",
+                "provider": "FRED",
+                "name": "Bachelor's Degree or Higher (5-year estimate) in Bristol city, VA",
+            }
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(search=Mock(return_value=lookup_results)),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "US VA Bachelor's Degree or Higher (5-year estimate) in Bristol city from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.parameters.get("indicator"), "HC01ESTVC1751520")
 
     def test_build_exact_indicator_title_intent_does_not_expand_generic_concept(self) -> None:
         lookup_results = [
@@ -4127,6 +4181,36 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.indicators, [title])
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), title)
         self.assertEqual(intent.parameters.get("__statscan_decomposition_axis"), "Sex")
+
+    def test_maybe_promote_statscan_axis_decomposition_skips_literal_exact_table_title(self) -> None:
+        title = (
+            "Frequency of drinking in the past 12 months, by age group and sex, "
+            "household population aged 12 and over who are current drinkers, "
+            "Canada, provinces, territories, health regions (January 2000 "
+            "boundaries) and peer groups"
+        )
+        intent = ParsedIntent(
+            apiProvider="STATSCAN",
+            indicators=[title],
+            parameters={
+                "__statscan_product_id": "13100071",
+                "__exact_indicator_title_match": True,
+                "__semantic_indicator_label": title,
+            },
+            clarificationNeeded=False,
+            originalQuery=f"{title} from Statistics Canada",
+            needsDecomposition=True,
+            decompositionType="sex",
+        )
+
+        self.service._maybe_promote_statscan_axis_decomposition_from_query(  # pylint: disable=protected-access
+            intent.originalQuery,
+            intent,
+        )
+
+        self.assertNotIn("__statscan_decomposition_axis", intent.parameters)
+        self.assertEqual(intent.indicators, [title])
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), title)
 
     def test_process_query_promotes_statscan_by_sex_query_to_dimension_decomposition(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-statscan-by-sex-dimension")

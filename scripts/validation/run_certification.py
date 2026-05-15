@@ -540,8 +540,23 @@ def apply_request_spacing(request_spacing: float) -> None:
         time.sleep(request_spacing)
 
 
+def request_failure_runtime_unavailable_reason(row: dict[str, Any], exc: Exception) -> str | None:
+    provider = str(row.get('provider_stratum') or (row.get('origin') or {}).get('source_provider') or '').strip()
+    normalized_provider = (provider or 'provider').lower().replace(' ', '_')
+    if isinstance(exc, requests.Timeout):
+        return f'{normalized_provider}_request_timeout'
+    if isinstance(exc, requests.ConnectionError):
+        return f'{normalized_provider}_connection_error'
+    evidence = str(exc or '').lower()
+    if 'read timed out' in evidence or 'connect timeout' in evidence or 'timed out' in evidence:
+        return f'{normalized_provider}_request_timeout'
+    if 'connection aborted' in evidence or 'connection error' in evidence or 'connection refused' in evidence:
+        return f'{normalized_provider}_connection_error'
+    return None
+
+
 def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, query: str, elapsed: float, exc: Exception) -> dict[str, Any]:
-    return {
+    record = {
         'session_id': row.get('id'),
         'dataset_type': dataset_type,
         'evaluation_target': certification_target_for_row(row),
@@ -560,6 +575,13 @@ def record_failure(row: dict[str, Any], dataset_type: str, round_index: int, que
         'clarification_questions_count': 0,
         'response_text_present': False,
     }
+    unavailable_reason = request_failure_runtime_unavailable_reason(row, exc)
+    if unavailable_reason:
+        record.update({
+            'runtime_unavailable': True,
+            'runtime_unavailable_reason': unavailable_reason,
+        })
+    return record
 
 
 def record_supportability_blocked(

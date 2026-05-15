@@ -1784,6 +1784,26 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     if entity and not dimensions:
         dimensions = {"geography": entity}
 
+    # Exact StatsCan table-title/product requests already carry a provider-native
+    # product ID.  Use the generic product dispatcher before metadata-derived
+    # modifier extraction so words that appear in the table title (for example
+    # Canada/provinces/United States/imports) are treated as table scope unless
+    # the query supplied explicit dimensions elsewhere.
+    if state_product_id and params.get("__exact_indicator_title_match") and not dimensions:
+        logger.info("StatsCan exact product dispatch before modifier extraction: product=%s", state_product_id)
+        dynamic_params = {
+            "indicator": state_product_id,
+            "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or state_product_id),
+            "periods": params.get("periods", 240),
+            "__exact_indicator_title_match": True,
+        }
+        if params.get("startDate"):
+            dynamic_params["startDate"] = params.get("startDate")
+        if params.get("endDate"):
+            dynamic_params["endDate"] = params.get("endDate")
+        result = await svc.statscan_provider.fetch_dynamic_data(dynamic_params)
+        return [result]
+
     # --- Dimension modifier detection (GENERAL, metadata-driven) ---
     # Before falling through to standard vector/dynamic fetch, check if the
     # query text contains dimension modifiers (province names, gender terms,

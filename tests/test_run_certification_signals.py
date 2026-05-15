@@ -1623,3 +1623,25 @@ def test_write_progress_summary_is_atomic_json(tmp_path: Path):
     assert payload["start_index"] == 1
     assert payload["completed_session_ids_count"] == 1
     assert not meta_path.with_name(meta_path.name + ".tmp").exists()
+
+
+
+def test_record_failure_marks_request_timeout_runtime_unavailable():
+    module = load_module()
+
+    record = module.record_failure(
+        {
+            "id": "batch-direct-statscan-timeout",
+            "query": "StatsCan archived table",
+            "provider_stratum": "STATSCAN",
+        },
+        "direct",
+        1,
+        "StatsCan archived table",
+        120.1,
+        module.requests.exceptions.ReadTimeout("read timed out"),
+    )
+
+    assert record["request_failed"] is True
+    assert record["runtime_unavailable"] is True
+    assert record["runtime_unavailable_reason"] == "statscan_request_timeout"

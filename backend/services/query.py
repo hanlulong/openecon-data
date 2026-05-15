@@ -309,7 +309,7 @@ def _coerce_generated_file(file_item: Any) -> Optional[GeneratedFile]:
 
 class QueryService:
     # Bump when cache semantics change so stale entries from old logic are not reused.
-    CACHE_KEY_VERSION = "2026-05-14.1"
+    CACHE_KEY_VERSION = "2026-05-15.1"
     MAX_FALLBACK_CACHE_ENTRIES = 1024
 
     def __init__(
@@ -3443,6 +3443,25 @@ class QueryService:
         params = dict(intent.parameters or {})
         if params.get("__dimensions"):
             return
+        if params.get("__exact_indicator_title_match") and params.get("__statscan_product_id"):
+            # Literal StatsCan table titles often contain phrases such as
+            # "by age group and sex" as provider table-scope metadata.  Do not
+            # reinterpret those title words as a user-requested decomposition.
+            # If the query is not just the literal provider title (for example
+            # a follow-up/near-title user request that already carries an
+            # explicit decomposition type), allow the provider-native axis
+            # pathway below to fail closed on missing required dimensions.
+            semantic_label = str(params.get("__semantic_indicator_label") or "").strip()
+            normalized_query = re.sub(r"[^a-z0-9]+", " ", str(query or "").lower()).strip()
+            normalized_label = re.sub(r"[^a-z0-9]+", " ", semantic_label.lower()).strip()
+            exact_title_is_query_scope = (
+                normalized_label
+                and len(normalized_label) >= 8
+                and normalized_label in normalized_query
+            )
+            current_decomp_type = str(intent.decompositionType or "").strip().lower()
+            if exact_title_is_query_scope or current_decomp_type not in {"sex", "gender", "age", "age group", "age groups", "ages"}:
+                return
 
         query_lower = query.lower()
         axis = None

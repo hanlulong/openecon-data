@@ -96,6 +96,16 @@ def _extract_exact_title_frequency_tokens(text: str) -> set[str]:
         normalized_aliases = {_normalize_exact_title_unit_text(alias) for alias in aliases}
         long_aliases = {alias for alias in normalized_aliases if len(alias) > 1}
         one_letter_aliases = {alias for alias in normalized_aliases if len(alias) == 1}
+        # Avoid treating descriptive duration phrases in provider-native
+        # titles, such as FRED ACS "(5-year estimate)", as a requested data
+        # frequency.  Frequency wrappers are standalone qualifiers like
+        # "(Annual)" or "(Monthly)", not arbitrary "<number>-year" title text.
+        if canonical == "annual":
+            long_aliases = {
+                alias
+                for alias in long_aliases
+                if not re.search(rf"\b\d+\s*{re.escape(alias)}\b", normalized)
+            }
         if tokens & long_aliases:
             found.add(canonical)
             continue
@@ -438,13 +448,20 @@ def build_exact_indicator_title_intent(
         "__semantic_provider_locked": True,
         "__exact_indicator_title_match": True,
     }
+    if provider in {"STATSCAN", "STATISTICS CANADA"}:
+        params.update({
+            "__statscan_product_id": code,
+            "__statscan_product_authority": "exact_user_input",
+            "__semantic_authority": "exact_user_input",
+            "__decision_source": "exact_title",
+        })
     candidate_params = candidate.get("params")
     if isinstance(candidate_params, dict):
         params.update(candidate_params)
     if provider == "COINGECKO":
         params["coinIds"] = [code]
 
-    countries = list(countries or [])
+    countries = [] if provider in {"STATSCAN", "STATISTICS CANADA"} else list(countries or [])
     if len(countries) == 1:
         params["country"] = countries[0]
     elif len(countries) > 1:
@@ -508,6 +525,11 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         # FRED exposes short provider-native titles; accepting them here only
         # signals an exact-title surface, not a final code decision.
         min_name_len = 2
+    if provider_key == "STATSCAN":
+        # StatsCan table titles are provider-native product surfaces.  Keep the
+        # detector exact-title-only, but do not require broad catalog-title
+        # length once the provider is locked.
+        min_name_len = 8
 
     candidates = []
     seen_codes = set()
@@ -598,16 +620,21 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         # title still must match catalog metadata, and duplicate titles are
         # disambiguated by explicit frequency/unit metadata or left unresolved.
         min_name_len = 2
+    if provider_key == "STATSCAN":
+        # StatsCan table titles map mechanically to product IDs.  This remains
+        # strict provider-scoped title transport, not a semantic concept map.
+        min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
     explicit_frequency_tokens = _extract_exact_title_frequency_tokens(query_text)
     explicit_unit_tokens: set[str] = set()
     explicit_unit_normalized = ""
-    for search_input in search_inputs:
-        unit_suffix_text = _trailing_exact_title_unit_suffix(search_input)
-        if unit_suffix_text:
-            explicit_unit_tokens = _exact_title_unit_tokens(unit_suffix_text)
-            explicit_unit_normalized = _normalize_exact_title_unit_text(unit_suffix_text)
-            break
+    if provider_key != "STATSCAN":
+        for search_input in search_inputs:
+            unit_suffix_text = _trailing_exact_title_unit_suffix(search_input)
+            if unit_suffix_text:
+                explicit_unit_tokens = _exact_title_unit_tokens(unit_suffix_text)
+                explicit_unit_normalized = _normalize_exact_title_unit_text(unit_suffix_text)
+                break
 
     best_candidate: Optional[Dict[str, Any]] = None
     best_rank = (-999, -1, -999, -999, -1, -999)
@@ -792,6 +819,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                     candidate["params"] = {**dict(candidate.get("params") or {}), **candidate_params}
             candidate_country_codes = _extract_country_codes_from_text(candidate_name)
             country_rank = len(query_country_codes & candidate_country_codes)
+            if provider_key == "STATSCAN":
+                # Country names inside StatsCan table titles describe table
+                # scope, not necessarily requested geography filters.  A
+                # unique literal table title should not be demoted into a
+                # clarification because it contains additional country words.
+                country_rank = 0
             query_token_lengths = [
                 len(normalized_query.split())
                 for normalized_query in (
@@ -949,13 +982,14 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         ):
             queue.append(without_trailing_frequency)
 
-        without_unit_suffix = _strip_trailing_exact_title_unit_suffix(candidate)
-        if (
-            without_unit_suffix
-            and without_unit_suffix != candidate
-            and without_unit_suffix not in seen
-        ):
-            queue.append(without_unit_suffix)
+        if provider_key != "STATSCAN":
+            without_unit_suffix = _strip_trailing_exact_title_unit_suffix(candidate)
+            if (
+                without_unit_suffix
+                and without_unit_suffix != candidate
+                and without_unit_suffix not in seen
+            ):
+                queue.append(without_unit_suffix)
 
         # Strip a leading country alias only when it appears as a plain prefix.
         for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):

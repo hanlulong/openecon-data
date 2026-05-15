@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import csv
+import io
 import logging
 import re
+import zipfile
 
 import httpx
 
@@ -41,6 +44,12 @@ class StatsCanProvider(BaseProvider):
 
     No API key required for basic access.
     """
+
+    # Keep the exact-table CSV fallback bounded.  The fallback is for
+    # provider-native full-table bundles that are unavailable/slow through WDS;
+    # very large tables must fail closed rather than materializing arbitrary
+    # provider payloads in memory.
+    FULL_TABLE_CSV_MAX_BYTES = 200 * 1024 * 1024
 
     # Runtime cache for vector ID -> product ID mappings (populated by metadata search)
     # This cache is built dynamically when indicators are discovered via metadata search
@@ -1196,10 +1205,12 @@ class StatsCanProvider(BaseProvider):
                 raise ValueError(f"Empty response for product {normalized_product_id}")
 
         except Exception as e:
-            logger.error(f"Failed to get metadata for product {normalized_product_id}: {e}")
-            raise DataNotAvailableError(
-                f"Could not retrieve metadata for Statistics Canada product {normalized_product_id}: {e}"
+            logger.warning(
+                "Failed to get WDS metadata for product %s; trying full-table CSV metadata fallback: %s",
+                normalized_product_id,
+                e,
             )
+            return await self._get_cube_metadata_via_full_table_csv(normalized_product_id)
 
     def _find_dimension_member(
         self,
@@ -2119,6 +2130,395 @@ class StatsCanProvider(BaseProvider):
 
         return NormalizedData(metadata=metadata, data=data_points)
 
+    def _metadata_from_full_table_csv_rows(
+        self,
+        product_id: str,
+        rows: List[Dict[str, str]],
+        metadata_rows: List[List[str]],
+    ) -> Dict[str, Any]:
+        """Build cube-style dimension metadata from a StatsCan full-table CSV zip.
+
+        This is a generic provider-native fallback for archived/slow WDS
+        ``getCubeMetadata`` calls.  Statistics Canada's public full-table CSV
+        bundles include both data rows and a ``*_MetaData.csv`` member with
+        dimension/member IDs; use that metadata instead of hardcoded product
+        coordinates.
+        """
+        title = ""
+        start_period = ""
+        end_period = ""
+        frequency = ""
+        dimensions: Dict[int, Dict[str, Any]] = {}
+
+        for index, record in enumerate(metadata_rows):
+            if not record:
+                continue
+            if record[0] == "Cube Title" and index + 1 < len(metadata_rows):
+                values = metadata_rows[index + 1]
+                title = values[0] if len(values) > 0 else title
+                frequency = values[6] if len(values) > 6 else frequency
+                start_period = values[7] if len(values) > 7 else start_period
+                end_period = values[8] if len(values) > 8 else end_period
+            if len(record) > 1 and record[0] == "Dimension ID" and record[1] == "Dimension name":
+                next_index = index + 1
+                while next_index < len(metadata_rows):
+                    dim_row = metadata_rows[next_index]
+                    next_index += 1
+                    if not dim_row:
+                        continue
+                    if dim_row[0] == "Dimension ID":
+                        break
+                    try:
+                        dim_id = int(str(dim_row[0]).strip())
+                    except (TypeError, ValueError):
+                        continue
+                    dimensions.setdefault(
+                        dim_id,
+                        {
+                            "dimensionPositionId": dim_id,
+                            "dimensionNameEn": str(dim_row[1] if len(dim_row) > 1 else "").strip(),
+                            "member": [],
+                        },
+                    )
+            if len(record) > 3 and record[0] != "Dimension ID":
+                try:
+                    dim_id = int(str(record[0]).strip())
+                    member_id = int(str(record[3]).strip())
+                except (TypeError, ValueError):
+                    continue
+                dim = dimensions.setdefault(
+                    dim_id,
+                    {
+                        "dimensionPositionId": dim_id,
+                        "dimensionNameEn": "",
+                        "member": [],
+                    },
+                )
+                if any(member.get("memberId") == member_id for member in dim["member"]):
+                    continue
+                parent = str(record[4]).strip() if len(record) > 4 else ""
+                member: Dict[str, Any] = {
+                    "memberId": member_id,
+                    "memberNameEn": str(record[1] if len(record) > 1 else "").strip(),
+                }
+                if parent:
+                    try:
+                        member["parentMemberId"] = int(parent)
+                    except ValueError:
+                        member["parentMemberId"] = parent
+                dim["member"].append(member)
+
+        if (not dimensions or any(not dim.get("member") for dim in dimensions.values())) and rows:
+            dim_columns = [
+                col
+                for col in rows[0]
+                if col
+                and col not in {
+                    "REF_DATE", "GEO", "DGUID", "UOM", "UOM_ID", "SCALAR_FACTOR", "SCALAR_ID",
+                    "VECTOR", "COORDINATE", "Coordinate", "VALUE", "STATUS", "SYMBOL", "TERMINATED", "DECIMALS",
+                }
+                and not str(col).startswith("Unnamed")
+            ]
+            for pos, column in enumerate(dim_columns, start=1):
+                seen_names: Dict[str, int] = {}
+                members: List[Dict[str, Any]] = []
+                for row in rows:
+                    name = str(row.get(column) or "").strip()
+                    if not name or name in seen_names:
+                        continue
+                    member_id = len(seen_names) + 1
+                    seen_names[name] = member_id
+                    members.append({"memberId": member_id, "memberNameEn": name})
+                dimensions.setdefault(
+                    pos,
+                    {
+                        "dimensionPositionId": pos,
+                        "dimensionNameEn": column,
+                        "member": members,
+                    },
+                )
+
+        return {
+            "_source": "full_table_csv",
+            "productId": self._normalize_metadata_product_id(product_id),
+            "cubeTitleEn": title,
+            "frequencyCode": self._frequency_code_from_text(frequency),
+            "cubeStartDate": start_period,
+            "cubeEndDate": end_period,
+            "dimension": [dimensions[key] for key in sorted(dimensions)],
+        }
+
+    @staticmethod
+    def _frequency_code_from_text(frequency: str) -> int:
+        frequency_lower = str(frequency or "").lower()
+        if "daily" in frequency_lower:
+            return 1
+        if "week" in frequency_lower:
+            return 3
+        if "month" in frequency_lower:
+            return 6
+        if "quarter" in frequency_lower:
+            return 9
+        return 12
+
+    async def _download_full_table_csv_bundle(
+        self,
+        product_id: str,
+    ) -> tuple[List[Dict[str, str]], List[List[str]], str]:
+        normalized_product_id = self._normalize_metadata_product_id(product_id)
+        if not normalized_product_id:
+            raise DataNotAvailableError(f"Invalid Statistics Canada product ID: {product_id}")
+
+        url = f"https://www150.statcan.gc.ca/n1/tbl/csv/{normalized_product_id}-eng.zip"
+        client = get_http_client()
+        if hasattr(client, "stream"):
+            content = bytearray()
+            async with client.stream("GET", url, timeout=30.0, follow_redirects=True) as response:
+                self._raise_for_status_or_data_unavailable(
+                    response,
+                    f"downloading full-table CSV for product {normalized_product_id}",
+                )
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > self.FULL_TABLE_CSV_MAX_BYTES:
+                            raise DataNotAvailableError(
+                                "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
+                            )
+                    except ValueError:
+                        pass
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > self.FULL_TABLE_CSV_MAX_BYTES:
+                        raise DataNotAvailableError(
+                            "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
+                        )
+            response_content = bytes(content)
+        else:
+            # Test doubles and older clients may only expose get().
+            response = await client.get(url, timeout=30.0, follow_redirects=True)
+            self._raise_for_status_or_data_unavailable(
+                response,
+                f"downloading full-table CSV for product {normalized_product_id}",
+            )
+            response_content = response.content
+            if len(response_content) > self.FULL_TABLE_CSV_MAX_BYTES:
+                raise DataNotAvailableError(
+                    "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
+                )
+        try:
+            zip_bytes = io.BytesIO(response_content)
+            with zipfile.ZipFile(zip_bytes) as archive:
+                data_name = next(
+                    name for name in archive.namelist()
+                    if name.endswith(".csv") and "MetaData" not in name
+                )
+                metadata_name = next(
+                    name for name in archive.namelist()
+                    if name.endswith(".csv") and "MetaData" in name
+                )
+                uncompressed_total = 0
+                for name in (data_name, metadata_name):
+                    uncompressed_total += archive.getinfo(name).file_size
+                    if uncompressed_total > self.FULL_TABLE_CSV_MAX_BYTES:
+                        raise DataNotAvailableError(
+                            "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
+                        )
+                with archive.open(data_name) as handle:
+                    data_reader = csv.DictReader(io.TextIOWrapper(handle, encoding="utf-8-sig", newline=""))
+                    rows = [dict(row) for row in data_reader]
+                with archive.open(metadata_name) as handle:
+                    metadata_reader = csv.reader(io.TextIOWrapper(handle, encoding="utf-8-sig", newline=""))
+                    metadata_rows = [list(row) for row in metadata_reader]
+                return rows, metadata_rows, url
+        except Exception as exc:
+            raise DataNotAvailableError(
+                f"Could not parse Statistics Canada full-table CSV for product {normalized_product_id}: {exc}"
+            ) from exc
+
+    async def _get_full_table_csv_rows(
+        self,
+        product_id: str,
+    ) -> tuple[List[Dict[str, str]], str]:
+        rows, metadata_rows, url = await self._download_full_table_csv_bundle(product_id)
+        normalized_product_id = self._normalize_metadata_product_id(product_id)
+        if normalized_product_id not in self._cube_metadata_cache:
+            metadata = self._metadata_from_full_table_csv_rows(normalized_product_id, rows, metadata_rows)
+            if metadata.get("dimension"):
+                self._cube_metadata_cache[normalized_product_id] = metadata
+        return rows, url
+
+    async def _get_cube_metadata_via_full_table_csv(self, product_id: str) -> Dict[str, any]:
+        normalized_product_id = self._normalize_metadata_product_id(product_id)
+        rows, metadata_rows, _url = await self._download_full_table_csv_bundle(normalized_product_id)
+        metadata = self._metadata_from_full_table_csv_rows(normalized_product_id, rows, metadata_rows)
+        if not metadata.get("dimension"):
+            raise DataNotAvailableError(
+                f"Full-table CSV metadata for Statistics Canada product {normalized_product_id} has no dimensions"
+            )
+        self._cube_metadata_cache[normalized_product_id] = metadata
+        logger.info("💾 Built local cube metadata for product %s from full-table CSV", normalized_product_id)
+        return metadata
+
+    def _data_value_column(self, row: Dict[str, str]) -> Optional[str]:
+        for key in ("VALUE", "Value", "value"):
+            if key in row:
+                return key
+        metadata_columns = {
+            "REF_DATE", "GEO", "DGUID", "UOM", "UOM_ID", "SCALAR_FACTOR", "SCALAR_ID",
+            "VECTOR", "COORDINATE", "Coordinate", "STATUS", "SYMBOL", "TERMINATED", "DECIMALS",
+        }
+        candidates = [key for key in row if key and key not in metadata_columns]
+        for key in reversed(candidates):
+            if self._parse_statscan_value(row.get(key)) is not None:
+                return key
+        return None
+
+    @staticmethod
+    def _parse_statscan_value(value: Any) -> Optional[float]:
+        text = str(value or "").strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _select_full_table_rows(
+        self,
+        rows: List[Dict[str, str]],
+        *,
+        metadata: Dict[str, Any],
+        indicator: str,
+        geography: Optional[str],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> tuple[List[Dict[str, str]], str, Optional[str]]:
+        if not rows:
+            raise DataNotAvailableError("Statistics Canada full-table CSV contains no rows")
+
+        value_column = self._data_value_column(rows[0])
+        if not value_column:
+            raise DataNotAvailableError("Statistics Canada full-table CSV has no value column")
+
+        selected_coordinate = ""
+
+        def value_is_present(row: Dict[str, str]) -> bool:
+            return self._parse_statscan_value(row.get(value_column)) is not None
+
+        coordinate_key = "COORDINATE" if "COORDINATE" in rows[0] else "Coordinate" if "Coordinate" in rows[0] else ""
+        series_key = coordinate_key or ("VECTOR" if "VECTOR" in rows[0] else "")
+        candidate_rows = [row for row in rows if value_is_present(row)]
+
+        if geography:
+            geography_lower = geography.lower()
+            candidate_rows = [
+                row for row in candidate_rows
+                if str(row.get("GEO") or "").lower() == geography_lower
+                or str(row.get("GEO") or "").lower().startswith(f"{geography_lower},")
+            ]
+
+        if start_date or end_date:
+            filtered_points = self._filter_by_date_range(
+                [
+                    {"date": str(row.get("REF_DATE") or ""), "value": row}
+                    for row in candidate_rows
+                ],
+                start_date,
+                end_date,
+            )
+            candidate_rows = [item["value"] for item in filtered_points]
+
+        if not candidate_rows:
+            raise DataNotAvailableError("No data rows found in Statistics Canada full-table CSV")
+
+        # Exact table-title fallback must not use semantic keyword/member
+        # selection.  Use the first provider-published coordinate/vector with
+        # data, then keep only rows for that same provider-native series.  This
+        # is deterministic file-order transport from the public table bundle,
+        # not concept-to-code inference from query words.
+        first_row = candidate_rows[0]
+        selected_coordinate = str(first_row.get(series_key) or "").strip() if series_key else ""
+        if series_key and selected_coordinate:
+            matching_rows = [
+                row for row in candidate_rows
+                if str(row.get(series_key) or "").strip() == selected_coordinate
+            ]
+        else:
+            matching_rows = candidate_rows
+            selected_coordinate = value_column if not coordinate_key else selected_coordinate
+
+        if not matching_rows:
+            raise DataNotAvailableError("No data rows found in Statistics Canada full-table CSV")
+
+        matching_rows.sort(key=lambda row: str(row.get("REF_DATE") or ""))
+        return matching_rows, selected_coordinate, value_column
+
+    async def fetch_full_table_csv_data(
+        self,
+        params: Dict[str, any],
+    ) -> NormalizedData:
+        product_id = self._normalize_metadata_product_id(params.get("productId") or params.get("indicator") or "")
+        if not product_id:
+            raise DataNotAvailableError("Statistics Canada full-table CSV fetch requires a product ID")
+        display_indicator = str(params.get("indicatorLabel") or params.get("indicator") or product_id).strip() or product_id
+        geography = params.get("geography")
+        start_date = params.get("startDate")
+        end_date = params.get("endDate")
+        rows, csv_url = await self._get_full_table_csv_rows(product_id)
+        metadata = self._cube_metadata_cache.get(product_id) or {}
+        selected_rows, coordinate, value_column = self._select_full_table_rows(
+            rows,
+            metadata=metadata,
+            indicator=display_indicator,
+            geography=geography,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        periods = params.get("periods")
+        if periods is not None:
+            try:
+                selected_rows = selected_rows[-int(periods):]
+            except (TypeError, ValueError):
+                pass
+
+        data_points = [
+            {
+                "date": str(row.get("REF_DATE") or ""),
+                "value": self._parse_statscan_value(row.get(value_column)),
+            }
+            for row in selected_rows
+        ]
+        first = selected_rows[0]
+        coordinate = coordinate or str(first.get("COORDINATE") or first.get("Coordinate") or "")
+        frequency_text = str(metadata.get("frequency") or "")
+        frequency_code = metadata.get("frequencyCode") or self._frequency_code_from_text(frequency_text)
+        frequency = self._map_frequency(int(frequency_code) if str(frequency_code).isdigit() else 12)
+        unit = str(first.get("UOM") or self._map_scalar_factor(int(str(first.get("SCALAR_ID") or 0) or 0)) or "units").strip()
+        country = str(first.get("GEO") or geography or "Canada").strip() or "Canada"
+        source_url = self._get_table_viewer_url(product_id)
+        api_url = f"{csv_url} (direct full-table CSV fallback)"
+        series_id = f"{product_id}:{coordinate}" if coordinate else product_id
+        return NormalizedData(
+            metadata=Metadata(
+                source="Statistics Canada",
+                indicator=display_indicator,
+                country=country,
+                frequency=frequency,
+                unit=unit,
+                lastUpdated="",
+                seriesId=series_id,
+                apiUrl=api_url,
+                sourceUrl=source_url,
+                description=display_indicator,
+                dataType="Rate" if str(unit).lower() == "percent" or "percent" in display_indicator.lower() else "Level",
+                scaleFactor=str(first.get("SCALAR_FACTOR") or "").strip() or None,
+                startDate=data_points[0]["date"] if data_points else None,
+                endDate=data_points[-1]["date"] if data_points else None,
+            ),
+            data=data_points,
+        )
+
     async def fetch_dynamic_data(
         self, params: Dict[str, any]
     ) -> NormalizedData:
@@ -2162,16 +2562,57 @@ class StatsCanProvider(BaseProvider):
         indicator_digits = "".join(ch for ch in str(indicator or "") if ch.isdigit())
         if exact_product_id and indicator_digits and len(indicator_digits) in {8, 10}:
             logger.info(f"📦 Treating {indicator} as an exact Statistics Canada product ID")
-            metadata = await self._get_cube_metadata(exact_product_id)
-            return await self.fetch_from_product_with_discovery(
-                product_id=exact_product_id,
-                indicator=display_indicator,
-                metadata=metadata,
-                geography=geography,
-                periods=periods,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            if params.get("__exact_indicator_title_match") and not geography:
+                try:
+                    return await self.fetch_full_table_csv_data({
+                        **params,
+                        "productId": exact_product_id,
+                        "indicatorLabel": display_indicator,
+                        "periods": periods,
+                        "startDate": start_date,
+                        "endDate": end_date,
+                    })
+                except DataNotAvailableError as exc:
+                    logger.warning(
+                        "Exact StatsCan product %s full-table CSV path failed; trying WDS coordinate path: %s",
+                        exact_product_id,
+                        exc,
+                    )
+            try:
+                metadata = await self._get_cube_metadata(exact_product_id)
+                if metadata.get("_source") == "full_table_csv" and not geography:
+                    return await self.fetch_full_table_csv_data({
+                        **params,
+                        "productId": exact_product_id,
+                        "indicatorLabel": display_indicator,
+                        "periods": periods,
+                        "startDate": start_date,
+                        "endDate": end_date,
+                    })
+                return await self.fetch_from_product_with_discovery(
+                    product_id=exact_product_id,
+                    indicator=display_indicator,
+                    metadata=metadata,
+                    geography=geography,
+                    periods=periods,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Exact StatsCan product %s WDS coordinate path failed; trying full-table CSV fallback: %s",
+                    exact_product_id,
+                    exc,
+                )
+                return await self.fetch_full_table_csv_data({
+                    **params,
+                    "productId": exact_product_id,
+                    "indicatorLabel": display_indicator,
+                    "geography": geography,
+                    "periods": periods,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                })
 
         # Step 1: Search for matching cubes
         matching_cubes = await self.search_vectors(search_term, limit=5)
