@@ -1664,7 +1664,7 @@ def test_score_certification_can_reach_claim_grade_with_full_coverage_and_custom
             {
                 "claim_thresholds": {
                     "weighted_session_success_min": 0.99,
-                    "lower95_min": 0.3,
+                    "lower95_min": 0.2,
                     "wrong_confident_answer_rate_max": 0.05,
                     "unnecessary_clarification_rate_max": 0.1,
                     "ambiguity_resolution_success_min": 0.99,
@@ -1786,7 +1786,7 @@ def _write_oecd_supportability_inventory_fixture(
             {
                 "claim_thresholds": {
                     "weighted_session_success_min": 0.99,
-                    "lower95_min": 0.3,
+                    "lower95_min": 0.2,
                     "wrong_confident_answer_rate_max": 0.05,
                     "unnecessary_clarification_rate_max": 0.1,
                     "ambiguity_resolution_success_min": 0.99,
@@ -1873,6 +1873,45 @@ def test_score_certification_surfaces_resolved_supportability_inventory(tmp_path
     assert report["metrics"]["supportability_inventory_items"] == 1
     assert report["metrics"]["supportability_inventory_resolved_items"] == 1
     assert report["metrics"]["supportability_inventory_unresolved_items"] == 0
+
+
+def test_score_certification_enforces_policy_lower95_before_claim_grade_ready(tmp_path: Path):
+    output_path = tmp_path / "score.json"
+    dataset_path, raw_path, adjudication_path, policy_path, inventory_path = (
+        _write_oecd_supportability_inventory_fixture(
+            tmp_path,
+            replacement_session_ids=["direct-oecd-000001"],
+        )
+    )
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["claim_thresholds"]["lower95_min"] = 0.99
+    policy_path.write_text(json.dumps(policy) + "\n", encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--supportability-inventory",
+            str(inventory_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["claim_grade_ready"] is False
+    assert report["scoring_mode"] == "adjudicated_structural"
+    assert report["metrics"]["claim_lower95"] < 0.99
+    assert any("claim_lower95" in blocker and "below required 0.990000" in blocker for blocker in report["claim_grade_blockers"])
 
 
 def test_score_certification_blocks_unresolved_supportability_inventory(tmp_path: Path):

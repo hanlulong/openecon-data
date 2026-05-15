@@ -1081,6 +1081,7 @@ def main() -> int:
         'unnecessary_clarification_rate': unnecessary_clarification_rate,
         'ambiguity_resolution_success': ambiguity_resolution_success,
     }
+    claim_thresholds = dict((floor_policy or {}).get('claim_thresholds') or {})
     claim_grade_blockers: list[str] = []
     if floor_policy is None:
         claim_grade_blockers.append('floor policy missing')
@@ -1138,6 +1139,41 @@ def main() -> int:
             claim_grade_blockers.append(
                 f'certification target mismatch: policy requires {required_evaluation_target}; observed {rendered}'
             )
+    if claim_metric_source:
+        required_observed = claim_thresholds.get('weighted_session_success_min')
+        if required_observed is not None:
+            if claim_observed_success is None:
+                claim_grade_blockers.append('claim_observed_success missing')
+            elif claim_observed_success < float(required_observed):
+                claim_grade_blockers.append(
+                    f'claim_observed_success {claim_observed_success:.6f} below required {float(required_observed):.6f}'
+                )
+        required_lower95 = claim_thresholds.get('lower95_min')
+        if required_lower95 is not None:
+            if claim_lower95 is None:
+                claim_grade_blockers.append('claim_lower95 missing')
+            elif claim_lower95 < float(required_lower95):
+                claim_grade_blockers.append(
+                    f'claim_lower95 {claim_lower95:.6f} below required {float(required_lower95):.6f}'
+                )
+        wrong_confident_max = claim_thresholds.get('wrong_confident_answer_rate_max')
+        if wrong_confident_max is not None and wrong_confident_answer_rate is not None:
+            if wrong_confident_answer_rate > float(wrong_confident_max):
+                claim_grade_blockers.append(
+                    f'wrong_confident_answer_rate {wrong_confident_answer_rate:.6f} above required {float(wrong_confident_max):.6f}'
+                )
+        unnecessary_clarification_max = claim_thresholds.get('unnecessary_clarification_rate_max')
+        if unnecessary_clarification_max is not None and unnecessary_clarification_rate is not None:
+            if unnecessary_clarification_rate > float(unnecessary_clarification_max):
+                claim_grade_blockers.append(
+                    f'unnecessary_clarification_rate {unnecessary_clarification_rate:.6f} above required {float(unnecessary_clarification_max):.6f}'
+                )
+        ambiguity_resolution_min = claim_thresholds.get('ambiguity_resolution_success_min')
+        if ambiguity_resolution_min is not None and ambiguity_resolution_success is not None:
+            if ambiguity_resolution_success < float(ambiguity_resolution_min):
+                claim_grade_blockers.append(
+                    f'ambiguity_resolution_success {ambiguity_resolution_success:.6f} below required {float(ambiguity_resolution_min):.6f}'
+                )
     if wrong_confident_answer_rate is None or unnecessary_clarification_rate is None or ambiguity_resolution_success is None:
         claim_grade_blockers.append('semantic metrics are still proxy-backed, not final claim-grade semantic measures')
     claim_grade_ready = len(claim_grade_blockers) == 0
