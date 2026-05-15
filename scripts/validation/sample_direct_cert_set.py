@@ -26,6 +26,7 @@ from scripts.validation.common import (
     imf_public_sdmx_runtime_family,
     read_json,
     sample_indicator_rows,
+    selection_supportability_reason_for_row,
     top_tokens,
     USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS,
     write_jsonl,
@@ -146,11 +147,15 @@ def _select_quality_screened_records(records: list[dict], count: int) -> list[di
             for reason in selection_reasons
             if reason in USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS
         )
+        selection_supportability_reason = str(
+            provenance.get('selection_supportability_reason') or ''
+        ).strip()
         provider_anchor = bool(provenance.get('user_answerability_sampling_anchor'))
         specificity = direct_query_specificity_score(record)
         popularity = float(origin.get('popularity') or 0.0)
         if certification_target_for_row(record) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             return (
+                1 if selection_supportability_reason else 0,
                 risk_rank,
                 0 if provider_anchor else 1,
                 inventory_only_reason_count,
@@ -314,6 +319,9 @@ def main() -> int:
             selection_quality_record['gold']['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
             selection_quality = audit_direct_query_shape(selection_quality_record)
             record['provenance']['selection_quality_reasons'] = selection_quality['reasons']
+            supportability_reason = selection_supportability_reason_for_row(record)
+            if supportability_reason:
+                record['provenance']['selection_supportability_reason'] = supportability_reason
             anchor_reason = _user_answerability_sampling_anchor_reason(row)
             if anchor_reason:
                 record['provenance']['user_answerability_sampling_anchor'] = anchor_reason

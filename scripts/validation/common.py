@@ -1164,6 +1164,29 @@ def direct_query_specificity_score(record: dict[str, Any]) -> int:
     return score
 
 
+def selection_supportability_reason_for_row(record: dict[str, Any]) -> str | None:
+    """Return metadata-only sampler supportability provenance for a direct row.
+
+    This is intentionally a candidate-selection prior, not a runtime blocker or
+    scoring exclusion. It may inspect only provider-native catalog metadata
+    carried by the row; user query prose is not supportability authority here.
+    """
+    origin = dict(record.get('origin') or {})
+    provider = str(
+        record.get('provider_stratum')
+        or record.get('provider')
+        or origin.get('source_provider')
+        or ''
+    ).strip().upper()
+    if provider != 'IMF':
+        return None
+    return imf_catalog_surface_supportability_reason(
+        str(origin.get('source_indicator_code') or record.get('code') or ''),
+        str(origin.get('name') or record.get('name') or ''),
+        str(origin.get('category') or record.get('category') or ''),
+    )
+
+
 def natural_phrase_from_name(name: str, description: str = '') -> str:
     raw = str(name or '').strip()
     if not raw:
