@@ -165,6 +165,24 @@ def test_user_answerability_fred_exact_title_with_frequency_is_not_high_risk(mon
     assert audit["risk_level"] != "high"
 
 
+def test_user_answerability_fred_preserves_short_acronym_suffix_title():
+    row = {
+        "provider": "FRED",
+        "code": "BA06RC1A027NBEA",
+        "name": "Total wages and salaries, BLS",
+        "unit": "Billions of Dollars",
+        "frequency": "Annual",
+        "category": "Search: GDP",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "US Total wages and salaries, BLS from FRED"
+
+
 def test_user_answerability_direct_record_asks_user_need_not_legacy_worldbank_code():
     row = {
         "id": 1,

@@ -491,6 +491,70 @@ def test_exact_title_match_ignores_appended_frequency_disambiguator(tmp_path) ->
     assert looks_exact is True
 
 
+def test_exact_title_search_inputs_include_leading_acronym_comma_tail_variant() -> None:
+    variants = exact_title_search_inputs("US BLS Total wages and salaries from FRED", "FRED")
+
+    assert "Total wages and salaries, BLS" in variants
+
+
+def test_exact_title_search_inputs_reject_short_acronym_tail_variant() -> None:
+    variants = exact_title_search_inputs("US BLS wages from FRED", "FRED")
+
+    assert "wages, BLS" not in variants
+
+
+def test_exact_title_match_accepts_leading_acronym_tail_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="FRED",
+            code="BA06RC1A027NBEA",
+            name="Total wages and salaries, BLS",
+            unit="Billions of Dollars",
+            frequency="Annual",
+            popularity=49,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "US BLS Total wages and salaries from FRED"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "FRED")
+        looks_exact = looks_like_exact_provider_title_match(query, "FRED")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="FRED",
+            countries=["US"],
+            all_providers=["FRED"],
+        )
+
+    assert match is not None
+    assert match["code"] == "BA06RC1A027NBEA"
+    assert looks_exact is True
+    assert intent is not None
+    assert intent.parameters["indicator"] == "BA06RC1A027NBEA"
+    assert intent.parameters["country"] == "US"
+    assert intent.parameters["__semantic_provider_locked"] is True
+    assert intent.parameters["__exact_indicator_title_match"] is True
+    assert intent.clarificationNeeded is False
+
+
+def test_exact_title_match_rejects_generic_leading_acronym_fragment(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="FRED",
+            code="BA06RC1A027NBEA",
+            name="Total wages and salaries, BLS",
+            popularity=49,
+        )
+    )
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        assert find_exact_provider_title_match("US BLS wages from FRED", "FRED") is None
+
+
 def test_exact_title_match_strips_fred_unit_suffix_and_uses_unit_to_disambiguate() -> None:
     title = "Nonfarm Business Sector: Labor Productivity (Output per Hour) for All Workers"
 

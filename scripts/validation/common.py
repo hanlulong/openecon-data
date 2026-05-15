@@ -1390,6 +1390,26 @@ def _normal_title_key(value: str) -> str:
     return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
 
 
+def _has_short_acronym_comma_suffix(value: str) -> bool:
+    """Return true for provider titles ending in a short acronym qualifier.
+
+    Titles such as ``Total wages and salaries, BLS`` are already natural enough
+    for user-answerability probes.  Moving the acronym to the front makes a less
+    literal prompt and can bypass provider exact-title recovery.  This is a
+    title-shape preservation rule, not an acronym-to-code mapping.
+    """
+
+    parts = [part.strip() for part in str(value or '').split(',') if part.strip()]
+    if len(parts) < 2:
+        return False
+    suffix = parts[-1]
+    head = ', '.join(parts[:-1]).strip()
+    return bool(
+        re.fullmatch(r'[A-Z]{2,8}', suffix)
+        and len(informative_tokens(head)) >= 3
+    )
+
+
 def _title_token_coverage(origin_title: str, query: str) -> float:
     origin_tokens = [
         token
@@ -1651,6 +1671,10 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         provider_upper == 'OECD'
         and bool(name)
         and not re.fullmatch(r'[A-Z0-9_@]{1,40}', name.strip())
+    ) or (
+        provider_upper == 'FRED'
+        and bool(name)
+        and _has_short_acronym_comma_suffix(name)
     )
     if preserve_provider_title and name:
         # Some providers expose many similarly named public tables/datasets that

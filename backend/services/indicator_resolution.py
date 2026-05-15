@@ -1030,6 +1030,10 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
             if reordered not in seen:
                 queue.append(reordered)
 
+        for comma_tail in _leading_acronym_comma_tail_exact_title_variants(candidate, provider_aliases):
+            if comma_tail not in seen:
+                queue.append(comma_tail)
+
         if provider_key == "IMF":
             without_definition = re.sub(r"\bdefinition\b", " ", candidate, flags=re.IGNORECASE)
             without_definition = re.sub(r"\s+", " ", without_definition).strip(" ,;:-")
@@ -1094,6 +1098,55 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
                 queue.append(suffix)
 
     return search_inputs
+
+
+def _leading_acronym_comma_tail_exact_title_variants(
+    text: str,
+    provider_aliases: list[str],
+) -> list[str]:
+    """Return mechanical exact-title variants for leading acronym qualifiers.
+
+    Provider titles often put institutional/source qualifiers after a comma
+    (``Total wages and salaries, BLS``), while user-facing prompts may move the
+    short all-caps qualifier to the front (``BLS Total wages and salaries``).
+    This helper only preserves and reorders literal title tokens so the existing
+    provider-scoped exact-title lookup can decide; it does not map acronyms,
+    concepts, or providers to codes.
+    """
+
+    candidate = str(text or "").strip(" ,;:-")
+    if not candidate or "," in candidate:
+        return []
+
+    match = re.match(r"^(?P<acronym>[A-Z]{2,8})\s+(?P<title>.+)$", candidate)
+    if not match:
+        return []
+
+    acronym = match.group("acronym").strip()
+    title = re.sub(r"\s+", " ", match.group("title")).strip(" ,;:-")
+    if not title:
+        return []
+
+    acronym_lower = acronym.lower()
+    provider_alias_set = {str(alias or "").strip().lower() for alias in provider_aliases}
+    if acronym_lower in provider_alias_set:
+        return []
+    if CountryResolver.normalize(acronym):
+        return []
+
+    meaningful_title_tokens = [
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", title)
+        if len(token) > 1
+        and token.lower() not in {"and", "the", "for", "from", "with", "of", "in", "to"}
+    ]
+    if len(meaningful_title_tokens) < 3:
+        return []
+
+    if re.search(rf"\b{re.escape(acronym)}\b", title):
+        return []
+
+    return [f"{title}, {acronym}"]
 
 
 def _extract_country_codes_from_text(text: str) -> set[str]:
