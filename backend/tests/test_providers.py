@@ -3887,6 +3887,121 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.data[0].date, "2017-01-01")
         self.assertEqual(series.data[0].value, 4.2)
 
+    def test_oecd_provider_advertised_span_failure_continues_to_relaxed_key(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        calls: list[dict[str, object]] = []
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "FREQ", "position": 1},
+                {"id": "UNIT_MEASURE", "position": 2},
+                {"id": "SPENDING_TYPE", "position": 3},
+                {"id": "EXPENDITURE_TYPE", "position": 4},
+                {"id": "AGE", "position": 5},
+                {"id": "SEX", "position": 6},
+            ],
+            "dimension_ids": [
+                "REF_AREA",
+                "FREQ",
+                "UNIT_MEASURE",
+                "SPENDING_TYPE",
+                "EXPENDITURE_TYPE",
+                "AGE",
+                "SEX",
+            ],
+            "valid_values_by_dimension": {"REF_AREA": ["USA"], "FREQ": ["A"]},
+            "default_values": {
+                "FREQ": "A",
+                "UNIT_MEASURE": "PT_B1GQ",
+                "SPENDING_TYPE": "ES50",
+                "EXPENDITURE_TYPE": "_T",
+                "AGE": "_T",
+                "TIME_PERIOD_START": "2010",
+                "TIME_PERIOD_END": "2023",
+            },
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "2010-01-01T00:00:00"},
+                        "endPeriod": {"period": "2023-12-31T00:00:00"},
+                    },
+                }
+            ],
+        }
+
+        class _NoResultsResponse(MockAsyncResponse):
+            text = "NoResultsFound"
+
+            def __init__(self) -> None:
+                super().__init__({}, status_code=404, request_url="https://example.com/oecd")
+
+            def raise_for_status(self) -> None:
+                raise httpx.HTTPStatusError(
+                    "NoResultsFound",
+                    request=httpx.Request("GET", "https://example.com/oecd"),
+                    response=httpx.Response(404, text="NoResultsFound"),
+                )
+
+        def _payload(observations: dict[str, list[float]]) -> dict:
+            return {
+                "data": {
+                    "dataSets": [{"observations": observations}],
+                    "structures": [
+                        {
+                            "name": "Public expenditure on family",
+                            "dimensions": {
+                                "observation": [
+                                    {"id": "REF_AREA", "values": [{"id": "USA", "name": "United States"}]},
+                                    {"id": "FREQ", "values": [{"id": "A", "name": "Annual"}]},
+                                    {"id": "UNIT_MEASURE", "values": [{"id": "PT_B1GQ"}]},
+                                    {"id": "SPENDING_TYPE", "values": [{"id": "ES50"}]},
+                                    {"id": "EXPENDITURE_TYPE", "values": [{"id": "_T"}]},
+                                    {"id": "AGE", "values": [{"id": "_T"}]},
+                                    {"id": "SEX", "values": [{"id": "_T"}]},
+                                    {"id": "TIME_PERIOD", "values": [{"id": "2019"}]},
+                                ]
+                            },
+                        }
+                    ],
+                },
+                "meta": {"prepared": "2026-01-01"},
+            }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                calls.append({"url": url, "params": dict(params or {})})
+                if "PT_B1GQ" in str(url) or "ES50" in str(url):
+                    return _NoResultsResponse()
+                return MockAsyncResponse(_payload({"0:0:0:0:0:0:0:0": [2.4]}))
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.ELS.SPD", "DSD_SOCX_AGG@DF_PUB_FAM", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="USA"))
+
+        self.assertGreaterEqual(len(calls), 3)
+        self.assertIn("PT_B1GQ", str(calls[0]["url"]))
+        self.assertIn("ES50", str(calls[0]["url"]))
+        self.assertEqual(calls[1]["params"]["startPeriod"], "2010")
+        self.assertEqual(calls[1]["params"]["endPeriod"], "2023")
+        self.assertNotIn("PT_B1GQ", str(calls[-1]["url"]))
+        self.assertIn("USA.A", str(calls[-1]["url"]))
+        self.assertEqual(series.metadata.country, "United States Of America")
+        self.assertEqual(series.data[0].date, "2019-01-01")
+        self.assertEqual(series.data[0].value, 2.4)
+
     def test_oecd_fetch_indicator_reports_all_missing_observation_values(self) -> None:
         provider = OECDProvider(metadata_search_service=None)
         metadata = {

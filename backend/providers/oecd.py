@@ -1759,10 +1759,21 @@ class OECDProvider(BaseProvider):
                 provider_advertised_time_params.get("endPeriod"),
                 request_key,
             )
-            return await _request_oecd_data(
-                request_url,
-                request_params=provider_advertised_time_params,
-            )
+            try:
+                return await _request_oecd_data(
+                    request_url,
+                    request_params=provider_advertised_time_params,
+                )
+            except DataNotAvailableError as exc:
+                logger.info(
+                    "OECD provider-advertised default time span had no data for %s/%s "
+                    "with key %s; continuing existing provider-native fallbacks: %s",
+                    country_code,
+                    dataflow,
+                    request_key,
+                    exc,
+                )
+                return None
 
         # Use retry_async with exponential backoff and jitter for OECD:
         # - 3 attempts (original + 2 retries)
@@ -1843,23 +1854,33 @@ class OECDProvider(BaseProvider):
                 provider_advertised_time_params.get("startPeriod"),
                 provider_advertised_time_params.get("endPeriod"),
             )
-            advertised_window_data = await _request_oecd_data(
-                url,
-                request_params=provider_advertised_time_params,
-            )
-            advertised_datasets = advertised_window_data.get("data", {}).get("dataSets", [])
-            advertised_dataset = advertised_datasets[0] if advertised_datasets else None
-            advertised_observations = (
-                advertised_dataset.get("observations", {})
-                if isinstance(advertised_dataset, dict)
-                else {}
-            )
-            if advertised_observations:
-                data = advertised_window_data
-                datasets = advertised_datasets
-                dataset = advertised_dataset
-                observations = advertised_observations
-                params = dict(provider_advertised_time_params)
+            try:
+                advertised_window_data = await _request_oecd_data(
+                    url,
+                    request_params=provider_advertised_time_params,
+                )
+            except DataNotAvailableError as exc:
+                logger.info(
+                    "OECD provider-advertised default time span had no observations for %s/%s; "
+                    "continuing existing provider-native fallbacks: %s",
+                    country_code,
+                    dataflow,
+                    exc,
+                )
+            else:
+                advertised_datasets = advertised_window_data.get("data", {}).get("dataSets", [])
+                advertised_dataset = advertised_datasets[0] if advertised_datasets else None
+                advertised_observations = (
+                    advertised_dataset.get("observations", {})
+                    if isinstance(advertised_dataset, dict)
+                    else {}
+                )
+                if advertised_observations:
+                    data = advertised_window_data
+                    datasets = advertised_datasets
+                    dataset = advertised_dataset
+                    observations = advertised_observations
+                    params = dict(provider_advertised_time_params)
 
         if not observations and not relaxed_default_retry:
             relaxed_frequency = (
