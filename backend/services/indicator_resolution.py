@@ -145,6 +145,14 @@ def _candidate_frequency_matches(requested: set[str], candidate_frequency: str) 
     return False
 
 
+def _lost_explicit_frequency_tokens(original_query: str, indicator_query: str) -> set[str]:
+    """Return explicit frequency tokens present in original but lost in indicator text."""
+
+    original_frequencies = _extract_exact_title_frequency_tokens(original_query)
+    indicator_frequencies = _extract_exact_title_frequency_tokens(indicator_query)
+    return original_frequencies - indicator_frequencies
+
+
 def _extract_exact_title_measurement_qualifiers(text: str) -> set[str]:
     """Extract explicit price-basis qualifiers from an exact-title query.
 
@@ -2518,7 +2526,18 @@ async def resolve_indicator_for_fetch(
             from .indicator_selector import IndicatorSelector
             selector = IndicatorSelector()
             selector_attempted = True
-            selection = await selector.select(selector_query, provider)
+            metadata_query = None
+            if (
+                provider == "FRED"
+                and original_selector_query
+                and indicator_query
+                and _lost_explicit_frequency_tokens(original_selector_query, indicator_query)
+            ):
+                metadata_query = original_selector_query
+            if metadata_query:
+                selection = await selector.select(selector_query, provider, metadata_query=metadata_query)
+            else:
+                selection = await selector.select(selector_query, provider)
             selector_source = str(getattr(selection, "source", "") or "")
             selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
             selector_retry_query = str(getattr(selection, "retry_query", "") or "")

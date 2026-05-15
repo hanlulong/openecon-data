@@ -378,6 +378,69 @@ async def test_select_retries_when_llm_pick_conflicts_with_requested_frequency(m
 
 
 @pytest.mark.asyncio
+async def test_select_uses_metadata_query_for_lost_frequency_constraints(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+    all_candidates = [
+        ("BOGZ1FL155035066A", "Households; Owners' Equity in Real Estate as a Percentage of Household Real Estate, Level"),
+        ("HOEREPHRE", "Households; Owners' Equity in Real Estate as a Percentage of Household Real Estate, Level"),
+    ]
+
+    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+        return all_candidates, [0.90, 0.88]
+
+    def fake_enrich(candidates, provider):  # noqa: ANN001, ARG001
+        metadata = {
+            "BOGZ1FL155035066A": {"frequency": "Annual", "unit": "Percent"},
+            "HOEREPHRE": {"frequency": "Quarterly, End of Period", "unit": "Percent"},
+        }
+        return [
+            {
+                "code": code,
+                "name": name,
+                "end_date": "",
+                "category": "",
+                "description": "",
+                "keywords": "",
+                "discontinued": False,
+                **metadata[code],
+            }
+            for code, name in candidates
+        ]
+
+    seen_candidate_sets: list[list[str]] = []
+
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False):  # noqa: ANN001, ARG001
+        seen_candidate_sets.append([code for code, _name in candidates])
+        if seen_candidate_sets[-1] == ["BOGZ1FL155035066A", "HOEREPHRE"]:
+            return SelectionResult(
+                code="BOGZ1FL155035066A",
+                name="Households; Owners' Equity in Real Estate as a Percentage of Household Real Estate, Level",
+                source="llm_pick",
+            )
+        return SelectionResult(
+            code="HOEREPHRE",
+            name="Households; Owners' Equity in Real Estate as a Percentage of Household Real Estate, Level",
+            source="llm_pick",
+        )
+
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", fake_candidates)
+    monkeypatch.setattr(selector, "_enrich_candidates", fake_enrich)
+    monkeypatch.setattr(selector, "_llm_pick", fake_llm_pick)
+
+    result = await selector.select(
+        "Owners' Equity in Real Estate as a Percentage of Household Real Estate",
+        "FRED",
+        metadata_query=(
+            "US Level Households; Owners' Equity in Real Estate as a Percentage "
+            "of Household Real Estate (Quarterly, End of Period) from FRED"
+        ),
+    )
+
+    assert result.code == "HOEREPHRE"
+    assert seen_candidate_sets == [["BOGZ1FL155035066A", "HOEREPHRE"], ["HOEREPHRE"]]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query,provider,wrong_code,wrong_title,correct_code,correct_title",
     [

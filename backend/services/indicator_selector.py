@@ -268,6 +268,7 @@ class IndicatorSelector:
         query: str,
         provider: str,
         country: Optional[str] = None,
+        metadata_query: Optional[str] = None,
     ) -> SelectionResult:
         """
         Select the best indicator for a query.
@@ -279,6 +280,8 @@ class IndicatorSelector:
             query: Natural language query (e.g., "female youth unemployment")
             provider: Data provider (e.g., "WorldBank", "FRED")
             country: Optional country context
+            metadata_query: Optional fuller query text used only for explicit
+                frequency/unit/measurement metadata constraints.
 
         Returns:
             SelectionResult with selected code or options for user choice
@@ -303,8 +306,9 @@ class IndicatorSelector:
 
         # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
         llm_candidates = candidates[:20]
+        metadata_constraint_query = metadata_query or query
         result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous)
-        result = await self._retry_if_metadata_conflict(query, result, llm_candidates, provider)
+        result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
         # honor its alternative search terms with one bounded research retry.
@@ -327,7 +331,7 @@ class IndicatorSelector:
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
                         return await self._retry_if_metadata_conflict(
-                            retry_query,
+                            metadata_constraint_query,
                             retry_result,
                             retry_candidates[:20],
                             provider,
@@ -340,7 +344,7 @@ class IndicatorSelector:
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
             result = await self._llm_pick(query, candidates[:5], provider)
-            result = await self._retry_if_metadata_conflict(query, result, candidates[:5], provider)
+            result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider)
 
         if self._is_llm_rejection(result):
             return result
