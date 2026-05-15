@@ -442,6 +442,8 @@ def runtime_supportability_reason(row: dict[str, Any], resp_json: dict[str, Any]
         return 'eurostat_response_too_large'
     if provider == 'EUROSTAT' and 'eurostat_requested_geo_unavailable' in evidence:
         return 'eurostat_requested_geo_unavailable'
+    if provider == 'OECD' and 'oecd_missing_valued_observations' in evidence:
+        return 'oecd_missing_valued_observations'
     if provider in {'STATSCAN', 'STATISTICS CANADA'} and 'statscan_required_dimension_missing' in evidence:
         return 'statscan_required_dimension_missing'
     return None

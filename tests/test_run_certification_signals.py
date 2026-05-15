@@ -1003,6 +1003,39 @@ def test_record_response_marks_eurostat_requested_geo_unavailable_as_supportabil
     assert record["series_count"] == 0
 
 
+def test_record_response_marks_oecd_missing_valued_observations_as_supportability_blocked():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-oecd-all-null",
+        "provider_stratum": "OECD",
+        "query": "United States Population in the National Accounts from OECD",
+        "origin": {
+            "source_provider": "OECD",
+            "source_indicator_code": "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE",
+        },
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "oecd_missing_valued_observations: OECD returned 36 observations for "
+            "USA DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE, but all observation "
+            "values were null/missing; OBS_STATUS=L."
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "oecd_missing_valued_observations"
+    assert record["error"] == "data_not_available"
+    assert record["series_count"] == 0
+    assert "runtime_unavailable" not in record
+
+
 def test_record_response_marks_comtrade_quota_as_runtime_unavailable():
     module = load_module()
 
