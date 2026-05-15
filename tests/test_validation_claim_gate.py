@@ -1711,6 +1711,210 @@ def test_score_certification_can_reach_claim_grade_with_full_coverage_and_custom
     assert report["metrics"]["ambiguity_resolution_success"] == 1.0
 
 
+def _write_oecd_supportability_inventory_fixture(
+    tmp_path: Path,
+    *,
+    replacement_session_ids: list[str],
+) -> tuple[Path, Path, Path, Path, Path]:
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    adjudication_path = tmp_path / "adjudication.jsonl"
+    policy_path = tmp_path / "policy.json"
+    inventory_path = tmp_path / "supportability_inventory.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-oecd-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "OECD",
+                "query": "Population in the National Accounts from OECD",
+                "gold": {"clarification_expected": False},
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 2.0,
+                },
+            },
+            {
+                "id": "amb-clarify-000001",
+                "dataset_tier": "cert_holdout",
+                "expected_behavior": "clarify",
+                "query": "GDP",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                    "family": "provider_ambiguity",
+                },
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {
+                "session_id": "direct-oecd-000001",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 1,
+                "error": None,
+                "clarification_detected": False,
+                "response_text_present": True,
+            },
+            {
+                "session_id": "amb-clarify-000001",
+                "round_index": 1,
+                "status_code": 200,
+                "series_count": 0,
+                "error": None,
+                "clarification_detected": True,
+                "response_text_present": True,
+            },
+        ],
+    )
+    write_jsonl(
+        adjudication_path,
+        [
+            {"session_id": "direct-oecd-000001", "final_label": "pass"},
+            {"session_id": "amb-clarify-000001", "final_label": "pass"},
+        ],
+    )
+    policy_path.write_text(
+        json.dumps(
+            {
+                "claim_thresholds": {
+                    "weighted_session_success_min": 0.99,
+                    "lower95_min": 0.3,
+                    "wrong_confident_answer_rate_max": 0.05,
+                    "unnecessary_clarification_rate_max": 0.1,
+                    "ambiguity_resolution_success_min": 0.99,
+                },
+                "required_direct_provider_floors": {
+                    "OECD": {"class": "critical", "floor": 0.97}
+                },
+                "required_multiround_family_floors": {},
+                "required_ambiguity_family_floors": {
+                    "provider_ambiguity": {"class": "critical", "floor": 0.97}
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "session_id": "original-oecd-null",
+                        "provider": "OECD",
+                        "supportability_reason": "oecd_missing_valued_observations",
+                        "disposition": "excluded_replaced",
+                        "replacement_session_ids": replacement_session_ids,
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return dataset_path, raw_path, adjudication_path, policy_path, inventory_path
+
+
+def test_score_certification_surfaces_resolved_supportability_inventory(tmp_path: Path):
+    output_path = tmp_path / "score.json"
+    dataset_path, raw_path, adjudication_path, policy_path, inventory_path = (
+        _write_oecd_supportability_inventory_fixture(
+            tmp_path,
+            replacement_session_ids=["direct-oecd-000001"],
+        )
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--supportability-inventory",
+            str(inventory_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["claim_grade_ready"] is True
+    assert report["claim_grade_blockers"] == []
+    assert report["supportability_inventory_path"] == str(inventory_path.resolve())
+    assert len(report["supportability_inventory_sha256"]) == 64
+    assert report["supportability_inventory"]["total_items"] == 1
+    assert report["supportability_inventory"]["resolved_items"] == 1
+    assert report["supportability_inventory"]["unresolved_items"] == 0
+    assert report["supportability_inventory"]["items"][0]["resolved"] is True
+    assert report["supportability_inventory"]["items"][0]["replacement_results"] == [
+        {
+            "session_id": "direct-oecd-000001",
+            "present": True,
+            "provisional_structural_pass": True,
+            "supportability_blocked": False,
+            "runtime_unavailable": False,
+        }
+    ]
+    assert report["metrics"]["supportability_inventory_items"] == 1
+    assert report["metrics"]["supportability_inventory_resolved_items"] == 1
+    assert report["metrics"]["supportability_inventory_unresolved_items"] == 0
+
+
+def test_score_certification_blocks_unresolved_supportability_inventory(tmp_path: Path):
+    output_path = tmp_path / "score.json"
+    dataset_path, raw_path, adjudication_path, policy_path, inventory_path = (
+        _write_oecd_supportability_inventory_fixture(
+            tmp_path,
+            replacement_session_ids=["missing-oecd-row"],
+        )
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--supportability-inventory",
+            str(inventory_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["claim_grade_ready"] is False
+    assert report["supportability_inventory"]["unresolved_items"] == 1
+    assert report["supportability_inventory"]["unresolved_session_ids"] == ["original-oecd-null"]
+    assert report["metrics"]["supportability_inventory_unresolved_items"] == 1
+    assert any(
+        "supportability inventory exclusions lack passing replacement" in blocker
+        for blocker in report["claim_grade_blockers"]
+    )
+
+
 def test_score_certification_respects_max_sessions_across_loaded_datasets(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"

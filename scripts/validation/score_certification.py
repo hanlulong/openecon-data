@@ -345,6 +345,119 @@ def canonical_failure_class(value: Any) -> str | None:
     return normalized
 
 
+RESOLVED_SUPPORTABILITY_INVENTORY_DISPOSITIONS = {
+    'backfilled',
+    'excluded_replaced',
+    'excluded_with_replacement',
+    'replaced',
+}
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or '').strip()]
+    raw = str(value).strip()
+    return [raw] if raw else []
+
+
+def evaluate_supportability_inventory(
+    inventory: dict[str, Any] | None,
+    *,
+    session_results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Evaluate manifest-backed out-of-frame supportability diagnostics.
+
+    Supportability inventory is intentionally not a pass override.  It is a
+    disclosure/backfill ledger for rows excluded from an answerable-surface
+    denominator after provider-native evidence proves the requested data were
+    unavailable.  A resolved entry must point to a replacement/backfill session
+    that is present in the scored bundle and structurally passes without its
+    own supportability or runtime-unavailable blocker.
+    """
+    if inventory is None:
+        return None
+
+    items = inventory.get('items') or inventory.get('exclusions') or []
+    if not isinstance(items, list):
+        raise ValueError('supportability inventory must contain an items/exclusions list')
+
+    by_session = {str(row.get('session_id') or ''): row for row in session_results}
+    evaluated: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    provider_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    disposition_counts: Counter[str] = Counter()
+
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            raise ValueError('supportability inventory entries must be objects')
+        session_id = str(raw_item.get('session_id') or raw_item.get('original_session_id') or '').strip()
+        provider = str(raw_item.get('provider') or raw_item.get('provider_stratum') or '<missing>').strip() or '<missing>'
+        reason = str(raw_item.get('supportability_reason') or raw_item.get('reason') or '<missing>').strip() or '<missing>'
+        disposition = str(raw_item.get('disposition') or '').strip().lower()
+        replacement_ids = _as_string_list(raw_item.get('replacement_session_ids'))
+        replacement_ids.extend(_as_string_list(raw_item.get('replacement_session_id')))
+        # Keep insertion order while removing accidental duplicates.
+        replacement_ids = list(dict.fromkeys(replacement_ids))
+
+        provider_counts[provider] += 1
+        reason_counts[reason] += 1
+        disposition_counts[disposition or '<missing>'] += 1
+
+        replacement_results = []
+        for replacement_id in replacement_ids:
+            result = by_session.get(replacement_id)
+            replacement_results.append(
+                {
+                    'session_id': replacement_id,
+                    'present': result is not None,
+                    'provisional_structural_pass': bool(result and result.get('provisional_structural_pass')),
+                    'supportability_blocked': bool(result and result.get('supportability_blocked')),
+                    'runtime_unavailable': bool(result and result.get('runtime_unavailable')),
+                }
+            )
+
+        resolved = (
+            disposition in RESOLVED_SUPPORTABILITY_INVENTORY_DISPOSITIONS
+            and bool(replacement_results)
+            and all(
+                item['present']
+                and item['provisional_structural_pass']
+                and not item['supportability_blocked']
+                and not item['runtime_unavailable']
+                for item in replacement_results
+            )
+        )
+        if not resolved:
+            unresolved.append(session_id or '<missing>')
+
+        evaluated.append(
+            {
+                'raw_item': raw_item,
+                'session_id': session_id,
+                'provider': provider,
+                'supportability_reason': reason,
+                'disposition': disposition,
+                'replacement_session_ids': replacement_ids,
+                'replacement_results': replacement_results,
+                'resolved': resolved,
+            }
+        )
+
+    return {
+        'total_items': len(evaluated),
+        'resolved_items': sum(1 for item in evaluated if item['resolved']),
+        'unresolved_items': len(unresolved),
+        'unresolved_session_ids': unresolved,
+        'provider_counts': dict(provider_counts),
+        'reason_counts': dict(reason_counts),
+        'disposition_counts': dict(disposition_counts),
+        'items': evaluated,
+    }
+
+
 def family_for_session(session: dict[str, Any], kind: str) -> str | None:
     if kind == 'multiround':
         family = str(session.get('family') or '').strip()
@@ -442,6 +555,12 @@ def main() -> int:
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--floor-policy', type=Path, default=DEFAULT_FLOOR_POLICY)
     parser.add_argument('--adjudication-records', type=Path, default=None)
+    parser.add_argument(
+        '--supportability-inventory',
+        type=Path,
+        default=None,
+        help='Optional manifest of supportability/out-of-frame rows and required same-stratum replacements.',
+    )
     parser.add_argument('--max-sessions', type=int, default=None)
     parser.add_argument('--start-index', type=int, default=0, help='0-based session index to start from before applying --max-sessions.')
     args = parser.parse_args()
@@ -449,6 +568,12 @@ def main() -> int:
     sessions: dict[str, dict[str, Any]] = {}
     session_order: list[str] = []
     floor_policy = load_json(args.floor_policy.resolve())
+    supportability_inventory_path = args.supportability_inventory.resolve() if args.supportability_inventory is not None else None
+    supportability_inventory_data = None
+    if supportability_inventory_path is not None:
+        supportability_inventory_data = load_json(supportability_inventory_path)
+        if supportability_inventory_data is None:
+            raise FileNotFoundError(f'supportability inventory not found: {supportability_inventory_path}')
     adjudication_records: dict[str, dict[str, Any]] = {}
     adjudication_path = args.adjudication_records.resolve() if args.adjudication_records is not None else None
     if adjudication_path is not None and adjudication_path.exists():
@@ -863,6 +988,11 @@ def main() -> int:
         failing_strata=failing_strata,
         missing_required_strata=missing_required_strata,
     )
+    supportability_inventory_report = evaluate_supportability_inventory(
+        supportability_inventory_data,
+        session_results=session_results,
+    )
+    supportability_inventory_summary = supportability_inventory_report or {}
 
     metrics = {
         'provisional_structural_session_success': {
@@ -933,6 +1063,9 @@ def main() -> int:
         'supportability_blocked_sessions': supportability_blocked_total,
         'supportability_blocked_by_provider': dict(supportability_blocked_by_provider),
         'supportability_blocked_reason_counts': dict(supportability_blocked_reason_counts),
+        'supportability_inventory_items': supportability_inventory_summary.get('total_items', 0),
+        'supportability_inventory_resolved_items': supportability_inventory_summary.get('resolved_items', 0),
+        'supportability_inventory_unresolved_items': supportability_inventory_summary.get('unresolved_items', 0),
         'runtime_unavailable_sessions': runtime_unavailable_total,
         'runtime_unavailable_by_type': dict(runtime_unavailable_by_type),
         'runtime_unavailable_reason_counts': dict(runtime_unavailable_reason_counts),
@@ -969,6 +1102,14 @@ def main() -> int:
         )
         claim_grade_blockers.append(
             f'supportability-blocked certification sessions remain unresolved ({supportability_blocked_total}: {rendered})'
+        )
+    if supportability_inventory_report and supportability_inventory_report.get('unresolved_items'):
+        unresolved_ids = supportability_inventory_report.get('unresolved_session_ids') or []
+        rendered = ', '.join(str(item) for item in unresolved_ids[:10])
+        suffix = f': {rendered}' if rendered else ''
+        claim_grade_blockers.append(
+            f'supportability inventory exclusions lack passing replacement '
+            f'({supportability_inventory_report["unresolved_items"]}{suffix})'
         )
     if runtime_unavailable_total:
         rendered = ', '.join(
@@ -1017,6 +1158,8 @@ def main() -> int:
         'snapshot_id': snapshot_ids.pop() if len(snapshot_ids) == 1 else None,
         'floor_policy_path': str(args.floor_policy.resolve()) if floor_policy is not None else None,
         'floor_policy_sha256': sha256_file(args.floor_policy.resolve()) if floor_policy is not None else None,
+        'supportability_inventory_path': str(supportability_inventory_path) if supportability_inventory_path is not None else None,
+        'supportability_inventory_sha256': sha256_file(supportability_inventory_path) if supportability_inventory_path is not None else None,
         'raw_results_path': str(args.raw_results.resolve()),
         'raw_results_sha256': sha256_file(args.raw_results.resolve()),
         'input_datasets': dataset_inputs,
@@ -1031,6 +1174,7 @@ def main() -> int:
             'adjudicated_session_count': adjudicated_records_total,
         },
         'metrics': metrics,
+        'supportability_inventory': supportability_inventory_report,
         'strata': {
             'provider_floor_policy_ready': floor_policy is not None,
             'floor_metric_source': floor_metric_source,
