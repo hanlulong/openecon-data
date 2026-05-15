@@ -59,13 +59,51 @@ _EXPLICIT_PROVIDER_KEYWORDS: Dict[str, List[str]] = {
     "CoinGecko": ["coingecko", "coin gecko", "from coingecko", "using coingecko", "crypto prices"],
 }
 
+_EXPLICIT_PROVIDER_DIRECTIVE_ALIASES: Dict[str, List[str]] = {
+    "OECD": ["oecd"],
+    "FRED": ["fred", "federal reserve", "st. louis fed", "stlouisfed"],
+    "WorldBank": ["world bank", "worldbank"],
+    "Comtrade": ["comtrade", "un comtrade", "united nations comtrade"],
+    "StatsCan": ["statscan", "statistics canada", "stats canada"],
+    "IMF": ["imf", "the imf", "international monetary fund"],
+    "BIS": ["bis", "bank for international settlements"],
+    "Eurostat": ["eurostat"],
+    "ExchangeRate": ["exchangerate", "exchange rate api", "exchange rate-api"],
+    "CoinGecko": ["coingecko", "coin gecko"],
+}
+
 _START_OF_QUERY_PROVIDERS = ["OECD", "IMF", "BIS", "Eurostat"]
 _START_OF_QUERY_EXCLUSIONS = ["countries", "country", "members", "member", "nations", "nation", "average"]
+
+
+def _provider_alias_pattern(alias: str) -> str:
+    """Return a boundary-safe provider alias pattern."""
+
+    return rf"(?<![a-z0-9_-]){re.escape(alias)}(?![a-z0-9_-])"
 
 
 def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
     """Return (provider, matched_keyword) if user explicitly names a provider, else None."""
     query_lower = query.lower()
+
+    directive_matches: List[Tuple[int, str, str]] = []
+    for provider, aliases in _EXPLICIT_PROVIDER_DIRECTIVE_ALIASES.items():
+        for alias in aliases:
+            alias_pattern = _provider_alias_pattern(alias)
+            directive_pattern = (
+                rf"(?<![a-z0-9_-])"
+                rf"(?P<keyword>(?:from|using|use|via)\s+{alias_pattern}|"
+                rf"according\s+to\s+{alias_pattern})"
+            )
+            for match in re.finditer(directive_pattern, query_lower):
+                directive_matches.append((match.start(), provider, match.group("keyword")))
+    if directive_matches:
+        # A syntactic provider directive ("from CoinGecko") is stronger than a
+        # bare provider word elsewhere in the title ("FRED Energy").  When a
+        # query contains multiple directives, use the later one as the most
+        # local source qualifier rather than falling back to provider-map order.
+        _, provider, keyword = max(directive_matches, key=lambda item: item[0])
+        return provider, keyword
 
     for provider in _START_OF_QUERY_PROVIDERS:
         provider_lower = provider.lower()
@@ -80,7 +118,7 @@ def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
             # CoinGecko has a valid asset id `fredenergy`; the bare FRED alias
             # must not steal `fredenergy from CoinGecko` before the explicit
             # CoinGecko suffix is seen.
-            if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", query_lower):
+            if re.search(_provider_alias_pattern(keyword), query_lower):
                 return provider, keyword
 
     return None

@@ -159,6 +159,20 @@ class TestExplicitProviderDetection:
         assert result is not None
         assert result[0] == "CoinGecko"
 
+    def test_explicit_provider_directive_overrides_bare_alias_in_title(self):
+        """A source directive is stronger than a provider word inside an asset/title."""
+        result = detect_explicit_provider_match("FRED Energy cryptocurrency price from CoinGecko")
+
+        assert result is not None
+        assert result == ("CoinGecko", "from coingecko")
+
+    def test_later_provider_directive_overrides_earlier_bare_alias(self):
+        """Provider directives should not depend on provider dictionary order."""
+        result = detect_explicit_provider_match("FRED data from World Bank")
+
+        assert result is not None
+        assert result == ("WorldBank", "from world bank")
+
     def test_start_of_query_provider(self):
         """Test provider detection at start of query."""
         result = detect_explicit_provider_match("OECD GDP for Italy")
@@ -246,6 +260,15 @@ class TestUnifiedRouter:
 
         assert decision.provider == "CoinGecko"
         assert decision.match_type == "explicit"
+
+    def test_explicit_coingecko_suffix_overrides_fred_asset_name(self, router):
+        """CoinGecko suffix wins when the asset's display name contains FRED."""
+        decision = router.route("FRED Energy cryptocurrency price from CoinGecko")
+
+        assert decision.provider == "CoinGecko"
+        assert decision.match_type == "explicit"
+        assert decision.matched_pattern == "from coingecko"
+        assert decision.semantic_authority == "exact_user_input"
 
     # ==========================================================================
     # US-Only Indicator Tests (LLM handles semantic routing; router defers)

@@ -735,6 +735,28 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "fredenergy")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_exact_title_intent_keeps_fred_named_coingecko_asset_locked(self) -> None:
+        class _Lookup:
+            def search(self, text, provider=None, limit=5):
+                return []
+
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                if provider in {"CoinGecko", "COINGECKO"} and "FRED Energy" in search_inputs:
+                    return [{"provider": provider, "code": "fredenergy", "name": "FRED Energy"}]
+                return []
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "FRED Energy cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "fredenergy")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "FRED Energy")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+
     def test_oecd_provider_code_shape_accepts_dataflow_ending_with_english_suffix(self) -> None:
         self.assertTrue(
             self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access
