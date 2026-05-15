@@ -90,6 +90,55 @@ def test_extract_response_signals_preserves_answer_surface_metadata():
     assert signals["source_urls"] == ["https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410037501"]
 
 
+def test_extract_response_signals_records_dataset_time_ranges_from_metadata_and_points():
+    module = load_module()
+
+    signals = module.extract_response_signals(
+        {
+            "data": [
+                {
+                    "metadata": {
+                        "source": "IMF",
+                        "country": "Canada",
+                        "indicator": "Real GDP growth",
+                        "seriesId": "NGDP_RPCH",
+                        "startDate": "2020",
+                        "endDate": "2025",
+                    },
+                    "data": [{"date": "2020", "value": 1.0}, {"date": "2025", "value": 2.0}],
+                },
+                {
+                    "metadata": {
+                        "source": "FRED",
+                        "country": "United States",
+                        "seriesId": "GDP",
+                    },
+                    "observations": [{"date": "2019-01-01", "value": 1}, {"date": "2024-01-01", "value": 2}],
+                },
+            ]
+        }
+    )
+
+    assert sorted(signals["dataset_time_ranges"], key=lambda item: item["provider"]) == [
+        {
+            "country": "United States",
+            "endDate": "2024-01-01",
+            "indicator": "",
+            "provider": "FRED",
+            "seriesId": "GDP",
+            "startDate": "2019-01-01",
+        },
+        {
+            "country": "Canada",
+            "endDate": "2025",
+            "indicator": "Real GDP growth",
+            "provider": "IMF",
+            "seriesId": "NGDP_RPCH",
+            "startDate": "2020",
+        },
+    ]
+
+
 def test_progress_sidecar_paths_and_summary(tmp_path: Path):
     module = load_module()
 

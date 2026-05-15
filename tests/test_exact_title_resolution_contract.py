@@ -911,6 +911,108 @@ def test_exact_title_match_accepts_short_fred_title_with_frequency_disambiguator
     assert intent.parameters["__exact_indicator_title_match"] is True
 
 
+def test_exact_title_match_preserves_real_measurement_qualifier() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if "Real Residential Property Prices for China" not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "QCNN628BIS",
+                    "name": "Residential Property Prices for China",
+                    "unit": "Index 2010=100",
+                    "frequency": "Quarterly",
+                    "description": "Residential property price index.",
+                    "keywords": "residential property prices china housing",
+                    "popularity": 50,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "QCNR628BIS",
+                    "name": "Real Residential Property Prices for China",
+                    "unit": "Index 2010=100",
+                    "frequency": "Quarterly",
+                    "description": "The series is deflated using CPI.",
+                    "keywords": "real residential property prices china cpi",
+                    "popularity": 40,
+                },
+            ]
+
+    query = "Real Residential Property Prices for China in Index 2010=100 from FRED"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "FRED")
+
+    assert match is not None
+    assert match["code"] == "QCNR628BIS"
+
+
+def test_exact_title_match_applies_frequency_to_strict_name_matches() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if "Bank Credit All Commercial Banks" not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "TOTBKCR",
+                    "name": "Bank Credit, All Commercial Banks",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Weekly, Ending Wednesday",
+                    "popularity": 80,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "LOANINV",
+                    "name": "Bank Credit, All Commercial Banks",
+                    "unit": "Billions of U.S. Dollars",
+                    "frequency": "Monthly",
+                    "popularity": 60,
+                },
+            ]
+
+    query = "US Bank Credit All Commercial Banks in Billions of U.S. Dollars (Monthly) from FRED"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "FRED")
+
+    assert match is not None
+    assert match["code"] == "LOANINV"
+
+
+def test_build_exact_statscan_title_intent_keeps_country_scope_outside_title() -> None:
+    lookup_results = [
+        {
+            "provider": "StatsCan",
+            "code": "13100287",
+            "name": "Health behaviour in school-aged children 2002, student response to question: How often do you go to school or to bed hungry because there is not enough food at home?",
+        }
+    ]
+
+    with patch(
+        "backend.services.indicator_database.get_indicator_lookup",
+        return_value=Mock(search=Mock(return_value=lookup_results)),
+    ):
+        intent = build_exact_indicator_title_intent(
+            "Canada Health behaviour in school-aged children 2002, student response to question: How often do you go to school or to bed hungry because there is not enough food at home? from Statistics Canada",
+            explicit_provider="StatsCan",
+            countries=["CA"],
+            all_providers=["StatsCan"],
+        )
+
+    assert intent is not None
+    assert intent.parameters["indicator"] == "13100287"
+    assert intent.parameters["country"] == "CA"
+    assert intent.parameters["geography"] == "Canada"
+
+
 def test_exact_title_match_rejects_ambiguous_short_fred_title_without_frequency() -> None:
     class _Lookup:
         def search(self, text, provider=None, limit=5):

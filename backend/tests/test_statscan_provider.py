@@ -579,6 +579,88 @@ async def test_full_table_csv_exact_fallback_uses_first_provider_series_not_sema
 
 
 @pytest.mark.asyncio
+async def test_full_table_csv_respects_explicit_canada_geography(monkeypatch, statscan_provider):
+    rows = [
+        {
+            "REF_DATE": "2000",
+            "GEO": "Austria",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v_at",
+            "COORDINATE": "1.1.1.1",
+            "VALUE": "5.0",
+        },
+        {
+            "REF_DATE": "2000",
+            "GEO": "Canada",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v_ca",
+            "COORDINATE": "2.1.1.1",
+            "VALUE": "9.0",
+        },
+        {
+            "REF_DATE": "2001",
+            "GEO": "Canada",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v_ca",
+            "COORDINATE": "2.1.1.1",
+            "VALUE": "10.0",
+        },
+    ]
+
+    async def fake_rows(product_id):
+        return rows, "https://www150.statcan.gc.ca/n1/tbl/csv/13100287-eng.zip"
+
+    monkeypatch.setattr(statscan_provider, "_get_full_table_csv_rows", fake_rows)
+
+    result = await statscan_provider.fetch_full_table_csv_data({
+        "productId": "13100287",
+        "indicatorLabel": "Exact provider table title",
+        "geography": "CA",
+        "periods": 10,
+    })
+
+    assert result.metadata.seriesId == "13100287:2.1.1.1"
+    assert result.metadata.country == "Canada"
+    assert [point.date for point in result.data] == ["2000", "2001"]
+    assert [point.value for point in result.data] == [9.0, 10.0]
+
+
+@pytest.mark.asyncio
+async def test_full_table_csv_fails_closed_when_explicit_geography_has_no_rows(monkeypatch, statscan_provider):
+    rows = [
+        {
+            "REF_DATE": "2000",
+            "GEO": "Austria",
+            "UOM": "Percent",
+            "SCALAR_FACTOR": "units",
+            "SCALAR_ID": "0",
+            "VECTOR": "v_at",
+            "COORDINATE": "1.1.1.1",
+            "VALUE": "5.0",
+        },
+    ]
+
+    async def fake_rows(product_id):
+        return rows, "https://www150.statcan.gc.ca/n1/tbl/csv/13100287-eng.zip"
+
+    monkeypatch.setattr(statscan_provider, "_get_full_table_csv_rows", fake_rows)
+
+    with pytest.raises(DataNotAvailableError):
+        await statscan_provider.fetch_full_table_csv_data({
+            "productId": "13100287",
+            "indicatorLabel": "Exact provider table title",
+            "geography": "Canada",
+            "periods": 10,
+        })
+
+
+@pytest.mark.asyncio
 async def test_full_table_csv_rejects_oversize_uncompressed_members(monkeypatch, statscan_provider):
     old_max = statscan_provider.FULL_TABLE_CSV_MAX_BYTES
     statscan_provider.FULL_TABLE_CSV_MAX_BYTES = 100

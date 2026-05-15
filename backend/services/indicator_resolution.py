@@ -82,6 +82,11 @@ _EXACT_TITLE_FREQUENCY_ALIASES = {
     "annual": {"annual", "annually", "yearly", "year", "a"},
 }
 
+_EXACT_TITLE_MEASUREMENT_QUALIFIER_ALIASES = {
+    "real": {"real", "inflation adjusted", "inflation-adjusted", "deflated", "cpi", "constant"},
+    "nominal": {"nominal", "current"},
+}
+
 
 def _normalize_exact_title_unit_text(text: str) -> str:
     """Normalize unit text for exact-title unit compatibility."""
@@ -138,6 +143,42 @@ def _candidate_frequency_matches(requested: set[str], candidate_frequency: str) 
         if canonical in tokens or tokens & aliases or normalized.startswith(canonical):
             return True
     return False
+
+
+def _extract_exact_title_measurement_qualifiers(text: str) -> set[str]:
+    """Extract explicit price-basis qualifiers from an exact-title query.
+
+    This intentionally stays narrower than general semantic matching.  It only
+    recognizes measurement-basis words that can distinguish provider-title
+    near-neighbors (for example real vs nominal price indexes).  The common noun
+    phrase ``real estate`` is excluded so housing asset titles are not treated
+    as CPI-deflated requests merely because they contain the word "real".
+    """
+
+    tokens = _normalize_exact_title_unit_text(text).split()
+    found: set[str] = set()
+    for idx, token in enumerate(tokens):
+        next_token = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+        if token == "real" and next_token != "estate":
+            found.add("real")
+        elif token == "nominal":
+            found.add("nominal")
+    if "inflation adjusted" in _normalize_exact_title_unit_text(text):
+        found.add("real")
+    return found
+
+
+def _candidate_measurement_qualifiers_match(requested: set[str], candidate_text: str) -> bool:
+    """Return True when candidate metadata supports requested price-basis words."""
+
+    if not requested:
+        return True
+    normalized = _normalize_exact_title_unit_text(candidate_text)
+    for qualifier in requested:
+        aliases = _EXACT_TITLE_MEASUREMENT_QUALIFIER_ALIASES.get(qualifier, {qualifier})
+        if not any(_normalize_exact_title_unit_text(alias) in normalized for alias in aliases):
+            return False
+    return True
 
 
 def _has_ratio_cue(text: str) -> bool:
@@ -465,7 +506,7 @@ def build_exact_indicator_title_intent(
     if provider == "COINGECKO":
         params["coinIds"] = [code]
 
-    countries = [] if provider in {"STATSCAN", "STATISTICS CANADA"} else _countries_outside_exact_title(
+    countries = _countries_outside_exact_title(
         query,
         provider,
         name,
@@ -473,6 +514,10 @@ def build_exact_indicator_title_intent(
     )
     if len(countries) == 1:
         params["country"] = countries[0]
+        if provider in {"STATSCAN", "STATISTICS CANADA"}:
+            country_code = str(countries[0] or "").strip().upper()
+            if country_code in {"CA", "CAN", "CANADA"}:
+                params["geography"] = "Canada"
     elif len(countries) > 1:
         params["countries"] = countries
 
@@ -540,7 +585,60 @@ def _countries_outside_exact_title(
     if not countries:
         return []
 
+    provider_key = _normalize_provider_name(provider)
     residual_tokens = _exact_surface_tokens(query)
+    if provider_key in {"STATSCAN", "STATISTICS CANADA"}:
+        # StatsCan exact table titles are often full descriptive sentences whose
+        # country words are table scope ("imports from Canada", "United States
+        # tariffs") rather than requested geography filters.  Prefer literal
+        # substring removal before the normalized variant matcher so those
+        # title-internal country words cannot survive as residual tokens.
+        residual_text = str(query or "")
+        literal_removed = False
+        literal_title_patterns = [exact_title]
+        literal_title_patterns.extend(exact_title_search_inputs(exact_title, provider))
+        provider_alias_tokens = [
+            _exact_surface_tokens(alias)
+            for alias in (
+                "statistics canada",
+                "statscan",
+                "from statistics canada",
+                "from statscan",
+            )
+        ]
+        for literal_title in sorted(
+            {text for text in literal_title_patterns if str(text or "").strip()},
+            key=len,
+            reverse=True,
+        ):
+            next_text = re.sub(re.escape(literal_title), " ", residual_text, count=1, flags=re.IGNORECASE)
+            if next_text != residual_text:
+                residual_tokens = _exact_surface_tokens(next_text)
+                for provider_alias in provider_alias_tokens:
+                    residual_tokens = _remove_first_token_sequence(residual_tokens, provider_alias)
+                literal_removed = True
+                break
+        if literal_removed:
+            filtered: list[str] = []
+            seen_codes: set[str] = set()
+            for country in countries:
+                code = CountryResolver.normalize(str(country)) or str(country or "").strip().upper()
+                if not code or code in seen_codes:
+                    continue
+                aliases = [
+                    alias
+                    for alias, alias_code in CountryResolver.COUNTRY_ALIASES.items()
+                    if alias_code == code
+                ]
+                aliases.append(code)
+                if any(
+                    _contains_token_sequence(residual_tokens, _exact_surface_tokens(alias))
+                    for alias in aliases
+                    if _exact_surface_tokens(alias)
+                ):
+                    filtered.append(country)
+                    seen_codes.add(code)
+            return filtered
     title_variants = [exact_title]
     title_variants.extend(exact_title_search_inputs(exact_title, provider))
     title_variants = sorted(
@@ -720,6 +818,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         min_name_len = 8
     query_country_codes = _extract_country_codes_from_text(query_text)
     explicit_frequency_tokens = _extract_exact_title_frequency_tokens(query_text)
+    explicit_measurement_qualifiers = _extract_exact_title_measurement_qualifiers(query_text)
     explicit_unit_tokens: set[str] = set()
     explicit_unit_normalized = ""
     if provider_key != "STATSCAN":
@@ -731,8 +830,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 break
 
     best_candidate: Optional[Dict[str, Any]] = None
-    best_rank = (-999, -1, -999, -999, -1, -999)
-    ranked_matches: list[tuple[tuple[int, int, int, int, int, int], dict[str, Any]]] = []
+    best_rank = (-999, -999, -1, -999, -999, -1, -999)
+    ranked_matches: list[tuple[tuple[int, int, int, int, int, int, int], dict[str, Any]]] = []
     seen_codes = set()
 
     def _unit_compatibility_rank(query: str, name: str, unit: str = "") -> int:
@@ -902,6 +1001,28 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 candidate_unit_tokens = _exact_title_unit_tokens(candidate_unit_text)
                 if not explicit_unit_tokens <= candidate_unit_tokens:
                     continue
+            if explicit_frequency_tokens:
+                candidate_frequency = str(candidate.get("frequency") or "")
+                if candidate_frequency and not _candidate_frequency_matches(
+                    explicit_frequency_tokens,
+                    candidate_frequency,
+                ):
+                    continue
+            if explicit_measurement_qualifiers:
+                candidate_measurement_text = " ".join(
+                    str(value or "")
+                    for value in (
+                        candidate.get("name"),
+                        candidate.get("description"),
+                        candidate.get("keywords"),
+                        candidate.get("category"),
+                    )
+                )
+                if not _candidate_measurement_qualifiers_match(
+                    explicit_measurement_qualifiers,
+                    candidate_measurement_text,
+                ):
+                    continue
             strict_exact_by_code.setdefault(code.upper(), dict(candidate))
         if len(strict_exact_by_code) == 1:
             return next(iter(strict_exact_by_code.values()))
@@ -926,11 +1047,28 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             if normalized_query
         ):
             title_exact = normalized_name in exact_query_norms
-            if provider_key == "FRED" and not title_exact and not _candidate_frequency_matches(
-                explicit_frequency_tokens,
-                str(candidate.get("frequency") or ""),
-            ):
-                continue
+            if provider_key == "FRED" and explicit_frequency_tokens:
+                candidate_frequency = str(candidate.get("frequency") or "")
+                if candidate_frequency and not _candidate_frequency_matches(
+                    explicit_frequency_tokens,
+                    candidate_frequency,
+                ):
+                    continue
+            if explicit_measurement_qualifiers:
+                candidate_measurement_text = " ".join(
+                    str(value or "")
+                    for value in (
+                        candidate.get("name"),
+                        candidate.get("description"),
+                        candidate.get("keywords"),
+                        candidate.get("category"),
+                    )
+                )
+                if not _candidate_measurement_qualifiers_match(
+                    explicit_measurement_qualifiers,
+                    candidate_measurement_text,
+                ):
+                    continue
             candidate = dict(candidate)
             if provider_key == "COMTRADE":
                 original_query_lower = query_text.lower()
@@ -967,9 +1105,36 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 normalized_name,
                 str(candidate.get("unit") or ""),
             )
+            measurement_rank = 0
+            if explicit_measurement_qualifiers:
+                candidate_measurement_text = " ".join(
+                    str(value or "")
+                    for value in (
+                        candidate.get("name"),
+                        candidate.get("description"),
+                        candidate.get("keywords"),
+                        candidate.get("category"),
+                    )
+                )
+                measurement_rank = (
+                    20
+                    if _candidate_measurement_qualifiers_match(
+                        explicit_measurement_qualifiers,
+                        candidate_measurement_text,
+                    )
+                    else -100
+                )
             shared_tokens = len(set(normalized_name.split()) & set(normalized_text.split()))
             popularity = int(candidate.get("popularity") or 0)
-            rank = (unit_rank, country_rank, -token_delta, popularity, shared_tokens, -name_token_len)
+            rank = (
+                measurement_rank,
+                unit_rank,
+                country_rank,
+                -token_delta,
+                popularity,
+                shared_tokens,
+                -name_token_len,
+            )
             ranked_matches.append((rank, candidate))
             if rank > best_rank:
                 best_candidate = candidate
@@ -1023,7 +1188,7 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             )
             for candidate in top_matches
         }
-        if explicit_unit_tokens and best_rank[0] <= -100:
+        if explicit_unit_tokens and best_rank[1] <= -100:
             return None
         if len(top_codes) > 1:
             if explicit_frequency_tokens:

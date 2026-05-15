@@ -271,6 +271,112 @@ def test_imf_candidate_order_prefers_public_datamapper_surface(monkeypatch) -> N
     assert scores == [0.69, 0.60, 0.55, 0.55]
 
 
+def test_query_metadata_ordering_promotes_requested_frequency_and_unit(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    def fake_enrich(candidates, provider):  # noqa: ANN001, ARG001
+        metadata = {
+            "TOTBKCR": {
+                "frequency": "Weekly, Ending Wednesday",
+                "unit": "Billions of U.S. Dollars",
+                "end_date": "",
+                "category": "",
+                "description": "",
+                "keywords": "",
+                "discontinued": False,
+            },
+            "H8B1001NCBCMG": {
+                "frequency": "Monthly",
+                "unit": "Percent Change at Annual Rate",
+                "end_date": "",
+                "category": "",
+                "description": "",
+                "keywords": "",
+                "discontinued": False,
+            },
+            "LOANINV": {
+                "frequency": "Monthly",
+                "unit": "Billions of U.S. Dollars",
+                "end_date": "",
+                "category": "",
+                "description": "",
+                "keywords": "",
+                "discontinued": False,
+            },
+        }
+        return [
+            {"code": code, "name": name, **metadata[code]}
+            for code, name in candidates
+        ]
+
+    monkeypatch.setattr(selector, "_enrich_candidates", fake_enrich)
+
+    candidates, scores = selector._prioritize_candidates_by_query_metadata(  # pylint: disable=protected-access
+        "US Bank Credit All Commercial Banks in Billions of U.S. Dollars (Monthly) from FRED",
+        [
+            ("TOTBKCR", "Bank Credit, All Commercial Banks"),
+            ("H8B1001NCBCMG", "Bank Credit, All Commercial Banks"),
+            ("LOANINV", "Bank Credit, All Commercial Banks"),
+        ],
+        [0.90, 0.88, 0.86],
+        "FRED",
+    )
+
+    assert candidates[0][0] == "LOANINV"
+    assert scores[0] == 0.86
+
+
+@pytest.mark.asyncio
+async def test_select_retries_when_llm_pick_conflicts_with_requested_frequency(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+    all_candidates = [
+        ("TOTBKCR", "Bank Credit, All Commercial Banks"),
+        ("LOANINV", "Bank Credit, All Commercial Banks"),
+    ]
+
+    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+        return all_candidates, [0.90, 0.86]
+
+    def fake_enrich(candidates, provider):  # noqa: ANN001, ARG001
+        metadata = {
+            "TOTBKCR": {"frequency": "Weekly", "unit": "Billions of U.S. Dollars"},
+            "LOANINV": {"frequency": "Monthly", "unit": "Billions of U.S. Dollars"},
+        }
+        return [
+            {
+                "code": code,
+                "name": name,
+                "end_date": "",
+                "category": "",
+                "description": "",
+                "keywords": "",
+                "discontinued": False,
+                **metadata[code],
+            }
+            for code, name in candidates
+        ]
+
+    seen_candidate_sets: list[list[str]] = []
+
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False):  # noqa: ANN001, ARG001
+        seen_candidate_sets.append([code for code, _name in candidates])
+        if seen_candidate_sets[-1] == ["TOTBKCR", "LOANINV"]:
+            return SelectionResult(code="TOTBKCR", name="Bank Credit, All Commercial Banks", source="llm_pick")
+        return SelectionResult(code="LOANINV", name="Bank Credit, All Commercial Banks", source="llm_pick")
+
+    monkeypatch.setattr(selector, "_get_candidates_with_scores", fake_candidates)
+    monkeypatch.setattr(selector, "_enrich_candidates", fake_enrich)
+    monkeypatch.setattr(selector, "_llm_pick", fake_llm_pick)
+
+    result = await selector.select(
+        "US Bank Credit All Commercial Banks in Billions of U.S. Dollars (Monthly) from FRED",
+        "FRED",
+    )
+
+    assert result.code == "LOANINV"
+    assert seen_candidate_sets == [["TOTBKCR", "LOANINV"], ["LOANINV"]]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query,provider,wrong_code,wrong_title,correct_code,correct_title",

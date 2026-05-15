@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 import asyncio
 import re
@@ -284,6 +284,107 @@ class ComtradeProvider(BaseProvider):
         )
 
     @staticmethod
+    def _looks_like_specific_hs_heading(commodity: str) -> bool:
+        text = str(commodity or "").strip()
+        meaningful_tokens = [
+            token
+            for token in re.findall(r"[A-Za-z0-9]+", text)
+            if len(token) > 1
+        ]
+        return bool((";" in text or "," in text) and len(meaningful_tokens) >= 6)
+
+    @staticmethod
+    def _strip_hs_code_prefix(title: str) -> str:
+        return re.sub(r"^\s*\d{2,6}\s*[-:]\s*", "", str(title or "")).strip()
+
+    @staticmethod
+    def _candidate_title_similarity(query: str, candidate_name: str) -> float:
+        try:
+            from rapidfuzz import fuzz
+
+            return float(fuzz.ratio(query, ComtradeProvider._strip_hs_code_prefix(candidate_name)))
+        except Exception:
+            query_tokens = set(re.findall(r"[a-z0-9]+", str(query or "").lower()))
+            candidate_tokens = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    ComtradeProvider._strip_hs_code_prefix(candidate_name).lower(),
+                )
+            )
+            if not query_tokens or not candidate_tokens:
+                return 0.0
+            return 100.0 * len(query_tokens & candidate_tokens) / max(len(query_tokens), len(candidate_tokens))
+
+    @staticmethod
+    def _resolve_catalog_commodity_code(commodity: str) -> Optional[str]:
+        """Resolve literal HS heading/subheading titles from provider catalog evidence."""
+
+        from ..utils.retry import DataNotAvailableError
+
+        candidates: list[dict[str, Any]] = []
+        seen_codes: set[str] = set()
+
+        def add_candidate(candidate: dict[str, Any]) -> None:
+            candidate_code = str(candidate.get("code") or "").strip()
+            if not (candidate_code.isdigit() and 2 <= len(candidate_code) <= 6):
+                return
+            if candidate_code in seen_codes:
+                return
+            seen_codes.add(candidate_code)
+            candidates.append(candidate)
+
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+
+            lookup = get_indicator_lookup()
+            for candidate in lookup.search(commodity, provider="Comtrade", limit=8):
+                add_candidate(candidate)
+        except Exception:
+            pass
+
+        if not candidates and ComtradeProvider._looks_like_specific_hs_heading(commodity):
+            try:
+                from ..services.indicator_selector import IndicatorSelector
+
+                selector = IndicatorSelector()
+                retrieved, _scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
+                    commodity,
+                    "Comtrade",
+                    top_k=8,
+                )
+                for code, name in retrieved:
+                    add_candidate({"code": code, "name": name, "provider": "Comtrade"})
+            except Exception:
+                pass
+
+        scored: list[tuple[float, dict[str, Any]]] = [
+            (
+                ComtradeProvider._candidate_title_similarity(
+                    commodity,
+                    str(candidate.get("name") or ""),
+                ),
+                candidate,
+            )
+            for candidate in candidates
+        ]
+        scored = [item for item in scored if item[0] >= 90.0]
+        if not scored:
+            if ComtradeProvider._looks_like_specific_hs_heading(commodity):
+                raise DataNotAvailableError(
+                    "comtrade_hs_subheading_unresolved: specific HS heading text did not resolve to a provider catalog code"
+                )
+            return None
+        scored.sort(key=lambda item: (-item[0], str(item[1].get("code") or "")))
+        if len(scored) > 1 and abs(scored[0][0] - scored[1][0]) <= 1.0:
+            top_code = str(scored[0][1].get("code") or "")
+            second_code = str(scored[1][1].get("code") or "")
+            if len(top_code) == len(second_code):
+                raise DataNotAvailableError(
+                    "comtrade_hs_subheading_ambiguous: provider catalog contains multiple indistinguishable HS headings"
+                )
+        return str(scored[0][1].get("code") or "").strip() or None
+
+    @staticmethod
     def _commodity_code(commodity: Optional[str]) -> str:
         """Convert commodity name/HS code to Comtrade commodity code.
 
@@ -328,6 +429,10 @@ class ComtradeProvider(BaseProvider):
             if numeric_part and 2 <= len(numeric_part) <= 4:
                 return numeric_part
 
+        catalog_code = ComtradeProvider._resolve_catalog_commodity_code(commodity)
+        if catalog_code:
+            return catalog_code
+
         key = upper_commodity.replace(" ", "_")
         # Tier 4: Check local COMMODITY_MAPPINGS (custom/specific mappings)
         code = ComtradeProvider.COMMODITY_MAPPINGS.get(key)
@@ -338,21 +443,6 @@ class ComtradeProvider(BaseProvider):
         code = HS_CODE_MAPPINGS.get(key)
         if code:
             return code
-
-        # Tier 6: Provider-local catalog search for long-tail HS headings.
-        # The sampled certification surface contains thousands of specific
-        # Comtrade heading titles that are too broad to hardcode but available
-        # in the local indicator catalog (e.g. "Yarn of carded wool...").
-        try:
-            from ..services.indicator_database import get_indicator_lookup
-
-            lookup = get_indicator_lookup()
-            for candidate in lookup.search(commodity, provider="Comtrade", limit=3):
-                candidate_code = str(candidate.get("code") or "").strip()
-                if candidate_code.isdigit() and 2 <= len(candidate_code) <= 6:
-                    return candidate_code
-        except Exception:
-            pass
 
         # Tier 7: Partial match - find commodity containing this term
         for mapping_key, mapping_code in ComtradeProvider.COMMODITY_MAPPINGS.items():

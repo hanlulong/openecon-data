@@ -1568,6 +1568,19 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(lookup.provider, "Comtrade")
         self.assertEqual(lookup.text, "Yarn of carded wool, not put up for retail sale")
 
+    def test_comtrade_commodity_code_preserves_specific_hs_subheading_before_broad_terms(self) -> None:
+        code = ComtradeProvider._commodity_code(  # pylint: disable=protected-access
+            "Steel, stainless; seamless, drill pipe, of a kind used in drilling for oil or gas"
+        )
+
+        self.assertEqual(code, "730422")
+
+    def test_comtrade_commodity_code_fails_closed_for_ambiguous_subheading_title(self) -> None:
+        with self.assertRaises(DataNotAvailableError):
+            ComtradeProvider._commodity_code(  # pylint: disable=protected-access
+                "Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled"
+            )
+
     def test_comtrade_fetch_single_reporter_retries_timeout_then_succeeds(self) -> None:
         provider = ComtradeProvider(api_key="demo")
 

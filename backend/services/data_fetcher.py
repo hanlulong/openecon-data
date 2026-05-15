@@ -1797,6 +1797,10 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             "periods": params.get("periods", 240),
             "__exact_indicator_title_match": True,
         }
+        if params.get("geography"):
+            dynamic_params["geography"] = params.get("geography")
+        elif str(params.get("country") or "").strip().upper() in {"CA", "CAN", "CANADA"}:
+            dynamic_params["geography"] = "Canada"
         if params.get("startDate"):
             dynamic_params["startDate"] = params.get("startDate")
         if params.get("endDate"):

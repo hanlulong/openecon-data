@@ -382,6 +382,65 @@ def dataset_has_values(dataset: dict[str, Any]) -> bool:
     return False
 
 
+def _dataset_point_dates(dataset: dict[str, Any]) -> list[str]:
+    dates: list[str] = []
+    for key in ['data', 'values', 'observations', 'time_series', 'timeSeries', 'chart_data', 'chartData']:
+        value = dataset.get(key)
+        items: list[Any]
+        if isinstance(value, list):
+            items = value
+        elif isinstance(value, dict):
+            items = list(value.values())
+        else:
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_date = (
+                item.get('date')
+                or item.get('period')
+                or item.get('time')
+                or item.get('x')
+                or item.get('year')
+            )
+            if raw_date is not None and str(raw_date).strip():
+                dates.append(str(raw_date).strip())
+    return sorted(dates)
+
+
+def _dataset_time_range(dataset: dict[str, Any]) -> dict[str, str] | None:
+    metadata = dataset.get('metadata') or {}
+    start_date = str(
+        metadata.get('startDate')
+        or metadata.get('start_date')
+        or metadata.get('observationStart')
+        or metadata.get('observation_start')
+        or ''
+    ).strip()
+    end_date = str(
+        metadata.get('endDate')
+        or metadata.get('end_date')
+        or metadata.get('observationEnd')
+        or metadata.get('observation_end')
+        or ''
+    ).strip()
+    if not (start_date and end_date):
+        dates = _dataset_point_dates(dataset)
+        if dates:
+            start_date = start_date or dates[0]
+            end_date = end_date or dates[-1]
+    if not (start_date or end_date):
+        return None
+    return {
+        'provider': str(metadata.get('source') or metadata.get('provider') or '').strip(),
+        'country': str(metadata.get('country') or '').strip(),
+        'indicator': str(metadata.get('indicator') or metadata.get('name') or '').strip(),
+        'seriesId': str(metadata.get('seriesId') or metadata.get('series_id') or '').strip(),
+        'startDate': start_date,
+        'endDate': end_date,
+    }
+
+
 def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
     datasets = collect_datasets(resp_json)
     populated_series_count = sum(1 for dataset in datasets if dataset_has_values(dataset))
@@ -393,6 +452,7 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
     indicators = set()
     api_urls = set()
     source_urls = set()
+    dataset_time_ranges: list[dict[str, str]] = []
     for dataset in datasets:
         metadata = dataset.get('metadata') or {}
         provider = str(metadata.get('source') or metadata.get('provider') or '').strip()
@@ -413,6 +473,9 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
         source_url = str(metadata.get('sourceUrl') or metadata.get('source_url') or '').strip()
         if source_url:
             source_urls.add(source_url)
+        time_range = _dataset_time_range(dataset)
+        if time_range:
+            dataset_time_ranges.append(time_range)
     clarification_options = resp_json.get('clarificationOptions') or []
     clarification_questions = resp_json.get('clarificationQuestions') or []
     return {
@@ -427,6 +490,16 @@ def extract_response_signals(resp_json: dict[str, Any]) -> dict[str, Any]:
         'indicators': sorted(indicators),
         'api_urls': sorted(api_urls),
         'source_urls': sorted(source_urls),
+        'dataset_time_ranges': sorted(
+            dataset_time_ranges,
+            key=lambda item: (
+                item.get('provider', ''),
+                item.get('country', ''),
+                item.get('seriesId', ''),
+                item.get('startDate', ''),
+                item.get('endDate', ''),
+            ),
+        ),
     }
 
 
@@ -491,6 +564,7 @@ def record_response(row: dict[str, Any], dataset_type: str, round_index: int, qu
         'indicators': response_signals.get('indicators', []),
         'api_urls': response_signals.get('api_urls', []),
         'source_urls': response_signals.get('source_urls', []),
+        'dataset_time_ranges': response_signals.get('dataset_time_ranges', []),
         'clarification_detected': response_signals['clarification_detected'],
         'clarification_options_count': response_signals['clarification_options_count'],
         'clarification_questions_count': response_signals['clarification_questions_count'],

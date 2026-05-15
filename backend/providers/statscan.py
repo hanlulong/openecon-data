@@ -2411,7 +2411,11 @@ class StatsCanProvider(BaseProvider):
         candidate_rows = [row for row in rows if value_is_present(row)]
 
         if geography:
-            geography_lower = geography.lower()
+            geography_lower = str(geography).strip().lower()
+            geography_lower = {
+                "ca": "canada",
+                "can": "canada",
+            }.get(geography_lower, geography_lower)
             candidate_rows = [
                 row for row in candidate_rows
                 if str(row.get("GEO") or "").lower() == geography_lower

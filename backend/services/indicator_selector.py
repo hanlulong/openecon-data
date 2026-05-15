@@ -37,6 +37,127 @@ def _get_settings() -> Settings:
     return _settings
 
 
+_FREQUENCY_ALIASES = {
+    "daily": {"daily", "day", "d"},
+    "weekly": {"weekly", "week", "w"},
+    "monthly": {"monthly", "month", "m"},
+    "quarterly": {"quarterly", "quarter", "q"},
+    "annual": {"annual", "annually", "yearly", "year", "a"},
+}
+
+_UNIT_CUE_RE = re.compile(
+    r"\b(?:dollars?|u\.?s\.?|usd|percent(?:age)?|index|capita|ppp|"
+    r"currency|millions?|billions?|thousands?|trillions?|units?)\b|"
+    r"\b\d{4}\s*=\s*100\b",
+    flags=re.IGNORECASE,
+)
+
+_MEASUREMENT_QUALIFIER_ALIASES = {
+    "real": {"real", "inflation adjusted", "inflation-adjusted", "deflated", "cpi", "constant"},
+    "nominal": {"nominal", "current"},
+}
+
+
+def _normalize_metadata_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _extract_requested_frequencies(text: str) -> set[str]:
+    normalized = _normalize_metadata_text(text)
+    tokens = set(normalized.split())
+    found: set[str] = set()
+    for canonical, aliases in _FREQUENCY_ALIASES.items():
+        alias_tokens = {_normalize_metadata_text(alias) for alias in aliases}
+        long_aliases = {alias for alias in alias_tokens if len(alias) > 1}
+        one_letter_aliases = {alias for alias in alias_tokens if len(alias) == 1}
+        if canonical == "annual":
+            long_aliases = {
+                alias
+                for alias in long_aliases
+                if not re.search(rf"\b\d+\s*{re.escape(alias)}\b", normalized)
+            }
+        if tokens & long_aliases:
+            found.add(canonical)
+            continue
+        if any(re.search(rf"\(\s*{re.escape(alias)}\s*\)", normalized) for alias in one_letter_aliases):
+            found.add(canonical)
+    return found
+
+
+def _frequency_matches(requested: set[str], candidate_frequency: str) -> bool:
+    if not requested:
+        return True
+    normalized = _normalize_metadata_text(candidate_frequency)
+    tokens = set(normalized.split())
+    if not normalized:
+        return False
+    for canonical in requested:
+        aliases = {
+            _normalize_metadata_text(alias)
+            for alias in _FREQUENCY_ALIASES.get(canonical, {canonical})
+        }
+        if canonical in tokens or tokens & aliases or normalized.startswith(canonical):
+            return True
+    return False
+
+
+def _extract_requested_unit_tokens(text: str) -> set[str]:
+    query = re.sub(r"\b(?:from|via|use)\s+[a-z][a-z0-9 ._-]*$", "", str(text or ""), flags=re.IGNORECASE)
+    query = re.sub(
+        r"\s+\((?:daily|weekly(?:,\s*ending\s+[a-z]+)?|monthly|quarterly|annual|yearly)\)\s*$",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    ).strip()
+    match = re.search(r"\s+in\s+(?P<unit>[^,;:]+)$", query, flags=re.IGNORECASE)
+    if not match:
+        return set()
+    unit_text = match.group("unit")
+    if not _UNIT_CUE_RE.search(unit_text):
+        return set()
+    return {
+        token
+        for token in _normalize_metadata_text(unit_text).split()
+        if len(token) > 1 and token not in {"and", "the", "per", "of", "at", "in"}
+    }
+
+
+def _unit_matches(requested_unit_tokens: set[str], candidate_unit: str) -> bool:
+    if not requested_unit_tokens:
+        return True
+    candidate_tokens = {
+        token
+        for token in _normalize_metadata_text(candidate_unit).split()
+        if len(token) > 1 and token not in {"and", "the", "per", "of", "at", "in"}
+    }
+    return bool(candidate_tokens and requested_unit_tokens <= candidate_tokens)
+
+
+def _extract_requested_measurement_qualifiers(text: str) -> set[str]:
+    tokens = _normalize_metadata_text(text).split()
+    found: set[str] = set()
+    for idx, token in enumerate(tokens):
+        next_token = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+        if token == "real" and next_token != "estate":
+            found.add("real")
+        elif token == "nominal":
+            found.add("nominal")
+    normalized = _normalize_metadata_text(text)
+    if "inflation adjusted" in normalized:
+        found.add("real")
+    return found
+
+
+def _measurement_matches(requested: set[str], candidate_text: str) -> bool:
+    if not requested:
+        return True
+    normalized = _normalize_metadata_text(candidate_text)
+    return all(
+        any(_normalize_metadata_text(alias) in normalized for alias in _MEASUREMENT_QUALIFIER_ALIASES.get(term, {term}))
+        for term in requested
+    )
+
+
 LLM_SELECTION_PROMPT = """You are selecting the best economic indicator for a user's data query.
 
 User query: "{query}"
@@ -183,6 +304,7 @@ class IndicatorSelector:
         # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
         llm_candidates = candidates[:20]
         result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous)
+        result = await self._retry_if_metadata_conflict(query, result, llm_candidates, provider)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
         # honor its alternative search terms with one bounded research retry.
@@ -204,7 +326,12 @@ class IndicatorSelector:
                         prefer_ask=retry_ambiguous,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
-                        return retry_result
+                        return await self._retry_if_metadata_conflict(
+                            retry_query,
+                            retry_result,
+                            retry_candidates[:20],
+                            provider,
+                        )
                     if self._is_llm_rejection(retry_result):
                         return retry_result
             return result
@@ -213,6 +340,7 @@ class IndicatorSelector:
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
             result = await self._llm_pick(query, candidates[:5], provider)
+            result = await self._retry_if_metadata_conflict(query, result, candidates[:5], provider)
 
         if self._is_llm_rejection(result):
             return result
@@ -358,9 +486,15 @@ class IndicatorSelector:
                 for code, entry in ranked_entries
             ]
 
-            return self._prioritize_candidates_by_provider_surface(
+            prioritized_candidates, prioritized_scores = self._prioritize_candidates_by_provider_surface(
                 merged_candidates,
                 merged_scores,
+                retrieval_provider,
+            )
+            return self._prioritize_candidates_by_query_metadata(
+                query,
+                prioritized_candidates,
+                prioritized_scores,
                 retrieval_provider,
             )
 
@@ -373,6 +507,164 @@ class IndicatorSelector:
         return {
             "STATSCAN": "StatsCan",
         }.get(canonical, provider)
+
+    def _prioritize_candidates_by_query_metadata(
+        self,
+        query: str,
+        candidates: List[tuple[str, str]],
+        scores: List[float],
+        provider: str,
+    ) -> tuple[List[tuple[str, str]], List[float]]:
+        """Order candidates by explicit metadata constraints in the query.
+
+        This is not a semantic shortcut: it never creates candidates or maps a
+        concept to a code.  It only moves already-retrieved provider catalog
+        candidates whose metadata satisfies explicit user constraints
+        (frequency, unit, or price-basis qualifier) ahead of near-neighbors
+        that contradict those constraints.
+        """
+
+        if not candidates:
+            return candidates, scores
+
+        requested_frequencies = _extract_requested_frequencies(query)
+        requested_unit_tokens = _extract_requested_unit_tokens(query)
+        requested_measurements = _extract_requested_measurement_qualifiers(query)
+        if not (requested_frequencies or requested_unit_tokens or requested_measurements):
+            return candidates, scores
+
+        enriched = self._enrich_candidates(candidates, provider)
+        has_frequency_match = requested_frequencies and any(
+            _frequency_matches(requested_frequencies, str(item.get("frequency") or ""))
+            for item in enriched
+        )
+        has_unit_match = requested_unit_tokens and any(
+            _unit_matches(requested_unit_tokens, str(item.get("unit") or ""))
+            for item in enriched
+        )
+        has_measurement_match = requested_measurements and any(
+            _measurement_matches(requested_measurements, self._candidate_metadata_text(item))
+            for item in enriched
+        )
+        if not (has_frequency_match or has_unit_match or has_measurement_match):
+            return candidates, scores
+
+        paired = list(zip(range(len(candidates)), candidates, scores, enriched))
+
+        def _rank(item: tuple[int, tuple[str, str], float, Dict[str, Any]]) -> tuple[int, int, int, int]:
+            index, _candidate, _score, meta = item
+            frequency_penalty = (
+                0
+                if not has_frequency_match
+                or _frequency_matches(requested_frequencies, str(meta.get("frequency") or ""))
+                else 1
+            )
+            unit_penalty = (
+                0
+                if not has_unit_match
+                or _unit_matches(requested_unit_tokens, str(meta.get("unit") or ""))
+                else 1
+            )
+            measurement_penalty = (
+                0
+                if not has_measurement_match
+                or _measurement_matches(requested_measurements, self._candidate_metadata_text(meta))
+                else 1
+            )
+            return frequency_penalty, unit_penalty, measurement_penalty, index
+
+        paired.sort(key=_rank)
+        return [candidate for _idx, candidate, _score, _meta in paired], [
+            score for _idx, _candidate, score, _meta in paired
+        ]
+
+    async def _retry_if_metadata_conflict(
+        self,
+        query: str,
+        result: Optional["SelectionResult"],
+        candidates: List[tuple[str, str]],
+        provider: str,
+    ) -> Optional["SelectionResult"]:
+        """Retry LLM selection if a PICK contradicts explicit metadata constraints."""
+
+        if not result or not result.code or not candidates:
+            return result
+
+        compatible = self._metadata_compatible_subset(query, candidates, provider)
+        if not compatible:
+            return result
+
+        normalized_selected = self._normalize_code(str(result.code or ""), provider)
+        compatible_codes = {
+            self._normalize_code(str(code or ""), provider)
+            for code, _name in compatible
+        }
+        if normalized_selected in compatible_codes:
+            return result
+
+        retry_result = await self._llm_pick(query, compatible[:20], provider, prefer_ask=False)
+        if retry_result and (retry_result.code or retry_result.needs_user_choice):
+            return retry_result
+
+        return SelectionResult(
+            code=None,
+            source="metadata_conflict",
+            rejection_reason="LLM pick contradicted explicit frequency/unit/measurement metadata.",
+        )
+
+    def _metadata_compatible_subset(
+        self,
+        query: str,
+        candidates: List[tuple[str, str]],
+        provider: str,
+    ) -> List[tuple[str, str]]:
+        requested_frequencies = _extract_requested_frequencies(query)
+        requested_unit_tokens = _extract_requested_unit_tokens(query)
+        requested_measurements = _extract_requested_measurement_qualifiers(query)
+        if not (requested_frequencies or requested_unit_tokens or requested_measurements):
+            return []
+
+        enriched = self._enrich_candidates(candidates, provider)
+        paired = list(zip(candidates, enriched))
+        filtered = paired
+        if requested_frequencies and any(
+            _frequency_matches(requested_frequencies, str(meta.get("frequency") or ""))
+            for _candidate, meta in paired
+        ):
+            filtered = [
+                (candidate, meta)
+                for candidate, meta in filtered
+                if _frequency_matches(requested_frequencies, str(meta.get("frequency") or ""))
+            ]
+        if requested_unit_tokens and any(
+            _unit_matches(requested_unit_tokens, str(meta.get("unit") or ""))
+            for _candidate, meta in paired
+        ):
+            filtered = [
+                (candidate, meta)
+                for candidate, meta in filtered
+                if _unit_matches(requested_unit_tokens, str(meta.get("unit") or ""))
+            ]
+        if requested_measurements and any(
+            _measurement_matches(requested_measurements, self._candidate_metadata_text(meta))
+            for _candidate, meta in paired
+        ):
+            filtered = [
+                (candidate, meta)
+                for candidate, meta in filtered
+                if _measurement_matches(requested_measurements, self._candidate_metadata_text(meta))
+            ]
+
+        if len(filtered) >= len(paired):
+            return []
+        return [candidate for candidate, _meta in filtered]
+
+    @staticmethod
+    def _candidate_metadata_text(item: Dict[str, Any]) -> str:
+        return " ".join(
+            str(item.get(key) or "")
+            for key in ("name", "description", "keywords", "category", "unit")
+        )
 
     def _prioritize_candidates_by_provider_surface(
         self,
@@ -465,9 +757,9 @@ class IndicatorSelector:
         candidates: List[tuple[str, str]],
         provider: str,
     ) -> List[Dict[str, Any]]:
-        """Enrich candidates with metadata from indicators.db (frequency, unit, end_date).
+        """Enrich candidates with metadata from indicators.db.
 
-        Returns a list of dicts with keys: code, name, frequency, unit, end_date, discontinued.
+        Returns dicts with frequency/unit/activity plus compact evidence fields.
         This gives the LLM visibility into whether a series is active or obsolete.
         """
         enriched = []
@@ -480,7 +772,7 @@ class IndicatorSelector:
             # Build a lookup map: (provider, code) -> metadata row
             placeholders = ",".join(["?"] * len(codes))
             cur.execute(
-                f"SELECT code, frequency, unit, end_date, category FROM indicators "
+                f"SELECT code, frequency, unit, end_date, category, description, keywords FROM indicators "
                 f"WHERE provider = ? AND code IN ({placeholders})",
                 [self._catalog_provider_name(provider)] + codes,
             )
@@ -491,6 +783,8 @@ class IndicatorSelector:
                     "unit": row["unit"] or "",
                     "end_date": row["end_date"] or "",
                     "category": row["category"] or "",
+                    "description": row["description"] or "",
+                    "keywords": row["keywords"] or "",
                 }
             conn.close()
         except Exception as e:
@@ -521,6 +815,8 @@ class IndicatorSelector:
                 "unit": meta.get("unit", ""),
                 "end_date": end_date,
                 "category": meta.get("category", ""),
+                "description": meta.get("description", ""),
+                "keywords": meta.get("keywords", ""),
                 "discontinued": discontinued,
             })
 
@@ -548,6 +844,13 @@ class IndicatorSelector:
                 meta_parts.append(item["unit"])
             if item.get("category"):
                 meta_parts.append(f"category: {item['category']}")
+            evidence_text = " ".join(
+                str(item.get(key) or "").strip()
+                for key in ("keywords", "description")
+            ).strip()
+            if evidence_text:
+                evidence_text = re.sub(r"\s+", " ", evidence_text)[:180]
+                meta_parts.append(f"evidence: {evidence_text}")
             if item["end_date"]:
                 meta_parts.append(f"last data: {item['end_date'][:10]}")
             if item["discontinued"]:
