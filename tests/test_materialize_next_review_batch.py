@@ -194,6 +194,31 @@ def test_materialize_ambiguity_starts_after_current_n():
     ]
 
 
+def test_materialize_ambiguity_keeps_canada_employment_as_direct_answer():
+    rows = materialize_ambiguity(
+        [
+            {
+                "name": "transform_ambiguity",
+                "planned_batch_sessions": 1,
+                "target_n": 30,
+                "current_n": 1,
+            }
+        ],
+        snapshot_meta={"snapshot_date": "2026-04-14", "git_sha": "abc12345", "indicator_count": 330050},
+        seed=20260415,
+        holdout_split="batch_review",
+        dataset_tier="dev",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "amb-transform_ambiguity-000002"
+    assert row["query"] == "Canada employment"
+    assert row["expected_behavior"] == "direct_answer"
+    assert row["gold"]["acceptable_outcomes"] == ["direct_answer_correct"]
+    assert row["gold"]["unnecessary_clarification"] is True
+
+
 def test_select_quality_screened_direct_records_prefers_low_risk():
     records = [
         {"id": "high-1", "query": "very long", "provenance": {"query_quality_risk": "high", "query_quality_reasons": ["catalog_jargon"]}},
