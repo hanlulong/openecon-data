@@ -17,9 +17,15 @@ except Exception:  # pragma: no cover - fallback for lightweight script usage
     CountryResolver = None
 
 try:
-    from backend.utils.imf_supportability import imf_catalog_surface_supportability_reason
+    from backend.utils.imf_supportability import (
+        imf_catalog_sampler_supportability_reason,
+        imf_catalog_surface_supportability_reason,
+    )
 except Exception:  # pragma: no cover - fallback for lightweight script usage
     def imf_catalog_surface_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
+        return None
+
+    def imf_catalog_sampler_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
         return None
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1180,7 +1186,7 @@ def selection_supportability_reason_for_row(record: dict[str, Any]) -> str | Non
     ).strip().upper()
     if provider != 'IMF':
         return None
-    return imf_catalog_surface_supportability_reason(
+    return imf_catalog_sampler_supportability_reason(
         str(origin.get('source_indicator_code') or record.get('code') or ''),
         str(origin.get('name') or record.get('name') or ''),
         str(origin.get('category') or record.get('category') or ''),

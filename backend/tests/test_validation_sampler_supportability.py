@@ -4,11 +4,13 @@ from scripts.validation.common import (
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
     selection_supportability_reason_for_row,
 )
+from backend.utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from scripts.validation.materialize_next_review_batch import select_quality_screened_direct_records
 from scripts.validation.sample_direct_cert_set import _select_quality_screened_records
 
 
 UNSUPPORTED_IMF_REASON = "imf_non_weo_public_surface_unsupported"
+UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON = "imf_public_datamapper_v1_category_not_served"
 
 
 def _imf_record(
@@ -80,6 +82,61 @@ def test_selection_supportability_reason_uses_exact_imf_metadata_only() -> None:
     assert selection_supportability_reason_for_row(non_imf) is None
 
 
+def test_selection_supportability_demotes_only_evidence_backed_imf_datamapper_category() -> None:
+    alt_fiscal = _imf_record(
+        row_id="alt-fiscal",
+        code="LS_NFA_09",
+        name=(
+            "Fiscal, Central Government, Net Worth and its Changes, "
+            "Nonfinancial assets, Fixed Assets"
+        ),
+        category="ALT_FISCAL",
+    )
+    aipi = _imf_record(
+        row_id="aipi",
+        code="DI",
+        name="Digital Infrastructure",
+        category="AIPI",
+    )
+    fpp = _imf_record(
+        row_id="fpp",
+        code="prim_exp",
+        name="Government primary expenditure, percent of GDP",
+        category="FPP",
+    )
+    cf = _imf_record(
+        row_id="cf",
+        code="PrivInexDIGDP",
+        name="Private Inflows excluding Direct Investment (% of GDP)",
+        category="CF",
+    )
+    sprlu = _imf_record(
+        row_id="sprlu",
+        code="SITC1_2",
+        name="Crude materials, inedible, except fuels",
+        category="SPRLU",
+    )
+
+    assert selection_supportability_reason_for_row(alt_fiscal) == UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON
+    assert selection_supportability_reason_for_row(aipi) is None
+    assert selection_supportability_reason_for_row(fpp) is None
+    assert selection_supportability_reason_for_row(cf) is None
+    assert selection_supportability_reason_for_row(sprlu) is None
+
+
+def test_alt_fiscal_sampler_prior_is_not_runtime_supportability_block() -> None:
+    assert imf_exact_provider_surface_supportability_reason(
+        "LS_NFA_09 from IMF",
+        params={
+            "__semantic_indicator_label": (
+                "Fiscal, Central Government, Net Worth and its Changes, "
+                "Nonfinancial assets, Fixed Assets"
+            ),
+            "__semantic_indicator_category": "ALT_FISCAL",
+        },
+    ) is None
+
+
 def test_next_review_selection_demotes_unsupported_imf_surfaces() -> None:
     supported_cpi = _imf_record(
         row_id="supported-cpi",
@@ -106,6 +163,26 @@ def test_next_review_selection_demotes_unsupported_imf_surfaces() -> None:
     )
 
     assert [row["id"] for row in selected] == ["supported-cpi"]
+
+
+def test_next_review_selection_keeps_datamapper_positive_controls_ahead_of_alt_fiscal() -> None:
+    alt_fiscal = _imf_record(
+        row_id="alt-fiscal",
+        code="LS_NFA_09",
+        name="Fiscal, Central Government, Net Worth and its Changes, Nonfinancial assets",
+        category="ALT_FISCAL",
+        selection_supportability_reason=UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON,
+    )
+    fpp = _imf_record(
+        row_id="fpp",
+        code="prim_exp",
+        name="Government primary expenditure, percent of GDP",
+        category="FPP",
+    )
+
+    selected = select_quality_screened_direct_records([alt_fiscal, fpp], 1)
+
+    assert [row["id"] for row in selected] == ["fpp"]
 
 
 def test_direct_sampler_selection_demotes_unsupported_imf_surfaces() -> None:

@@ -12,6 +12,15 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON = "imf_non_weo_public_surface_unsupported"
+UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON = "imf_public_datamapper_v1_category_not_served"
+
+# Evidence: Ralph168 provider-contract inventory found that the sampled
+# ALT_FISCAL catalog rows, plus the first 20 ALT_FISCAL catalog controls, return
+# public DataMapper v1 API echoes with no ``values`` payload.  This is a
+# sampler prior only: it is not a runtime blocker and it is deliberately not a
+# broad "all non-WEO" rule because AIPI/FPP/CF/SPRLU controls have public
+# DataMapper values.
+_PUBLIC_DATAMAPPER_V1_UNSERVED_CATEGORIES = frozenset({"ALT_FISCAL"})
 
 _EXACT_CODE_TOKEN_RE = re.compile(
     r"\b[A-Z0-9][A-Z0-9_\.]{1,40}\b",
@@ -161,6 +170,33 @@ def imf_catalog_surface_supportability_reason(
         return None
     if category_value == "INDICATOR":
         return UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON
+    return None
+
+
+def imf_catalog_sampler_supportability_reason(
+    code: str = "",
+    name: str = "",
+    category: str = "",
+) -> str | None:
+    """Return sampler-only IMF supportability provenance.
+
+    This extends the runtime exact-code support matrix with evidence-backed
+    validation-sampler priors.  It must not be used by production query
+    execution because these reasons are candidate-selection provenance, not
+    final supportability blockers.
+    """
+    runtime_reason = imf_catalog_surface_supportability_reason(code, name, category)
+    if runtime_reason:
+        return runtime_reason
+
+    exact_code = _normalize_code(code)
+    if not _looks_like_imf_provider_code(exact_code):
+        return None
+
+    entry = _catalog_entry_for_code(exact_code)
+    category_value = str(category or entry.get("category") or "").strip().upper()
+    if category_value in _PUBLIC_DATAMAPPER_V1_UNSERVED_CATEGORIES:
+        return UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON
     return None
 
 
