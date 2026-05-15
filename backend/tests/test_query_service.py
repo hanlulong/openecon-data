@@ -1662,6 +1662,79 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].metadata.seriesId, "COMTRADE:JP:071340:exports")
 
+    def test_fetch_data_passes_specific_comtrade_heading_indicator_as_commodity(self) -> None:
+        heading = "Molluscs; cuttle fish and squid, whether in shell or not, live, fresh or chilled"
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=[heading],
+            parameters={
+                "country": "IN",
+                "reporter": "India",
+                "flow": "EXPORT",
+                "indicator": heading,
+            },
+            clarificationNeeded=False,
+            originalQuery=f"India exports of {heading} from Comtrade",
+        )
+        returned = sample_series_with(
+            source="UN Comtrade",
+            indicator="Exports - 030742",
+            series_id="COMTRADE:IN:030742:exports",
+            country="India",
+        )
+
+        async def _fake_fetch_trade_data(**kwargs):
+            self.assertEqual(kwargs.get("commodity"), heading)
+            return [returned]
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, side_effect=_fake_fetch_trade_data):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "COMTRADE:IN:030742:exports")
+
+    def test_fetch_data_keeps_generic_comtrade_indicator_without_commodity(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="COMTRADE",
+            indicators=["exports"],
+            parameters={
+                "country": "IN",
+                "reporter": "India",
+                "flow": "EXPORT",
+                "indicator": "exports",
+            },
+            clarificationNeeded=False,
+            originalQuery="India exports from Comtrade",
+        )
+        returned = sample_series_with(
+            source="UN Comtrade",
+            indicator="Exports - Total Trade",
+            series_id="COMTRADE:IN:TOTAL:exports",
+            country="India",
+        )
+
+        async def _fake_fetch_trade_data(**kwargs):
+            self.assertIsNone(kwargs.get("commodity"))
+            return [returned]
+
+        with patch.object(self.service, "_preflight_geographic_split", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_apply_concept_provider_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", new_callable=AsyncMock, return_value=dict(intent.parameters or {})), \
+             patch.object(self.service, "_apply_catalog_availability_override", return_value=("COMTRADE", dict(intent.parameters or {}))), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.comtrade_provider, "fetch_trade_data", new_callable=AsyncMock, side_effect=_fake_fetch_trade_data):
+            result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].metadata.seriesId, "COMTRADE:IN:TOTAL:exports")
+
     def test_comtrade_flow_code_accepts_native_api_codes(self) -> None:
         self.assertEqual(ComtradeProvider._flow_code("X"), "X")
         self.assertEqual(ComtradeProvider._flow_code("M"), "M")

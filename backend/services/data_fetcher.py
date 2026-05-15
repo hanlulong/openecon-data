@@ -726,6 +726,36 @@ def _raise_if_fred_country_scope_unsupported(
     )
 
 
+def _comtrade_dispatch_commodity(params: dict[str, Any]) -> Optional[str]:
+    """Return the commodity value to send to Comtrade provider dispatch.
+
+    Non-numeric broad indicator labels intentionally remain unset so aggregate
+    trade can use the provider's TOTAL default. Literal HS heading/subheading
+    text, however, is a concrete provider-native commodity surface; pass it
+    through so the Comtrade provider can resolve it from catalog evidence or
+    fail closed instead of silently querying TOTAL.
+    """
+
+    explicit_commodity = str(params.get("commodity") or "").strip()
+    if explicit_commodity:
+        return explicit_commodity
+
+    indicator = str(params.get("indicator") or "").strip()
+    if not indicator:
+        return None
+    if indicator.isdigit():
+        return indicator
+
+    try:
+        from ..providers.comtrade import ComtradeProvider
+
+        if ComtradeProvider._looks_like_specific_hs_heading(indicator):  # pylint: disable=protected-access
+            return indicator
+    except Exception:
+        return None
+    return None
+
+
 def _cache_identity(fetch_strategy: str, provider_request: dict[str, Any], expected_shape: dict[str, Any]) -> dict[str, Any]:
     return {
         "fetch_strategy": fetch_strategy,
@@ -1467,11 +1497,7 @@ async def fetch_from_provider_dispatch(
             reporter=reporter_value,
             reporters=reporters_value,
             partner=params.get("partner"),
-            commodity=params.get("commodity") or (
-                params.get("indicator")
-                if str(params.get("indicator") or "").strip().isdigit()
-                else None
-            ),
+            commodity=_comtrade_dispatch_commodity(params),
             flow=params.get("flow"),
             start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
