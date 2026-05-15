@@ -716,6 +716,25 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "draiftking")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_keeps_fred_prefixed_coingecko_slug_locked(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "CoinGecko" and code == "fredenergy":
+                    return {"provider": provider, "code": code, "name": "FRED Energy"}
+                return None
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "fredenergy from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "fredenergy")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "fredenergy")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_oecd_provider_code_shape_accepts_dataflow_ending_with_english_suffix(self) -> None:
         self.assertTrue(
             self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access

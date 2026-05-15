@@ -152,6 +152,13 @@ class TestExplicitProviderDetection:
             assert result is not None, f"Expected {expected_provider} for '{query}', got None"
             assert result[0] == expected_provider, f"For '{query}': {result[0]} != {expected_provider}"
 
+    def test_explicit_provider_detection_does_not_match_inside_asset_slug(self):
+        """Bare provider aliases should not hijack provider-native slug text."""
+        result = detect_explicit_provider_match("fredenergy from CoinGecko")
+
+        assert result is not None
+        assert result[0] == "CoinGecko"
+
     def test_start_of_query_provider(self):
         """Test provider detection at start of query."""
         result = detect_explicit_provider_match("OECD GDP for Italy")
@@ -231,6 +238,13 @@ class TestUnifiedRouter:
         """Explicit BIS request."""
         decision = router.route("Policy rate from BIS")
         assert decision.provider == "BIS"
+        assert decision.match_type == "explicit"
+
+    def test_explicit_coingecko_slug_containing_fred_routes_to_coingecko(self, router):
+        """CoinGecko provider suffix wins even when the asset slug starts with fred."""
+        decision = router.route("fredenergy from CoinGecko")
+
+        assert decision.provider == "CoinGecko"
         assert decision.match_type == "explicit"
 
     # ==========================================================================

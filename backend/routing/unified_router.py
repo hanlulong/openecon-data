@@ -75,7 +75,12 @@ def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
 
     for provider, keywords in _EXPLICIT_PROVIDER_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in query_lower:
+            # Match provider aliases as standalone text, not as arbitrary
+            # substrings inside provider-native codes/slugs.  For example,
+            # CoinGecko has a valid asset id `fredenergy`; the bare FRED alias
+            # must not steal `fredenergy from CoinGecko` before the explicit
+            # CoinGecko suffix is seen.
+            if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", query_lower):
                 return provider, keyword
 
     return None
