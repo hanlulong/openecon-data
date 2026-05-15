@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Dict, Optional, TYPE_CHECKING, Any
+from typing import Awaitable, Callable, Dict, Optional, TYPE_CHECKING, Any
 
 import httpx
 
@@ -326,6 +326,15 @@ class EurostatProvider(BaseProvider):
                     effective_query_params = retry_params
 
         if not data_points:
+            supportability_reason = await self._requested_geo_unavailable_supportability_reason(
+                fetch_payload=fetch_payload,
+                query_params=query_params,
+                dataset_code=dataset_code,
+                country_code=country_code,
+                no_geo_filter=no_geo_filter,
+            )
+            if supportability_reason:
+                raise DataNotAvailableError(supportability_reason)
             raise DataNotAvailableError(f"No data found for {country_code or 'ALL_AVAILABLE'} in dataset {dataset_code}")
 
         # Apply year-over-year rate calculation if requested
@@ -410,6 +419,99 @@ class EurostatProvider(BaseProvider):
         if code == "prc_colc_rents" and re.fullmatch(r"[A-Z]{2}", geo):
             return f"{geo}_CAP"
         return country_code
+
+    async def _requested_geo_unavailable_supportability_reason(
+        self,
+        *,
+        fetch_payload: Callable[[Dict[str, str]], Awaitable[Dict[str, Any]]],
+        query_params: Dict[str, str],
+        dataset_code: str,
+        country_code: Optional[str],
+        no_geo_filter: bool,
+    ) -> Optional[str]:
+        """Classify fail-closed country misses when Eurostat exposes only aggregate geo.
+
+        This is provider-surface supportability, not a semantic shortcut: it only
+        runs after the exact provider-native dataset returned no observations for
+        the requested geography, and it probes the same Eurostat dataset without a
+        geo filter to inspect the public JSON-stat geo dimension.  If the only
+        available geographies are aggregates, silently returning that aggregate
+        for an individual country request would answer a different user question.
+        """
+        requested_geo = str(country_code or "").strip().upper()
+        if no_geo_filter or not requested_geo:
+            return None
+        if self._is_aggregate_geo_category(requested_geo, ""):
+            return None
+
+        probe_params = dict(query_params)
+        probe_params.pop("geo", None)
+        probe_params.pop("sinceTimePeriod", None)
+        probe_params.pop("time", None)
+        probe_params["lastTimePeriod"] = "1"
+
+        try:
+            probe_payload = await fetch_payload(probe_params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 413:
+                # Existing response-size supportability handling owns this case.
+                return None
+            raise
+
+        available_geo = self._extract_geo_categories(probe_payload)
+        if not available_geo or requested_geo in available_geo:
+            return None
+        if not all(
+            self._is_aggregate_geo_category(code, label)
+            for code, label in available_geo.items()
+        ):
+            return None
+
+        available_codes = ",".join(sorted(available_geo))
+        return (
+            "fail-closed supportability block: "
+            "reason=eurostat_requested_geo_unavailable; "
+            f"dataset={dataset_code}; "
+            f"country={requested_geo}; "
+            f"available_geo={available_codes}"
+        )
+
+    @staticmethod
+    def _extract_geo_categories(payload: Dict[str, Any]) -> Dict[str, str]:
+        """Return provider-native geo category codes and labels from JSON-stat."""
+        geo_dimension = (payload.get("dimension") or {}).get("geo") or {}
+        category = geo_dimension.get("category") or {}
+        labels = category.get("label") or {}
+        indexes = category.get("index") or {}
+
+        categories: Dict[str, str] = {}
+        if isinstance(labels, dict):
+            categories.update({str(code).upper(): str(label or "") for code, label in labels.items()})
+        if isinstance(indexes, dict):
+            for code in indexes:
+                categories.setdefault(str(code).upper(), "")
+        elif isinstance(indexes, list):
+            for code in indexes:
+                categories.setdefault(str(code).upper(), "")
+        return categories
+
+    @staticmethod
+    def _is_aggregate_geo_category(code: str, label: str) -> bool:
+        """Identify Eurostat aggregate geography codes/labels mechanically."""
+        normalized_code = str(code or "").strip().upper()
+        normalized_label = str(label or "").strip().lower()
+        if not normalized_code and not normalized_label:
+            return False
+        if normalized_code in {"EU", "EU_V", "EU27_2020", "EU28", "EU15", "EA", "EA20", "EA19"}:
+            return True
+        if re.fullmatch(r"(EU|EA)\d{0,2}(_\d{4})?", normalized_code):
+            return True
+        if normalized_code.startswith(("EU_", "EA_")):
+            return True
+        return any(
+            token in normalized_label
+            for token in ("european union", "euro area", "aggregate")
+        )
 
     async def _resolve_dataset(self, indicator: str) -> tuple[str, Optional[str]]:
         """Resolve Eurostat dataset ID through exact codes or metadata search."""

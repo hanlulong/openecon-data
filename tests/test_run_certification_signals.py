@@ -972,6 +972,37 @@ def test_record_response_marks_eurostat_response_too_large_as_supportability_blo
     assert record["series_count"] == 0
 
 
+def test_record_response_marks_eurostat_requested_geo_unavailable_as_supportability_blocked():
+    module = load_module()
+
+    class Resp:
+        status_code = 200
+
+    row = {
+        "id": "direct-eurostat-country-miss",
+        "provider_stratum": "Eurostat",
+        "query": "Germany HSW_HP_SVCLN from Eurostat",
+        "origin": {"source_provider": "Eurostat", "source_indicator_code": "HSW_HP_SVCLN"},
+    }
+    response_payload = {
+        "error": "data_not_available",
+        "message": (
+            "fail-closed supportability block: "
+            "reason=eurostat_requested_geo_unavailable; "
+            "dataset=hsw_hp_svcln; "
+            "country=DE; "
+            "available_geo=EU_V"
+        ),
+    }
+
+    record = module.record_response(row, "direct", 1, row["query"], Resp(), 0.25, response_payload)
+
+    assert record["supportability_blocked"] is True
+    assert record["supportability_reason"] == "eurostat_requested_geo_unavailable"
+    assert record["error"] == "data_not_available"
+    assert record["series_count"] == 0
+
+
 def test_record_response_marks_comtrade_quota_as_runtime_unavailable():
     module = load_module()
 
