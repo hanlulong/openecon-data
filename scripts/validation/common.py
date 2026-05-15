@@ -1660,6 +1660,10 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         provider_upper == 'WORLDBANK'
         and str(category or '').strip().lower() == 'world development indicators'
     ) or (
+        provider_upper == 'IMF'
+        and bool(name)
+        and imf_public_sdmx_runtime_family(code, name, category) == 'cpi_aggregate'
+    ) or (
         provider_upper == 'EUROSTAT'
         and bool(name)
         and not _looks_like_eurostat_dataset_code(name)
@@ -2670,6 +2674,36 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'imf_low_viability_family',
                 'imf_query_only_public_surface_family',
                 'methodology_dense',
+            }
+        ]
+    exact_imf_supported_cpi_title_query = (
+        provider_upper == 'IMF'
+        and origin_name
+        and imf_public_sdmx_runtime_family(
+            origin_code_upper,
+            origin_name,
+            str(origin.get('category') or row.get('category') or ''),
+        ) == 'cpi_aggregate'
+        and _normal_title_key(origin_name) in _normal_title_key(query)
+        and re.search(r'\bfrom\s+IMF$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_imf_supported_cpi_title_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Supported IMF aggregate CPI titles need their provider-native
+        # COICOP/base-year/index qualifiers to remain answerable through the
+        # strict exact-title path.  This is not a code/concept shortcut: the
+        # prompt carries the literal public IMF title, and runtime/adjudication
+        # still decide whether the provider returns the requested series.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'acronym_dense',
+                'provider_title_like',
+                'country_scope_conflict',
+                'methodology_dense',
+                'multi_modifier_title',
             }
         ]
     exact_worldbank_code_query = (

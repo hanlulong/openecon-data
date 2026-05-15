@@ -231,6 +231,70 @@ def test_exact_title_match_accepts_short_imf_weo_titles() -> None:
     assert looks_exact is True
 
 
+def test_exact_title_match_accepts_full_imf_cpi_aggregate_titles(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    cases = [
+        (
+            "PCPI_CP_02_BY2008_IX",
+            (
+                "Prices, Consumer Prices, All Items, By Classification of Individual "
+                "Consumption According to Purpose (COICOP) 1999, Expenditure of "
+                "Households, Alcoholic Beverages, Tobacco, and Narcotics, BY2008, Index"
+            ),
+        ),
+        (
+            "PCPI_CP_04_BY2005_IX",
+            (
+                "Prices, Consumer Price Index, Housing, water, electricity, gas and other "
+                "fuels, COICOP, Base Year = 2005, Index"
+            ),
+        ),
+        (
+            "PCPI_CP_06_BY2010_IX",
+            "Prices, Consumer Price Index, Health, COICOP, Base Year = 2010, Index",
+        ),
+    ]
+    for code, name in cases:
+        assert db.insert_indicator(Indicator(provider="IMF", code=code, name=name, category="INDICATOR"))
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        for code, name in cases:
+            query = f"Brazil {name} from IMF"
+            match = find_exact_provider_title_match(query, "IMF")
+            looks_exact = looks_like_exact_provider_title_match(query, "IMF")
+
+            assert match is not None
+            assert match["code"] == code
+            assert looks_exact is True
+
+
+def test_exact_title_match_does_not_accept_shortened_imf_cpi_phrase(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="IMF",
+            code="PCPI_CP_06_BY2010_IX",
+            name="Prices, Consumer Price Index, Health, COICOP, Base Year = 2010, Index",
+            category="INDICATOR",
+        )
+    )
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(
+            "Brazil Health Consumer Price Index Base Year = 2010 from IMF",
+            "IMF",
+        )
+        looks_exact = looks_like_exact_provider_title_match(
+            "Brazil Health Consumer Price Index Base Year = 2010 from IMF",
+            "IMF",
+        )
+
+    assert match is None
+    assert looks_exact is False
+
+
 def test_exact_title_match_rejects_ambiguous_duplicate_imf_title_without_unit() -> None:
     class _Lookup:
         def search(self, text, provider=None, limit=5):

@@ -507,6 +507,77 @@ def test_default_query_for_row_keeps_detailed_imf_cpi_family_outside_public_sdmx
     assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) is None
 
 
+def test_user_answerability_preserves_supported_imf_cpi_aggregate_titles():
+    rows = [
+        {
+            "provider": "IMF",
+            "code": "PCPI_CP_02_BY2008_IX",
+            "name": (
+                "Prices, Consumer Prices, All Items, By Classification of Individual "
+                "Consumption According to Purpose (COICOP) 1999, Expenditure of "
+                "Households, Alcoholic Beverages, Tobacco, and Narcotics, BY2008, Index"
+            ),
+            "description": "",
+            "category": "INDICATOR",
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        },
+        {
+            "provider": "IMF",
+            "code": "PCPI_CP_04_BY2005_IX",
+            "name": (
+                "Prices, Consumer Price Index, Housing, water, electricity, gas and other "
+                "fuels, COICOP, Base Year = 2005, Index"
+            ),
+            "description": "",
+            "category": "INDICATOR",
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        },
+        {
+            "provider": "IMF",
+            "code": "PCPI_CP_06_BY2010_IX",
+            "name": "Prices, Consumer Price Index, Health, COICOP, Base Year = 2010, Index",
+            "description": "",
+            "category": "INDICATOR",
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        },
+    ]
+
+    for row in rows:
+        query = common.default_query_for_row(
+            row,
+            certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+        )
+        audit = common.audit_direct_query_shape({**row, "query": query})
+
+        assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) == "cpi_aggregate"
+        assert query == f"Brazil {row['name']} from IMF"
+        assert row["code"] not in query
+        assert audit["risk_level"] != "high"
+        assert "very_long_query" not in audit["reasons"]
+        assert "methodology_dense" not in audit["reasons"]
+        assert "multi_modifier_title" not in audit["reasons"]
+
+
+def test_user_answerability_does_not_preserve_unsupported_imf_cpi_detail_title():
+    row = {
+        "provider": "IMF",
+        "code": "PCPI_ECP_01123_IX",
+        "name": "Prices, Consumer Price Index, Lamb and goat, COICOP, Base Year = 2010, Index",
+        "description": "",
+        "category": "INDICATOR",
+        "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert imf_public_sdmx_runtime_family(row["code"], row["name"], row["category"]) is None
+    assert query != f"Brazil {row['name']} from IMF"
+    assert row["code"] not in query
+
+
 def test_default_query_for_row_does_not_treat_are_verb_as_country() -> None:
     row = {
         "provider": "WorldBank",
