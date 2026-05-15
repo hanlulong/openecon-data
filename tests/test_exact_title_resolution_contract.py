@@ -603,6 +603,124 @@ def test_exact_title_match_does_not_expand_generic_fred_unit_phrase_to_title() -
     assert looks_exact is False
 
 
+def test_exact_title_match_accepts_short_fred_title_with_frequency_disambiguator() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if "Demand Deposits" not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "WDDNS",
+                    "name": "Demand Deposits",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Weekly, Ending Monday",
+                    "popularity": 37,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "DEMDEPSL",
+                    "name": "Demand Deposits",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Monthly",
+                    "popularity": 43,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "DEMDEPNS",
+                    "name": "Demand Deposits",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Monthly",
+                    "popularity": 15,
+                },
+            ]
+
+    query = "US Demand Deposits (Monthly) from FRED"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "FRED")
+        looks_exact = looks_like_exact_provider_title_match(query, "FRED")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="FRED",
+            countries=["US"],
+            all_providers=["FRED"],
+        )
+
+    assert match is not None
+    assert match["code"] == "DEMDEPSL"
+    assert looks_exact is True
+    assert intent is not None
+    assert intent.parameters["indicator"] == "DEMDEPSL"
+    assert intent.parameters["country"] == "US"
+    assert intent.parameters["__exact_indicator_title_match"] is True
+
+
+def test_exact_title_match_rejects_ambiguous_short_fred_title_without_frequency() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if "M1" not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "M1SL",
+                    "name": "M1",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Monthly",
+                    "popularity": 82,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "WM1NS",
+                    "name": "M1",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Weekly, Ending Monday",
+                    "popularity": 66,
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match("M1 from FRED", "FRED")
+        looks_exact = looks_like_exact_provider_title_match("M1 from FRED", "FRED")
+
+    assert match is None
+    assert looks_exact is True
+
+
+def test_exact_title_match_does_not_promote_non_exact_short_fred_phrase() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "DEMDEPSL",
+                    "name": "Demand Deposits",
+                    "unit": "Billions of Dollars",
+                    "frequency": "Monthly",
+                    "popularity": 43,
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match("Deposits from FRED", "FRED")
+        looks_exact = looks_like_exact_provider_title_match("Deposits from FRED", "FRED")
+
+    assert match is None
+    assert looks_exact is False
+
+
 def test_exact_and_provider_lock_helpers_read_shared_flags() -> None:
     params = {
         "__semantic_provider_locked": True,

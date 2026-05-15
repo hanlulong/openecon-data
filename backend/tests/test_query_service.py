@@ -1989,6 +1989,55 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
         self.assertFalse(intent.clarificationNeeded)
 
+    def test_build_exact_indicator_title_intent_resolves_short_fred_title_with_frequency(self) -> None:
+        class _Lookup:
+            def search(self, text, provider=None, limit=5):
+                return []
+
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                assert provider == "FRED"
+                if "Demand Deposits" not in search_inputs:
+                    return []
+                return [
+                    {
+                        "code": "WDDNS",
+                        "provider": "FRED",
+                        "name": "Demand Deposits",
+                        "unit": "Billions of Dollars",
+                        "frequency": "Weekly, Ending Monday",
+                        "popularity": 37,
+                    },
+                    {
+                        "code": "DEMDEPSL",
+                        "provider": "FRED",
+                        "name": "Demand Deposits",
+                        "unit": "Billions of Dollars",
+                        "frequency": "Monthly",
+                        "popularity": 43,
+                    },
+                    {
+                        "code": "DEMDEPNS",
+                        "provider": "FRED",
+                        "name": "Demand Deposits",
+                        "unit": "Billions of Dollars",
+                        "frequency": "Monthly",
+                        "popularity": 15,
+                    },
+                ]
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "US Demand Deposits (Monthly) from FRED"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "FRED")
+        self.assertEqual(intent.parameters.get("indicator"), "DEMDEPSL")
+        self.assertEqual(intent.parameters.get("country"), "US")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+        self.assertFalse(intent.clarificationNeeded)
+
     def test_build_exact_indicator_title_intent_handles_country_prefixed_fred_stale_title(self) -> None:
         lookup_results = [
             {

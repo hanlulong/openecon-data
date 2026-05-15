@@ -68,11 +68,62 @@ _EXACT_TITLE_UNIT_TOKEN_STOPWORDS = {
     "to",
 }
 
+_EXACT_TITLE_FREQUENCY_ALIASES = {
+    "daily": {"daily", "d"},
+    "weekly": {"weekly", "week", "w"},
+    "biweekly": {"biweekly", "bi-weekly"},
+    "monthly": {"monthly", "month", "m"},
+    "quarterly": {"quarterly", "quarter", "q"},
+    "semiannual": {"semiannual", "semi-annual", "semi annual"},
+    "annual": {"annual", "annually", "yearly", "year", "a"},
+}
+
 
 def _normalize_exact_title_unit_text(text: str) -> str:
     """Normalize unit text for exact-title unit compatibility."""
 
     return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _extract_exact_title_frequency_tokens(text: str) -> set[str]:
+    """Extract explicit frequency words from exact-title query wrappers."""
+
+    normalized = _normalize_exact_title_unit_text(text)
+    all_tokens = normalized.split()
+    tokens = set(all_tokens)
+    found: set[str] = set()
+    for canonical, aliases in _EXACT_TITLE_FREQUENCY_ALIASES.items():
+        normalized_aliases = {_normalize_exact_title_unit_text(alias) for alias in aliases}
+        long_aliases = {alias for alias in normalized_aliases if len(alias) > 1}
+        one_letter_aliases = {alias for alias in normalized_aliases if len(alias) == 1}
+        if tokens & long_aliases:
+            found.add(canonical)
+            continue
+        # One-letter frequency abbreviations (M/Q/A/D/W) are too ambiguous in
+        # natural titles; accept them only inside explicit parenthetical
+        # frequency wrappers.
+        for letter in one_letter_aliases:
+            if re.search(rf"\(\s*{re.escape(letter)}\s*\)", normalized):
+                found.add(canonical)
+                break
+    return found
+
+
+def _candidate_frequency_matches(requested: set[str], candidate_frequency: str) -> bool:
+    """Return True when candidate frequency is compatible with request."""
+
+    if not requested:
+        return True
+    normalized = _normalize_exact_title_unit_text(candidate_frequency)
+    tokens = set(normalized.split())
+    for canonical in requested:
+        aliases = {
+            _normalize_exact_title_unit_text(alias)
+            for alias in _EXACT_TITLE_FREQUENCY_ALIASES.get(canonical, {canonical})
+        }
+        if canonical in tokens or tokens & aliases or normalized.startswith(canonical):
+            return True
+    return False
 
 
 def _has_ratio_cue(text: str) -> bool:
@@ -453,6 +504,10 @@ def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool
         # This remains a literal provider-scoped title path; the matcher below
         # still rejects generic fragments like "credit" or "GDP gaps".
         min_name_len = 8
+    if provider_key == "FRED":
+        # FRED exposes short provider-native titles; accepting them here only
+        # signals an exact-title surface, not a final code decision.
+        min_name_len = 2
 
     candidates = []
     seen_codes = set()
@@ -514,6 +569,11 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
 
     search_inputs = exact_title_search_inputs(text, provider_name)
     provider_key = _normalize_provider_name(provider_name)
+    exact_query_norms = {
+        re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
+        for candidate_query in search_inputs
+        if candidate_query
+    }
     min_name_len = 3 if provider_key == "COINGECKO" else 24
     if provider_key == "IMF":
         # IMF DataMapper/WEO exposes short, provider-native titles such as
@@ -532,7 +592,14 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         # floor (for example "Credit-to-GDP gaps").  Allow those literal titles
         # through only inside the existing strict provider-scoped matcher.
         min_name_len = 8
+    if provider_key == "FRED":
+        # FRED has provider-native short titles such as "M1" and
+        # "Demand Deposits".  Keep the path strict: a provider-scoped exact
+        # title still must match catalog metadata, and duplicate titles are
+        # disambiguated by explicit frequency/unit metadata or left unresolved.
+        min_name_len = 2
     query_country_codes = _extract_country_codes_from_text(query_text)
+    explicit_frequency_tokens = _extract_exact_title_frequency_tokens(query_text)
     explicit_unit_tokens: set[str] = set()
     explicit_unit_normalized = ""
     for search_input in search_inputs:
@@ -696,7 +763,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         if not normalized_name or len(normalized_name) < min_name_len:
             continue
         if any(
-            _is_close_exact_title_match(normalized_query, normalized_name)
+            normalized_query == normalized_name
+            or _is_close_exact_title_match(normalized_query, normalized_name)
             or _is_permutation_exact_title_match(normalized_query, normalized_name)
             for normalized_query in (
                 re.sub(r"[^a-z0-9]+", " ", candidate_query.lower()).strip()
@@ -704,6 +772,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             )
             if normalized_query
         ):
+            title_exact = normalized_name in exact_query_norms
+            if provider_key == "FRED" and not title_exact and not _candidate_frequency_matches(
+                explicit_frequency_tokens,
+                str(candidate.get("frequency") or ""),
+            ):
+                continue
             candidate = dict(candidate)
             if provider_key == "COMTRADE":
                 original_query_lower = query_text.lower()
@@ -742,6 +816,36 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                 best_candidate = candidate
                 best_rank = rank
     if ranked_matches:
+        if not explicit_unit_tokens and not explicit_frequency_tokens:
+            best_name_signature = re.sub(
+                r"[^a-z0-9]+",
+                " ",
+                str((best_candidate or {}).get("name") or "").lower(),
+            ).strip()
+            same_title_candidates = [
+                candidate
+                for _, candidate in ranked_matches
+                if re.sub(
+                    r"[^a-z0-9]+",
+                    " ",
+                    str(candidate.get("name") or "").lower(),
+                ).strip()
+                == best_name_signature
+            ]
+            same_title_codes = {
+                str(candidate.get("code") or "").strip().upper()
+                for candidate in same_title_candidates
+                if str(candidate.get("code") or "").strip()
+            }
+            same_title_unit_frequency_signatures = {
+                (
+                    re.sub(r"[^a-z0-9]+", " ", str(candidate.get("unit") or "").lower()).strip(),
+                    re.sub(r"[^a-z0-9]+", " ", str(candidate.get("frequency") or "").lower()).strip(),
+                )
+                for candidate in same_title_candidates
+            }
+            if len(same_title_codes) > 1 and len(same_title_unit_frequency_signatures) > 1:
+                return None
         top_matches = [
             candidate
             for rank, candidate in ranked_matches
@@ -756,13 +860,16 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             (
                 re.sub(r"[^a-z0-9]+", " ", str(candidate.get("name") or "").lower()).strip(),
                 re.sub(r"[^a-z0-9]+", " ", str(candidate.get("unit") or "").lower()).strip(),
+                re.sub(r"[^a-z0-9]+", " ", str(candidate.get("frequency") or "").lower()).strip(),
             )
             for candidate in top_matches
         }
         if explicit_unit_tokens and best_rank[0] <= -100:
             return None
         if len(top_codes) > 1:
-            if len(top_title_unit_signatures) <= 1:
+            if explicit_frequency_tokens:
+                return best_candidate
+            if len(top_title_unit_signatures) <= 1 and len(normalized_name.split()) >= 3:
                 return best_candidate
             # A provider-native exact title can legitimately map to multiple
             # series that differ only by unit or measurement convention (for
