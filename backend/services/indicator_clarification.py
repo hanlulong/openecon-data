@@ -589,7 +589,7 @@ async def maybe_recover_from_uncertain_match(
     params = dict(intent.parameters or {})
     if params.get("_uncertain_recovery_attempted"):
         return None
-    if params.get("__exact_provider_code_match"):
+    if _is_exact_match_locked(params):
         return None
     if not qs._needs_indicator_clarification(query, data, intent):
         return None

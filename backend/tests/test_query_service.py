@@ -3041,7 +3041,7 @@ class QueryServiceTests(unittest.TestCase):
         )
         fetched = [sample_series_with(source="OECD", indicator="Some other OECD dataflow")]
 
-        with patch.object(self.service, "_needs_indicator_clarification", return_value=True), \
+        with patch.object(self.service, "_needs_indicator_clarification", side_effect=AssertionError("exact codes should not be re-scored for recovery")), \
              patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("exact codes should not collect alternatives")):
             recovered = run(
                 self.service._maybe_recover_from_uncertain_match(  # pylint: disable=protected-access
@@ -3052,6 +3052,60 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(recovered)
+
+    def test_uncertain_match_recovery_skips_exact_indicator_title_match(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["Personal Income"],
+            parameters={
+                "indicator": "PI",
+                "__exact_indicator_title_match": True,
+                "__semantic_provider_locked": True,
+                "__semantic_authority": "exact_user_input",
+            },
+            clarificationNeeded=False,
+            originalQuery="United States Personal Income (Monthly) from FRED",
+        )
+        fetched = [sample_series_with(source="FRED", series_id="PI", indicator="Personal Income")]
+
+        with patch.object(self.service, "_needs_indicator_clarification", side_effect=AssertionError("exact title should not be re-scored for recovery")), \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("exact title should not collect alternatives")):
+            recovered = run(
+                self.service._maybe_recover_from_uncertain_match(  # pylint: disable=protected-access
+                    intent.originalQuery or "",
+                    intent,
+                    fetched,
+                )
+            )
+
+        self.assertIsNone(recovered)
+
+    def test_uncertain_match_recovery_checks_non_exact_semantic_lock(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED",
+            indicators=["personal income"],
+            parameters={
+                "indicator": "personal income",
+                "__semantic_provider_locked": True,
+                "__semantic_authority": "llm_adjudication",
+            },
+            clarificationNeeded=False,
+            originalQuery="US personal income from FRED",
+        )
+        fetched = [sample_series_with(source="FRED", series_id="Q0882BUSQ027NNBR", indicator="Disposable Personal Income")]
+
+        with patch.object(self.service, "_needs_indicator_clarification", return_value=False) as needs_clarification, \
+             patch.object(self.service, "_collect_indicator_choice_options", side_effect=AssertionError("non-uncertain data should not collect alternatives")):
+            recovered = run(
+                self.service._maybe_recover_from_uncertain_match(  # pylint: disable=protected-access
+                    intent.originalQuery or "",
+                    intent,
+                    fetched,
+                )
+            )
+
+        self.assertIsNone(recovered)
+        needs_clarification.assert_called_once_with(intent.originalQuery, fetched, intent)
 
     def test_build_no_data_indicator_clarification_returns_options(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar")
