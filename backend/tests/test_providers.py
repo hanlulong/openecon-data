@@ -329,6 +329,17 @@ class ProviderTests(unittest.TestCase):
             },
         )
 
+    def test_oecd_default_annotations_ignore_not_displayed_as_defaults(self) -> None:
+        defaults = OECDProvider._parse_oecd_default_annotations(  # pylint: disable=protected-access
+            [
+                {"type": "NOT_DISPLAYED", "title": "REF_AREA=CAN,AGE=Y_GE15"},
+                {"type": "DEFAULT", "title": "AGE=_Z,FREQ=A"},
+            ]
+        )
+
+        self.assertEqual(defaults, {"AGE": "_Z", "FREQ": "A"})
+        self.assertNotIn("REF_AREA", defaults)
+
     def test_oecd_registry_external_bases_come_from_provider_links(self) -> None:
         code = "DSD_OTHMRKR@DF_OTHERMARKERS"
         lookup = MagicMock()
@@ -482,6 +493,43 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(params["startPeriod"], "2024")
         self.assertEqual(params["endPeriod"], "2024")
+
+    def test_oecd_provider_advertised_time_params_use_default_span(self) -> None:
+        metadata = {
+            "default_values": {
+                "FREQ": "A3",
+                "TIME_PERIOD_START": "2017",
+                "TIME_PERIOD_END": "2024",
+            },
+            "valid_values_by_dimension": {"FREQ": ["A3"]},
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "2015-01-01T00:00:00"},
+                        "endPeriod": {"period": "2024-12-31T00:00:00"},
+                    },
+                }
+            ],
+        }
+
+        params = OECDProvider._provider_advertised_time_params_from_structure(  # pylint: disable=protected-access
+            metadata,
+            {
+                "dimensionAtObservation": "AllDimensions",
+                "startPeriod": "2024",
+                "endPeriod": "2024",
+            },
+        )
+
+        self.assertEqual(
+            params,
+            {
+                "dimensionAtObservation": "AllDimensions",
+                "startPeriod": "2017",
+                "endPeriod": "2024",
+            },
+        )
 
     def test_oecd_default_time_window_preserves_monthly_provider_period(self) -> None:
         params = {
@@ -3733,6 +3781,329 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("USA.M", captured["url"])
         self.assertEqual(series.metadata.frequency, "annual")
         self.assertEqual(series.data[0].value, 4.2)
+
+    def test_oecd_fetch_indicator_retries_provider_default_span_for_sparse_latest_year(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        calls: list[dict[str, object]] = []
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "SEX", "position": 1},
+                {"id": "AGE", "position": 2},
+                {"id": "ATTAINMENT_LEV", "position": 3},
+                {"id": "EDUCATION_FIELD", "position": 4},
+                {"id": "STATISTICAL_OPERATION", "position": 5},
+                {"id": "FREQ", "position": 6},
+            ],
+            "dimension_ids": [
+                "REF_AREA",
+                "SEX",
+                "AGE",
+                "ATTAINMENT_LEV",
+                "EDUCATION_FIELD",
+                "STATISTICAL_OPERATION",
+                "FREQ",
+            ],
+            "valid_values_by_dimension": {"REF_AREA": ["USA"], "FREQ": ["A3"]},
+            "default_values": {
+                "SEX": "_T",
+                "AGE": "Y25T64",
+                "ATTAINMENT_LEV": "ISCED11A_5T8",
+                "EDUCATION_FIELD": "F01+F02",
+                "STATISTICAL_OPERATION": "OBS",
+                "FREQ": "A3",
+                "TIME_PERIOD_START": "2017",
+                "TIME_PERIOD_END": "2024",
+            },
+            "time_ranges": [
+                {
+                    "dimension": "TIME_PERIOD",
+                    "timeRange": {
+                        "startPeriod": {"period": "2015-01-01T00:00:00"},
+                        "endPeriod": {"period": "2024-12-31T00:00:00"},
+                    },
+                }
+            ],
+        }
+
+        def _payload(observations: dict[str, list[float]]) -> dict:
+            return {
+                "data": {
+                    "dataSets": [{"observations": observations}],
+                    "structures": [
+                        {
+                            "name": "Unemployment rates of tertiary-educated adults",
+                            "dimensions": {
+                                "observation": [
+                                    {"id": "REF_AREA", "values": [{"id": "USA", "name": "United States"}]},
+                                    {"id": "SEX", "values": [{"id": "_T"}]},
+                                    {"id": "AGE", "values": [{"id": "Y25T64"}]},
+                                    {"id": "ATTAINMENT_LEV", "values": [{"id": "ISCED11A_5T8"}]},
+                                    {"id": "EDUCATION_FIELD", "values": [{"id": "F02"}]},
+                                    {"id": "STATISTICAL_OPERATION", "values": [{"id": "OBS"}]},
+                                    {"id": "FREQ", "values": [{"id": "A3"}]},
+                                    {"id": "TIME_PERIOD", "values": [{"id": "2017"}]},
+                                ]
+                            },
+                        }
+                    ],
+                },
+                "meta": {"prepared": "2026-01-01"},
+            }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                calls.append({"url": url, "params": dict(params or {})})
+                if len(calls) == 1:
+                    return MockAsyncResponse(_payload({}))
+                return MockAsyncResponse(_payload({"0:0:0:0:0:0:0:0": [4.2]}))
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.EDU.IMEP", "DSD_EAG_LSO_EA@DF_LSO_NEAC_UNEMP_FIELD", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="USA"))
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn(
+            "/data/OECD.EDU.IMEP,DSD_EAG_LSO_EA@DF_LSO_NEAC_UNEMP_FIELD,1.0/USA._T.Y25T64.ISCED11A_5T8.F01+F02.OBS.A3",
+            str(calls[0]["url"]),
+        )
+        self.assertEqual(calls[0]["params"]["startPeriod"], "2024")
+        self.assertEqual(calls[0]["params"]["endPeriod"], "2024")
+        self.assertEqual(calls[1]["params"]["startPeriod"], "2017")
+        self.assertEqual(calls[1]["params"]["endPeriod"], "2024")
+        self.assertEqual(series.metadata.country, "United States Of America")
+        self.assertEqual(series.data[0].date, "2017-01-01")
+        self.assertEqual(series.data[0].value, 4.2)
+
+    def test_oecd_fetch_indicator_reports_all_missing_observation_values(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "SEX", "position": 1},
+            ],
+            "dimension_ids": ["REF_AREA", "SEX"],
+            "valid_values_by_dimension": {"REF_AREA": ["USA"], "SEX": ["_Z"]},
+            "default_values": {"SEX": "_Z"},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [
+                                {
+                                    "observations": {
+                                        "0:0:0": [None, 0],
+                                        "0:0:1": [None, 0],
+                                    }
+                                }
+                            ],
+                            "structures": [
+                                {
+                                    "name": "Population in the National Accounts",
+                                    "dimensions": {
+                                        "observation": [
+                                            {"id": "REF_AREA", "values": [{"id": "USA", "name": "United States"}]},
+                                            {"id": "SEX", "values": [{"id": "_Z", "name": "Not applicable"}]},
+                                            {
+                                                "id": "TIME_PERIOD",
+                                                "values": [{"id": "2019"}, {"id": "2023"}],
+                                            },
+                                        ]
+                                    },
+                                    "attributes": {
+                                        "observation": [
+                                            {
+                                                "id": "OBS_STATUS",
+                                                "values": [
+                                                    {
+                                                        "id": "L",
+                                                        "name": "Missing value; data exist but were not collected",
+                                                    }
+                                                ],
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2026-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.NAD", "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(provider.fetch_indicator("TEST", country="USA", start_year=2019, end_year=2023))
+
+        message = str(raised.exception)
+        self.assertIn("oecd_missing_valued_observations", message)
+        self.assertIn("DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE", message)
+        self.assertIn("USA", message)
+        self.assertIn("OBS_STATUS=L", message)
+        self.assertIn("no collected numeric values", message)
+
+    def test_oecd_fetch_indicator_preserves_requested_country_when_other_country_has_values(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "SEX", "position": 1},
+            ],
+            "dimension_ids": ["REF_AREA", "SEX"],
+            "valid_values_by_dimension": {"REF_AREA": ["USA", "CAN"], "SEX": ["_Z"]},
+            "default_values": {"SEX": "_Z"},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [
+                                {
+                                    "observations": {
+                                        "0:0:0": [None, 0],
+                                        "1:0:0": [37_448_282.0],
+                                    }
+                                }
+                            ],
+                            "structures": [
+                                {
+                                    "name": "Population in the National Accounts",
+                                    "dimensions": {
+                                        "observation": [
+                                            {
+                                                "id": "REF_AREA",
+                                                "values": [
+                                                    {"id": "USA", "name": "United States"},
+                                                    {"id": "CAN", "name": "Canada"},
+                                                ],
+                                            },
+                                            {"id": "SEX", "values": [{"id": "_Z", "name": "Not applicable"}]},
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2019"}]},
+                                        ]
+                                    },
+                                    "attributes": {
+                                        "observation": [
+                                            {
+                                                "id": "OBS_STATUS",
+                                                "values": [{"id": "L", "name": "Missing value"}],
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2026-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.NAD", "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(provider.fetch_indicator("TEST", country="USA", start_year=2019, end_year=2019))
+
+        message = str(raised.exception)
+        self.assertIn("oecd_missing_valued_observations", message)
+        self.assertIn("USA", message)
+        self.assertNotIn("Canada", message)
+
+    def test_oecd_fetch_indicator_keeps_z_dimension_values_when_numeric(self) -> None:
+        provider = OECDProvider(metadata_search_service=None)
+        metadata = {
+            "base_url": "https://sdmx.oecd.org/public/rest",
+            "dimensions": [
+                {"id": "REF_AREA", "position": 0},
+                {"id": "SEX", "position": 1},
+            ],
+            "dimension_ids": ["REF_AREA", "SEX"],
+            "valid_values_by_dimension": {"REF_AREA": ["CAN"], "SEX": ["_Z"]},
+            "default_values": {"SEX": "_Z"},
+            "time_ranges": [],
+        }
+
+        class _Client:
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return MockAsyncResponse(
+                    {
+                        "data": {
+                            "dataSets": [{"observations": {"0:0:0": [37_448_282.0]}}],
+                            "structures": [
+                                {
+                                    "name": "Population in the National Accounts",
+                                    "dimensions": {
+                                        "observation": [
+                                            {"id": "REF_AREA", "values": [{"id": "CAN", "name": "Canada"}]},
+                                            {"id": "SEX", "values": [{"id": "_Z", "name": "Not applicable"}]},
+                                            {"id": "TIME_PERIOD", "values": [{"id": "2019"}]},
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
+                        "meta": {"prepared": "2026-01-01"},
+                    }
+                )
+
+        with patch.object(
+            provider,
+            "_resolve_indicator",
+            new=AsyncMock(return_value=("OECD.SDD.NAD", "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE", "1.0")),
+        ), patch.object(
+            provider,
+            "_get_oecd_dataflow_structure",
+            new=AsyncMock(return_value=metadata),
+        ), patch("backend.providers.oecd.get_http_client", return_value=_Client()), \
+             patch("backend.providers.oecd.wait_for_provider", new=AsyncMock(return_value=0)), \
+             patch("backend.providers.oecd.record_provider_request"), \
+             patch("backend.providers.oecd.record_provider_success"), \
+             patch("backend.providers.oecd.is_provider_circuit_open", return_value=False):
+            series = run(provider.fetch_indicator("TEST", country="CAN", start_year=2019, end_year=2019))
+
+        self.assertEqual(series.metadata.country, "Canada")
+        self.assertEqual(series.data[0].date, "2019-01-01")
+        self.assertEqual(series.data[0].value, 37_448_282.0)
 
     def test_oecd_fetch_indicator_fails_fast_when_constraints_exclude_country(self) -> None:
         provider = OECDProvider(metadata_search_service=None)

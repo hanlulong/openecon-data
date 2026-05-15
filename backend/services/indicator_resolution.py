@@ -52,10 +52,14 @@ _GDP_RATIO_PATTERNS = (
 
 _EXACT_TITLE_UNIT_SUFFIX_CUE_RE = re.compile(
     r"\b(?:dollars?|currency|percent(?:age)?|index|capita|parity|ppp|"
-    r"constant|current|national|millions?|billions?|thousands?|trillions?|"
+    r"constant|current|millions?|billions?|thousands?|trillions?|"
     r"chained|base|units?)\b|\b\d{4}\s*=\s*100\b",
     flags=re.IGNORECASE,
 )
+# Standalone "national" is intentionally not a unit cue.  Legitimate
+# measurement phrases such as "national currency" still match through the
+# stronger "currency" token, while title text such as "in the National
+# Accounts" must remain part of the exact provider-native title.
 _EXACT_TITLE_UNIT_TOKEN_STOPWORDS = {
     "and",
     "the",
@@ -1040,7 +1044,7 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
                 unit_text = unit_suffix.group("unit")
                 if re.search(
                     r"\b(?:u\.?s\.?|us|dollars?|international|currency|percent|percentage|"
-                    r"capita|parity|ppp|index|constant|current|national|millions?|billions?)\b",
+                    r"capita|parity|ppp|index|constant|current|millions?|billions?)\b",
                     unit_text,
                     flags=re.IGNORECASE,
                 ):

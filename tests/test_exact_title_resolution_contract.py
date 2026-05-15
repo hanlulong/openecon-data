@@ -10,6 +10,8 @@ from backend.services.indicator_resolution import (
     is_exact_match_locked,
     is_provider_locked,
     looks_like_exact_provider_title_match,
+    _strip_trailing_exact_title_unit_suffix,
+    _trailing_exact_title_unit_suffix,
 )
 
 
@@ -144,6 +146,63 @@ def test_exact_title_match_uses_exact_name_lookup_when_fts_misses_short_titles()
     assert match is not None
     assert match["code"] == "MYAGM1KRM189S"
     assert looks_exact is True
+
+
+def test_exact_title_unit_suffix_does_not_strip_national_accounts_title_text() -> None:
+    title = "Population in the National Accounts distribution of people in income quintiles by age from OECD"
+
+    assert _trailing_exact_title_unit_suffix(title) is None
+    assert _strip_trailing_exact_title_unit_suffix(title) is None
+    assert "Population" not in exact_title_search_inputs(title, "OECD")
+
+
+def test_exact_title_unit_suffix_still_detects_measurement_phrases() -> None:
+    assert _trailing_exact_title_unit_suffix(
+        "GDP per capita current prices in U.S. dollars per capita from IMF"
+    )
+    assert _trailing_exact_title_unit_suffix(
+        "Some provider title in Index 2017=100 from FRED"
+    )
+    assert _trailing_exact_title_unit_suffix(
+        "National Accounts, gross value added in National Currency from IMF"
+    )
+
+
+def test_oecd_national_accounts_exact_titles_resolve_without_unit_suffix_false_positive(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    cases = [
+        (
+            "United States Population in the National Accounts: distribution of people in income quintiles by age from OECD",
+            "DSD_EGDNA_SOCDEM@DF_SOCIODEMOGRAPHIC_AGE",
+            "Population in the National Accounts: distribution of people in income quintiles by age",
+        ),
+        (
+            "United States Household income and saving in the National Accounts: distributions by main source of income from OECD",
+            "DSD_EGDNA_INC_MSI@DF_INC_MSI",
+            "Household income and saving in the National Accounts: distributions by main source of income",
+        ),
+    ]
+    for _query, code, name in cases:
+        assert db.insert_indicator(Indicator(provider="OECD", code=code, name=name, popularity=10))
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        for query, code, name in cases:
+            match = find_exact_provider_title_match(query, "OECD")
+            looks_exact = looks_like_exact_provider_title_match(query, "OECD")
+            intent = build_exact_indicator_title_intent(
+                query,
+                explicit_provider="OECD",
+                countries=["US"],
+                all_providers=["OECD"],
+            )
+
+            assert match is not None
+            assert match["code"] == code
+            assert looks_exact is True
+            assert intent is not None
+            assert intent.parameters["indicator"] == code
+            assert intent.indicators == [name]
 
 
 def test_exact_title_match_accepts_short_imf_weo_titles() -> None:

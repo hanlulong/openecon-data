@@ -882,6 +882,51 @@ class OECDProvider(BaseProvider):
                 return start_period, end_period
         return None, None
 
+    @classmethod
+    def _provider_advertised_time_params_from_structure(
+        cls,
+        structure_metadata: Optional[Dict[str, Any]],
+        base_params: Dict[str, str],
+    ) -> Optional[Dict[str, str]]:
+        """Return OECD provider-advertised default/valid time span params.
+
+        This is a mechanical fallback for provider-generated default windows:
+        when a latest-period request is empty for a sparse dataflow/country,
+        retrying the provider's own advertised default time span preserves the
+        same REF_AREA/key constraints without guessing a query-specific range.
+        """
+        if not structure_metadata:
+            return None
+
+        defaults = dict(structure_metadata.get("default_values") or {})
+        period_frequency = cls._time_param_frequency_from_structure(structure_metadata)
+        start_period = cls._period_code_from_oecd_period(
+            defaults.get("TIME_PERIOD_START"),
+            period_frequency,
+        )
+        end_period = cls._period_code_from_oecd_period(
+            defaults.get("TIME_PERIOD_END"),
+            period_frequency,
+        )
+        if not start_period and not end_period:
+            start_period, end_period = cls._period_range_from_structure(
+                structure_metadata,
+                period_frequency,
+            )
+        if not start_period and not end_period:
+            return None
+
+        params = dict(base_params or {})
+        if start_period:
+            params["startPeriod"] = str(start_period)
+        elif end_period:
+            params["startPeriod"] = str(end_period)
+        if end_period:
+            params["endPeriod"] = str(end_period)
+        elif start_period:
+            params["endPeriod"] = str(start_period)
+        return params
+
     @staticmethod
     def _time_param_frequency_from_structure(structure_metadata: Dict[str, Any]) -> Optional[str]:
         defaults = dict(structure_metadata.get("default_values") or {})
@@ -1542,6 +1587,7 @@ class OECDProvider(BaseProvider):
         structure_metadata = await self._get_oecd_dataflow_structure(agency, dataflow, version)
         filter_key = None
         structure_defaults_for_selection: Dict[str, str] = {}
+        provider_advertised_time_params: Optional[Dict[str, str]] = None
         relaxed_default_retry = False
         if structure_metadata and structure_metadata.get("dimensions"):
             adjusted_expected_freq = self._oecd_expected_frequency_for_structure(
@@ -1570,6 +1616,12 @@ class OECDProvider(BaseProvider):
                     raise DataNotAvailableError(country_constraint_error)
             if used_default_time_range:
                 self._clamp_default_time_params_to_oecd_constraints(params, structure_metadata)
+                provider_advertised_time_params = (
+                    self._provider_advertised_time_params_from_structure(
+                        structure_metadata,
+                        params,
+                    )
+                )
             data_base_url = str(structure_metadata.get("base_url") or self.base_url).rstrip("/")
             defaults = dict(structure_metadata.get("default_values") or {})
             if expected_freq and "FREQ" not in defaults:
@@ -1692,6 +1744,26 @@ class OECDProvider(BaseProvider):
                 jitter=2.0,  # Add 0-2s random jitter
             )
 
+        async def _try_provider_advertised_time_window(
+            request_url: str,
+            request_key: str,
+        ) -> Optional[Dict[str, Any]]:
+            if not provider_advertised_time_params or provider_advertised_time_params == params:
+                return None
+            logger.info(
+                "OECD generated latest/default window returned no records for %s/%s; "
+                "retrying provider-advertised default time span %s-%s with key %s",
+                country_code,
+                dataflow,
+                provider_advertised_time_params.get("startPeriod"),
+                provider_advertised_time_params.get("endPeriod"),
+                request_key,
+            )
+            return await _request_oecd_data(
+                request_url,
+                request_params=provider_advertised_time_params,
+            )
+
         # Use retry_async with exponential backoff and jitter for OECD:
         # - 3 attempts (original + 2 retries)
         # - Exponential backoff: 3s → 6s → 12s
@@ -1699,34 +1771,49 @@ class OECDProvider(BaseProvider):
         # Total worst case: 50s + 5s + 50s + 8s + 50s = ~163s (but rare)
         try:
             data = await _request_oecd_data(url)
-        except DataNotAvailableError:
-            relaxed_frequency = (
-                structure_defaults_for_selection.get("FREQ")
-                or structure_defaults_for_selection.get("frequency")
-                or expected_freq
-            )
-            relaxed_key = (
-                self._build_oecd_relaxed_key_from_structure(
-                    structure_metadata,
-                    country_code,
-                    relaxed_frequency,
+        except DataNotAvailableError as primary_exc:
+            advertised_data = await _try_provider_advertised_time_window(url, filter_key)
+            if advertised_data is not None:
+                data = advertised_data
+                params = dict(provider_advertised_time_params or params)
+            else:
+                relaxed_frequency = (
+                    structure_defaults_for_selection.get("FREQ")
+                    or structure_defaults_for_selection.get("frequency")
+                    or expected_freq
                 )
-                if structure_metadata
-                else None
-            )
-            if not relaxed_key or relaxed_key == filter_key:
-                raise
-            relaxed_url = f"{data_base_url}/data/{agency},{dataflow},{version}/{relaxed_key}"
-            logger.info(
-                "OECD default key returned no records for %s/%s; retrying relaxed provider-native key %s",
-                country_code,
-                dataflow,
-                relaxed_key,
-            )
-            data = await _request_oecd_data(relaxed_url)
-            filter_key = relaxed_key
-            url = relaxed_url
-            relaxed_default_retry = True
+                relaxed_key = (
+                    self._build_oecd_relaxed_key_from_structure(
+                        structure_metadata,
+                        country_code,
+                        relaxed_frequency,
+                    )
+                    if structure_metadata
+                    else None
+                )
+                if not relaxed_key or relaxed_key == filter_key:
+                    raise primary_exc
+                relaxed_url = f"{data_base_url}/data/{agency},{dataflow},{version}/{relaxed_key}"
+                logger.info(
+                    "OECD default key returned no records for %s/%s; retrying relaxed provider-native key %s",
+                    country_code,
+                    dataflow,
+                    relaxed_key,
+                )
+                try:
+                    data = await _request_oecd_data(relaxed_url)
+                except DataNotAvailableError as relaxed_exc:
+                    advertised_data = await _try_provider_advertised_time_window(
+                        relaxed_url,
+                        relaxed_key,
+                    )
+                    if advertised_data is None:
+                        raise relaxed_exc
+                    data = advertised_data
+                    params = dict(provider_advertised_time_params or params)
+                filter_key = relaxed_key
+                url = relaxed_url
+                relaxed_default_retry = True
 
         # Parse SDMX-JSON 2.0 format
         # Check if data is None before accessing
@@ -1743,6 +1830,37 @@ class OECDProvider(BaseProvider):
             raise DataNotAvailableError(f"Empty dataset received for {country_code} {indicator}")
 
         observations = dataset.get("observations", {})
+        if (
+            not observations
+            and provider_advertised_time_params is not None
+            and provider_advertised_time_params != params
+        ):
+            logger.info(
+                "OECD latest-period default window returned no observations for %s/%s; "
+                "retrying provider-advertised default time span %s-%s",
+                country_code,
+                dataflow,
+                provider_advertised_time_params.get("startPeriod"),
+                provider_advertised_time_params.get("endPeriod"),
+            )
+            advertised_window_data = await _request_oecd_data(
+                url,
+                request_params=provider_advertised_time_params,
+            )
+            advertised_datasets = advertised_window_data.get("data", {}).get("dataSets", [])
+            advertised_dataset = advertised_datasets[0] if advertised_datasets else None
+            advertised_observations = (
+                advertised_dataset.get("observations", {})
+                if isinstance(advertised_dataset, dict)
+                else {}
+            )
+            if advertised_observations:
+                data = advertised_window_data
+                datasets = advertised_datasets
+                dataset = advertised_dataset
+                observations = advertised_observations
+                params = dict(provider_advertised_time_params)
+
         if not observations and not relaxed_default_retry:
             relaxed_frequency = (
                 structure_defaults_for_selection.get("FREQ")
@@ -1785,8 +1903,9 @@ class OECDProvider(BaseProvider):
             # no observations for a specific country/default dimension
             # combination.  If the single-period request is empty, replay the
             # same provider-native key sequence with the original generated
-            # default window before declaring no data.  Explicit user dates do
-            # not enter this path.
+            # default window before declaring no data.  The provider-advertised
+            # default/valid span has already been tried above when available.
+            # Explicit user dates do not enter this path.
             logger.info(
                 "OECD latest-period default window returned no observations for %s/%s; "
                 "retrying original generated default window",
@@ -1886,11 +2005,18 @@ class OECDProvider(BaseProvider):
         )
         ref_period_attr_index = None
         ref_period_values = []
+        obs_status_attr_index = None
+        obs_status_values = []
         for attr_idx, attr in enumerate(observation_attributes):
-            if isinstance(attr, dict) and attr.get("id") == "REF_PERIOD":
+            if not isinstance(attr, dict):
+                continue
+            attr_id = attr.get("id")
+            if attr_id == "REF_PERIOD":
                 ref_period_attr_index = attr_idx
                 ref_period_values = attr.get("values", []) or []
-                break
+            elif attr_id == "OBS_STATUS":
+                obs_status_attr_index = attr_idx
+                obs_status_values = attr.get("values", []) or []
 
         # Find dimensions for filtering
         # CRITICAL: OECD doesn't populate position field, so use array index instead
@@ -1962,6 +2088,9 @@ class OECDProvider(BaseProvider):
         data_points = []
         observations_checked = 0
         observations_filtered_out = 0
+        selected_observations_with_period = 0
+        selected_null_value_observations = 0
+        null_value_status_counts: Dict[str, int] = defaultdict(int)
         selection_defaults = dict(structure_defaults_for_selection or {})
         if selection_defaults.get("frequency") and "FREQ" not in selection_defaults:
             selection_defaults["FREQ"] = selection_defaults["frequency"]
@@ -1990,6 +2119,32 @@ class OECDProvider(BaseProvider):
             for dim_id, value_id in series_key:
                 if str(dim_id or "") == "REF_AREA" and str(value_id or "").strip():
                     return str(value_id).strip()
+            return None
+
+        def _observation_status_label(observation_value: Any) -> Optional[str]:
+            if (
+                obs_status_attr_index is None
+                or not isinstance(observation_value, list)
+                or len(observation_value) <= 1 + obs_status_attr_index
+            ):
+                return None
+            status_index = observation_value[1 + obs_status_attr_index]
+            if status_index is None:
+                return None
+            status_info: Any = None
+            if isinstance(status_index, int) and 0 <= status_index < len(obs_status_values):
+                status_info = obs_status_values[status_index]
+            elif isinstance(status_index, str):
+                status_info = {"id": status_index}
+            if isinstance(status_info, dict):
+                status_id = str(status_info.get("id") or status_info.get("value") or "").strip()
+                status_name = str(status_info.get("name") or "").strip()
+                if status_id and status_name and status_name != status_id:
+                    return f"{status_id} ({status_name})"
+                return status_id or status_name or None
+            if status_info is not None:
+                status_label = str(status_info).strip()
+                return status_label or None
             return None
 
         for obs_key, obs_value in observations.items():
@@ -2058,56 +2213,87 @@ class OECDProvider(BaseProvider):
 
             # obs_value is an array where first element is the value
             value = obs_value[0] if isinstance(obs_value, list) and obs_value else obs_value
+            selected_observations_with_period += 1
 
-            if value is not None:
-                series_key_parts = []
-                default_match_score = 0
-                for dim_idx, dim in enumerate(dimensions):
-                    if dim_idx == time_dim_index:
-                        continue
-                    dim_id = str(dim.get("id") or "")
-                    value_id = ""
-                    if dim_idx < len(indices) and indices[dim_idx] is not None:
-                        dim_values = dim.get("values", []) or []
-                        if indices[dim_idx] < len(dim_values):
-                            dim_value = dim_values[indices[dim_idx]]
-                            if isinstance(dim_value, dict):
-                                value_id = str(dim_value.get("id") or dim_value.get("value") or "")
-                    if dim_id:
-                        series_key_parts.append((dim_id, value_id))
-                        if value_id and _default_value_matches(dim_id, value_id):
-                            default_match_score += 1
+            if value is None:
+                selected_null_value_observations += 1
+                status_label = _observation_status_label(obs_value)
+                if status_label:
+                    null_value_status_counts[status_label] += 1
+                continue
 
-                # Convert time period to ISO date
-                # OECD returns formats like "2020", "2020-Q1", "2020-01"
-                time_period = str(time_period)
-                if "-Q" in time_period:
-                    # Quarterly: convert 2020-Q1 to 2020-03-31
-                    year, quarter = time_period.split("-Q")
-                    month = int(quarter) * 3
-                    date_str = f"{year}-{month:02d}-01"
-                elif "-" in time_period and len(time_period.split("-")) == 2:
-                    # Monthly: 2020-01
-                    date_str = f"{time_period}-01"
-                else:
-                    # Annual: 2020
-                    date_str = f"{time_period}-01-01"
+            series_key_parts = []
+            default_match_score = 0
+            for dim_idx, dim in enumerate(dimensions):
+                if dim_idx == time_dim_index:
+                    continue
+                dim_id = str(dim.get("id") or "")
+                value_id = ""
+                if dim_idx < len(indices) and indices[dim_idx] is not None:
+                    dim_values = dim.get("values", []) or []
+                    if indices[dim_idx] < len(dim_values):
+                        dim_value = dim_values[indices[dim_idx]]
+                        if isinstance(dim_value, dict):
+                            value_id = str(dim_value.get("id") or dim_value.get("value") or "")
+                if dim_id:
+                    series_key_parts.append((dim_id, value_id))
+                    if value_id and _default_value_matches(dim_id, value_id):
+                        default_match_score += 1
 
-                data_points.append(
-                    {
-                        "date": date_str,
-                        "value": float(value),
-                        "_series_key": tuple(series_key_parts),
-                        "_default_match_score": default_match_score,
-                    }
-                )
+            # Convert time period to ISO date
+            # OECD returns formats like "2020", "2020-Q1", "2020-01"
+            time_period = str(time_period)
+            if "-Q" in time_period:
+                # Quarterly: convert 2020-Q1 to 2020-03-31
+                year, quarter = time_period.split("-Q")
+                month = int(quarter) * 3
+                date_str = f"{year}-{month:02d}-01"
+            elif "-" in time_period and len(time_period.split("-")) == 2:
+                # Monthly: 2020-01
+                date_str = f"{time_period}-01"
+            else:
+                # Annual: 2020
+                date_str = f"{time_period}-01-01"
+
+            data_points.append(
+                {
+                    "date": date_str,
+                    "value": float(value),
+                    "_series_key": tuple(series_key_parts),
+                    "_default_match_score": default_match_score,
+                }
+            )
 
         logger.info(f"📊 Filtering results:")
         logger.info(f"   Observations checked: {observations_checked}")
         logger.info(f"   Observations filtered out: {observations_filtered_out}")
+        logger.info(f"   Selected observations with period: {selected_observations_with_period}")
+        logger.info(f"   Selected null-valued observations: {selected_null_value_observations}")
         logger.info(f"   Data points extracted: {len(data_points)}")
 
         if not data_points:
+            if (
+                selected_observations_with_period > 0
+                and selected_null_value_observations == selected_observations_with_period
+            ):
+                reported_country = country_code or response_country_code or "requested selection"
+                status_summary = ""
+                if null_value_status_counts:
+                    ranked_statuses = sorted(
+                        null_value_status_counts.items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                    status_summary = "; OBS_STATUS=" + ", ".join(
+                        f"{label} ({count})" for label, count in ranked_statuses[:5]
+                    )
+                raise DataNotAvailableError(
+                    "oecd_missing_valued_observations: "
+                    f"OECD returned {selected_observations_with_period} observations for "
+                    f"{reported_country} {dataflow}, but all observation values were null/missing"
+                    f"{status_summary}. The provider response contains no collected numeric values "
+                    "for the requested country and time window."
+                )
+
             # Provide helpful error message based on what filters were applied
             error_parts = [f"No valid data points found for {country_code} {indicator}"]
 
