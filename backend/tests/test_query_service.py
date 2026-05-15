@@ -1045,6 +1045,54 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("fail-closed supportability block", response.message or "")
         self.assertEqual(response.intent.apiProvider, "IMF")
 
+    def test_build_exact_indicator_title_intent_resolves_reordered_worldbank_source_title(self) -> None:
+        class _Lookup:
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                self.search_inputs = search_inputs
+                self.provider = provider
+                return [
+                    {
+                        "code": "DXGSRMRCHSAXD",
+                        "provider": "WorldBank",
+                        "name": "Exports Merchandise, Customs, Price, US$, seas. adj.",
+                        "raw_metadata": '{"source": {"id": "15", "value": "Global Economic Monitor"}}',
+                    }
+                ]
+
+        lookup = _Lookup()
+        query = "Customs Price US$ seas. adj. Exports Merchandise from World Bank"
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+            intent = self.service._build_exact_indicator_title_intent(query)  # pylint: disable=protected-access
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertEqual(intent.parameters.get("indicator"), "DXGSRMRCHSAXD")
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+
+    def test_worldbank_reordered_source_title_dispatches_exact_code_without_clarification(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="WorldBank",
+            indicators=["Exports Merchandise, Customs, Price, US$, seas. adj."],
+            parameters={
+                "indicator": "DXGSRMRCHSAXD",
+                "__semantic_provider_locked": True,
+                "__semantic_indicator_label": "Exports Merchandise, Customs, Price, US$, seas. adj.",
+                "__exact_indicator_title_match": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Customs Price US$ seas. adj. Exports Merchandise from World Bank",
+        )
+        returned = [sample_series_with(source="World Bank", indicator="Exports Merchandise, Customs, Price, US$, seas. adj.", series_id="DXGSRMRCHSAXD")]
+
+        with patch.object(self.service, "_get_from_cache", return_value=None), \
+             patch.object(self.service.world_bank_provider, "fetch_indicator", new_callable=AsyncMock, return_value=returned) as fetch_mock:
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+
+        self.assertEqual(data[0].metadata.seriesId, "DXGSRMRCHSAXD")
+        self.assertEqual(fetch_mock.call_args.kwargs.get("indicator"), "DXGSRMRCHSAXD")
+
     def test_explicit_provider_code_intent_extracts_imf_code_with_country_context(self) -> None:
         intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
             "United States PCPI_CP_01_BY2010_IX from IMF"

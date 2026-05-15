@@ -510,6 +510,34 @@ def test_exact_title_match_accepts_short_worldbank_public_source_title(tmp_path)
     assert looks_exact is True
 
 
+def test_exact_title_match_uses_token_bag_for_worldbank_title_permutation(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    assert db.insert_indicator(
+        Indicator(
+            provider="WorldBank",
+            code="DXGSRMRCHSAXD",
+            name="Exports Merchandise, Customs, Price, US$, seas. adj.",
+            description="The price index of Merchandise (goods) exports, free on board (f.o.b.), in US$ seasonally adjusted.",
+            category="Global Economic Monitor",
+            popularity=10,
+            raw_metadata='{"source": {"id": "15", "value": "Global Economic Monitor"}}',
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = "Customs Price US$ seas. adj. Exports Merchandise from World Bank"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "WorldBank")
+        broad_match = find_exact_provider_title_match(
+            "Merchandise exports from World Bank",
+            "WorldBank",
+        )
+
+    assert match is not None
+    assert match["code"] == "DXGSRMRCHSAXD"
+    assert broad_match is None
+
+
 def test_exact_title_match_accepts_short_bis_hyphenated_dataflow_title(tmp_path) -> None:
     db = IndicatorDatabase(tmp_path / "indicators.db")
     assert db.insert_indicator(

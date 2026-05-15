@@ -720,7 +720,69 @@ class IndicatorLookup:
             normalized_rows.append((order, -popularity, code, candidate))
 
         normalized_rows.sort()
-        return (exact_rows + [candidate for _, _, _, candidate in normalized_rows])[:limit]
+
+        # Provider titles are often comma-delimited provider-native labels whose
+        # token order is not stable when pasted into natural-language queries
+        # (for example "Exports Merchandise, Customs, Price, US$, seas. adj."
+        # vs "Customs Price US$ seas. adj. Exports Merchandise").  The strict
+        # exact-title resolver already verifies near-identical token bags before
+        # accepting a row; this lookup fallback only broadens provider-scoped
+        # candidate recall so that strict check can see the catalog row.  It is
+        # not semantic final authority and does not introduce synonyms, keyword
+        # maps, or code shortcuts.
+        permutation_rows: list[tuple[int, int, int, int, int, str, Dict[str, Any]]] = []
+        if normalized_provider == "WorldBank":
+            for normalized, order in normalized_inputs.items():
+                query_tokens = list(dict.fromkeys(normalized.split()))
+                # Keep this path narrow: short generic titles should continue
+                # through the literal/prefix exact-title paths or clarify.
+                if len(query_tokens) < 5:
+                    continue
+                token_sql = "SELECT * FROM indicators WHERE provider = ?"
+                token_params: list[Any] = [normalized_provider]
+                for token in query_tokens:
+                    token_sql += " AND lower(name) LIKE ?"
+                    token_params.append(f"%{token}%")
+                token_sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
+                token_params.append(max(limit * 10, 200))
+
+                cursor.execute(token_sql, token_params)
+                query_token_set = set(query_tokens)
+                for row in cursor.fetchall():
+                    candidate = dict(row)
+                    code = str(candidate.get("code") or "")
+                    if code in seen_codes:
+                        continue
+                    normalized_name = _normalize_exact_title(str(candidate.get("name") or ""))
+                    name_tokens = normalized_name.split()
+                    if len(name_tokens) < 5:
+                        continue
+                    name_token_set = set(name_tokens)
+                    shared_tokens = len(query_token_set & name_token_set)
+                    token_delta = abs(len(name_tokens) - len(query_tokens))
+                    unmatched_tokens = len(query_token_set ^ name_token_set)
+                    if token_delta > 2 or unmatched_tokens > 1:
+                        continue
+                    popularity = int(candidate.get("popularity") or 0)
+                    permutation_rows.append(
+                        (
+                            order,
+                            unmatched_tokens,
+                            token_delta,
+                            -shared_tokens,
+                            -popularity,
+                            code,
+                            candidate,
+                        )
+                    )
+                    seen_codes.add(code)
+
+        permutation_rows.sort()
+        return (
+            exact_rows
+            + [candidate for _, _, _, candidate in normalized_rows]
+            + [candidate for _, _, _, _, _, _, candidate in permutation_rows]
+        )[:limit]
 
     def get(self, provider: str, code: str) -> Optional[Dict[str, Any]]:
         """
