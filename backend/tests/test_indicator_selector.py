@@ -167,6 +167,77 @@ def test_get_candidates_uses_catalog_provider_alias_for_statscan(monkeypatch) ->
     assert scores == []
     assert seen == [("embedding", "StatsCan"), ("fts", "StatsCan")]
 
+
+def test_hybrid_candidate_merge_keeps_embedding_backed_matches_ahead_of_fts_recall(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    class _FakeEmbeddingRetrieval:
+        def search(self, query: str, provider: str, top_k: int):  # noqa: ANN001, ARG002
+            assert query == "unemployment rate"
+            assert provider == "FRED"
+            return [
+                {"code": "GENERIC_SA", "name": "Unemployment Rate", "score": 0.91},
+                {"code": "GENERIC_NSA", "name": "Unemployment Rate", "score": 0.90},
+                {"code": "LEVEL", "name": "Unemployment Level", "score": 0.76},
+            ]
+
+    monkeypatch.setattr(
+        "backend.services.embedding_retrieval.get_embedding_retrieval",
+        lambda: _FakeEmbeddingRetrieval(),
+    )
+    monkeypatch.setattr(
+        selector,
+        "_get_candidates_fts5",
+        lambda query, provider, top_k: [  # noqa: ARG005
+            ("STATE_CA", "Unemployment Rate in California"),
+            ("STATE_TX", "Unemployment Rate in Texas"),
+            ("GENERIC_SA", "Unemployment Rate"),
+        ],
+    )
+
+    candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
+        "unemployment rate",
+        "FRED",
+    )
+
+    assert [code for code, _name in candidates[:2]] == ["GENERIC_SA", "GENERIC_NSA"]
+    assert {code for code, _name in candidates[:5]} >= {"STATE_CA", "STATE_TX"}
+    assert scores[0] > scores[2]
+    assert not IndicatorSelector._scores_are_ambiguous(scores[:3])  # pylint: disable=protected-access
+
+
+def test_hybrid_candidate_merge_keeps_fts_only_recall_when_embeddings_miss(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    class _FakeEmbeddingRetrieval:
+        def search(self, query: str, provider: str, top_k: int):  # noqa: ANN001, ARG002
+            return []
+
+    monkeypatch.setattr(
+        "backend.services.embedding_retrieval.get_embedding_retrieval",
+        lambda: _FakeEmbeddingRetrieval(),
+    )
+    monkeypatch.setattr(
+        selector,
+        "_get_candidates_fts5",
+        lambda query, provider, top_k: [  # noqa: ARG005
+            ("LEXICAL_CODE", "Lexical acronym match"),
+            ("SECOND_CODE", "Second lexical match"),
+        ],
+    )
+
+    candidates, scores = selector._get_candidates_with_scores(  # pylint: disable=protected-access
+        "lexical acronym",
+        "FRED",
+    )
+
+    assert candidates == [
+        ("LEXICAL_CODE", "Lexical acronym match"),
+        ("SECOND_CODE", "Second lexical match"),
+    ]
+    assert scores[0] > scores[1]
+
+
 def test_imf_candidate_order_prefers_public_datamapper_surface(monkeypatch) -> None:
     selector = IndicatorSelector(settings=SimpleNamespace())
 

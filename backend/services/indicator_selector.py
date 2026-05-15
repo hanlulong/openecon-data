@@ -286,31 +286,77 @@ class IndicatorSelector:
         except Exception as e:
             logger.debug("FTS5 retrieval failed: %s", e)
 
-        # 2. Merge: FTS5, then embeddings. FTS5 results often contain
-        # canonical lexical matches that embeddings miss. Embeddings provide
-        # semantic paraphrases for novel queries.
-        seen_codes: set = set()
-        merged_candidates: List[tuple[str, str]] = []
-        merged_scores: List[float] = []
-
+        # 2. Merge with score-aware hybrid ordering.  FTS5 is excellent recall
+        # evidence for lexical/provider-title surfaces, but it must not occupy the
+        # whole front of the LLM prompt ahead of much stronger embedding matches.
+        # Keep both evidence sources, dedupe by provider code, and let the final
+        # LLM selector adjudicate semantics.
         if embedding_candidates or fts5_candidates:
-            # Take top FTS5 (canonical lexical matches)
-            for code, name in fts5_candidates[:10]:
-                if code not in seen_codes:
-                    seen_codes.add(code)
-                    merged_candidates.append((code, name))
-                    merged_scores.append(0.55)
+            merged_by_code: Dict[str, Dict[str, Any]] = {}
 
-            # Then top embedding results (semantic paraphrases)
-            for i, (code, name) in enumerate(embedding_candidates):
-                if code not in seen_codes:
-                    seen_codes.add(code)
-                    merged_candidates.append((code, name))
-                    merged_scores.append(
-                        embedding_scores[i] if i < len(embedding_scores) else 0.0
-                    )
-                if len(merged_candidates) >= top_k:
-                    break
+            for rank, (code, name) in enumerate(fts5_candidates[:20]):
+                code_text = str(code or "").strip()
+                if not code_text:
+                    continue
+                entry = merged_by_code.setdefault(
+                    code_text,
+                    {
+                        "candidate": (code, name),
+                        "embedding_score": None,
+                        "embedding_rank": None,
+                        "fts_rank": None,
+                    },
+                )
+                if entry["fts_rank"] is None:
+                    entry["fts_rank"] = rank
+
+            for rank, (code, name) in enumerate(embedding_candidates):
+                code_text = str(code or "").strip()
+                if not code_text:
+                    continue
+                score = embedding_scores[rank] if rank < len(embedding_scores) else 0.0
+                entry = merged_by_code.setdefault(
+                    code_text,
+                    {
+                        "candidate": (code, name),
+                        "embedding_score": None,
+                        "embedding_rank": None,
+                        "fts_rank": None,
+                    },
+                )
+                # Prefer the embedding-sourced display name when this source has
+                # stronger numeric evidence; FTS-only candidates still remain as
+                # recall candidates below embedding-backed matches.
+                if entry["embedding_score"] is None or score > float(entry["embedding_score"]):
+                    entry["candidate"] = (code, name)
+                    entry["embedding_score"] = score
+                    entry["embedding_rank"] = rank
+
+            def _effective_rank(item: tuple[str, Dict[str, Any]]) -> tuple[float, int, int, str]:
+                code, entry = item
+                embedding_score = entry["embedding_score"]
+                fts_rank = entry["fts_rank"]
+                embedding_rank = entry["embedding_rank"]
+                if embedding_score is not None:
+                    lexical_boost = 0.02 / (int(fts_rank) + 1) if fts_rank is not None else 0.0
+                    effective_score = float(embedding_score) + lexical_boost
+                else:
+                    # FTS-only rows are useful recall candidates, but their
+                    # synthetic score must stay below real embedding evidence.
+                    effective_score = 0.55 - min(0.10, 0.005 * int(fts_rank or 0))
+                return (
+                    -effective_score,
+                    int(embedding_rank) if embedding_rank is not None else top_k + int(fts_rank or 0),
+                    int(fts_rank) if fts_rank is not None else top_k,
+                    code,
+                )
+
+            ranked_entries = sorted(merged_by_code.items(), key=_effective_rank)[:top_k]
+            merged_candidates = [entry["candidate"] for _code, entry in ranked_entries]
+            merged_scores = [
+                -_effective_rank((code, entry))[0]
+                for code, entry in ranked_entries
+            ]
 
             return self._prioritize_candidates_by_provider_surface(
                 merged_candidates,
