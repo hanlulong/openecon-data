@@ -108,6 +108,73 @@ def test_run_claim_bundle_uses_existing_adjudication_for_summary(tmp_path: Path)
     assert triage_cmd is not None
 
 
+def test_run_claim_bundle_passes_supportability_inventory_to_local_score_only(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    inventory_path = tmp_path / "supportability_inventory.json"
+    production_dataset_path = tmp_path / "prod_replay.jsonl"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "id": "direct-imf-replacement-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "United States Current account balance U.S. dollars from IMF",
+                "provenance": {
+                    "snapshot_id": "snap-1",
+                    "holdout_split": "cert_holdout",
+                    "selection_weight": 1.0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    production_dataset_path.write_text(dataset_path.read_text(encoding="utf-8"), encoding="utf-8")
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "session_id": "direct-imf-original-unsupported",
+                        "disposition": "excluded_replaced",
+                        "replacement_session_ids": ["direct-imf-replacement-000001"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BUNDLE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--supportability-inventory",
+            str(inventory_path),
+            "--run-production-replay",
+            "--production-dataset",
+            str(production_dataset_path),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    score_cmd = payload["commands"]["score_certification"]
+    replay_cmd = payload["commands"]["replay_production_holdout"]
+    assert payload["supportability_inventory"] == str(inventory_path.resolve())
+    assert payload["production_supportability_inventory_supported"] is False
+    assert "--supportability-inventory" in score_cmd
+    assert str(inventory_path.resolve()) in score_cmd
+    assert replay_cmd is not None
+    assert "--supportability-inventory" not in replay_cmd
+    assert str(inventory_path.resolve()) not in replay_cmd
+
+
 def test_run_claim_bundle_propagates_max_sessions_to_score_step(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     dataset_path.write_text(

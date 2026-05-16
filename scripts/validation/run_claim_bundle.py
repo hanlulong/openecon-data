@@ -48,6 +48,18 @@ def main() -> int:
     parser.add_argument("--claim-output", type=Path, default=DEFAULT_CLAIM_OUTPUT)
     parser.add_argument("--floor-policy", type=Path, default=ROOT / "validation" / "manifests" / "claim_gate_policy-v1.json")
     parser.add_argument("--existing-adjudication-records", type=Path, default=None)
+    parser.add_argument(
+        "--supportability-inventory",
+        type=Path,
+        default=None,
+        help=(
+            "Optional supportability/backfill inventory passed through to "
+            "score_certification.py for explicit replacement accounting. "
+            "This is local scoring provenance only; production replay does "
+            "not consume it unless replay_production_holdout.py grows a "
+            "separate explicit inventory flag."
+        ),
+    )
     parser.add_argument("--production-score-report", type=Path, default=None)
     parser.add_argument("--run-production-replay", action="store_true")
     parser.add_argument("--production-dataset", type=Path, default=DEFAULT_PRODUCTION_DATASET)
@@ -101,6 +113,7 @@ def main() -> int:
     claim_output = args.claim_output.resolve()
     floor_policy = args.floor_policy.resolve()
     existing_adjudication = args.existing_adjudication_records.resolve() if args.existing_adjudication_records else None
+    supportability_inventory = args.supportability_inventory.resolve() if args.supportability_inventory else None
     production_score_report = args.production_score_report.resolve() if args.production_score_report else None
     production_dataset = args.production_dataset.resolve()
     production_raw_output = args.production_raw_output.resolve()
@@ -170,6 +183,8 @@ def main() -> int:
         score_cmd += ["--start-index", str(effective_start_index)]
     if existing_adjudication is not None:
         score_cmd += ["--adjudication-records", str(existing_adjudication)]
+    if supportability_inventory is not None:
+        score_cmd += ["--supportability-inventory", str(supportability_inventory)]
 
     queue_cmd = [
         sys.executable,
@@ -303,6 +318,8 @@ def main() -> int:
         "claim_output": str(claim_output),
         "floor_policy": str(floor_policy),
         "existing_adjudication_records": str(existing_adjudication) if existing_adjudication is not None else None,
+        "supportability_inventory": str(supportability_inventory) if supportability_inventory is not None else None,
+        "production_supportability_inventory_supported": False,
         "production_score_report": str(production_score_report) if production_score_report is not None else None,
         "run_production_replay": args.run_production_replay,
         "production_dataset": str(production_dataset),
