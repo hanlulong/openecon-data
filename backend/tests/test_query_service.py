@@ -813,6 +813,19 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("flow"), "EXPORT")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
 
+    def test_explicit_provider_code_intent_extracts_spaced_comtrade_hs_code_with_flow(self) -> None:
+        intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+            "Japan exports of HS 820600 from Comtrade"
+        )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COMTRADE")
+        self.assertEqual(intent.parameters.get("indicator"), "820600")
+        self.assertEqual(intent.parameters.get("country"), "JP")
+        self.assertEqual(intent.parameters.get("flow"), "EXPORT")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
     def test_comtrade_provider_code_shape_accepts_hs_codes(self) -> None:
         self.assertTrue(
             self.service._looks_like_provider_indicator_code(  # pylint: disable=protected-access

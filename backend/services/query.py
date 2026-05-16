@@ -511,9 +511,9 @@ class QueryService:
                 code_candidates.extend(fred_catalog_codes)
             if explicit_provider == "COMTRADE":
                 code_candidates.extend(
-                    re.sub(r"^HS", "", token.upper())
+                    re.sub(r"^HS\s*", "", token.upper())
                     for token in re.findall(
-                        r"(?<![A-Za-z0-9])HS[0-9]{2,6}(?![A-Za-z0-9])",
+                        r"(?<![A-Za-z0-9])HS\s*[0-9]{2,6}(?![A-Za-z0-9])",
                         str(query or ""),
                         flags=re.IGNORECASE,
                     )

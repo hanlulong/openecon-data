@@ -1687,7 +1687,11 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
     provider_label = _provider_query_label(provider_upper, provider)
     preserve_provider_title = (
         provider_upper == 'WORLDBANK'
-        and str(category or '').strip().lower() == 'world development indicators'
+        and bool(name)
+        and (
+            str(category or '').strip().lower() == 'world development indicators'
+            or not inferred_country
+        )
     ) or (
         provider_upper == 'IMF'
         and bool(name)
@@ -1768,11 +1772,13 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         return f"{choice} exchange rate from ExchangeRate"
     if provider_upper == 'COMTRADE':
         commodity = re.sub(r'^(?:HS)?\d{2,6}\s*[-:]\s*', '', name, flags=re.IGNORECASE).strip()
+        code_numeric = re.sub(r'^HS', '', code.upper()).strip() if code else ''
+        if commodity and re.fullmatch(r'\d{2,6}', code_numeric):
+            return f"{choice} exports of HS {code_numeric} {commodity} from Comtrade"
         if commodity:
             return f"{choice} exports of {commodity} from Comtrade"
-        code_numeric = re.sub(r'^HS', '', code.upper()).strip() if code else ''
         if re.fullmatch(r'\d{2,6}', code_numeric):
-            return f"{choice} exports of HS{code_numeric} from Comtrade"
+            return f"{choice} exports of HS {code_numeric} from Comtrade"
         return f"{choice} exports from Comtrade"
     if provider_upper == 'STATSCAN':
         prefix = '' if query_mentions_country(phrase) else 'Canada '
@@ -2783,6 +2789,47 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'multi_modifier_title',
             }
         ]
+    exact_comtrade_hs_code_query = (
+        provider_upper == 'COMTRADE'
+        and origin_code_upper
+        and re.fullmatch(r'\d{2,6}', origin_code_upper)
+        and re.search(
+            rf'\bHS\s*{re.escape(origin_code_upper)}\b',
+            query,
+            flags=re.IGNORECASE,
+        )
+        is not None
+        and re.search(r'\bfrom\s+Comtrade$', query.strip(), flags=re.IGNORECASE) is not None
+    )
+    if exact_comtrade_hs_code_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # HS codes are the public provider-native language for Comtrade
+        # commodity surfaces.  A prompt carrying the exact HS code may also
+        # carry a long commodity label for human readability; do not preblock
+        # that mechanical exact-code probe only because the label is verbose.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'very_long_query',
+                'long_query',
+                'punctuation_dense',
+                'provider_title_like',
+            }
+        ]
+    if (
+        provider_upper == 'WORLDBANK'
+        and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY
+        and not query_mentions_country(query)
+        and not exact_worldbank_code_query
+        and not exact_worldbank_title_query
+        and (row.get('scope_family') or infer_scope_family('WorldBank', str(origin.get('coverage') or row.get('coverage') or ''))) == 'single_country'
+    ):
+        # A countryless WorldBank prompt is only safe claim evidence when the
+        # user supplied an exact public title/code, which locks runtime to the
+        # provider-native all-country surface.  Collapsed token snippets such as
+        # "number people pushed further 2017 ppp" reliably trigger clarification
+        # and should be regenerated or excluded by the validation framework
+        # rather than repaired by runtime country guessing.
+        reasons.append('worldbank_countryless_single_country_query')
     exact_fred_title_query = (
         provider_upper == 'FRED'
         and origin_name
@@ -2998,6 +3045,7 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
         'worldbank_macro_exposure_family',
         'worldbank_ddh_prevalence_family',
         'worldbank_country_availability_surface',
+        'worldbank_countryless_single_country_query',
         'oecd_low_viability_family',
         'oecd_education_programme_share_query',
         'imf_query_only_public_surface_family',

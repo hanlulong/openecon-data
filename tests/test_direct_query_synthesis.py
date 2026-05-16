@@ -267,6 +267,47 @@ def test_user_answerability_worldbank_wdi_keeps_exact_title_without_high_risk():
     assert audit["risk_level"] != "high"
 
 
+def test_user_answerability_worldbank_non_wdi_keeps_exact_title_without_country_guess():
+    title = (
+        "Number of people pushed or further pushed below the $2.15 ($ 2017 PPP) "
+        "poverty line by out-of-pocket health care expenditure"
+    )
+    row = {
+        "id": 1,
+        "provider": "WorldBank",
+        "code": "SH.UHC.TOT1.TO",
+        "name": title,
+        "description": (
+            "This indicator shows the number of people pushed further into poverty "
+            "by out-of-pocket health spending."
+        ),
+        "category": "Health Nutrition and Population Statistics",
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "WorldBank",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "SH.UHC.TOT1.TO",
+                "source_provider": "WorldBank",
+                "category": "Health Nutrition and Population Statistics",
+            },
+        }
+    )
+
+    assert query == f"{title} from World Bank"
+    assert not query.startswith(("United States ", "Germany ", "Brazil ", "India ", "China "))
+    assert "worldbank_countryless_single_country_query" not in audit["reasons"]
+    assert audit["risk_level"] != "high"
+
+
 def test_user_answerability_eurostat_keeps_exact_title_without_high_risk():
     title = (
         "Employed persons by level of difficulty to take one or two hours off at short notice, "
@@ -670,8 +711,61 @@ def test_user_answerability_comtrade_query_uses_high_coverage_reporter_pool():
 
     query = default_query_for_row(row, certification_target="user_answerability")
 
-    assert query.startswith("India exports of ")
+    assert query.startswith("India exports of HS 262020 ")
     assert query.endswith(" from Comtrade")
+
+
+def test_user_answerability_comtrade_query_preserves_hs_code_for_embedded_heading_numbers():
+    row = {
+        "provider": "Comtrade",
+        "provider_stratum": "Comtrade",
+        "evaluation_target": "user_answerability",
+        "origin": {
+            "source_provider": "Comtrade",
+            "source_indicator_code": "820600",
+            "name": (
+                "820600 - Tools, hand; two or more of heading no. 8202 to "
+                "8205, put up in sets for retail sale"
+            ),
+            "description": (
+                "HS Code 820600: 820600 - Tools, hand; two or more of heading "
+                "no. 8202 to 8205, put up in sets for retail sale"
+            ),
+            "category": "HS Subheading",
+        },
+    }
+
+    query = default_query_for_row(row, certification_target="user_answerability")
+
+    assert "exports of HS 820600 Tools, hand" in query
+    assert "HS 8202" not in query
+    assert query.endswith(" from Comtrade")
+
+
+def test_audit_direct_query_shape_keeps_exact_comtrade_hs_code_query_low_risk():
+    query = (
+        "Japan exports of HS 820600 Tools, hand; two or more of heading no. "
+        "8202 to 8205, put up in sets for retail sale from Comtrade"
+    )
+
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "Comtrade",
+            "query": query,
+            "origin": {
+                "source_provider": "Comtrade",
+                "source_indicator_code": "820600",
+                "name": (
+                    "820600 - Tools, hand; two or more of heading no. 8202 to "
+                    "8205, put up in sets for retail sale"
+                ),
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "low"
+    assert "very_long_query" not in audit["reasons"]
 
 
 def test_default_query_for_row_carries_statscan_product_id_with_title_evidence():
@@ -1088,6 +1182,29 @@ def test_audit_direct_query_shape_keeps_exact_worldbank_code_probe_low_risk() ->
 
     assert audit["risk_level"] == "low"
     assert not any(reason.startswith("worldbank_") for reason in audit["reasons"])
+
+
+def test_audit_direct_query_shape_flags_countryless_non_exact_worldbank_prompt() -> None:
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "WorldBank",
+            "scope_family": "single_country",
+            "query": "number people pushed further 2017 ppp from World Bank",
+            "origin": {
+                "source_provider": "WorldBank",
+                "source_indicator_code": "SH.UHC.TOT1.TO",
+                "name": (
+                    "Number of people pushed or further pushed below the $2.15 "
+                    "($ 2017 PPP) poverty line by out-of-pocket health care expenditure"
+                ),
+                "category": "Health Nutrition and Population Statistics",
+            },
+        }
+    )
+
+    assert audit["risk_level"] == "high"
+    assert "worldbank_countryless_single_country_query" in audit["reasons"]
 
 
 def test_audit_direct_query_shape_flags_worldbank_country_role_availability() -> None:
