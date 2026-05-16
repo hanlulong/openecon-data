@@ -899,18 +899,48 @@ class IMFProvider(BaseProvider):
 
         return data
 
+    @staticmethod
+    def _indicator_catalog_lookup_keys(indicator_code: str) -> List[str]:
+        """Return exact IMF catalog lookup keys, preserving provider-native case.
+
+        IMF DataMapper has several executable non-WEO codes whose public API
+        identifiers are mixed/lowercase (for example ``PrivInexDIGDP`` and
+        ``prim_exp``).  The local catalog is case-sensitive for those rows, so
+        exact-code resolution must try the provider-native spelling before the
+        all-uppercase normalization used by SDMX exact-code families.
+        """
+        raw = str(indicator_code or "").strip()
+        if not raw:
+            return []
+        return list(dict.fromkeys([raw, raw.upper()]))
+
+    @staticmethod
+    def _is_executable_datamapper_catalog_category(category: str) -> bool:
+        """Return whether a catalog category can use legacy DataMapper v1.
+
+        This is a provider-surface check for exact catalog codes only.  It does
+        not infer codes from prose, and deliberately excludes ``INDICATOR``
+        public-SDMX rows and ``DATAFLOW`` descriptors.
+        """
+        value = str(category or "").strip().upper()
+        return bool(value and value not in {"INDICATOR", "DATAFLOW"})
+
     def _indicator_catalog_entry(self, indicator_code: str) -> Optional[Dict[str, Any]]:
         """Return the local IMF indicator catalog entry for a code when available."""
-        code = str(indicator_code or "").strip().upper()
-        if not code:
+        lookup_keys = self._indicator_catalog_lookup_keys(indicator_code)
+        if not lookup_keys:
             return None
         try:
             from ..services.indicator_database import get_indicator_lookup
 
-            return get_indicator_lookup().get("IMF", code)
+            lookup = get_indicator_lookup()
+            for code in lookup_keys:
+                entry = lookup.get("IMF", code)
+                if entry:
+                    return entry
         except Exception as exc:
             logger.debug("IMF indicator catalog lookup skipped for '%s': %s", indicator_code, exc)
-            return None
+        return None
 
     def _classify_execution_family(self, indicator_code: str) -> str:
         """Classify whether a resolved IMF code is executable on the DataMapper path."""
@@ -2255,34 +2285,42 @@ class IMFProvider(BaseProvider):
         # explicit provider-code queries without re-running metadata discovery,
         # while still failing closed for fake codes because they will miss the
         # local exact lookup and continue down the normal validation path.
-        exact_code_candidate = str(indicator or "").upper().strip()
-        exact_code_like = self._looks_like_imf_code(exact_code_candidate) or bool(
-            re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_candidate)
+        exact_code_raw = str(indicator or "").strip()
+        exact_code_normalized = exact_code_raw.upper()
+        exact_code_like = self._looks_like_imf_code(exact_code_normalized) or bool(
+            re.fullmatch(r"[A-Z0-9][A-Z0-9_\.]{1,}", exact_code_normalized)
             and (
-                "_" in exact_code_candidate
-                or "." in exact_code_candidate
-                or any(ch.isdigit() for ch in exact_code_candidate)
+                "_" in exact_code_normalized
+                or "." in exact_code_normalized
+                or any(ch.isdigit() for ch in exact_code_normalized)
             )
-            or re.fullmatch(r"[A-Z]{2}", exact_code_candidate)
+            or re.fullmatch(r"[A-Z]{2}", exact_code_normalized)
         )
         exact_code_has_namespace = (
-            "_" in exact_code_candidate
-            or "." in exact_code_candidate
-            or any(ch.isdigit() for ch in exact_code_candidate)
+            "_" in exact_code_normalized
+            or "." in exact_code_normalized
+            or any(ch.isdigit() for ch in exact_code_normalized)
         )
         if exact_code_like:
             try:
                 from ..services.indicator_database import get_indicator_lookup
 
                 lookup = get_indicator_lookup()
-                exact_meta = lookup.get("IMF", exact_code_candidate)
+                exact_code_candidate = exact_code_normalized
+                exact_meta = None
+                for lookup_key in self._indicator_catalog_lookup_keys(exact_code_raw):
+                    exact_meta = lookup.get("IMF", lookup_key)
+                    if exact_meta:
+                        exact_code_candidate = lookup_key
+                        break
             except Exception as exc:
                 logger.debug("IMF exact-code lookup skipped for '%s': %s", indicator, exc)
                 exact_meta = None
 
             exact_category = str(exact_meta.get("category") or "").strip().upper() if exact_meta else ""
-            if exact_meta and (
+            if exact_meta and exact_category != "DATAFLOW" and (
                 exact_code_has_namespace
+                or self._is_executable_datamapper_catalog_category(exact_category)
                 or exact_category == "WEO"
                 or exact_category.endswith("REO")
             ):

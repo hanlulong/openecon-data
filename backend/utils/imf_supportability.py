@@ -13,6 +13,7 @@ from typing import Any
 
 UNSUPPORTED_IMF_PUBLIC_SURFACE_REASON = "imf_non_weo_public_surface_unsupported"
 UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON = "imf_public_datamapper_v1_category_not_served"
+UNSUPPORTED_IMF_DATAFLOW_DIRECT_SERIES_REASON = "imf_catalog_dataflow_not_single_series"
 
 # Evidence: Ralph168 provider-contract inventory found that the sampled
 # ALT_FISCAL catalog rows, plus the first 20 ALT_FISCAL catalog controls, return
@@ -190,11 +191,14 @@ def imf_catalog_sampler_supportability_reason(
         return runtime_reason
 
     exact_code = _normalize_code(code)
+    entry = _catalog_entry_for_code(exact_code)
+    category_value = str(category or entry.get("category") or "").strip().upper()
+    if category_value == "DATAFLOW" or str(code or "").strip().upper().startswith("DF:"):
+        return UNSUPPORTED_IMF_DATAFLOW_DIRECT_SERIES_REASON
+
     if not _looks_like_imf_provider_code(exact_code):
         return None
 
-    entry = _catalog_entry_for_code(exact_code)
-    category_value = str(category or entry.get("category") or "").strip().upper()
     if category_value in _PUBLIC_DATAMAPPER_V1_UNSERVED_CATEGORIES:
         return UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON
     return None

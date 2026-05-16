@@ -3,7 +3,7 @@ from __future__ import annotations
 import types
 from unittest.mock import patch
 
-from backend.tests.utils import run
+from backend.tests.utils import MockAsyncResponse, run
 
 
 try:
@@ -224,6 +224,115 @@ def test_imf_resolve_indicator_preserves_exact_short_weo_code() -> None:
     assert code == "BCA"
     assert label is not None
     assert "current account" in label.lower()
+
+
+def test_imf_resolve_indicator_preserves_exact_non_weo_datamapper_code_case() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "PrivInexDIGDP":
+                return {
+                    "code": "PrivInexDIGDP",
+                    "category": "CF",
+                    "name": "Private Inflows excluding Direct Investment (% of GDP)",
+                }
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        code, label = run(provider._resolve_indicator_code("PrivInexDIGDP"))  # pylint: disable=protected-access
+
+    assert code == "PrivInexDIGDP"
+    assert label is not None
+    assert "private inflows" in label.lower()
+
+
+def test_imf_fetch_uses_preserved_exact_datamapper_code_case() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    calls: list[str] = []
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "PrivInexDIGDP":
+                return {
+                    "code": "PrivInexDIGDP",
+                    "category": "CF",
+                    "name": "Private Inflows excluding Direct Investment (% of GDP)",
+                }
+            return None
+
+    class _RecordingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, **_kwargs):
+            calls.append(str(url))
+            return MockAsyncResponse(
+                {
+                    "values": {
+                        "PrivInexDIGDP": {
+                            "DEU": {"2020": 1.2, "2021": 1.3}
+                        }
+                    }
+                }
+            )
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()), patch(
+        "backend.providers.imf.get_http_client",
+        return_value=_RecordingClient(),
+    ):
+        result = run(provider.fetch_batch_indicator("PrivInexDIGDP", ["Germany"]))
+
+    assert calls == ["https://www.imf.org/external/datamapper/api/v1/PrivInexDIGDP"]
+    assert len(result) == 1
+    assert result[0].metadata.seriesId == "PrivInexDIGDP"
+    assert result[0].data[0].value == 1.2
+
+
+def test_imf_resolve_indicator_accepts_exact_short_datamapper_category() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "DI":
+                return {
+                    "code": "DI",
+                    "category": "AIPI",
+                    "name": "Digital Infrastructure",
+                }
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        code, label = run(provider._resolve_indicator_code("DI"))  # pylint: disable=protected-access
+
+    assert code == "DI"
+    assert label is not None
+    assert "digital infrastructure" in label.lower()
+
+
+def test_imf_resolve_indicator_does_not_execute_dataflow_descriptor_as_series() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "CGD_GNA":
+                return {
+                    "code": "CGD_GNA",
+                    "category": "Dataflow",
+                    "name": "Dataset: Central Government Debt (CGD) - Global Use NA_SEC DSD V1.5",
+                }
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        try:
+            run(provider._resolve_indicator_code("CGD_GNA"))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected dataflow descriptors to require non-series handling")
 
 
 def test_imf_fetch_fails_explicitly_for_non_datamapper_indicator_family() -> None:

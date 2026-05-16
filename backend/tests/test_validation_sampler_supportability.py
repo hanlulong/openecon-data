@@ -11,6 +11,7 @@ from scripts.validation.sample_direct_cert_set import _select_quality_screened_r
 
 UNSUPPORTED_IMF_REASON = "imf_non_weo_public_surface_unsupported"
 UNSUPPORTED_IMF_DATAMAPPER_CATEGORY_REASON = "imf_public_datamapper_v1_category_not_served"
+UNSUPPORTED_IMF_DATAFLOW_DIRECT_SERIES_REASON = "imf_catalog_dataflow_not_single_series"
 
 
 def _imf_record(
@@ -124,6 +125,24 @@ def test_selection_supportability_demotes_only_evidence_backed_imf_datamapper_ca
     assert selection_supportability_reason_for_row(sprlu) is None
 
 
+def test_selection_supportability_demotes_imf_dataflow_descriptors_only() -> None:
+    dataflow = _imf_record(
+        row_id="dataflow",
+        code="DF:IMTS_M",
+        name="Dataset: IMTS Monthly",
+        category="Dataflow",
+    )
+    fpp = _imf_record(
+        row_id="fpp",
+        code="prim_exp",
+        name="Government primary expenditure, percent of GDP",
+        category="FPP",
+    )
+
+    assert selection_supportability_reason_for_row(dataflow) == UNSUPPORTED_IMF_DATAFLOW_DIRECT_SERIES_REASON
+    assert selection_supportability_reason_for_row(fpp) is None
+
+
 def test_alt_fiscal_sampler_prior_is_not_runtime_supportability_block() -> None:
     assert imf_exact_provider_surface_supportability_reason(
         "LS_NFA_09 from IMF",
@@ -181,6 +200,26 @@ def test_next_review_selection_keeps_datamapper_positive_controls_ahead_of_alt_f
     )
 
     selected = select_quality_screened_direct_records([alt_fiscal, fpp], 1)
+
+    assert [row["id"] for row in selected] == ["fpp"]
+
+
+def test_next_review_selection_keeps_single_series_controls_ahead_of_dataflow_descriptors() -> None:
+    dataflow = _imf_record(
+        row_id="dataflow",
+        code="DF:IMTS_M",
+        name="Dataset: IMTS Monthly",
+        category="Dataflow",
+        selection_supportability_reason=UNSUPPORTED_IMF_DATAFLOW_DIRECT_SERIES_REASON,
+    )
+    fpp = _imf_record(
+        row_id="fpp",
+        code="prim_exp",
+        name="Government primary expenditure, percent of GDP",
+        category="FPP",
+    )
+
+    selected = select_quality_screened_direct_records([dataflow, fpp], 1)
 
     assert [row["id"] for row in selected] == ["fpp"]
 
