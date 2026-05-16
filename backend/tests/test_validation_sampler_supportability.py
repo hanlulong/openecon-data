@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from scripts.validation.common import (
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    apply_selection_supportability_probe_query,
     selection_supportability_reason_for_row,
 )
 from backend.utils.imf_supportability import imf_exact_provider_surface_supportability_reason
@@ -182,6 +183,23 @@ def test_next_review_selection_demotes_unsupported_imf_surfaces() -> None:
     )
 
     assert [row["id"] for row in selected] == ["supported-cpi"]
+
+
+def test_apply_selection_supportability_probe_query_preserves_original_prompt() -> None:
+    unsupported_hs = _imf_record(
+        row_id="unsupported-hs",
+        code="NXG_H5_XII_FOB_USD",
+        name="National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        selection_supportability_reason=UNSUPPORTED_IMF_REASON,
+    )
+
+    apply_selection_supportability_probe_query(unsupported_hs)
+
+    assert unsupported_hs["query"] == "NXG_H5_XII_FOB_USD from IMF"
+    assert unsupported_hs["provenance"]["supportability_probe_query"] == "imf_exact_provider_code"
+    assert unsupported_hs["provenance"]["original_user_answerability_query"].startswith(
+        "Brazil National Accounts"
+    )
 
 
 def test_next_review_selection_keeps_datamapper_positive_controls_ahead_of_alt_fiscal() -> None:

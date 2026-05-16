@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import (
+    apply_selection_supportability_probe_query,
     audit_direct_query_shape,
     CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
     CERTIFICATION_TARGET_USER_ANSWERABILITY,
@@ -322,6 +323,10 @@ def main() -> int:
             supportability_reason = selection_supportability_reason_for_row(record)
             if supportability_reason:
                 record['provenance']['selection_supportability_reason'] = supportability_reason
+                apply_selection_supportability_probe_query(record)
+                quality = audit_direct_query_shape(record)
+                record['provenance']['query_quality_risk'] = quality['risk_level']
+                record['provenance']['query_quality_reasons'] = quality['reasons']
             anchor_reason = _user_answerability_sampling_anchor_reason(row)
             if anchor_reason:
                 record['provenance']['user_answerability_sampling_anchor'] = anchor_reason

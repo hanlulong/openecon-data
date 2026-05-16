@@ -1193,6 +1193,50 @@ def selection_supportability_reason_for_row(record: dict[str, Any]) -> str | Non
     )
 
 
+def apply_selection_supportability_probe_query(record: dict[str, Any]) -> dict[str, Any]:
+    """Use exact provider-native probe text for known unsupported IMF inventory rows.
+
+    User-answerability prompts normally avoid replaying provider codes.  Rows
+    that already carry metadata-only IMF supportability provenance are
+    different: attempting a naturalized, title-compressed prompt can push the
+    production path into semantic clarification or long provider timeouts.  For
+    those rows, carry the exact provider code as a fail-closed diagnostic probe
+    while preserving the originally synthesized user prompt in provenance.
+    This is mechanical provider-native code transport, not a semantic shortcut
+    or a pass override.
+    """
+    if certification_target_for_row(record) != CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        return record
+
+    provenance = record.setdefault('provenance', {})
+    if not isinstance(provenance, dict):
+        return record
+    supportability_reason = str(provenance.get('selection_supportability_reason') or '').strip()
+    if supportability_reason != 'imf_non_weo_public_surface_unsupported':
+        return record
+
+    origin = dict(record.get('origin') or {})
+    provider = str(
+        record.get('provider_stratum')
+        or record.get('provider')
+        or origin.get('source_provider')
+        or ''
+    ).strip().upper()
+    if provider != 'IMF':
+        return record
+
+    code = str(origin.get('source_indicator_code') or record.get('code') or '').strip().upper()
+    if not code:
+        return record
+    existing_query = str(record.get('query') or '').strip()
+    exact_query = f'{code} from IMF'
+    if existing_query and existing_query != exact_query:
+        provenance.setdefault('original_user_answerability_query', existing_query)
+    provenance['supportability_probe_query'] = 'imf_exact_provider_code'
+    record['query'] = exact_query
+    return record
+
+
 def natural_phrase_from_name(name: str, description: str = '') -> str:
     raw = str(name or '').strip()
     if not raw:
@@ -2709,6 +2753,18 @@ def audit_direct_query_shape(row: dict[str, Any]) -> dict[str, Any]:
                 'imf_low_viability_family',
                 'imf_query_only_public_surface_family',
                 'methodology_dense',
+            }
+        ]
+    if exact_imf_code_query and evaluation_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
+        # Exact unsupported IMF probe rows are mechanical supportability
+        # diagnostics.  Keep the long catalog title in origin/provenance, but
+        # do not let title-density flags turn the code-only probe into a prompt
+        # shape failure before the fail-closed supportability path can run.
+        reasons = [
+            reason for reason in reasons
+            if reason not in {
+                'methodology_dense',
+                'multi_modifier_title',
             }
         ]
     exact_imf_supported_cpi_title_query = (

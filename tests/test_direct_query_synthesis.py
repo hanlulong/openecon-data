@@ -619,6 +619,38 @@ def test_user_answerability_does_not_preserve_unsupported_imf_cpi_detail_title()
     assert row["code"] not in query
 
 
+def test_user_answerability_selection_supportability_rows_use_exact_imf_probe() -> None:
+    row = build_record(
+        {
+            "id": 1,
+            "provider": "IMF",
+            "code": "NXG_H5_XII_FOB_USD",
+            "name": "National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+            "description": "",
+            "category": "INDICATOR",
+        },
+        1,
+        provider_count=100,
+        provider_sample_count=10,
+        snapshot_id="snap",
+        seed=7,
+        holdout_split="unit",
+        dataset_tier="unit",
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    row["provenance"]["selection_supportability_reason"] = "imf_non_weo_public_surface_unsupported"
+
+    common.apply_selection_supportability_probe_query(row)
+    audit = audit_direct_query_shape(row)
+
+    assert row["query"] == "NXG_H5_XII_FOB_USD from IMF"
+    assert row["provenance"]["supportability_probe_query"] == "imf_exact_provider_code"
+    assert "original_user_answerability_query" in row["provenance"]
+    assert row["provenance"]["original_user_answerability_query"] != row["query"]
+    assert audit["risk_level"] != "high"
+    assert "multi_modifier_title" not in audit["reasons"]
+
+
 def test_default_query_for_row_does_not_treat_are_verb_as_country() -> None:
     row = {
         "provider": "WorldBank",

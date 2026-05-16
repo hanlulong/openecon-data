@@ -82,6 +82,17 @@ def unsupported_direct_surface_reason(row: dict[str, Any], audit: dict[str, Any]
     if detect_dataset_type(row) != 'direct':
         return None
 
+    provenance = row.get('provenance') if isinstance(row.get('provenance'), dict) else {}
+    selection_supportability_reason = str(
+        provenance.get('selection_supportability_reason') or ''
+    ).strip()
+    if (
+        certification_target_for_row(row) == CERTIFICATION_TARGET_USER_ANSWERABILITY
+        and selection_supportability_reason
+        and str(provenance.get('supportability_probe_query') or '').strip() == 'imf_exact_provider_code'
+    ):
+        return selection_supportability_reason
+
     if certification_target_for_row(row) == CERTIFICATION_TARGET_USER_ANSWERABILITY:
         # Real-user certification evaluates the actual user prompt against the
         # live answer path. Legacy catalog-code supportability screens remain

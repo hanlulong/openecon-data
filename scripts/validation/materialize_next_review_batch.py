@@ -17,6 +17,7 @@ from scripts.validation.common import (  # noqa: E402
     CERTIFICATION_TARGETS,
     DEFAULT_DB,
     USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS,
+    apply_selection_supportability_probe_query,
     certification_target_for_row,
     provider_family_key,
     sample_indicator_rows,
@@ -257,6 +258,10 @@ def materialize_direct(
             supportability_reason = selection_supportability_reason_for_row(record)
             if supportability_reason:
                 record['provenance']['selection_supportability_reason'] = supportability_reason
+                apply_selection_supportability_probe_query(record)
+                quality = audit_direct_query_shape(record)
+                record['provenance']['query_quality_risk'] = quality['risk_level']
+                record['provenance']['query_quality_reasons'] = quality['reasons']
             anchor_reason = _user_answerability_sampling_anchor_reason(row)
             if anchor_reason:
                 record['provenance']['user_answerability_sampling_anchor'] = anchor_reason

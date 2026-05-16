@@ -631,6 +631,34 @@ def test_execute_rows_keeps_imf_bop_detail_off_runtime(tmp_path: Path, monkeypat
     assert "runtime_unavailable" not in record
 
 
+def test_user_answerability_preblocks_explicit_imf_selection_supportability_probe():
+    module = load_module()
+    row = {
+        "id": "batch-direct-imf-unsupported",
+        "provider_stratum": "IMF",
+        "evaluation_target": "user_answerability",
+        "query": "NXG_H5_XII_FOB_USD from IMF",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "NXG_H5_XII_FOB_USD",
+            "category": "INDICATOR",
+            "name": "National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        },
+        "provenance": {
+            "certification_target": "user_answerability",
+            "selection_supportability_reason": "imf_non_weo_public_surface_unsupported",
+            "supportability_probe_query": "imf_exact_provider_code",
+        },
+    }
+    audit = module.audit_direct_query_shape(row)
+
+    assert module.unsupported_direct_surface_reason(row, audit) == "imf_non_weo_public_surface_unsupported"
+    blocked = module.supportability_blocked_record(row)
+    assert blocked is not None
+    assert blocked["supportability_blocked"] is True
+    assert blocked["supportability_reason"] == "imf_non_weo_public_surface_unsupported"
+
+
 def test_preflight_keeps_runnable_oecd_non_production_dataflow_executable():
     module = load_module()
     runnable_oecd = {
