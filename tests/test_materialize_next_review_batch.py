@@ -5,11 +5,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.validation.materialize_next_review_batch import (
     direct_oversample_count,
+    materialize_direct,
     materialize_ambiguity,
     materialize_multiround,
+    normalize_batch_targets,
     select_quality_screened_direct_records,
+    supportability_prefilter_samples,
 )
 
 
@@ -29,12 +34,182 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def test_direct_oversample_count_deepens_imf_candidate_pool() -> None:
     assert direct_oversample_count("IMF", 9, 115_381) == 5_000
+    assert direct_oversample_count("IMF", 30, 115_381) == 15_000
     assert direct_oversample_count("IMF", 1, 115_381) == 201
     assert direct_oversample_count("FRED", 9, 138_774) == 450
     assert direct_oversample_count("IMF", 9, 100) == 100
-    assert direct_oversample_count("IMF", 544, 115_381) == 3_000
+    assert direct_oversample_count("IMF", 544, 115_381) == 115_381
     assert direct_oversample_count("FRED", 597, 138_774) == 1_194
     assert direct_oversample_count("WorldBank", 268, 29_269) == 2_680
+
+
+def _imf_sample_row(row_id: int, code: str, name: str, *, category: str = "INDICATOR") -> dict:
+    return {
+        "id": row_id,
+        "provider": "IMF",
+        "code": code,
+        "name": name,
+        "description": "",
+        "category": category,
+        "subcategory": None,
+        "unit": None,
+        "frequency": None,
+        "coverage": None,
+        "keywords": None,
+        "synonyms": None,
+        "raw_metadata": None,
+        "popularity": 1,
+        "last_updated": None,
+    }
+
+
+def test_materialize_direct_replaces_supportability_probe_rows_from_same_provider(monkeypatch):
+    import scripts.validation.materialize_next_review_batch as module
+
+    rows = [
+        _imf_sample_row(1, "TXG_H5_60_EUR", "Detailed unsupported trade surface"),
+        _imf_sample_row(2, "NGDPD", "Xqzv Blorf Snarg Pleet Alpha", category="WEO"),
+        _imf_sample_row(3, "NGDP", "Xqzv Blorf Snarg Pleet Beta", category="WEO"),
+        _imf_sample_row(4, "PCPIPCH", "Xqzv Blorf Snarg Pleet Gamma", category="WEO"),
+    ]
+
+    monkeypatch.setattr(module, "sample_indicator_rows", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(module, "_merge_provider_anchor_rows", lambda provider, sampled_rows, *, db_path: sampled_rows)
+    monkeypatch.setattr(
+        module,
+        "selection_supportability_reason_for_row",
+        lambda record: (
+            "imf_non_weo_public_surface_unsupported"
+            if (record.get("origin") or {}).get("source_indicator_code") == "TXG_H5_60_EUR"
+            else None
+        ),
+    )
+
+    inventory: list[dict] = []
+    selected = materialize_direct(
+        [{"name": "IMF", "planned_batch_sessions": 3}],
+        snapshot_meta={
+            "snapshot_date": "2026-04-14",
+            "git_sha": "abc12345",
+            "indicator_count": 330050,
+            "provider_counts": {"IMF": 4},
+        },
+        seed=20260516,
+        holdout_split="replacement-test",
+        dataset_tier="cert_holdout",
+        db_path=Path("unused.db"),
+        supportability_inventory=inventory,
+    )
+
+    assert len(selected) == 3
+    assert all(
+        "selection_supportability_reason" not in row["provenance"]
+        for row in selected
+    )
+    assert inventory
+    assert inventory[0]["session_id"] == "batch-direct-imf-000001"
+    assert inventory[0]["provider"] == "IMF"
+    assert inventory[0]["supportability_reason"] == "imf_non_weo_public_surface_unsupported"
+    assert inventory[0]["disposition"] == "excluded_with_replacement"
+    assert inventory[0]["replacement_session_ids"]
+    assert inventory[0]["replacement_session_ids"][0] in {row["id"] for row in selected}
+
+
+def test_materialize_direct_blocks_underfill_when_only_supportability_candidates_remain(monkeypatch):
+    import scripts.validation.materialize_next_review_batch as module
+
+    rows = [
+        _imf_sample_row(1, "TXG_H5_60_EUR", "Detailed unsupported trade surface"),
+        _imf_sample_row(2, "NGDPD", "Gross domestic product, current prices", category="WEO"),
+    ]
+
+    monkeypatch.setattr(module, "sample_indicator_rows", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(module, "_merge_provider_anchor_rows", lambda provider, sampled_rows, *, db_path: sampled_rows)
+    monkeypatch.setattr(
+        module,
+        "selection_supportability_reason_for_row",
+        lambda record: (
+            "imf_non_weo_public_surface_unsupported"
+            if (record.get("origin") or {}).get("source_indicator_code") == "TXG_H5_60_EUR"
+            else None
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="could not fill IMF planned count 2"):
+        materialize_direct(
+            [{"name": "IMF", "planned_batch_sessions": 2}],
+            snapshot_meta={
+                "snapshot_date": "2026-04-14",
+                "git_sha": "abc12345",
+                "indicator_count": 330050,
+                "provider_counts": {"IMF": 2},
+            },
+            seed=20260516,
+            holdout_split="underfill-test",
+            dataset_tier="cert_holdout",
+            db_path=Path("unused.db"),
+            supportability_inventory=[],
+        )
+
+
+def test_supportability_prefilter_samples_fails_fast_for_large_imf_underfill(monkeypatch):
+    import scripts.validation.materialize_next_review_batch as module
+
+    rows = [
+        _imf_sample_row(1, "TXG_H5_60_EUR", "Detailed unsupported trade surface"),
+        _imf_sample_row(2, "NGDPD", "Gross domestic product, current prices", category="WEO"),
+    ]
+    monkeypatch.setattr(
+        module,
+        "selection_supportability_reason_for_row",
+        lambda record: (
+            "imf_non_weo_public_surface_unsupported"
+            if ((record.get("origin") or {}).get("source_indicator_code") == "TXG_H5_60_EUR")
+            else None
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="could not fill IMF planned count 2"):
+        supportability_prefilter_samples(
+            "IMF",
+            rows,
+            2,
+            certification_target="user_answerability",
+            include_supportability_probes=False,
+            min_candidate_rows=0,
+        )
+
+
+def test_supportability_prefilter_samples_keeps_selectable_large_imf_rows(monkeypatch):
+    import scripts.validation.materialize_next_review_batch as module
+
+    rows = [
+        _imf_sample_row(1, "TXG_H5_60_EUR", "Detailed unsupported trade surface"),
+        _imf_sample_row(2, "NGDPD", "Gross domestic product, current prices", category="WEO"),
+        _imf_sample_row(3, "NGDP", "Gross domestic product, current prices", category="WEO"),
+    ]
+    monkeypatch.setattr(
+        module,
+        "selection_supportability_reason_for_row",
+        lambda record: (
+            "imf_non_weo_public_surface_unsupported"
+            if ((record.get("origin") or {}).get("source_indicator_code") == "TXG_H5_60_EUR")
+            else None
+        ),
+    )
+
+    filtered, excluded_count, did_filter = supportability_prefilter_samples(
+        "IMF",
+        rows,
+        2,
+        certification_target="user_answerability",
+        include_supportability_probes=False,
+        min_candidate_rows=0,
+    )
+
+    assert did_filter is True
+    assert excluded_count == 1
+    assert [row["code"] for row in filtered] == ["NGDPD", "NGDP"]
 
 
 def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):
@@ -112,6 +287,133 @@ def test_materialize_next_review_batch_writes_expected_counts(tmp_path: Path):
     assert "raw_metadata" in direct_rows[0]["origin"]
     assert multiround_rows[0]["family"] == "transform_switch_chain"
     assert ambiguity_rows[0]["provenance"]["family"] == "dominant_interpretation_cases"
+
+
+def test_normalize_batch_targets_accepts_expansion_plan_mapping() -> None:
+    targets = normalize_batch_targets(
+        {
+            "FRED": {
+                "class": "critical",
+                "floor": 0.98,
+                "current_n": 88,
+                "additional_target_sessions": 784,
+                "recommended_total_n": 872,
+            },
+            "IMF": {
+                "class": "critical",
+                "floor": 0.98,
+                "current_n": 143,
+                "additional_target_sessions": 577,
+                "recommended_total_n": 720,
+            },
+        }
+    )
+
+    assert targets == [
+        {
+            "name": "FRED",
+            "class": "critical",
+            "floor": 0.98,
+            "current_n": 88,
+            "additional_target_sessions": 784,
+            "planned_batch_sessions": 784,
+            "recommended_total_n": 872,
+            "target_n": 872,
+        },
+        {
+            "name": "IMF",
+            "class": "critical",
+            "floor": 0.98,
+            "current_n": 143,
+            "additional_target_sessions": 577,
+            "planned_batch_sessions": 577,
+            "recommended_total_n": 720,
+            "target_n": 720,
+        },
+    ]
+
+
+def test_materialize_next_review_batch_accepts_expansion_plan_target_mapping(tmp_path: Path):
+    batch_plan = tmp_path / "batch.json"
+    snapshot = tmp_path / "snapshot.json"
+    output_dir = tmp_path / "out"
+
+    write_json(
+        batch_plan,
+        {
+            "allocation": {
+                "direct": {
+                    "targets": {
+                        "FRED": {
+                            "additional_target_sessions": 1,
+                            "recommended_total_n": 89,
+                            "current_n": 88,
+                        }
+                    }
+                },
+                "multiround": {
+                    "targets": {
+                        "provider_switch_chain": {
+                            "additional_target_sessions": 1,
+                            "recommended_total_n": 2,
+                            "current_n": 1,
+                        }
+                    }
+                },
+                "ambiguity": {
+                    "targets": {
+                        "provider_ambiguity": {
+                            "additional_target_sessions": 1,
+                            "recommended_total_n": 2,
+                            "current_n": 1,
+                        }
+                    }
+                },
+            }
+        },
+    )
+    write_json(
+        snapshot,
+        {
+            "snapshot_date": "2026-04-14",
+            "git_sha": "abc12345",
+            "indicator_count": 330050,
+            "provider_counts": {
+                "FRED": 138774,
+            },
+        },
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--batch-plan",
+            str(batch_plan),
+            "--snapshot",
+            str(snapshot),
+            "--output-dir",
+            str(output_dir),
+            "--dataset-tier",
+            "dev",
+            "--holdout-split",
+            "batch_review",
+            "--session-id-prefix",
+            "ralph175-design-expansion",
+        ],
+        check=True,
+    )
+
+    direct_rows = read_jsonl(output_dir / "next_batch_direct.jsonl")
+    multiround_rows = read_jsonl(output_dir / "next_batch_multiround.jsonl")
+    ambiguity_rows = read_jsonl(output_dir / "next_batch_ambiguity.jsonl")
+    assert len(direct_rows) == 1
+    assert len(multiround_rows) == 1
+    assert len(ambiguity_rows) == 1
+    assert len(read_jsonl(output_dir / "next_batch_all.jsonl")) == 3
+    assert direct_rows[0]["id"].startswith("ralph175-design-expansion-batch-direct-fred-")
+    assert multiround_rows[0]["id"] == "ralph175-design-expansion-batch-provider_switch_chain-000002"
+    assert ambiguity_rows[0]["id"] == "ralph175-design-expansion-amb-provider_ambiguity-000002"
 
 
 def test_materialize_next_review_batch_handles_empty_targets(tmp_path: Path):

@@ -10,6 +10,7 @@ from backend.services.indicator_resolution import (
     is_exact_match_locked,
     is_provider_locked,
     looks_like_exact_provider_title_match,
+    _strip_trailing_exact_title_frequency_wrapper,
     _strip_trailing_exact_title_unit_suffix,
     _trailing_exact_title_unit_suffix,
 )
@@ -233,6 +234,111 @@ def test_exact_title_unit_suffix_still_detects_measurement_phrases() -> None:
     )
 
 
+def test_exact_title_frequency_wrapper_strips_compound_frequency_only() -> None:
+    title = "OECD based Recession Indicators for Canada from the Peak through the Trough (DISCONTINUED)"
+
+    assert (
+        _strip_trailing_exact_title_frequency_wrapper(f"{title} (Daily, 7-Day)")
+        == title
+    )
+    assert _strip_trailing_exact_title_frequency_wrapper(
+        "Bachelor's Degree or Higher (5-year estimate) in Liberty County, FL"
+    ) is None
+    assert title in exact_title_search_inputs(f"{title} (Daily, 7-Day) from FRED", "FRED")
+
+
+def test_fred_exact_title_with_compound_frequency_resolves_exact_series() -> None:
+    title = "OECD based Recession Indicators for Canada from the Peak through the Trough (DISCONTINUED)"
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=20):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if title not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "CANRECDM",
+                    "name": title,
+                    "frequency": "Daily, 7-Day",
+                    "unit": "+1 or 0",
+                    "popularity": 18,
+                },
+                {
+                    "provider": "FRED",
+                    "code": "CANRECM",
+                    "name": title,
+                    "frequency": "Monthly",
+                    "unit": "+1 or 0",
+                    "popularity": 20,
+                },
+            ]
+
+    query = f"{title} (Daily, 7-Day) from FRED"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "FRED")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="FRED",
+            countries=[],
+            all_providers=["FRED"],
+        )
+
+    assert match is not None
+    assert match["code"] == "CANRECDM"
+    assert intent is not None
+    assert intent.apiProvider == "FRED"
+    assert intent.parameters["indicator"] == "CANRECDM"
+    assert intent.parameters["__semantic_provider_locked"] is True
+    assert intent.parameters["__exact_indicator_title_match"] is True
+    assert is_provider_locked(intent.parameters)
+    assert is_exact_match_locked(intent.parameters)
+
+
+def test_fred_exact_title_without_frequency_does_not_guess_duplicate_series() -> None:
+    title = "OECD based Recession Indicators for Canada from the Peak through the Trough (DISCONTINUED)"
+
+    class _Lookup:
+        def search(self, text, provider=None, limit=20):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "FRED"
+            if title not in search_inputs:
+                return []
+            return [
+                {
+                    "provider": "FRED",
+                    "code": "CANRECDM",
+                    "name": title,
+                    "frequency": "Daily, 7-Day",
+                    "unit": "+1 or 0",
+                },
+                {
+                    "provider": "FRED",
+                    "code": "CANRECM",
+                    "name": title,
+                    "frequency": "Monthly",
+                    "unit": "+1 or 0",
+                },
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(f"{title} from FRED", "FRED")
+        intent = build_exact_indicator_title_intent(
+            f"{title} from FRED",
+            explicit_provider="FRED",
+            countries=[],
+            all_providers=["FRED"],
+        )
+
+    assert match is None
+    assert intent is None
+
+
 def test_oecd_national_accounts_exact_titles_resolve_without_unit_suffix_false_positive(tmp_path) -> None:
     db = IndicatorDatabase(tmp_path / "indicators.db")
     cases = [
@@ -294,6 +400,133 @@ def test_exact_title_match_accepts_short_imf_weo_titles() -> None:
     assert match is not None
     assert match["code"] == "NGDP_RPCH"
     assert looks_exact is True
+
+
+def test_exact_title_match_accepts_short_imf_title_with_unit_and_source_context() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "DEBT1",
+                    "name": "DEBT",
+                    "unit": "% of GDP",
+                    "category": "DEBT",
+                    "raw_metadata": (
+                        '{"label":"DEBT","source":"Fiscal Affairs Departmental Data",'
+                        '"unit":"% of GDP","dataset":"DEBT"}'
+                    ),
+                }
+            ]
+
+    query = "India DEBT in percent of GDP Fiscal Affairs Departmental Data from IMF"
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(query, "IMF")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="IMF",
+            countries=["IN"],
+            all_providers=["IMF"],
+        )
+
+    assert match is not None
+    assert match["code"] == "DEBT1"
+    assert intent is not None
+    assert intent.parameters["indicator"] == "DEBT1"
+    assert intent.parameters["country"] == "IN"
+    assert is_exact_match_locked(intent.parameters)
+
+
+def test_exact_title_match_accepts_short_imf_revenue_title_with_source_context() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "GGR_G01_GDP_PT",
+                    "name": "Revenue",
+                    "unit": "% of GDP",
+                    "category": "FM",
+                    "raw_metadata": (
+                        '{"label":"Revenue","source":"Fiscal Monitor (October 2025)",'
+                        '"unit":"% of GDP","dataset":"FM"}'
+                    ),
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "Japan Revenue in percent of GDP Fiscal Monitor (October 2025) from IMF",
+            "IMF",
+        )
+
+    assert match is not None
+    assert match["code"] == "GGR_G01_GDP_PT"
+
+
+def test_exact_title_match_rejects_short_imf_title_without_source_context() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "GGR_G01_GDP_PT",
+                    "name": "Revenue",
+                    "unit": "% of GDP",
+                    "category": "FM",
+                    "raw_metadata": (
+                        '{"label":"Revenue","source":"Fiscal Monitor (October 2025)",'
+                        '"unit":"% of GDP","dataset":"FM"}'
+                    ),
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match("Japan Revenue in percent of GDP from IMF", "IMF")
+
+    assert match is None
+
+
+def test_exact_title_match_rejects_short_non_executable_imf_title() -> None:
+    class _Lookup:
+        def search(self, text, provider=None, limit=5):
+            return []
+
+        def exact_name_matches(self, search_inputs, provider=None, limit=20):
+            assert provider == "IMF"
+            return [
+                {
+                    "provider": "IMF",
+                    "code": "FM4_XDC",
+                    "name": "M4",
+                    "unit": "National Currency",
+                    "category": "INDICATOR",
+                    "raw_metadata": (
+                        '{"label":"M4","source":"International Financial Statistics",'
+                        '"unit":"National Currency"}'
+                    ),
+                }
+            ]
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+        match = find_exact_provider_title_match(
+            "Germany M4 in National Currency International Financial Statistics from IMF",
+            "IMF",
+        )
+
+    assert match is None
 
 
 def test_exact_title_match_accepts_full_imf_cpi_aggregate_titles(tmp_path) -> None:
@@ -570,6 +803,92 @@ def test_exact_title_match_accepts_short_bis_hyphenated_dataflow_title(tmp_path)
     assert intent.parameters["country"] == "CN"
 
 
+def test_exact_title_match_collapses_bis_prefixed_dataflow_aliases(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    for code, category in [
+        ("BIS_WS_CPMI_INSTITUT", "BIS Dataflow"),
+        ("WS_CPMI_INSTITUT", "BIS Statistics"),
+    ]:
+        assert db.insert_indicator(
+            Indicator(
+                provider="BIS",
+                code=code,
+                name="CPMI institutions",
+                category=category,
+                frequency="Annual",
+                popularity=10,
+            )
+        )
+    lookup = IndicatorLookup(db)
+    query = "United States CPMI institutions from BIS"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "BIS")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="BIS",
+            countries=["US"],
+            all_providers=["BIS"],
+        )
+
+    assert match is not None
+    assert match["code"] == "BIS_WS_CPMI_INSTITUT"
+    assert intent is not None
+    assert intent.parameters["indicator"] == "BIS_WS_CPMI_INSTITUT"
+    assert intent.parameters["country"] == "US"
+
+
+def test_exact_title_match_rejects_bis_same_title_different_dataflows() -> None:
+    lookup = Mock(
+        exact_name_matches=Mock(
+            return_value=[
+                {
+                    "provider": "BIS",
+                    "code": "BIS_WS_TEST_A",
+                    "name": "CPMI duplicate title",
+                    "frequency": "Annual",
+                },
+                {
+                    "provider": "BIS",
+                    "code": "WS_TEST_B",
+                    "name": "CPMI duplicate title",
+                    "frequency": "Annual",
+                },
+            ]
+        ),
+        search=Mock(return_value=[]),
+    )
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match("CPMI duplicate title from BIS", "BIS")
+
+    assert match is None
+
+
+def test_exact_title_match_rejects_bis_aliases_with_different_frequency(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    for code, frequency in [
+        ("BIS_WS_TEST_ALIAS", "Annual"),
+        ("WS_TEST_ALIAS", "Monthly"),
+    ]:
+        assert db.insert_indicator(
+            Indicator(
+                provider="BIS",
+                code=code,
+                name="CPMI alias title",
+                category="BIS Statistics",
+                frequency=frequency,
+                popularity=10,
+            )
+        )
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match("CPMI alias title from BIS", "BIS")
+
+    assert match is None
+
+
 def test_exact_title_match_rejects_short_bis_partial_title(tmp_path) -> None:
     db = IndicatorDatabase(tmp_path / "indicators.db")
     assert db.insert_indicator(
@@ -646,6 +965,40 @@ def test_exact_title_match_ignores_appended_frequency_disambiguator(tmp_path) ->
     assert match is not None
     assert match["code"] == "DTWEXM"
     assert looks_exact is True
+
+
+def test_exact_title_match_keeps_fred_title_internal_semiannual_as_title_text(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    title = "ICE BofA CCC & Lower US High Yield Index Semi-Annual Yield to Worst"
+    assert db.insert_indicator(
+        Indicator(
+            provider="FRED",
+            code="BAMLH0A3HYCSYTW",
+            name=title,
+            unit="Percent",
+            frequency="Daily, Close",
+            popularity=20,
+        )
+    )
+    lookup = IndicatorLookup(db)
+    query = f"{title} from FRED"
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        match = find_exact_provider_title_match(query, "FRED")
+        looks_exact = looks_like_exact_provider_title_match(query, "FRED")
+        intent = build_exact_indicator_title_intent(
+            query,
+            explicit_provider="FRED",
+            countries=[],
+            all_providers=["FRED"],
+        )
+
+    assert match is not None
+    assert match["code"] == "BAMLH0A3HYCSYTW"
+    assert looks_exact is True
+    assert intent is not None
+    assert intent.parameters["indicator"] == "BAMLH0A3HYCSYTW"
+    assert intent.parameters["__exact_indicator_title_match"] is True
 
 
 def test_exact_title_search_inputs_include_leading_acronym_comma_tail_variant() -> None:
@@ -1039,6 +1392,74 @@ def test_build_exact_statscan_title_intent_keeps_country_scope_outside_title() -
     assert intent.parameters["indicator"] == "13100287"
     assert intent.parameters["country"] == "CA"
     assert intent.parameters["geography"] == "Canada"
+
+
+def test_exact_name_matches_prefers_unicode_raw_provider_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    for code, name, popularity in [
+        ("ae-coin", "Æ Coin", 1),
+        ("coin-2", "COIN", 100),
+        ("coin-3", "Coin", 90),
+    ]:
+        assert db.insert_indicator(
+            Indicator(
+                provider="CoinGecko",
+                code=code,
+                name=name,
+                category="Cryptocurrency",
+                unit="USD",
+                popularity=popularity,
+            )
+        )
+    lookup = IndicatorLookup(db)
+
+    exact_rows = lookup.exact_name_matches(["Æ Coin"], provider="CoinGecko")
+    lowercase_rows = lookup.exact_name_matches(["æ coin"], provider="CoinGecko")
+    generic_rows = lookup.exact_name_matches(["Coin"], provider="CoinGecko")
+
+    assert [row["code"] for row in exact_rows] == ["ae-coin"]
+    assert [row["code"] for row in lowercase_rows] == ["ae-coin"]
+    assert "ae-coin" not in [row["code"] for row in generic_rows]
+
+
+def test_build_exact_indicator_title_intent_handles_unicode_coingecko_title(tmp_path) -> None:
+    db = IndicatorDatabase(tmp_path / "indicators.db")
+    for code, name, popularity in [
+        ("ae-coin", "Æ Coin", 1),
+        ("coin-2", "COIN", 100),
+        ("coin-3", "Coin", 90),
+    ]:
+        assert db.insert_indicator(
+            Indicator(
+                provider="CoinGecko",
+                code=code,
+                name=name,
+                category="Cryptocurrency",
+                unit="USD",
+                popularity=popularity,
+            )
+        )
+    lookup = IndicatorLookup(db)
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
+        intent = build_exact_indicator_title_intent(
+            "Æ Coin cryptocurrency price from CoinGecko",
+            explicit_provider="CoinGecko",
+            all_providers=["CoinGecko"],
+        )
+        generic_intent = build_exact_indicator_title_intent(
+            "Coin cryptocurrency price from CoinGecko",
+            explicit_provider="CoinGecko",
+            all_providers=["CoinGecko"],
+        )
+
+    assert intent is not None
+    assert intent.parameters["indicator"] == "ae-coin"
+    assert intent.parameters["coinIds"] == ["ae-coin"]
+    assert intent.parameters["__exact_indicator_title_match"] is True
+    assert generic_intent is not None
+    assert generic_intent.parameters["indicator"] != "ae-coin"
+    assert "ae-coin" not in generic_intent.parameters.get("coinIds", [])
 
 
 def test_exact_title_match_rejects_ambiguous_short_fred_title_without_frequency() -> None:

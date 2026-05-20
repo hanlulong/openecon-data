@@ -526,6 +526,15 @@ def runtime_supportability_reason(row: dict[str, Any], resp_json: dict[str, Any]
         return 'eurostat_response_too_large'
     if provider == 'EUROSTAT' and 'eurostat_requested_geo_unavailable' in evidence:
         return 'eurostat_requested_geo_unavailable'
+    if provider == 'EUROSTAT' and 'eurostat_dataset_not_disseminated' in evidence:
+        return 'eurostat_dataset_not_disseminated'
+    if provider == 'IMF' and (
+        'imf_non_weo_public_surface_unsupported' in evidence
+        or 'imf query targets a detailed imf public-data surface' in evidence
+        or 'requires imf dataset-family routing' in evidence
+        or 'not yet executable by openecon' in evidence and 'imf dataset-family routing' in evidence
+    ):
+        return 'imf_non_weo_public_surface_unsupported'
     if provider == 'OECD' and 'oecd_missing_valued_observations' in evidence:
         return 'oecd_missing_valued_observations'
     if provider in {'STATSCAN', 'STATISTICS CANADA'} and 'statscan_required_dimension_missing' in evidence:

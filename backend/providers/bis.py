@@ -217,6 +217,268 @@ class BISProvider(BaseProvider):
         description = info.get("description") or None
         return name, description
 
+    @staticmethod
+    def _is_exact_dataflow_request(indicator: str) -> bool:
+        """Return true when the caller supplied a provider-native BIS dataflow code."""
+        normalized = str(indicator or "").strip().upper()
+        return (
+            normalized.startswith("WS_")
+            or normalized.startswith("BIS_WS_")
+            or normalized.startswith("BIS.WS_")
+        )
+
+    @staticmethod
+    def _country_dimension_ids(series_dimensions: list) -> set[str]:
+        """Identify provider-native dimensions that carry country/area values."""
+        country_ids: set[str] = set()
+        for dim in series_dimensions or []:
+            dim_id = str(dim.get("id") or "").upper()
+            dim_name = str(dim.get("name") or "").lower()
+            if dim_id in {"REF_AREA", "REP_CTY", "BORROWERS_CTY", "ISSUER_RES", "RESIDENCY", "COUNTRY"}:
+                country_ids.add(dim_id)
+            elif "country" in dim_name or "area" in dim_name:
+                country_ids.add(dim_id)
+        return country_ids
+
+    @staticmethod
+    def _aggregate_dimension_score(selected_dimensions: Dict[str, Dict[str, str]]) -> int:
+        """Score mechanically broad/not-applicable BIS dimension values."""
+        score = 0
+        for dim in selected_dimensions.values():
+            value_id = str(dim.get("id") or "").upper()
+            value_name = str(dim.get("name") or "").lower()
+            if value_id in {"A", "ALL", "T", "TOT", "_T", "Z", "5J"}:
+                score += 3
+            if any(marker in value_name for marker in ["all", "total", "not applicable", "aggregate"]):
+                score += 2
+        return score
+
+    def _select_fallback_series(
+        self,
+        series_data: dict,
+        series_dimensions: list,
+        *,
+        requested_country_code: Optional[str],
+    ) -> tuple[Optional[str], dict, Dict[str, Dict[str, str]]]:
+        """Select a BIS series from a frequency-level exact-dataflow response.
+
+        Selection is purely provider-native and mechanical: if the dataflow has
+        country dimensions and a country was requested, the selected key must
+        carry that exact country code.  Broad/all/not-applicable non-country
+        dimensions are preferred, then longer observation history, then stable
+        series key order.
+        """
+        if not series_data:
+            return None, {}, {}
+
+        requested_country_code = str(requested_country_code or "").upper() or None
+        country_dimension_ids = self._country_dimension_ids(series_dimensions)
+        best_key: Optional[str] = None
+        best_observations: dict = {}
+        best_selected: Dict[str, Dict[str, str]] = {}
+        best_score: tuple[int, int, str] | None = None
+
+        for series_key in sorted(series_data):
+            series_obj = series_data.get(series_key) or {}
+            observations = series_obj.get("observations", {}) or {}
+            if not observations:
+                continue
+
+            selected = self._selected_series_dimension_values(series_key, series_dimensions)
+            if requested_country_code and country_dimension_ids:
+                selected_country_values = {
+                    str(selected.get(dim_id, {}).get("id") or "").upper()
+                    for dim_id in country_dimension_ids
+                }
+                if requested_country_code not in selected_country_values:
+                    continue
+
+            aggregate_score = self._aggregate_dimension_score(
+                {
+                    dim_id: dim
+                    for dim_id, dim in selected.items()
+                    if dim_id.upper() not in country_dimension_ids
+                }
+            )
+            score = (aggregate_score, len(observations), str(series_key))
+            if best_score is None or score > best_score:
+                best_score = score
+                best_key = str(series_key)
+                best_observations = observations
+                best_selected = selected
+
+        return best_key, best_observations, best_selected
+
+    def _frequency_candidates(self, preferred_frequency: str) -> list[str]:
+        preferred = str(preferred_frequency or "").upper()[:1] or "M"
+        candidates = [preferred, "A", "Q", "M"]
+        return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+    async def _fetch_exact_dataflow_fallback(
+        self,
+        *,
+        indicator_code: str,
+        indicator_label: Optional[str],
+        country_code_raw: Optional[str],
+        start_year: Optional[int],
+        end_year: Optional[int],
+        preferred_frequency: str,
+    ) -> Optional[NormalizedData]:
+        """Fetch exact provider-native BIS dataflows with non-standard key shapes.
+
+        This fallback is intentionally limited to exact ``WS_*`` dataflow codes.
+        It does not resolve natural language to codes; it only changes how an
+        already-known provider-native dataflow is queried.
+        """
+        indicator_code = str(indicator_code or "").strip().upper()
+        if not indicator_code.startswith("WS_"):
+            return None
+
+        requested_country_code = self._country_code(country_code_raw) if country_code_raw else None
+        client = get_http_client()
+        date_params: dict[str, str] = {}
+        if start_year:
+            date_params["startPeriod"] = str(start_year)
+        if end_year:
+            date_params["endPeriod"] = str(end_year)
+
+        for frequency in self._frequency_candidates(preferred_frequency):
+            url = f"{self.base_url}/data/{indicator_code}/{frequency}"
+            payload = None
+            try:
+                response = await client.get(
+                    url,
+                    params=date_params,
+                    headers={"Accept": "application/vnd.sdmx.data+json;version=1.0.0"},
+                    timeout=30.0,
+                )
+                if response.status_code == 200 and response.content:
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        payload = None
+                if payload is None or "errors" in payload:
+                    response = await client.get(
+                        url,
+                        headers={"Accept": "application/vnd.sdmx.data+json;version=1.0.0"},
+                        timeout=30.0,
+                    )
+                    if response.status_code != 200 or not response.content:
+                        continue
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+            data = (payload or {}).get("data") or {}
+            datasets = data.get("dataSets") or []
+            if not datasets or "series" not in datasets[0]:
+                continue
+
+            structure = data.get("structure") or {}
+            dimensions = structure.get("dimensions") or {}
+            observation_dimensions = dimensions.get("observation", []) or []
+            time_dimension = next(
+                (dim for dim in observation_dimensions if dim.get("id") == "TIME_PERIOD"),
+                None,
+            )
+            if not time_dimension:
+                continue
+            time_values = time_dimension.get("values") or []
+            series_dimensions = dimensions.get("series", []) or []
+            series_key, observations, selected_dimensions = self._select_fallback_series(
+                datasets[0].get("series") or {},
+                series_dimensions,
+                requested_country_code=requested_country_code,
+            )
+            if not series_key or not observations:
+                continue
+
+            data_points = []
+            for time_idx_str in sorted(observations, key=lambda item: int(item) if str(item).isdigit() else -1):
+                obs_data = observations.get(time_idx_str)
+                try:
+                    time_idx = int(time_idx_str)
+                except (ValueError, TypeError):
+                    continue
+                if time_idx < 0 or time_idx >= len(time_values):
+                    continue
+                time_period = str((time_values[time_idx] or {}).get("id") or "")
+                if not time_period:
+                    continue
+                value = None
+                if obs_data:
+                    try:
+                        value_str = obs_data[0]
+                        if value_str is not None and value_str != "":
+                            value = float(value_str)
+                    except (ValueError, TypeError, IndexError):
+                        value = None
+                if "-" in time_period:
+                    if "Q" in time_period:
+                        year, quarter = time_period.split("-Q", 1)
+                        month = (int(quarter) - 1) * 3 + 1
+                        date_str = f"{year}-{month:02d}-01"
+                        year_int = int(year)
+                    else:
+                        date_str = f"{time_period}-01"
+                        year_int = int(time_period.split("-")[0])
+                else:
+                    date_str = f"{time_period}-01-01"
+                    year_int = int(time_period)
+                if start_year and year_int < start_year:
+                    continue
+                if end_year and year_int > end_year:
+                    continue
+                data_points.append({"date": date_str, "value": value})
+
+            if not data_points:
+                continue
+
+            freq_label = {"M": "monthly", "Q": "quarterly", "A": "annual"}.get(frequency, frequency)
+            dataflow_name, dataflow_description = self._lookup_dataflow_info(indicator_code)
+            selected_country = None
+            for dim_id in self._country_dimension_ids(series_dimensions):
+                value_id = str(selected_dimensions.get(dim_id, {}).get("id") or "").upper()
+                if requested_country_code and value_id == requested_country_code:
+                    selected_country = value_id
+                    break
+            display_country = (
+                self._display_country_name(selected_country)
+                if selected_country
+                else ("Global" if not requested_country_code else self._display_country_name(requested_country_code))
+            )
+            selected_dimension_text = "; ".join(
+                f"{dim_id}={dim.get('id') or ''} ({dim.get('name') or ''})"
+                for dim_id, dim in selected_dimensions.items()
+            )
+            metadata = Metadata(
+                source="BIS",
+                indicator=indicator_label or dataflow_name or indicator_code,
+                country=display_country,
+                frequency=freq_label,
+                unit="",
+                lastUpdated="",
+                seriesId=f"{indicator_code}/{frequency}/{series_key}",
+                apiUrl=url,
+                sourceUrl=f"https://data.bis.org/topics/{indicator_code}",
+                seasonalAdjustment=None,
+                dataType=None,
+                priceType=None,
+                description=(
+                    dataflow_description
+                    or f"Exact BIS dataflow {indicator_code}; selected dimensions: {selected_dimension_text}"
+                ),
+                notes=[f"Selected BIS SDMX key {series_key}: {selected_dimension_text}"],
+                startDate=data_points[0]["date"],
+                endDate=data_points[-1]["date"],
+            )
+            return NormalizedData(metadata=metadata, data=data_points)
+
+        return None
+
     @classmethod
     def _country_display_names(cls) -> Dict[str, str]:
         """Build human-readable country labels for BIS metadata."""
@@ -427,6 +689,7 @@ class BISProvider(BaseProvider):
         }
         frequency = freq_map.get(frequency.lower(), frequency.upper()[0]) if frequency else "M"
 
+        exact_provider_dataflow_request = self._is_exact_dataflow_request(indicator)
         indicator_code, indicator_label = await self._resolve_indicator_code(indicator)
 
         # Expand regions to country lists
@@ -726,6 +989,27 @@ class BISProvider(BaseProvider):
                 results.append(cr)
             elif isinstance(cr, Exception):
                 logger.debug(f"BIS: Country fetch failed: {cr}")
+
+        if not results and exact_provider_dataflow_request and indicator_code.startswith("WS_"):
+            fallback_results = await asyncio.gather(
+                *[
+                    self._fetch_exact_dataflow_fallback(
+                        indicator_code=indicator_code,
+                        indicator_label=indicator_label,
+                        country_code_raw=c,
+                        start_year=start_year,
+                        end_year=end_year,
+                        preferred_frequency=frequency,
+                    )
+                    for c in country_list
+                ],
+                return_exceptions=True,
+            )
+            for fr in fallback_results:
+                if isinstance(fr, NormalizedData):
+                    results.append(fr)
+                elif isinstance(fr, Exception):
+                    logger.debug("BIS: Exact dataflow fallback failed: %s", fr)
 
         # INFRASTRUCTURE FIX: Raise error for empty results to trigger fallback
         # This enables the query orchestrator to try alternative providers

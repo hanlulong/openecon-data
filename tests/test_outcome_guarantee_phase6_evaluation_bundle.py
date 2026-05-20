@@ -37,7 +37,8 @@ def test_phase6_multiround_harness_supports_named_suites() -> None:
     script = (REPO_ROOT / "scripts" / "test_multiround_10x10.py").read_text(encoding="utf-8")
     assert "list_suite_descriptions" in script
     assert "load_suite(args.suite)" in script
-    assert '"suite": args.suite' in script
+    assert "suite=args.suite" in script
+    assert '"suite": suite' in script
 
 
 def test_phase6_exact_output_validator_accepts_catalog_concept_for_decomposition() -> None:

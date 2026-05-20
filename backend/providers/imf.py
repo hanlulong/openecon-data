@@ -2301,13 +2301,13 @@ class IMFProvider(BaseProvider):
             or "." in exact_code_normalized
             or any(ch.isdigit() for ch in exact_code_normalized)
         )
-        if exact_code_like:
+        exact_code_candidate = exact_code_normalized
+        exact_meta = None
+        if exact_code_raw:
             try:
                 from ..services.indicator_database import get_indicator_lookup
 
                 lookup = get_indicator_lookup()
-                exact_code_candidate = exact_code_normalized
-                exact_meta = None
                 for lookup_key in self._indicator_catalog_lookup_keys(exact_code_raw):
                     exact_meta = lookup.get("IMF", lookup_key)
                     if exact_meta:
@@ -2315,18 +2315,26 @@ class IMFProvider(BaseProvider):
                         break
             except Exception as exc:
                 logger.debug("IMF exact-code lookup skipped for '%s': %s", indicator, exc)
-                exact_meta = None
 
-            exact_category = str(exact_meta.get("category") or "").strip().upper() if exact_meta else ""
-            if exact_meta and exact_category != "DATAFLOW" and (
-                exact_code_has_namespace
-                or self._is_executable_datamapper_catalog_category(exact_category)
-                or exact_category == "WEO"
-                or exact_category.endswith("REO")
-            ):
-                label_hint = str(exact_meta.get("name") or indicator)
-                logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
-                return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
+        exact_category = str(exact_meta.get("category") or "").strip().upper() if exact_meta else ""
+        short_plain_uppercase_code = bool(re.fullmatch(r"[A-Z]{2,10}", exact_code_normalized))
+        exact_name_upper = str(exact_meta.get("name") or "").upper() if exact_meta else ""
+        plain_code_shadows_title_token = bool(
+            short_plain_uppercase_code
+            and re.search(rf"(?<![A-Z0-9]){re.escape(exact_code_normalized)}(?![A-Z0-9])", exact_name_upper)
+        )
+        if exact_meta and exact_category != "DATAFLOW" and (
+            exact_code_has_namespace
+            or exact_category == "WEO"
+            or exact_category.endswith("REO")
+            or (
+                self._is_executable_datamapper_catalog_category(exact_category)
+                and not plain_code_shadows_title_token
+            )
+        ):
+            label_hint = str(exact_meta.get("name") or indicator)
+            logger.info("IMF: Using exact local indicator code '%s' from catalog lookup", exact_code_candidate)
+            return exact_code_candidate, self._friendly_indicator_label(label_hint, exact_code_candidate)
 
         # Step 2: Resolve natural-language indicators through provider metadata search only.
         if self.metadata_search:

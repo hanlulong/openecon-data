@@ -378,7 +378,32 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • Try a provider-native FRED series ID that names the requested country")
             message_parts.append("  • Or remove the provider constraint so OpenEcon can choose another source")
 
-        # 4. Country/Region Not Supported
+        # 4. Provider-native data unavailable
+        elif 'eurostat_dataset_not_disseminated' in error_lower:
+            message_parts.append("📭 **Eurostat Dataset Not Available**")
+            message_parts.append(
+                "Eurostat recognizes this dataset in metadata, but its public data API does not currently disseminate executable observations for it."
+            )
+            message_parts.append("")
+            message_parts.append(f"Provider evidence: {error}")
+
+        elif 'eurostat_response_too_large' in error_lower:
+            message_parts.append("📭 **Eurostat Dataset Too Large**")
+            message_parts.append(
+                "Eurostat rejected the provider-native dataset request because the response is too large."
+            )
+            message_parts.append("")
+            message_parts.append(f"Provider evidence: {error}")
+
+        elif 'eurostat_requested_geo_unavailable' in error_lower:
+            message_parts.append("📭 **Eurostat Geography Not Available**")
+            message_parts.append(
+                "The selected Eurostat dataset is available, but not for the requested geography."
+            )
+            message_parts.append("")
+            message_parts.append(f"Provider evidence: {error}")
+
+        # 5. Country/Region Not Supported
         elif 'not a valid country' in error_lower or 'country' in error_lower and 'not' in error_lower:
             message_parts.append("🌍 **Country/Region Not Recognized**")
             message_parts.append(f"{error}")
@@ -388,14 +413,14 @@ class QueryComplexityAnalyzer:
             message_parts.append("  • For regions, specify individual countries")
             message_parts.append("  • Example: Instead of 'Asia', try 'China, Japan, South Korea'")
 
-        # 5. Provider-native data unavailable
+        # 6. Provider-native data unavailable
         elif 'coingecko_price_unavailable' in error_lower:
             message_parts.append("📭 **No CoinGecko Price Available**")
             message_parts.append("CoinGecko recognizes the asset, but its current price endpoint did not provide the requested metric.")
             message_parts.append("")
             message_parts.append(f"Provider evidence: {error}")
 
-        # 6. No Data Found
+        # 7. No Data Found
         elif 'no data found' in error_lower or 'no data available' in error_lower or 'norecordsfound' in error_lower:
             message_parts.append("📭 **No Data Found**")
             message_parts.append("The requested data is not available from this source.")

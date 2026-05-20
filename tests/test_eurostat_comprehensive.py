@@ -17,7 +17,7 @@ from backend.config import get_settings
 from backend.services.query import QueryService
 
 
-async def test_query(query_service: QueryService, query: str, expected_provider: str = "Eurostat") -> dict:
+async def run_query(query_service: QueryService, query: str, expected_provider: str = "Eurostat") -> dict:
     """Test a single query and return result."""
     print(f"\n{'='*80}")
     print(f"Testing: {query}")
@@ -125,7 +125,7 @@ async def main():
 
     results = []
     for query in test_queries:
-        result = await test_query(query_service, query)
+        result = await run_query(query_service, query)
         results.append(result)
         # Small delay to avoid rate limiting
         await asyncio.sleep(0.5)

@@ -1075,6 +1075,7 @@ class WorldBankProvider(BaseProvider):
         end_date: Optional[str] = None,
         _skip_alternatives: bool = False,  # Internal flag to prevent recursion
         _allow_semantic_alternatives: bool = False,
+        _defaulted_all_country: bool = False,
     ) -> List[NormalizedData]:
         # Circuit breaker: skip WB entirely when API is confirmed down
         if not _wb_is_available():
@@ -1103,6 +1104,7 @@ class WorldBankProvider(BaseProvider):
             exact_indicator_request = False
         if not catalog_source_id or str(indic).strip() != str(indicator or "").strip():
             catalog_source_id = self._indicator_source_id(indic)
+        defaulted_no_country_all = bool(_defaulted_all_country or (not country and not countries))
         country_list = countries or ([country] if country else ["all"])
 
         # Detect when the country list represents a known WB aggregate region.
@@ -1384,6 +1386,54 @@ class WorldBankProvider(BaseProvider):
                 "WorldBank skipping per-country fallback: time budget exceeded (%.1fs)",
                 _elapsed_so_far,
             )
+
+        # Provider-native exact-title/code requests with no user country first
+        # use WorldBank's documented all-country surface.  Some WDI indicators
+        # expose no non-null data (or intermittently fail) on /country/all
+        # while the provider-native World aggregate does return a valid current
+        # observation.  Retry that aggregate only for defaulted no-country exact
+        # requests; explicit country/all-country requests remain strict.
+        if (
+            not payload
+            and exact_indicator_request
+            and defaulted_no_country_all
+            and (not catalog_source_id or catalog_source_id == "2")
+            and len(country_list) == 1
+            and self._country_code(str(country_list[0])) == "all"
+            and (_time.perf_counter() - _fetch_start) < _FETCH_BUDGET_S
+        ):
+            world_code = "WLD"
+            world_url = f"{self.base_url}/country/{world_code}/indicator/{indic}"
+            world_params = dict(params)
+            if not date_param:
+                world_params["MRNEV"] = 1
+            try:
+                logger.info(
+                    "WorldBank exact no-country all surface returned no data; "
+                    "trying World aggregate for indicator %s",
+                    indic,
+                )
+                world_response = await client.get(
+                    world_url,
+                    params=world_params,
+                    headers=headers,
+                    timeout=effective_timeout(15.0),
+                )
+                world_response.raise_for_status()
+                world_payload = world_response.json()
+                if (
+                    isinstance(world_payload, list)
+                    and len(world_payload) >= 2
+                    and world_payload[1]
+                ):
+                    payload = world_payload
+                    batch_response = world_response
+            except Exception as exc:
+                logger.debug(
+                    "WorldBank World aggregate retry failed for exact no-country %s: %s",
+                    indic,
+                    exc,
+                )
 
         # Process batched payload — group records by country
         # NOTE: Do NOT return early here — fall through to alternative indicator

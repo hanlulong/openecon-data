@@ -648,19 +648,89 @@ class IndicatorLookup:
         def _normalize_exact_title(value: str) -> str:
             return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
-        cleaned = [
-            str(name or "").strip().lower()
+        raw_inputs = [
+            str(name or "").strip()
             for name in names
             if str(name or "").strip()
         ]
-        if not cleaned:
+        if not raw_inputs:
             return []
 
-        # Preserve caller order while deduplicating case-insensitively.
+        # Preserve caller order while deduplicating.  Keep the raw spellings
+        # for literal provider-title transport before falling back to SQLite
+        # lower()/ASCII-style normalized recall.  SQLite lower() is
+        # ASCII-oriented, so titles such as "Æ Coin" can otherwise collapse
+        # into generic normalized labels like "coin" and shadow the exact
+        # provider-native row.
+        raw_deduped = list(dict.fromkeys(raw_inputs))
+        raw_casefold_order: dict[str, int] = {}
+        for order, raw_name in enumerate(raw_deduped):
+            raw_casefold_order.setdefault(raw_name.casefold(), order)
+        cleaned = [name.lower() for name in raw_deduped]
         deduped = list(dict.fromkeys(cleaned))
         normalized_provider = self._normalize_provider(provider)
         conn = self.db._get_connection()  # pylint: disable=protected-access
         cursor = conn.cursor()
+
+        def _row_identity(row: Dict[str, Any]) -> tuple[str, str]:
+            return (
+                str(row.get("provider") or ""),
+                str(row.get("code") or ""),
+            )
+
+        raw_exact_rows: list[tuple[int, int, str, Dict[str, Any]]] = []
+        raw_seen: set[tuple[str, str]] = set()
+
+        raw_placeholders = ",".join("?" for _ in raw_deduped)
+        raw_sql = f"SELECT * FROM indicators WHERE trim(name) IN ({raw_placeholders})"
+        raw_params: list[Any] = list(raw_deduped)
+        if normalized_provider:
+            raw_sql += " AND provider = ?"
+            raw_params.append(normalized_provider)
+        raw_sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
+        raw_params.append(max(1, limit))
+        cursor.execute(raw_sql, raw_params)
+        for row in cursor.fetchall():
+            candidate = dict(row)
+            identity = _row_identity(candidate)
+            if identity in raw_seen:
+                continue
+            raw_seen.add(identity)
+            order = raw_casefold_order.get(
+                str(candidate.get("name") or "").strip().casefold(),
+                len(raw_casefold_order),
+            )
+            popularity = int(candidate.get("popularity") or 0)
+            raw_exact_rows.append((order, -popularity, str(candidate.get("code") or ""), candidate))
+
+        # For provider-scoped exact-title matching, add a bounded Python
+        # casefold equality pass so Unicode titles still match when the user
+        # uses lowercase Unicode text (for example "æ coin").  This is literal
+        # equality over provider catalog names, not transliteration, fuzzy
+        # matching, synonym expansion, or semantic code inference.
+        if normalized_provider and len(raw_exact_rows) < limit:
+            cursor.execute(
+                "SELECT * FROM indicators WHERE provider = ? "
+                "ORDER BY COALESCE(popularity, 0) DESC, code",
+                (normalized_provider,),
+            )
+            for row in cursor.fetchall():
+                candidate = dict(row)
+                identity = _row_identity(candidate)
+                if identity in raw_seen:
+                    continue
+                order = raw_casefold_order.get(
+                    str(candidate.get("name") or "").strip().casefold()
+                )
+                if order is None:
+                    continue
+                raw_seen.add(identity)
+                popularity = int(candidate.get("popularity") or 0)
+                raw_exact_rows.append((order, -popularity, str(candidate.get("code") or ""), candidate))
+
+        if raw_exact_rows:
+            raw_exact_rows.sort()
+            return [candidate for _, _, _, candidate in raw_exact_rows][:limit]
 
         placeholders = ",".join("?" for _ in deduped)
         sql = f"SELECT * FROM indicators WHERE lower(trim(name)) IN ({placeholders})"

@@ -305,6 +305,88 @@ class IndicatorResolutionTests(unittest.TestCase):
             "unemployment rate",
         )
 
+    def test_provider_locked_exact_title_miss_falls_through_to_selector(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(),
+            _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["total credit"],
+            parameters={
+                "country": "JP",
+                "__semantic_provider_locked": True,
+            },
+            clarificationNeeded=False,
+            originalQuery="Japan Total credit from BIS",
+        )
+
+        with patch(
+            "backend.services.indicator_resolution.looks_like_exact_provider_title_match",
+            return_value=True,
+        ), patch(
+            "backend.services.indicator_resolution.find_exact_provider_title_match",
+            return_value=None,
+        ), patch(
+            "backend.services.indicator_selector.IndicatorSelector.select",
+            new=AsyncMock(
+                return_value=SelectionResult(
+                    code="WS_TC",
+                    name="Total credit",
+                    source="llm_pick",
+                )
+            ),
+        ) as select_mock:
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "BIS",
+                    intent,
+                    dict(intent.parameters or {}),
+                )
+            )
+
+        self.assertEqual(params.get("indicator"), "WS_TC")
+        self.assertEqual(params.get("__semantic_authority"), "llm_adjudication")
+        self.assertEqual(params.get("__decision_source"), "llm_pick")
+        select_mock.assert_awaited_once()
+        self.assertEqual(select_mock.await_args.args[0], "total credit")
+        self.assertEqual(select_mock.await_args.args[1], "BIS")
+
+    def test_unlocked_exact_title_miss_still_fails_closed_without_selector(self) -> None:
+        svc = SimpleNamespace(
+            settings=SimpleNamespace(),
+            _looks_like_provider_indicator_code=lambda _provider, _indicator: False,
+            _verify_semantic_discriminators=lambda *_args, **_kwargs: True,
+        )
+        intent = ParsedIntent(
+            apiProvider="BIS",
+            indicators=["total credit"],
+            parameters={"country": "JP"},
+            clarificationNeeded=False,
+            originalQuery="Japan Total credit from BIS",
+        )
+
+        with patch(
+            "backend.services.indicator_resolution.looks_like_exact_provider_title_match",
+            return_value=True,
+        ), patch(
+            "backend.services.indicator_resolution.find_exact_provider_title_match",
+            return_value=None,
+        ), patch("backend.services.indicator_selector.IndicatorSelector.select") as select_mock:
+            params = asyncio.run(
+                resolve_indicator_for_fetch(
+                    svc,
+                    "BIS",
+                    intent,
+                    dict(intent.parameters or {}),
+                )
+            )
+
+        self.assertEqual(params.get("__indicator_selection_status"), "exact_title_unresolved")
+        select_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

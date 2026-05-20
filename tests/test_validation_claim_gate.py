@@ -1450,6 +1450,215 @@ def test_score_certification_claim_lower95_uses_design_strata(tmp_path: Path):
     assert report["metrics"]["overall_weighted_adjudicated_lower95_approx"] > confidence["lower95"]
 
 
+def test_score_certification_rescales_incremental_batch_weights_to_fixed_design_population(tmp_path: Path):
+    batch1_path = tmp_path / "batch1.jsonl"
+    batch2_path = tmp_path / "batch2.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    policy_path = tmp_path / "policy.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    output_path = tmp_path / "score.json"
+
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "snapshot_date": "2026-05-16",
+                "git_sha": "test",
+                "indicator_count": 200,
+                "provider_counts": {"FRED": 100, "IMF": 100},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    policy_path.write_text(
+        json.dumps(
+            {
+                "snapshot_manifest_path": str(snapshot_path),
+                "claim_thresholds": {},
+                "required_direct_provider_floors": {},
+                "required_multiround_family_floors": {},
+                "required_ambiguity_family_floors": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    write_jsonl(
+        batch1_path,
+        [
+            {
+                "id": "direct-fred-b1-1",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch1", "selection_weight": 50.0},
+            },
+            {
+                "id": "direct-fred-b1-2",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US CPI",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch1", "selection_weight": 50.0},
+            },
+            {
+                "id": "direct-imf-b1-1",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Japan GDP",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch1", "selection_weight": 50.0},
+            },
+            {
+                "id": "direct-imf-b1-2",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "IMF",
+                "query": "Japan CPI",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch1", "selection_weight": 50.0},
+            },
+        ],
+    )
+    write_jsonl(
+        batch2_path,
+        [
+            {
+                "id": "direct-fred-b2-1",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US employment",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch2", "selection_weight": 50.0},
+            },
+            {
+                "id": "direct-fred-b2-2",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US unemployment",
+                "provenance": {"snapshot_id": "2026-05-16:test:200", "holdout_split": "batch2", "selection_weight": 50.0},
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {"session_id": "direct-fred-b1-1", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-fred-b1-2", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-imf-b1-1", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-imf-b1-2", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-fred-b2-1", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-fred-b2-2", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(batch1_path),
+            "--dataset",
+            str(batch2_path),
+            "--raw-results",
+            str(raw_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    weighting = report["metrics"]["cumulative_design_weighting"]["strata"]
+    assert weighting["direct_provider:FRED"]["raw_weight_total"] == 200.0
+    assert weighting["direct_provider:FRED"]["scoring_weight_total"] == 100.0
+    assert weighting["direct_provider:IMF"]["raw_weight_total"] == 100.0
+    assert weighting["direct_provider:IMF"]["scoring_weight_total"] == 100.0
+
+    confidence = report["metrics"]["overall_weighted_design_confidence"]
+    assert confidence["strata"]["direct_provider:FRED"]["population_weight_share"] == 0.5
+    assert confidence["strata"]["direct_provider:IMF"]["population_weight_share"] == 0.5
+
+
+def test_score_certification_blocks_claim_grade_for_mixed_snapshots(tmp_path: Path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    adjudication_path = tmp_path / "adjudication.jsonl"
+    policy_path = tmp_path / "policy.json"
+    output_path = tmp_path / "score.json"
+
+    write_jsonl(
+        dataset_path,
+        [
+            {
+                "id": "direct-fred-000001",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US GDP",
+                "gold": {"clarification_expected": False},
+                "provenance": {"snapshot_id": "snap-1", "holdout_split": "cert_holdout", "selection_weight": 1.0},
+            },
+            {
+                "id": "direct-fred-000002",
+                "dataset_tier": "cert_holdout",
+                "provider_stratum": "FRED",
+                "query": "US CPI",
+                "gold": {"clarification_expected": False},
+                "provenance": {"snapshot_id": "snap-2", "holdout_split": "cert_holdout", "selection_weight": 1.0},
+            },
+        ],
+    )
+    write_jsonl(
+        raw_path,
+        [
+            {"session_id": "direct-fred-000001", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+            {"session_id": "direct-fred-000002", "round_index": 1, "status_code": 200, "series_count": 1, "error": None},
+        ],
+    )
+    write_jsonl(
+        adjudication_path,
+        [
+            {"session_id": "direct-fred-000001", "final_label": "pass"},
+            {"session_id": "direct-fred-000002", "final_label": "pass"},
+        ],
+    )
+    policy_path.write_text(
+        json.dumps(
+            {
+                "claim_thresholds": {
+                    "weighted_session_success_min": 0.99,
+                    "lower95_min": 0.1,
+                },
+                "required_direct_provider_floors": {"FRED": {"class": "critical", "floor": 0.97}},
+                "required_multiround_family_floors": {},
+                "required_ambiguity_family_floors": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCORE_SCRIPT),
+            "--dataset",
+            str(dataset_path),
+            "--raw-results",
+            str(raw_path),
+            "--adjudication-records",
+            str(adjudication_path),
+            "--floor-policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+    )
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["claim_grade_ready"] is False
+    assert any("mixed snapshot_ids" in blocker for blocker in report["claim_grade_blockers"])
+
+
 def test_score_certification_evaluates_multiround_and_ambiguity_family_floors(tmp_path: Path):
     dataset_path = tmp_path / "dataset.jsonl"
     raw_path = tmp_path / "raw.jsonl"

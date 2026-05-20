@@ -185,6 +185,51 @@ def test_next_review_selection_demotes_unsupported_imf_surfaces() -> None:
     assert [row["id"] for row in selected] == ["supported-cpi"]
 
 
+def test_next_review_selection_excludes_supportability_rows_by_default() -> None:
+    supported_cpi = _imf_record(
+        row_id="supported-cpi",
+        code="PCPI_CP_01_BY2015M12_IX",
+        name="Prices, Consumer Prices, Food and non-alcoholic beverages, BY2015, Index",
+        anchor_reason="imf_provider_native_sdmx_cpi_aggregate",
+    )
+    unsupported_hs = _imf_record(
+        row_id="unsupported-hs",
+        code="NXG_H5_XII_FOB_USD",
+        name="National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        selection_supportability_reason=UNSUPPORTED_IMF_REASON,
+    )
+
+    selected = select_quality_screened_direct_records(
+        [unsupported_hs, supported_cpi],
+        2,
+    )
+
+    assert [row["id"] for row in selected] == ["supported-cpi"]
+
+
+def test_next_review_selection_can_include_supportability_probe_rows_explicitly() -> None:
+    supported_cpi = _imf_record(
+        row_id="supported-cpi",
+        code="PCPI_CP_01_BY2015M12_IX",
+        name="Prices, Consumer Prices, Food and non-alcoholic beverages, BY2015, Index",
+        anchor_reason="imf_provider_native_sdmx_cpi_aggregate",
+    )
+    unsupported_hs = _imf_record(
+        row_id="unsupported-hs",
+        code="NXG_H5_XII_FOB_USD",
+        name="National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        selection_supportability_reason=UNSUPPORTED_IMF_REASON,
+    )
+
+    selected = select_quality_screened_direct_records(
+        [unsupported_hs, supported_cpi],
+        2,
+        include_supportability_probes=True,
+    )
+
+    assert [row["id"] for row in selected] == ["supported-cpi", "unsupported-hs"]
+
+
 def test_apply_selection_supportability_probe_query_preserves_original_prompt() -> None:
     unsupported_hs = _imf_record(
         row_id="unsupported-hs",
@@ -269,3 +314,50 @@ def test_direct_sampler_selection_demotes_unsupported_imf_surfaces() -> None:
     )
 
     assert [row["id"] for row in selected] == ["weo-anchor"]
+
+
+def test_direct_sampler_selection_excludes_supportability_rows_by_default() -> None:
+    weo_anchor = _imf_record(
+        row_id="weo-anchor",
+        code="NGDPD",
+        name="Gross domestic product, current prices, U.S. dollars",
+        category="WEO",
+        anchor_reason="imf_provider_native_weo_surface",
+    )
+    unsupported_hs = _imf_record(
+        row_id="unsupported-hs",
+        code="NXG_H5_XII_FOB_USD",
+        name="National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        selection_supportability_reason=UNSUPPORTED_IMF_REASON,
+    )
+
+    selected = _select_quality_screened_records(
+        [unsupported_hs, weo_anchor],
+        2,
+    )
+
+    assert [row["id"] for row in selected] == ["weo-anchor"]
+
+
+def test_direct_sampler_selection_can_include_supportability_probe_rows_explicitly() -> None:
+    weo_anchor = _imf_record(
+        row_id="weo-anchor",
+        code="NGDPD",
+        name="Gross domestic product, current prices, U.S. dollars",
+        category="WEO",
+        anchor_reason="imf_provider_native_weo_surface",
+    )
+    unsupported_hs = _imf_record(
+        row_id="unsupported-hs",
+        code="NXG_H5_XII_FOB_USD",
+        name="National Accounts, External Sector, Exports of Goods, HS 2017 Section XII",
+        selection_supportability_reason=UNSUPPORTED_IMF_REASON,
+    )
+
+    selected = _select_quality_screened_records(
+        [unsupported_hs, weo_anchor],
+        2,
+        include_supportability_probes=True,
+    )
+
+    assert [row["id"] for row in selected] == ["weo-anchor", "unsupported-hs"]

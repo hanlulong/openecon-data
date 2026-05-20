@@ -20,6 +20,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _eurostat_dataset_unavailable_message(
+    dataset_code: str,
+    country_code: Optional[str],
+    response_text: str = "",
+) -> str:
+    """Return a fail-closed supportability reason for non-disseminated datasets."""
+
+    evidence = re.sub(r"\s+", " ", str(response_text or "")).strip()
+    if len(evidence) > 300:
+        evidence = evidence[:300].rstrip() + "..."
+    suffix = f"; provider_evidence={evidence}" if evidence else ""
+    return (
+        "fail-closed supportability block: "
+        "reason=eurostat_dataset_not_disseminated; "
+        f"dataset={str(dataset_code or '').strip().lower()}; "
+        f"country={country_code or 'ALL_AVAILABLE'}"
+        f"{suffix}"
+    )
+
+
 class EurostatProvider(BaseProvider):
     """Eurostat Statistics API provider for EU economic data using SDMX 3.0 endpoints."""
 
@@ -276,7 +296,21 @@ class EurostatProvider(BaseProvider):
         try:
             payload = await fetch_payload(effective_query_params)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 413 and no_geo_filter and used_default_time_range:
+            if e.response.status_code in {404, 500} and no_geo_filter and used_default_time_range:
+                effective_query_params = latest_default_time_params()
+                try:
+                    payload = await fetch_payload(effective_query_params)
+                except httpx.HTTPStatusError as retry_error:
+                    if retry_error.response.status_code not in {404, 500}:
+                        raise
+                    raise DataNotAvailableError(
+                        _eurostat_dataset_unavailable_message(
+                            dataset_code,
+                            country_code,
+                            retry_error.response.text,
+                        )
+                    ) from retry_error
+            elif e.response.status_code == 413 and no_geo_filter and used_default_time_range:
                 effective_query_params = latest_default_time_params()
                 try:
                     payload = await fetch_payload(effective_query_params)

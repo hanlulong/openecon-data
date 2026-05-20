@@ -15,6 +15,7 @@ from ..routing.country_resolver import CountryResolver
 from ..utils.providers import normalize_provider_name
 from .indicator_resolution import (
     is_ranking_query,
+    is_exact_match_locked,
     extract_top_n_from_query,
     extract_target_year_from_query,
 )
@@ -145,6 +146,8 @@ def maybe_expand_ranking_country_scope(
 
     query_text = str(query or "").strip()
     if not query_text or not is_ranking_query(query_text):
+        return params
+    if is_exact_match_locked(params):
         return params
     if params.get("_ranking_scope_expanded"):
         return params

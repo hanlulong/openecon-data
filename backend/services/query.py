@@ -522,7 +522,10 @@ class QueryService:
                 worldbank_catalog_codes = self._worldbank_uppercase_catalog_code_tokens(str(query or ""), stripped)
                 code_candidates.extend(worldbank_catalog_codes)
             if explicit_provider == "COINGECKO":
-                coingecko_catalog_slugs = self._coingecko_catalog_slug_tokens(str(query or ""), stripped)
+                coingecko_catalog_slugs = self._coingecko_catalog_slug_tokens(
+                    str(query or ""),
+                    stripped_original,
+                )
                 code_candidates.extend(coingecko_catalog_slugs)
             if len(dict.fromkeys(code_candidates)) == 1:
                 candidate = code_candidates[0]
@@ -765,6 +768,72 @@ class QueryService:
             exact_code = str(metadata.get("code") or token).strip().lower()
             if exact_code:
                 matches.append(exact_code)
+        if matches:
+            return matches
+
+        residual_text = str(stripped_query or "")
+        residual_words = [
+            word
+            for word in re.sub(r"[^a-z0-9]+", " ", residual_text.lower()).split()
+            if word
+        ]
+        slug_request_tokens = {
+            "crypto",
+            "cryptocurrency",
+            "price",
+            "current",
+            "latest",
+            "usd",
+        }
+        asset_words = [
+            word
+            for word in residual_words
+            if word not in slug_request_tokens
+        ]
+        raw_asset_words = [
+            word
+            for word in re.findall(r"[A-Za-z0-9]+", residual_text)
+            if word.lower() not in slug_request_tokens
+        ]
+        # Mechanical slug transport only: require the complete provider-locked
+        # asset phrase to be present with an explicit crypto/price wrapper, and
+        # require that phrase to hyphen-join exactly to a local CoinGecko slug.
+        # This covers generated phrases such as "Aevo Exchange" ->
+        # "aevo-exchange" and "Aga Token" -> "aga-token" without making
+        # "Aevo" imply the exchange slug or allowing partial/generic
+        # "Exchange" lookups.
+        if len(asset_words) >= 2 and len(asset_words) != len(residual_words):
+            phrase = " ".join(asset_words)
+            raw_phrase = " ".join(raw_asset_words).strip()
+            try:
+                exact_title_rows = lookup.exact_name_matches(
+                    list(
+                        dict.fromkeys(
+                            candidate
+                            for candidate in (
+                                raw_phrase,
+                                phrase,
+                                phrase.title(),
+                            )
+                            if candidate
+                        )
+                    ),
+                    provider="CoinGecko",
+                    limit=20,
+                )
+            except Exception:
+                exact_title_rows = []
+            if exact_title_rows:
+                return []
+            candidate_slug = "-".join(asset_words)
+            try:
+                metadata = lookup.get("CoinGecko", candidate_slug)
+            except Exception:
+                metadata = None
+            if metadata:
+                exact_code = str(metadata.get("code") or candidate_slug).strip().lower()
+                if exact_code == candidate_slug:
+                    matches.append(exact_code)
         return matches
 
     def _imf_uppercase_catalog_code_tokens(self, query: str, stripped_query: str = "") -> list[str]:

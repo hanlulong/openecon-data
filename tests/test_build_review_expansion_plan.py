@@ -5,6 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.validation.build_review_expansion_plan import (
+    direct_capacity_addition_caps,
+    greedy_design_additions,
+    projection_meets_targets,
+    upper_bound_projection_metrics,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "validation" / "build_review_expansion_plan.py"
@@ -237,3 +244,94 @@ def test_build_review_expansion_plan_uses_design_lower95_when_available(tmp_path
     direct_targets = report["allocation"]["direct"]["targets"]
     assert direct_targets["FRED"]["additional_target_sessions"] > direct_targets["CoinGecko"]["additional_target_sessions"]
     assert report["allocation"]["by_dataset_type"]["direct"] == report["current"]["additional_effective_n_needed"]
+
+
+def test_direct_capacity_caps_use_answerability_selectable_remaining_rows() -> None:
+    caps, metadata = direct_capacity_addition_caps(
+        capacities={
+            "IMF": {
+                "catalog_rows": 10,
+                "answerability_selectable_rows": 3,
+                "supportability_excluded_rows": 7,
+                "supportability_exclusion_reasons": {
+                    "imf_non_weo_public_surface_unsupported": 7
+                },
+            }
+        },
+        direct_policy={"IMF": {"class": "high_traffic", "floor": 0.98}},
+        current_stats={"IMF": {"n": 2}},
+        design_strata={},
+    )
+
+    assert caps == {"direct_provider:IMF": 1}
+    assert metadata["IMF"]["max_additional_answerability_sessions"] == 1
+    assert metadata["IMF"]["supportability_excluded_rows"] == 7
+
+
+def test_greedy_design_additions_respects_capacity_caps() -> None:
+    states = {
+        "direct_provider:IMF": {
+            "population_weight_share": 0.5,
+            "effective_n": 1,
+            "effective_successes": 1,
+        },
+        "direct_provider:FRED": {
+            "population_weight_share": 0.5,
+            "effective_n": 1,
+            "effective_successes": 1,
+        },
+    }
+
+    additions, projected_lower, _projected_observed, feasible, reason = greedy_design_additions(
+        states,
+        target_lower95=0.99,
+        target_observed_success=0.992,
+        max_additions_by_stratum={"direct_provider:IMF": 0},
+        max_iterations=10,
+    )
+
+    assert additions["direct_provider:IMF"] == 0
+    assert additions["direct_provider:FRED"] == 10
+    assert projected_lower < 0.99
+    assert feasible is False
+    assert reason == "max_iterations_10_exhausted"
+
+
+def test_upper_bound_projection_reports_capped_infeasibility() -> None:
+    states = {
+        "direct_provider:FRED": {
+            "population_weight_share": 0.99,
+            "raw_weight_total": 1000.0,
+            "raw_weight_square_total": 1000.0 * 1000.0,
+            "raw_pass_weight_total": 1000.0,
+            "raw_wrong_confident_weight_total": 0.0,
+            "future_weight_model": "direct_catalog_population",
+            "future_population_count": 100.0,
+        },
+        "ambiguity_family:provider_ambiguity": {
+            "population_weight_share": 0.01,
+            "raw_weight_total": 1.0,
+            "raw_weight_square_total": 1.0,
+            "raw_pass_weight_total": 1.0,
+            "raw_wrong_confident_weight_total": 0.0,
+            "future_weight_model": "template_target_total",
+            "future_current_n": 1,
+        },
+    }
+
+    upper_bound = upper_bound_projection_metrics(
+        states,
+        max_additions_by_stratum={"direct_provider:FRED": 100},
+    )
+
+    assert upper_bound is not None
+    assert upper_bound["lower95"] < 0.99
+    assert upper_bound["uncapped_strata"] == ["ambiguity_family:provider_ambiguity"]
+    assert not projection_meets_targets(
+        lower95=upper_bound["lower95"],
+        observed_success=upper_bound["observed_success"],
+        wrong_confident_answer_rate=upper_bound["wrong_confident_answer_rate"],
+        target_lower95=0.99,
+        target_observed_success=0.992,
+        target_wrong_confident_rate=0.005,
+    )

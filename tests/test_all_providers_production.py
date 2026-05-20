@@ -23,7 +23,7 @@ BLUE = "\033[94m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 
-def test_query(query: str) -> Dict:
+def production_query(query: str) -> Dict:
     """Test a query against production"""
     try:
         response = requests.post(API_URL, json={"query": query}, timeout=TIMEOUT)
@@ -225,7 +225,7 @@ PROVIDER_TESTS = {
     ],
 }
 
-def test_provider(provider_name: str, queries: List[Tuple]) -> Dict:
+def run_provider_queries(provider_name: str, queries: List[Tuple]) -> Dict:
     """Test a provider with its queries"""
     print(f"\n{BOLD}{BLUE}Testing {provider_name}{RESET}")
     print("=" * 60)
@@ -239,7 +239,7 @@ def test_provider(provider_name: str, queries: List[Tuple]) -> Dict:
         
         print(f"[{i:2}/{len(queries)}] {query:40}", end=" ")
         
-        result = test_query(query)
+        result = production_query(query)
         
         # Check for errors
         if "error" in result:
@@ -295,7 +295,7 @@ def main():
     
     # Test each provider
     for provider, queries in PROVIDER_TESTS.items():
-        result = test_provider(provider, queries)
+        result = run_provider_queries(provider, queries)
         all_results.append(result)
     
     # Overall summary

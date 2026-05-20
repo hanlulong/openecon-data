@@ -1,8 +1,10 @@
 """
 Pytest coverage for deterministic provider routing.
 
-These tests validate the legacy ProviderRouter directly without relying on the
-LLM parsing layer.
+These tests validate the legacy ProviderRouter import path without relying on
+the LLM parsing layer. The compatibility surface now delegates final routing
+to the no-shortcut UnifiedRouter: explicit/mechanical routes may override, but
+semantic coverage hints must not force provider changes.
 """
 from __future__ import annotations
 
@@ -46,38 +48,42 @@ def test_explicit_provider_detection(query: str, expected: str | None) -> None:
 
 
 @pytest.mark.parametrize(
-    ("indicators", "expected"),
+    "indicators",
     [
-        (["Case-Shiller"], True),
-        (["federal funds rate"], True),
-        (["PCE"], True),
-        (["nonfarm payrolls"], True),
-        (["S&P 500"], True),
-        (["prime lending rate"], True),
-        (["GDP"], False),
-        (["unemployment"], False),
-        (["inflation"], False),
+        ["Case-Shiller"],
+        ["federal funds rate"],
+        ["PCE"],
+        ["nonfarm payrolls"],
+        ["S&P 500"],
+        ["prime lending rate"],
+        ["GDP"],
+        ["unemployment"],
+        ["inflation"],
     ],
 )
-def test_us_only_indicator_detection(indicators: list[str], expected: bool) -> None:
-    assert ProviderRouter.is_us_only_indicator(indicators) is expected
+def test_legacy_us_only_indicator_hook_is_not_semantic_authority(indicators: list[str]) -> None:
+    assert ProviderRouter.is_us_only_indicator(indicators) is False
 
 
 @pytest.mark.parametrize(
     ("query", "parameters", "expected"),
     [
-        ("Canada GDP", {}, True),
-        ("Ontario unemployment", {}, True),
-        ("Toronto population", {}, True),
-        ("Canadian inflation", {}, True),
-        ("Show me BC housing starts", {}, True),
+        ("Canada GDP", {}, False),
+        ("Ontario unemployment", {}, False),
+        ("Toronto population", {}, False),
+        ("Canadian inflation", {}, False),
+        ("Show me BC housing starts", {}, False),
         ("US GDP", {}, False),
         ("China imports", {}, False),
         ("Get data", {"country": "Canada"}, True),
+        ("Get data", {"country": "CA"}, True),
+        ("Get data", {"countries": ["US", "CA"]}, True),
         ("Get data", {"country": "US"}, False),
     ],
 )
-def test_canadian_query_detection(query: str, parameters: dict[str, str], expected: bool) -> None:
+def test_canadian_query_detection_uses_explicit_parameters_only(
+    query: str, parameters: dict[str, str], expected: bool
+) -> None:
     assert ProviderRouter.is_canadian_query(query, parameters) is expected
 
 
@@ -102,7 +108,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "Show me Case-Shiller index",
-            "FRED",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -112,7 +118,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "Canada GDP",
-            "StatsCan",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -122,7 +128,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "China GDP",
-            "WorldBank",
+            "OECD",
         ),
         (
             ParsedIntent(
@@ -132,7 +138,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "US government debt",
-            "IMF",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -142,7 +148,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "Germany house prices",
-            "BIS",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -152,7 +158,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "US house prices",
-            "BIS",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -162,7 +168,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "US imports",
-            "Comtrade",
+            "WorldBank",
         ),
         (
             ParsedIntent(
@@ -172,7 +178,7 @@ def test_canadian_query_detection(query: str, parameters: dict[str, str], expect
                 clarificationNeeded=False,
             ),
             "Bitcoin price",
-            "CoinGecko",
+            "WorldBank",
         ),
         (
             ParsedIntent(

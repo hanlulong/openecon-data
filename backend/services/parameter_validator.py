@@ -229,6 +229,7 @@ class ParameterValidator:
                 # knows how to fetch the cross-country "all" surface; do not
                 # fail validation before it gets a chance to return data.
                 params['country'] = 'all'
+                params['__worldbank_defaulted_country_all'] = True
                 intent.parameters = params
                 return True, None, {
                     'note': 'Defaulted exact WorldBank title/code query to all countries',

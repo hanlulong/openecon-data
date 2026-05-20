@@ -14,6 +14,8 @@ DEFAULT_OUTPUT = ROOT / 'validation_private' / 'reports' / 'certification-score-
 DEFAULT_FLOOR_POLICY = ROOT / 'validation' / 'manifests' / 'claim_gate_policy-v1.json'
 CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY = 'legacy_catalog_replay'
 CERTIFICATION_TARGET_USER_ANSWERABILITY = 'user_answerability'
+DEFAULT_SNAPSHOT_MANIFEST = ROOT / 'validation' / 'manifests' / 'catalog_snapshot-2026-04-14.json'
+DEFAULT_STRATA_MANIFEST = ROOT / 'validation' / 'manifests' / 'strata_definition-v1.json'
 
 
 def normalize_certification_target(value: object, *, default: str = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY) -> str:
@@ -185,7 +187,7 @@ def design_aware_weighted_confidence(
         row
         for row in records
         if row.get(success_key) is not None
-        and float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) > 0
+        and scoring_weight(row) > 0
     ]
     if not eligible:
         return None
@@ -194,7 +196,7 @@ def design_aware_weighted_confidence(
     for row in eligible:
         grouped[str(row.get('design_stratum') or '<missing>')].append(row)
 
-    total_weight = sum(float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) for row in eligible)
+    total_weight = sum(scoring_weight(row) for row in eligible)
     if total_weight <= 0:
         return None
 
@@ -202,12 +204,12 @@ def design_aware_weighted_confidence(
     lower95 = 0.0
     stratum_reports: dict[str, dict[str, Any]] = {}
     for stratum, rows in sorted(grouped.items()):
-        weights = [float(((row.get('provenance') or {}).get('selection_weight')) or 0.0) for row in rows]
+        weights = [scoring_weight(row) for row in rows]
         stratum_weight = sum(weights)
         if stratum_weight <= 0:
             continue
         pass_weight = sum(
-            float(((row.get('provenance') or {}).get('selection_weight')) or 0.0)
+            scoring_weight(row)
             for row in rows
             if row.get(success_key) is True
         )
@@ -265,6 +267,13 @@ def ratio(numerator: float, denominator: float) -> float | None:
     return numerator / denominator
 
 
+def resolve_manifest_path(raw_path: Any, *, default: Path) -> Path:
+    if raw_path is None:
+        return default
+    path = Path(str(raw_path))
+    return path if path.is_absolute() else ROOT / path
+
+
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -281,6 +290,166 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def normalize_multiround_family_name(value: str) -> str:
+    raw = str(value or '').strip()
+    aliases = {
+        'provider_switch_chains': 'provider_switch_chain',
+        'transform_switch_chains': 'transform_switch_chain',
+        'comtrade_bilateral_chains': 'comtrade_bilateral_chain',
+        'statscan_decomposition_chains': 'statscan_decomposition_chain',
+    }
+    return aliases.get(raw, raw)
+
+
+def cumulative_design_population_totals(floor_policy: dict[str, Any] | None) -> dict[str, float]:
+    """Return frozen design-population totals keyed by score design stratum.
+
+    Incremental review batches carry batch-local inverse-probability weights.
+    Those weights are useful provenance for a single batch, but summing them
+    across several batches can make a repeatedly sampled stratum look like a
+    larger share of the frozen claim population.  The cumulative scorer fixes
+    that by rescaling row weights inside each design stratum so the stratum
+    totals remain anchored to the frozen snapshot/strata manifests.
+    """
+    policy = floor_policy or {}
+    snapshot_path = resolve_manifest_path(policy.get('snapshot_manifest_path'), default=DEFAULT_SNAPSHOT_MANIFEST)
+    strata_path = resolve_manifest_path(policy.get('strata_manifest_path'), default=DEFAULT_STRATA_MANIFEST)
+
+    totals: dict[str, float] = {}
+    snapshot = load_json(snapshot_path)
+    if snapshot:
+        for provider, count in dict(snapshot.get('provider_counts') or {}).items():
+            try:
+                value = float(count)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                totals[f'direct_provider:{provider}'] = value
+
+    strata = load_json(strata_path)
+    if strata:
+        for family, count in dict(((strata.get('multiround_session_plan') or {}).get('family_allocation')) or {}).items():
+            try:
+                value = float(count)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                if str(family).strip() == 'crypto_fx_rapid_switch_chains':
+                    # v1 grouped these two runtime families together; v2 split
+                    # them.  Preserve the historical total without making one
+                    # family absorb the other's design population.
+                    totals['multiround_family:crypto_rotation_chain'] = value / 2
+                    totals['multiround_family:fx_pair_chain'] = value / 2
+                else:
+                    totals[f'multiround_family:{normalize_multiround_family_name(family)}'] = value
+        for family, count in dict(((strata.get('ambiguity_session_plan') or {}).get('family_allocation')) or {}).items():
+            try:
+                value = float(count)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                totals[f'ambiguity_family:{family}'] = value
+    return totals
+
+
+def manifest_snapshot_id(snapshot: dict[str, Any] | None) -> str | None:
+    if not snapshot:
+        return None
+    snapshot_date = str(snapshot.get('snapshot_date') or '').strip()
+    git_sha = str(snapshot.get('git_sha') or '').strip()
+    indicator_count = snapshot.get('indicator_count')
+    if not snapshot_date or not git_sha or indicator_count is None:
+        return None
+    return f'{snapshot_date}:{git_sha[:8]}:{indicator_count}'
+
+
+def raw_selection_weight(row: dict[str, Any]) -> float:
+    return float(((row.get('provenance') or {}).get('selection_weight')) or 0.0)
+
+
+def scoring_weight(row: dict[str, Any]) -> float:
+    value = row.get('cumulative_design_weight')
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+    return raw_selection_weight(row)
+
+
+def apply_cumulative_design_weights(
+    records: list[dict[str, Any]],
+    *,
+    floor_policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach claim-scoring weights that preserve frozen stratum shares.
+
+    The adjustment is outcome-independent: it reads only each row's design
+    stratum and provenance selection weight.  Within a stratum, raw weights are
+    rescaled proportionally so their sum equals the fixed design-population
+    total.  Strata without a manifest-backed total retain their raw weights and
+    are disclosed in the report.
+    """
+    policy = floor_policy or {}
+    snapshot = load_json(resolve_manifest_path(policy.get('snapshot_manifest_path'), default=DEFAULT_SNAPSHOT_MANIFEST))
+    fixed_snapshot_id = manifest_snapshot_id(snapshot)
+    record_snapshot_ids = sorted({
+        str(((row.get('provenance') or {}).get('snapshot_id')) or '').strip()
+        for row in records
+        if str(((row.get('provenance') or {}).get('snapshot_id')) or '').strip()
+    })
+    snapshot_compatible = (
+        not fixed_snapshot_id
+        or not record_snapshot_ids
+        or record_snapshot_ids == [fixed_snapshot_id]
+    )
+    totals = cumulative_design_population_totals(floor_policy) if snapshot_compatible else {}
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in records:
+        if raw_selection_weight(row) > 0:
+            grouped[str(row.get('design_stratum') or '<missing>')].append(row)
+
+    stratum_reports: dict[str, dict[str, Any]] = {}
+    fallback_strata: list[str] = []
+    for stratum, rows in sorted(grouped.items()):
+        raw_total = sum(raw_selection_weight(row) for row in rows)
+        design_total = totals.get(stratum)
+        if design_total is not None and design_total > 0 and raw_total > 0:
+            scale = design_total / raw_total
+            for row in rows:
+                row['cumulative_design_weight'] = raw_selection_weight(row) * scale
+            mode = 'fixed_design_population_rescale'
+            effective_total = design_total
+        else:
+            for row in rows:
+                row['cumulative_design_weight'] = raw_selection_weight(row)
+            mode = 'raw_selection_weight_fallback'
+            effective_total = raw_total
+            fallback_strata.append(stratum)
+        stratum_reports[stratum] = {
+            'n': len(rows),
+            'raw_weight_total': raw_total,
+            'design_population_total': design_total,
+            'scoring_weight_total': sum(scoring_weight(row) for row in rows),
+            'mode': mode,
+            'scale': (effective_total / raw_total) if raw_total > 0 else None,
+        }
+
+    return {
+        'method': 'cumulative_fixed_design_stratum_rescale',
+        'description': (
+            'Batch-local selection weights are rescaled within each design stratum '
+            'to fixed frozen snapshot/strata totals before weighted claim metrics are computed.'
+        ),
+        'outcome_independent': True,
+        'fixed_design_snapshot_id': fixed_snapshot_id,
+        'record_snapshot_ids': record_snapshot_ids,
+        'snapshot_compatible': snapshot_compatible,
+        'strata': stratum_reports,
+        'fallback_strata': fallback_strata,
+    }
 
 
 def label_is_success(label: Any) -> bool | None:
@@ -846,6 +1015,67 @@ def main() -> int:
             if adjudicated_pass:
                 ambiguity_family_adjudicated_pass_counts[family] += 1
 
+    design_weight_report = apply_cumulative_design_weights(
+        session_results,
+        floor_policy=floor_policy,
+    )
+
+    # Recompute all weighted claim metrics from cumulative design weights.
+    # The first pass above builds unweighted outcomes and supportability
+    # counters.  Weighted evidence is deliberately computed only after every
+    # row can be rescaled against the cumulative frozen design frame; otherwise
+    # incremental batches would inflate repeatedly sampled strata.
+    weighted_totals_by_type = defaultdict(float)
+    weighted_pass_totals_by_type = defaultdict(float)
+    adjudicated_weighted_pass_totals_by_type = defaultdict(float)
+    weighted_session_counts_by_type = Counter()
+    direct_weights = []
+    direct_pass_weights = []
+    all_weights = []
+    all_pass_weights = []
+    all_adjudicated_pass_weights = []
+    all_reviewed_weights = []
+    expected_no_clarification_weight_total = 0.0
+    expected_no_clarification_unnecessary_weight = 0.0
+    expected_clarification_weight_total = 0.0
+    expected_clarification_success_weight = 0.0
+    wrong_confident_weight_total = 0.0
+
+    for result_record in session_results:
+        weight = scoring_weight(result_record)
+        if weight <= 0:
+            continue
+        kind = str(result_record.get('dataset_type') or '<missing>')
+        weighted_totals_by_type[kind] += weight
+        weighted_session_counts_by_type[kind] += 1
+        all_weights.append(weight)
+        if result_record.get('provisional_structural_pass'):
+            weighted_pass_totals_by_type[kind] += weight
+            all_pass_weights.append(weight)
+        if result_record.get('adjudicated_pass') is not None:
+            all_reviewed_weights.append(weight)
+        if result_record.get('adjudicated_pass'):
+            adjudicated_weighted_pass_totals_by_type[kind] += weight
+            all_adjudicated_pass_weights.append(weight)
+
+        expected_clarification = result_record.get('expected_clarification')
+        final_failure_class = result_record.get('final_failure_class')
+        if expected_clarification is False:
+            expected_no_clarification_weight_total += weight
+            if final_failure_class == 'unnecessary_clarification':
+                expected_no_clarification_unnecessary_weight += weight
+        elif expected_clarification is True:
+            expected_clarification_weight_total += weight
+            if result_record.get('adjudicated_pass'):
+                expected_clarification_success_weight += weight
+        if result_record.get('adjudicated_pass') is False and final_failure_class == 'wrong_confident_answer':
+            wrong_confident_weight_total += weight
+
+        if kind == 'direct':
+            direct_weights.append(weight)
+            if result_record.get('provisional_structural_pass'):
+                direct_pass_weights.append(weight)
+
     direct_weight_total = sum(direct_weights)
     direct_weight_pass = sum(direct_pass_weights)
     direct_weighted_success = (direct_weight_pass / direct_weight_total) if direct_weight_total else None
@@ -1043,6 +1273,7 @@ def main() -> int:
         'overall_weighted_effective_n': overall_effective_n,
         'overall_weighted_lower95_approx': overall_weighted_lower95,
         'overall_weighted_design_confidence': overall_design_confidence,
+        'cumulative_design_weighting': design_weight_report,
         'overall_adjudication_weight_coverage': overall_adjudication_weight_coverage,
         'overall_weighted_adjudicated_success': overall_adjudicated_weighted_success,
         'overall_weighted_adjudicated_lower95_approx': overall_adjudicated_weighted_lower95,
@@ -1083,8 +1314,13 @@ def main() -> int:
     }
     claim_thresholds = dict((floor_policy or {}).get('claim_thresholds') or {})
     claim_grade_blockers: list[str] = []
+    snapshot_id_values = sorted(snapshot_ids)
     if floor_policy is None:
         claim_grade_blockers.append('floor policy missing')
+    if len(snapshot_id_values) > 1:
+        rendered = ', '.join(snapshot_id_values[:5])
+        suffix = '...' if len(snapshot_id_values) > 5 else ''
+        claim_grade_blockers.append(f'mixed snapshot_ids in scored bundle: {rendered}{suffix}')
     if overall_weight_total <= 0:
         claim_grade_blockers.append('no weighted certification inputs available')
     if overall_adjudication_weight_coverage != 1.0:
@@ -1191,7 +1427,7 @@ def main() -> int:
         'certification_target': required_evaluation_target or (next(iter(counts_by_evaluation_target)) if len(counts_by_evaluation_target) == 1 else None),
         'claim_grade_ready': claim_grade_ready,
         'claim_grade_blockers': claim_grade_blockers,
-        'snapshot_id': snapshot_ids.pop() if len(snapshot_ids) == 1 else None,
+        'snapshot_id': snapshot_id_values[0] if len(snapshot_id_values) == 1 else None,
         'floor_policy_path': str(args.floor_policy.resolve()) if floor_policy is not None else None,
         'floor_policy_sha256': sha256_file(args.floor_policy.resolve()) if floor_policy is not None else None,
         'supportability_inventory_path': str(supportability_inventory_path) if supportability_inventory_path is not None else None,

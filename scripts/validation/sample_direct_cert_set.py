@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validation.common import (
+    answerability_supportability_exclusion_reason,
     apply_selection_supportability_probe_query,
     audit_direct_query_shape,
     CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY,
@@ -135,7 +136,12 @@ def build_record(
     }
 
 
-def _select_quality_screened_records(records: list[dict], count: int) -> list[dict]:
+def _select_quality_screened_records(
+    records: list[dict],
+    count: int,
+    *,
+    include_supportability_probes: bool = False,
+) -> list[dict]:
     def sort_key(record: dict) -> tuple:
         provenance = dict(record.get('provenance') or {})
         origin = dict(record.get('origin') or {})
@@ -177,7 +183,13 @@ def _select_quality_screened_records(records: list[dict], count: int) -> list[di
             str(record.get('id') or ''),
         )
 
-    ranked = sorted(records, key=sort_key)
+    selectable_records = [
+        record
+        for record in records
+        if include_supportability_probes
+        or not answerability_supportability_exclusion_reason(record)
+    ]
+    ranked = sorted(selectable_records, key=sort_key)
     return ranked[:count]
 
 
@@ -271,6 +283,15 @@ def main() -> int:
         default=CERTIFICATION_TARGET_USER_ANSWERABILITY,
         help='Evaluate real user answerability by default; use legacy_catalog_replay only for inventory replay.',
     )
+    parser.add_argument(
+        '--include-supportability-probes',
+        action='store_true',
+        help=(
+            'Allow rows marked with selection_supportability_reason into '
+            'user_answerability output. Intended only for explicit '
+            'supportability-inventory/probe runs, not answerability evidence.'
+        ),
+    )
     args = parser.parse_args()
 
     strata = read_json(args.strata.resolve())
@@ -309,6 +330,11 @@ def main() -> int:
                 dataset_tier=args.dataset_tier,
                 certification_target=args.certification_target,
             )
+            supportability_reason = selection_supportability_reason_for_row(record)
+            if supportability_reason:
+                record['provenance']['selection_supportability_reason'] = supportability_reason
+                if args.include_supportability_probes:
+                    apply_selection_supportability_probe_query(record)
             quality = audit_direct_query_shape(record)
             record['provenance']['query_quality_risk'] = quality['risk_level']
             record['provenance']['query_quality_reasons'] = quality['reasons']
@@ -320,19 +346,33 @@ def main() -> int:
             selection_quality_record['gold']['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
             selection_quality = audit_direct_query_shape(selection_quality_record)
             record['provenance']['selection_quality_reasons'] = selection_quality['reasons']
-            supportability_reason = selection_supportability_reason_for_row(record)
-            if supportability_reason:
-                record['provenance']['selection_supportability_reason'] = supportability_reason
-                apply_selection_supportability_probe_query(record)
-                quality = audit_direct_query_shape(record)
-                record['provenance']['query_quality_risk'] = quality['risk_level']
-                record['provenance']['query_quality_reasons'] = quality['reasons']
             anchor_reason = _user_answerability_sampling_anchor_reason(row)
             if anchor_reason:
                 record['provenance']['user_answerability_sampling_anchor'] = anchor_reason
             candidate_records.append(record)
             seq += 1
-        rows_out.extend(_select_quality_screened_records(candidate_records, scaled_count))
+        selected_records = _select_quality_screened_records(
+            candidate_records,
+            scaled_count,
+            include_supportability_probes=args.include_supportability_probes,
+        )
+        if (
+            args.certification_target == CERTIFICATION_TARGET_USER_ANSWERABILITY
+            and not args.include_supportability_probes
+            and len(selected_records) < scaled_count
+        ):
+            excluded_count = sum(
+                1
+                for record in candidate_records
+                if answerability_supportability_exclusion_reason(record)
+            )
+            raise RuntimeError(
+                'user_answerability direct sampler could not fill '
+                f'{provider} planned count {scaled_count} without selecting '
+                f'{excluded_count} supportability-inventory candidates; '
+                'split/supportability-inventory replacement is required'
+            )
+        rows_out.extend(selected_records)
 
     write_jsonl(args.output.resolve(), rows_out)
     print(json.dumps({

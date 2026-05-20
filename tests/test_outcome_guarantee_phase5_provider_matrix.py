@@ -146,13 +146,14 @@ def test_phase5_imf_dispatch_prefers_provider_request_contract() -> None:
     intent = ParsedIntent(
         apiProvider="IMF",
         indicators=["real GDP growth"],
-        parameters=dict(plan.params),
+        parameters={**dict(plan.params), "__semantic_authority": "exact_user_input"},
         clarificationNeeded=False,
         originalQuery="US real GDP growth from IMF",
         queryType="data_fetch",
     )
+    plan.params["__semantic_authority"] = "exact_user_input"
     result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
-    assert svc.imf_provider.calls[0]["country"] == "FR"
+    assert svc.imf_provider.calls[0]["countries"] == ["FR"]
     assert result == [{"provider": "IMF", **svc.imf_provider.calls[0]}]
 
 
@@ -173,6 +174,7 @@ def test_phase5_oecd_dispatch_prefers_provider_request_contract() -> None:
         originalQuery="US unemployment from OECD",
         queryType="data_fetch",
     )
+    plan.params["__semantic_authority"] = "exact_user_input"
     result = asyncio.run(fetch_from_provider_dispatch(svc, intent, plan))
     assert svc.oecd_provider.calls[0]["country"] == "OECD"
     assert result == [{"provider": "OECD", **svc.oecd_provider.calls[0]}]

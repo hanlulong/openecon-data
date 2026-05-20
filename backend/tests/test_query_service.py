@@ -17,6 +17,7 @@ from backend.services.conversation import conversation_manager
 from backend.services.conversation_state_v2 import AnswerSetMember, ConversationState, FollowUpDelta
 from backend.services.query_pipeline import ParseRouteResult, ValidationResult
 from backend.services.query import QueryService
+from backend.services.query_complexity import QueryComplexityAnalyzer
 from backend.services.indicator_selector import SelectionResult
 from backend.providers.fred import FREDProvider
 from backend.services.semantic_match_judge import ExecutionResultJudgment
@@ -181,6 +182,30 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response.data[0].metadata.source, "FRED")
         self.assertEqual(response.data[0].metadata.country, "Canada")
         self.assertNotEqual(response.data[0].metadata.seriesId, "GDP")
+
+    def test_process_query_fred_exact_provider_title_with_ranking_word_does_not_add_g20_scope(self) -> None:
+        exact_series = sample_series_with(
+            indicator="ICE BofA CCC & Lower US High Yield Index Semi-Annual Yield to Worst",
+            country="US",
+            series_id="BAMLH0A3HYCSYTW",
+            unit="Percent",
+        )
+
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service.fred_provider, "fetch_series", return_value=exact_series) as fetch_mock:
+            response = run(self.service.process_query(
+                "ICE BofA CCC & Lower US High Yield Index Semi-Annual Yield to Worst from FRED"
+            ))
+
+        self.assertIsNone(response.error)
+        self.assertTrue(response.data)
+        self.assertEqual(response.data[0].metadata.seriesId, "BAMLH0A3HYCSYTW")
+        fetch_params = fetch_mock.call_args.args[0]
+        self.assertEqual(fetch_params["indicator"], "BAMLH0A3HYCSYTW")
+        self.assertTrue(fetch_params["__exact_indicator_title_match"])
+        self.assertNotIn("countries", fetch_params)
+        self.assertNotIn("_ranking_scope_expanded", fetch_params)
 
     def test_build_cache_params_adds_version_without_mutating_input(self) -> None:
         raw_params = {"indicator": "NE.IMP.GNFS.ZS", "countries": ["China", "US"]}
@@ -750,6 +775,68 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "draiftking")
         self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "draiftking")
         self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+
+    def test_explicit_provider_code_intent_slugifies_full_coingecko_asset_phrase(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "CoinGecko" and code == "aevo-exchange":
+                    return {"provider": provider, "code": code, "name": "Aevo"}
+                if provider == "CoinGecko" and code == "aga-token":
+                    return {"provider": provider, "code": code, "name": "AGA"}
+                return None
+
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                return []
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Aevo Exchange cryptocurrency price from CoinGecko"
+            )
+            token_suffix_intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Aga Token cryptocurrency price from CoinGecko"
+            )
+            unknown_intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Foo Exchange cryptocurrency price from CoinGecko"
+            )
+            generic_intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Exchange cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "aevo-exchange")
+        self.assertEqual(intent.parameters.get("__semantic_indicator_label"), "aevo-exchange")
+        self.assertTrue(intent.parameters.get("__exact_provider_code_match"))
+        self.assertIsNotNone(token_suffix_intent)
+        assert token_suffix_intent is not None
+        self.assertEqual(token_suffix_intent.apiProvider, "COINGECKO")
+        self.assertEqual(token_suffix_intent.parameters.get("indicator"), "aga-token")
+        self.assertTrue(token_suffix_intent.parameters.get("__exact_provider_code_match"))
+        self.assertIsNone(unknown_intent)
+        self.assertIsNone(generic_intent)
+
+    def test_explicit_provider_code_intent_does_not_override_coingecko_exact_title_duplicate(self) -> None:
+        class _Lookup:
+            def get(self, provider, code):
+                if provider == "CoinGecko" and code == "swarm-network":
+                    return {"provider": provider, "code": code, "name": "Swarm Network"}
+                return None
+
+            def exact_name_matches(self, search_inputs, provider=None, limit=20):
+                if provider == "CoinGecko" and "Swarm Network" in search_inputs:
+                    return [
+                        {"provider": provider, "code": "swarm", "name": "Swarm Network"},
+                        {"provider": provider, "code": "swarm-network", "name": "Swarm Network"},
+                    ]
+                return []
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_Lookup()):
+            intent = self.service._build_explicit_provider_code_intent(  # pylint: disable=protected-access
+                "Swarm Network cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNone(intent)
 
     def test_explicit_provider_code_intent_keeps_fred_prefixed_coingecko_slug_locked(self) -> None:
         class _Lookup:
@@ -2461,6 +2548,94 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(intent.parameters.get("indicator"), "libfi")
         self.assertEqual(intent.parameters.get("coinIds"), ["libfi"])
         self.assertEqual(intent.indicators, ["Liberty Finance"])
+
+    def test_build_exact_indicator_title_intent_handles_duplicate_coingecko_asset_name_with_catalog_order(self) -> None:
+        lookup_results = [
+            {
+                "code": "swarm",
+                "provider": "CoinGecko",
+                "name": "Swarm Network",
+                "unit": "USD",
+                "raw_metadata": {"id": "swarm", "symbol": "swm", "name": "Swarm Network"},
+            },
+            {
+                "code": "swarm-network",
+                "provider": "CoinGecko",
+                "name": "Swarm Network",
+                "unit": "USD",
+                "raw_metadata": {"id": "swarm-network", "symbol": "truth", "name": "Swarm Network"},
+            },
+        ]
+
+        with patch(
+            "backend.services.indicator_database.get_indicator_lookup",
+            return_value=Mock(
+                exact_name_matches=Mock(return_value=lookup_results),
+                search=Mock(return_value=[]),
+            ),
+        ):
+            intent = self.service._build_exact_indicator_title_intent(  # pylint: disable=protected-access
+                "Swarm Network cryptocurrency price from CoinGecko"
+            )
+
+        self.assertIsNotNone(intent)
+        assert intent is not None
+        self.assertEqual(intent.apiProvider, "COINGECKO")
+        self.assertEqual(intent.parameters.get("indicator"), "swarm")
+        self.assertEqual(intent.parameters.get("coinIds"), ["swarm", "swarm-network"])
+        self.assertTrue(intent.parameters.get("__exact_indicator_title_match"))
+        self.assertEqual(intent.parameters.get("__decision_source"), "exact_title_multi_asset")
+
+    def test_process_query_coingecko_duplicate_exact_asset_name_fetches_all_matches_before_llm_confidence(self) -> None:
+        lookup_results = [
+            {
+                "code": "swarm",
+                "provider": "CoinGecko",
+                "name": "Swarm Network",
+                "unit": "USD",
+            },
+            {
+                "code": "swarm-network",
+                "provider": "CoinGecko",
+                "name": "Swarm Network",
+                "unit": "USD",
+            },
+        ]
+        lookup = Mock(
+            exact_name_matches=Mock(return_value=lookup_results),
+            search=Mock(return_value=[]),
+        )
+        swarm_series = sample_series_with(series_id="swarm", indicator="Swarm Network", source="CoinGecko")
+        swarm_network_series = sample_series_with(series_id="swarm-network", indicator="Swarm Network", source="CoinGecko")
+
+        with patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
+             patch.object(self.service.pipeline, "parse_and_route", new_callable=AsyncMock, side_effect=AssertionError("LLM parse should be skipped")), \
+             patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(
+                 self.service.coingecko_provider,
+                 "get_simple_price",
+                 return_value=[swarm_series, swarm_network_series],
+             ) as simple_mock:
+            response = run(self.service.process_query("Swarm Network cryptocurrency price from CoinGecko"))
+
+        self.assertFalse(response.clarificationNeeded)
+        self.assertEqual(len(response.data or []), 2)
+        self.assertEqual(simple_mock.call_args.kwargs.get("coin_ids"), ["swarm", "swarm-network"])
+
+    def test_eurostat_not_disseminated_message_is_not_country_not_recognized(self) -> None:
+        message = QueryComplexityAnalyzer.format_error_message(
+            (
+                "fail-closed supportability block: "
+                "reason=eurostat_dataset_not_disseminated; "
+                "dataset=lfso_19fxwt05; country=ALL_AVAILABLE"
+            ),
+            "Employed persons by level of difficulty from Eurostat",
+            ParsedIntent(apiProvider="Eurostat", indicators=["LFSO_19FXWT05"], parameters={}, clarificationNeeded=False),
+        )
+
+        self.assertIn("Eurostat Dataset Not Available", message)
+        self.assertNotIn("Country/Region Not Recognized", message)
 
     def test_build_exact_indicator_title_intent_handles_three_letter_coingecko_asset(self) -> None:
         lookup_results = [
@@ -8778,6 +8953,23 @@ class QueryServiceTests(unittest.TestCase):
         self.assertIn("US", countries)
         self.assertIn("CN", countries)
         self.assertNotIn("country", expanded)
+
+    def test_ranking_scope_does_not_expand_exact_provider_title_text(self) -> None:
+        params = {
+            "indicator": "BAMLH0A3HYCSYTW",
+            "__exact_indicator_title_match": True,
+            "__semantic_provider_locked": True,
+        }
+
+        kept = self.service._maybe_expand_ranking_country_scope(  # pylint: disable=protected-access
+            query="ICE BofA CCC & Lower US High Yield Index Semi-Annual Yield to Worst from FRED",
+            provider="FRED",
+            params=params,
+        )
+
+        self.assertEqual(kept, params)
+        self.assertNotIn("countries", kept)
+        self.assertNotIn("_ranking_scope_expanded", kept)
 
     def test_ranking_scope_keeps_explicit_single_country(self) -> None:
         kept = self.service._maybe_expand_ranking_country_scope(  # pylint: disable=protected-access

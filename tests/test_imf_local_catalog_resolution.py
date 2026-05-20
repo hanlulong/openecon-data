@@ -313,6 +313,110 @@ def test_imf_resolve_indicator_accepts_exact_short_datamapper_category() -> None
     assert "digital infrastructure" in label.lower()
 
 
+def test_imf_resolve_indicator_accepts_exact_lowercase_datamapper_code() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "d":
+                return {
+                    "code": "d",
+                    "category": "FPP",
+                    "name": "Gross public debt, percent of GDP",
+                }
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        code, label = run(provider._resolve_indicator_code("d"))  # pylint: disable=protected-access
+
+    assert code == "d"
+    assert label is not None
+    assert "gross public debt" in label.lower()
+
+
+def test_imf_fetch_uses_exact_lowercase_datamapper_code() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+    calls: list[str] = []
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "d":
+                return {
+                    "code": "d",
+                    "category": "FPP",
+                    "name": "Gross public debt, percent of GDP",
+                }
+            return None
+
+    class _RecordingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, **_kwargs):
+            calls.append(str(url))
+            return MockAsyncResponse(
+                {
+                    "values": {
+                        "d": {
+                            "CHN": {"2020": 70.1, "2021": 71.2}
+                        }
+                    }
+                }
+            )
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()), patch(
+        "backend.providers.imf.get_http_client",
+        return_value=_RecordingClient(),
+    ):
+        result = run(provider.fetch_batch_indicator("d", ["China"]))
+
+    assert calls == ["https://www.imf.org/external/datamapper/api/v1/d"]
+    assert len(result) == 1
+    assert result[0].metadata.seriesId == "d"
+    assert result[0].data[0].value == 70.1
+
+
+def test_imf_resolve_indicator_rejects_fake_lowercase_short_code_without_catalog() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        try:
+            run(provider._resolve_indicator_code("x"))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected fake one-letter IMF code to fail closed")
+
+
+def test_imf_resolve_indicator_rejects_lowercase_non_executable_catalog_code() -> None:
+    provider = IMFProvider(metadata_search_service=None)
+
+    class _ExactLookup:
+        def get(self, provider_name: str, code: str):
+            if provider_name == "IMF" and code == "q":
+                return {
+                    "code": "q",
+                    "category": "INDICATOR",
+                    "name": "Unsupported short catalog descriptor",
+                }
+            return None
+
+    with patch("backend.services.indicator_database.get_indicator_lookup", return_value=_ExactLookup()):
+        try:
+            run(provider._resolve_indicator_code("q"))  # pylint: disable=protected-access
+        except DataNotAvailableError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("Expected non-executable one-letter IMF catalog code to fail closed")
+
+
 def test_imf_resolve_indicator_does_not_execute_dataflow_descriptor_as_series() -> None:
     provider = IMFProvider(metadata_search_service=None)
 

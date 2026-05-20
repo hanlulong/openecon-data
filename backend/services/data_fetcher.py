@@ -374,7 +374,9 @@ def _coingecko_has_historical_time_scope(query: str) -> bool:
         flags=re.IGNORECASE,
     ):
         return True
-    return bool(_TIME_SCOPE_YEAR_RE.search(snapshot_neutral_text))
+    if _TIME_SCOPE_SINGLE_YEAR_RE.search(snapshot_neutral_text):
+        return True
+    return bool(_TIME_SCOPE_YEAR_RANGE_RE.search(snapshot_neutral_text))
 
 
 def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
@@ -1010,9 +1012,9 @@ async def fetch_from_coingecko(
     elif any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
         metric = "market_cap"
     elif re.search(
-        r"(?<![a-z0-9])(?:24h|24-hour|24 hour)\s+change(?![a-z0-9])"
+        r"(?<![a-z0-9])(?:24h|24-hour|24 hour)\s+(?:price\s+)?change(?![a-z0-9])"
         r"|(?<![a-z0-9])price\s+change(?![a-z0-9])"
-        r"|(?<![a-z0-9])change(?![a-z0-9])",
+        r"|(?<![a-z0-9])(?:percent|percentage|%)\s+change(?![a-z0-9])",
         metric_text,
     ):
         metric = "24h_change"
@@ -1418,6 +1420,7 @@ async def fetch_from_provider_dispatch(
                     start_date=params.get("startDate"),
                     end_date=params.get("endDate"),
                     _allow_semantic_alternatives=allow_semantic_alternatives,
+                    _defaulted_all_country=bool(params.get("__worldbank_defaulted_country_all")),
                 )
                 all_data.extend(data if isinstance(data, list) else [data])
             return all_data
@@ -1430,6 +1433,7 @@ async def fetch_from_provider_dispatch(
                 start_date=params.get("startDate"),
                 end_date=params.get("endDate"),
                 _allow_semantic_alternatives=allow_semantic_alternatives,
+                _defaulted_all_country=bool(params.get("__worldbank_defaulted_country_all")),
             )
             if isinstance(wb_result, list):
                 logger.info(f"WorldBank returned: {len(wb_result)} series, data_pts={[len(r.data) for r in wb_result if r]}")

@@ -17,6 +17,24 @@ except Exception:  # pragma: no cover - fallback for lightweight script usage
     CountryResolver = None
 
 try:
+    from backend.utils.bis_supportability import bis_catalog_sampler_supportability_reason
+except Exception:  # pragma: no cover - fallback for lightweight script usage
+    def bis_catalog_sampler_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
+        return None
+
+try:
+    from backend.utils.coingecko_supportability import coingecko_catalog_sampler_supportability_reason
+except Exception:  # pragma: no cover - fallback for lightweight script usage
+    def coingecko_catalog_sampler_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
+        return None
+
+try:
+    from backend.utils.oecd_supportability import oecd_catalog_sampler_supportability_reason
+except Exception:  # pragma: no cover - fallback for lightweight script usage
+    def oecd_catalog_sampler_supportability_reason(*_args: Any, **_kwargs: Any) -> str | None:
+        return None
+
+try:
     from backend.utils.imf_supportability import (
         imf_catalog_sampler_supportability_reason,
         imf_catalog_surface_supportability_reason,
@@ -1184,13 +1202,37 @@ def selection_supportability_reason_for_row(record: dict[str, Any]) -> str | Non
         or origin.get('source_provider')
         or ''
     ).strip().upper()
-    if provider != 'IMF':
+    code = str(origin.get('source_indicator_code') or record.get('code') or '')
+    name = str(origin.get('name') or record.get('name') or '')
+    category = str(origin.get('category') or record.get('category') or '')
+    raw_metadata = origin.get('raw_metadata') or record.get('raw_metadata')
+    if provider == 'IMF':
+        return imf_catalog_sampler_supportability_reason(code, name, category)
+    if provider == 'BIS':
+        return bis_catalog_sampler_supportability_reason(code, name, category)
+    if provider == 'COINGECKO':
+        return coingecko_catalog_sampler_supportability_reason(code, name, category, raw_metadata)
+    if provider == 'OECD':
+        return oecd_catalog_sampler_supportability_reason(code, name, category, raw_metadata)
+    return None
+
+
+def answerability_supportability_exclusion_reason(record: dict[str, Any]) -> str | None:
+    """Return the supportability reason that excludes a row from answerability evidence.
+
+    ``selection_supportability_reason`` marks provider-native inventory that is
+    useful for supportability diagnostics, not ordinary user-answerability
+    lower-bound evidence.  The exclusion is intentionally narrow: it applies
+    only to real user-answerability rows that already carry provider/catalog
+    supportability provenance.  General selection quality reasons such as
+    ``imf_low_viability_family`` remain ranking signals rather than hard
+    exclusions.
+    """
+    if certification_target_for_row(record) != CERTIFICATION_TARGET_USER_ANSWERABILITY:
         return None
-    return imf_catalog_sampler_supportability_reason(
-        str(origin.get('source_indicator_code') or record.get('code') or ''),
-        str(origin.get('name') or record.get('name') or ''),
-        str(origin.get('category') or record.get('category') or ''),
-    )
+    provenance = record.get('provenance') if isinstance(record.get('provenance'), dict) else {}
+    reason = str(provenance.get('selection_supportability_reason') or '').strip()
+    return reason or None
 
 
 def apply_selection_supportability_probe_query(record: dict[str, Any]) -> dict[str, Any]:
@@ -1290,19 +1332,147 @@ def natural_phrase_from_name(name: str, description: str = '') -> str:
     return candidate
 
 
+_COINGECKO_GENERIC_ASSET_LABELS = {
+    'asset',
+    'coin',
+    'crypto',
+    'cryptocurrency',
+    'token',
+}
+
+
+def _coingecko_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    origin = dict(row.get('origin') or {})
+    raw_metadata = row.get('raw_metadata') or origin.get('raw_metadata')
+    return _raw_metadata_dict(raw_metadata)
+
+
+def _raw_metadata_dict(raw_metadata: Any) -> dict[str, Any]:
+    if isinstance(raw_metadata, dict):
+        return raw_metadata
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _coingecko_alias_candidate(value: Any) -> str:
+    alias = str(value or '').strip()
+    if not alias:
+        return ''
+    if alias.lower() in _COINGECKO_GENERIC_ASSET_LABELS:
+        return ''
+    if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{1,20}', alias):
+        return alias
+    return ''
+
+
+def _coingecko_provider_native_symbol(row: dict[str, Any]) -> str:
+    origin = dict(row.get('origin') or {})
+    metadata = _coingecko_metadata(row)
+    candidates: list[Any] = []
+    synonyms = row.get('synonyms') or origin.get('synonyms')
+    if isinstance(synonyms, str):
+        candidates.extend(re.split(r'[,;|\s]+', synonyms))
+    elif isinstance(synonyms, list):
+        candidates.extend(synonyms)
+    candidates.append(metadata.get('symbol'))
+    for candidate in candidates:
+        alias = _coingecko_alias_candidate(candidate)
+        if alias:
+            return alias
+    return ''
+
+
+def _coingecko_has_informative_ascii_token(value: str) -> bool:
+    for token in re.findall(r'[A-Za-z0-9]+', str(value or '')):
+        if len(token) >= 2:
+            return True
+    return False
+
+
+def _coingecko_humanized_slug_label(code: str) -> str:
+    if not code:
+        return ''
+    slug = re.sub(r'-\d+$', '', code)
+    human = humanize_slug(slug)
+    if not human:
+        return ''
+    human_lower = human.lower().strip()
+    slug_tokens = [token for token in re.split(r'[-_]+', code) if token]
+    nontrailing_numeric_tokens = [
+        token
+        for idx, token in enumerate(slug_tokens)
+        if token.isdigit() and idx != len(slug_tokens) - 1
+    ]
+    if human_lower in _COINGECKO_GENERIC_ASSET_LABELS or nontrailing_numeric_tokens:
+        return code
+    return human.title()
+
+
+def _coingecko_short_asset_label_prefers_slug(name: str, code: str) -> bool:
+    """Return True when a short CoinGecko label needs exact slug transport.
+
+    CoinGecko catalog names are sometimes ticker-like labels such as ``3A`` or
+    ``AAG`` while the executable provider id is a longer slug.  Humanizing that
+    slug invents asset-title words that are not in the provider name/symbol and
+    can make the runtime miss the exact provider asset.  Keep this mechanical:
+    only use the provider-native slug/code already present in catalog metadata.
+    """
+    normalized_code = str(code or '').strip()
+    if not normalized_code or '-' not in normalized_code:
+        return False
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{1,127}', normalized_code):
+        return False
+
+    tokens = re.findall(r'[A-Za-z0-9]+', str(name or ''))
+    compact = ''.join(tokens)
+    if not compact:
+        return False
+    if len(compact) <= 4:
+        return True
+    if len(tokens) == 1 and compact.upper() == compact and len(compact) <= 8:
+        return True
+    code_tokens = [token for token in re.split(r'[-_]+', normalized_code.lower()) if token]
+    name_tokens = [token.lower() for token in tokens]
+    if (
+        len(code_tokens) > len(name_tokens)
+        and name_tokens
+        and code_tokens[: len(name_tokens)] == name_tokens
+    ):
+        # CoinGecko slugs sometimes append a provider-native namespace or
+        # product qualifier to an otherwise short display name, e.g.
+        # ``Aevo`` -> ``aevo-exchange``.  A humanized slug label ("Aevo
+        # Exchange") is not the provider title and can be interpreted as a
+        # broader/unknown phrase.  Preserve the exact provider-native slug
+        # mechanically instead of inventing display-title words.
+        return True
+    return False
+
+
 def derive_coin_query_name(row: dict[str, Any]) -> str:
     origin = dict(row.get('origin') or {})
     name = str(row.get('name') or origin.get('name') or '').strip()
     code = str(row.get('code') or origin.get('source_indicator_code') or '').strip()
+    if not _coingecko_has_informative_ascii_token(name):
+        symbol = _coingecko_provider_native_symbol(row)
+        if symbol:
+            return symbol
+        if code:
+            return code
+    if _coingecko_short_asset_label_prefers_slug(name, code):
+        return code
     if code and '-' in code:
         if len(name.split()) >= 4 or len(name) >= 24 or any(symbol in name for symbol in {'€', '$', '£'}):
             return code
     if len(name) > 4 and not re.fullmatch(r'[A-Z0-9]{1,5}', name):
         return name
-    slug = re.sub(r'-\d+$', '', code)
-    human = humanize_slug(slug)
-    if human:
-        return human.title()
+    slug_label = _coingecko_humanized_slug_label(code)
+    if slug_label:
+        return slug_label
     return name.title() if name else code.title()
 
 
@@ -1483,6 +1653,31 @@ def _has_short_acronym_comma_suffix(value: str) -> bool:
     )
 
 
+def _fred_average_price_title_needs_exact_title(value: str) -> bool:
+    """Return true for FRED average-price titles whose scope is in the title.
+
+    FRED/BLS average-price series often differ only by late provider-native
+    geography qualifiers such as ``in the Northeast Census Region - Urban`` or
+    ``in U.S. City Average``.  Top-token compression drops those qualifiers and
+    can produce a broad prompt that exact-title recovery cannot lock to the
+    intended public series.  This is a title-shape preservation rule, not a
+    commodity-to-code mapping.
+    """
+
+    title = re.sub(r'\s+', ' ', str(value or '')).strip()
+    if not re.match(r'^Average Price:', title, flags=re.IGNORECASE):
+        return False
+    return bool(
+        re.search(
+            r'\bin\s+(?:the\s+)?(?:Northeast|Midwest|South|West)\s+Census\s+Region\b',
+            title,
+            flags=re.IGNORECASE,
+        )
+        or re.search(r'\bin\s+U\.S\.\s+City\s+Average\b', title, flags=re.IGNORECASE)
+        or re.search(r'\bCBSA\b', title, flags=re.IGNORECASE)
+    )
+
+
 def _title_token_coverage(origin_title: str, query: str) -> float:
     origin_tokens = [
         token
@@ -1543,6 +1738,70 @@ def _row_frequency(row: dict[str, Any], origin: dict[str, Any]) -> str:
         or str(origin.get('frequency') or '').strip()
         or _metadata_frequency_from_raw(origin.get('raw_metadata') or row.get('raw_metadata'))
     )
+
+
+def _query_unit_text(unit: str) -> str:
+    """Return unit text suitable for a real-user prompt."""
+    value = re.sub(r'\s+', ' ', str(unit or '').replace('%', 'percent')).strip(' ,;:')
+    return value
+
+
+def _raw_metadata_source(raw_metadata: Any) -> str:
+    parsed = _raw_metadata_dict(raw_metadata)
+    source = parsed.get('source') or ''
+    if isinstance(source, dict):
+        source = source.get('value') or ''
+    return re.sub(r'\s+', ' ', str(source or '')).strip(' ,;:')
+
+
+def _imf_generic_datamapper_prompt_needs_context(
+    *,
+    name: str,
+    phrase: str,
+    category: str,
+) -> bool:
+    category_upper = str(category or '').strip().upper()
+    if not category_upper or category_upper in {'INDICATOR', 'DATAFLOW'}:
+        return False
+    tokens = informative_tokens(phrase or name)
+    if len(tokens) <= 2:
+        return True
+    return bool(re.fullmatch(r'[A-Z0-9_ -]{2,12}', str(name or '').strip()))
+
+
+def _append_imf_generic_datamapper_context(
+    phrase: str,
+    *,
+    row: dict[str, Any],
+    origin: dict[str, Any],
+    name: str,
+    category: str,
+) -> str:
+    """Disambiguate generic IMF DataMapper titles with row-native metadata.
+
+    This is validation query synthesis only: it copies public catalog unit and
+    source text into an otherwise too-short generated user prompt.  It never
+    appends provider codes or hand-authored semantic expansions.
+    """
+    if not _imf_generic_datamapper_prompt_needs_context(name=name, phrase=phrase, category=category):
+        return phrase
+
+    pieces = [phrase]
+    current_tokens = set(informative_tokens(phrase))
+    unit = _query_unit_text(_row_unit(row, origin))
+    if unit:
+        unit_tokens = set(informative_tokens(unit))
+        if unit_tokens and not unit_tokens <= current_tokens:
+            pieces.append(f"in {unit}")
+            current_tokens.update(unit_tokens)
+
+    source = _raw_metadata_source(origin.get('raw_metadata') or row.get('raw_metadata'))
+    if source:
+        source_tokens = set(informative_tokens(source))
+        if source_tokens and not source_tokens <= current_tokens:
+            pieces.append(source)
+
+    return re.sub(r'\s+', ' ', ' '.join(piece for piece in pieces if piece)).strip()
 
 
 @lru_cache(maxsize=32)
@@ -1716,12 +1975,12 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
     category = str(row.get('category') or origin.get('category') or '')
     choice = _default_user_answerability_country(provider, provider_upper, category, name)
     inferred_country = None
-    if provider_upper not in {'EXCHANGERATE', 'COINGECKO'}:
+    if provider_upper not in {'EXCHANGERATE', 'COINGECKO', 'COMTRADE'}:
         inferred_country = (
             detect_single_country_from_text(name)
             or detect_single_country_from_text(str(row.get('coverage') or origin.get('coverage') or ''))
         )
-        if not inferred_country:
+        if not inferred_country and provider_upper != 'FRED':
             description_country = detect_single_country_from_text(description)
             if description_country and description_country.lower() not in {'world', 'global', 'worldwide'}:
                 inferred_country = description_country
@@ -1755,7 +2014,10 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
     ) or (
         provider_upper == 'FRED'
         and bool(name)
-        and _has_short_acronym_comma_suffix(name)
+        and (
+            _has_short_acronym_comma_suffix(name)
+            or _fred_average_price_title_needs_exact_title(name)
+        )
     )
     if preserve_provider_title and name:
         # Some providers expose many similarly named public tables/datasets that
@@ -1799,13 +2061,17 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
             origin=origin,
         ),
     )
+    if provider_upper == 'IMF':
+        phrase = _append_imf_generic_datamapper_context(
+            phrase,
+            row=row,
+            origin=origin,
+            name=name,
+            category=category,
+        )
 
     if provider_upper == 'COINGECKO':
-        asset = name.strip()
-        if not asset or re.fullmatch(r'[A-Z0-9]{1,5}', asset):
-            slug = re.sub(r'-\d+$', '', code)
-            asset = humanize_slug(slug).title() if humanize_slug(slug) else (asset or code)
-        return f"{asset} cryptocurrency price from CoinGecko".strip()
+        return f"{derive_coin_query_name(row)} cryptocurrency price from CoinGecko".strip()
     if provider_upper == 'EXCHANGERATE':
         target_code = str(row.get('code') or origin.get('source_indicator_code') or '').strip().upper()
         if re.fullmatch(r'[A-Z]{3}', target_code) and target_code != 'USD':
@@ -1859,6 +2125,8 @@ def synthesize_user_answerability_query_for_row(row: dict[str, Any]) -> str:
         # default slice may be unpopulated for long-tail tables.  Explicit or
         # intrinsic country mentions are still preserved above.
         return f"{phrase} from {provider_label}".strip()
+    if provider_upper == 'FRED' and _fred_average_price_title_needs_exact_title(name):
+        return f"{phrase} from {provider_label}".strip()
 
     prefix = '' if query_mentions_country(phrase) else f"{choice} "
     return f"{prefix}{phrase} from {provider_label}".strip()
@@ -1888,7 +2156,7 @@ def synthesize_direct_query_for_row(row: dict[str, Any], *, certification_target
             detect_single_country_from_text(name)
             or detect_single_country_from_text(str(row.get('coverage') or ''))
         )
-        if not inferred_country:
+        if not inferred_country and provider_upper != 'FRED':
             description_country = detect_single_country_from_text(description)
             if description_country and description_country.lower() not in {'world', 'global', 'worldwide'}:
                 inferred_country = description_country

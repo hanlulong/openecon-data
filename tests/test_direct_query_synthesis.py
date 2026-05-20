@@ -37,6 +37,103 @@ def test_default_query_for_row_naturalizes_imf_indicator_names():
     assert "isic rev" not in query.lower()
 
 
+def test_user_answerability_query_enriches_generic_imf_debt_title_without_code():
+    row = {
+        "provider": "IMF",
+        "provider_stratum": "IMF",
+        "code": "DEBT1",
+        "name": "DEBT",
+        "category": "DEBT",
+        "unit": "% of GDP",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "DEBT1",
+            "name": "DEBT",
+            "category": "DEBT",
+            "unit": "% of GDP",
+            "raw_metadata": json.dumps(
+                {
+                    "label": "DEBT",
+                    "description": "DEBT",
+                    "source": "Fiscal Affairs Departmental Data",
+                    "unit": "% of GDP",
+                    "dataset": "DEBT",
+                }
+            ),
+        },
+        "provenance": {"certification_target": CERTIFICATION_TARGET_USER_ANSWERABILITY},
+    }
+
+    query = default_query_for_row(row, certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY)
+
+    assert query == "India DEBT in percent of GDP Fiscal Affairs Departmental Data from IMF"
+    assert "DEBT1" not in query
+
+
+def test_user_answerability_query_enriches_generic_imf_revenue_title_without_code():
+    row = {
+        "provider": "IMF",
+        "provider_stratum": "IMF",
+        "code": "GGR_G01_GDP_PT",
+        "name": "Revenue",
+        "category": "FM",
+        "unit": "% of GDP",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "GGR_G01_GDP_PT",
+            "name": "Revenue",
+            "category": "FM",
+            "unit": "% of GDP",
+            "raw_metadata": json.dumps(
+                {
+                    "label": "Revenue",
+                    "description": "Revenue",
+                    "source": "Fiscal Monitor (October 2025)",
+                    "unit": "% of GDP",
+                    "dataset": "FM",
+                }
+            ),
+        },
+        "provenance": {"certification_target": CERTIFICATION_TARGET_USER_ANSWERABILITY},
+    }
+
+    query = default_query_for_row(row, certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY)
+
+    assert query == "Japan Revenue in percent of GDP Fiscal Monitor (October 2025) from IMF"
+    assert "GGR_G01_GDP_PT" not in query
+
+
+def test_user_answerability_query_does_not_enrich_non_executable_imf_indicator_title():
+    row = {
+        "provider": "IMF",
+        "provider_stratum": "IMF",
+        "code": "FM4_XDC",
+        "name": "M4 Monetary",
+        "category": "INDICATOR",
+        "unit": "National Currency",
+        "origin": {
+            "source_provider": "IMF",
+            "source_indicator_code": "FM4_XDC",
+            "name": "M4 Monetary",
+            "category": "INDICATOR",
+            "unit": "National Currency",
+            "raw_metadata": json.dumps(
+                {
+                    "label": "M4 Monetary",
+                    "source": "International Financial Statistics",
+                    "unit": "National Currency",
+                }
+            ),
+        },
+        "provenance": {"certification_target": CERTIFICATION_TARGET_USER_ANSWERABILITY},
+    }
+
+    query = default_query_for_row(row, certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY)
+
+    assert query == "Brazil M4 Monetary from IMF"
+    assert "International Financial Statistics" not in query
+
+
 def test_user_answerability_query_adds_unit_for_duplicate_provider_title(monkeypatch):
     monkeypatch.setattr(
         common,
@@ -181,6 +278,161 @@ def test_user_answerability_fred_preserves_short_acronym_suffix_title():
     )
 
     assert query == "US Total wages and salaries, BLS from FRED"
+
+
+def test_user_answerability_fred_preserves_average_price_region_title_without_code_shortcut():
+    title = (
+        "Average Price: Steak, Rib Eye, USDA Choice, Boneless "
+        "(Cost per Pound/453.6 Grams) in the Northeast Census Region - Urban"
+    )
+    row = {
+        "provider": "FRED",
+        "code": "APU0100703425",
+        "name": title,
+        "unit": "U.S. Dollars",
+        "frequency": "Monthly",
+        "category": "Commodities",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+    audit = audit_direct_query_shape(
+        {
+            "evaluation_target": CERTIFICATION_TARGET_USER_ANSWERABILITY,
+            "provider_stratum": "FRED",
+            "query": query,
+            "origin": {
+                "name": title,
+                "source_indicator_code": "APU0100703425",
+                "source_provider": "FRED",
+                "category": "Commodities",
+            },
+        }
+    )
+
+    assert query == f"{title} from FRED"
+    assert "APU0100703425" not in query
+    assert not query.startswith(("US ", "United States "))
+    assert audit["risk_level"] != "high"
+
+
+def test_user_answerability_fred_preserves_average_price_us_city_average_title():
+    title = (
+        "Average Price: Steak, Rib Eye, USDA Choice, Boneless "
+        "(Cost per Pound/453.6 Grams) in U.S. City Average"
+    )
+    row = {
+        "provider": "FRED",
+        "code": "APU0000703425",
+        "name": title,
+        "unit": "U.S. Dollars",
+        "frequency": "Monthly",
+        "category": "Commodities",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == f"{title} from FRED"
+    assert "APU0000703425" not in query
+    assert not query.startswith(("US ", "United States "))
+
+
+def test_user_answerability_fred_preserves_average_price_cbsa_title():
+    title = (
+        "Average Price: Gasoline, Unleaded Regular "
+        "(Cost per Gallon/3.785 Liters) in Philadelphia-Camden-Wilmington, "
+        "PA-NJ-DE-MD (CBSA)"
+    )
+    row = {
+        "provider": "FRED",
+        "code": "APUS12B74714",
+        "name": title,
+        "unit": "U.S. Dollars",
+        "frequency": "Monthly",
+        "category": "Commodities",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == f"{title} from FRED"
+    assert "APUS12B74714" not in query
+    assert "average price gasoline unleaded regular cost" not in query.lower()
+    assert not query.startswith(("US ", "United States "))
+
+
+def test_user_answerability_fred_ignores_description_only_country_mentions():
+    row = {
+        "provider": "FRED",
+        "code": "GASDESECW",
+        "name": "PADD I (East Coast District) Diesel Sales Price",
+        "description": (
+            "PADD I represents the East Coast District and includes Connecticut, "
+            "Florida, Georgia, North Carolina, South Carolina, and Virginia."
+        ),
+        "unit": "Dollars per Gallon",
+        "frequency": "Weekly, Ending Monday",
+        "category": "Commodities",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "US PADD I (East Coast District) Diesel Sales Price (Weekly, Ending Monday) from FRED"
+    assert not query.startswith("Georgia ")
+
+
+def test_user_answerability_fred_keeps_name_or_coverage_country_inference():
+    row = {
+        "provider": "FRED",
+        "code": "CANADATEST",
+        "name": "Policy Rate",
+        "description": "A description without provider-native country scope.",
+        "coverage": "Canada",
+        "unit": "Percent",
+        "frequency": "Monthly",
+        "category": "Search: synthetic",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "Canada Policy Rate from FRED"
+
+
+def test_user_answerability_fred_does_not_preserve_unrelated_long_title_by_default():
+    title = (
+        "Long FRED Catalog Title With Many Dense Qualifiers And Instrument "
+        "Descriptions That Should Continue To Use Core Concept Tokens Rather "
+        "Than The Full Provider Title When It Is Not An Average Price Scope"
+    )
+    row = {
+        "provider": "FRED",
+        "code": "FREDLONGTEST",
+        "name": title,
+        "description": "Long synthetic FRED title for a non-average-price surface.",
+        "unit": "Index",
+        "frequency": "Monthly",
+        "category": "Search: synthetic",
+    }
+
+    query = common.default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query != f"{title} from FRED"
 
 
 def test_user_answerability_direct_record_asks_user_need_not_legacy_worldbank_code():
@@ -694,6 +946,117 @@ def test_default_query_for_row_prefers_slug_for_complex_coingecko_assets():
     assert query.lower().endswith("from coingecko")
 
 
+def test_user_answerability_query_uses_provider_native_symbol_for_symbol_only_coingecko_asset():
+    row = {
+        "provider": "CoinGecko",
+        "code": "_",
+        "name": "༼ つ ◕_◕ ༽つ",
+        "description": "",
+        "synonyms": "gib",
+        "raw_metadata": json.dumps({"id": "_", "symbol": "gib", "name": "༼ つ ◕_◕ ༽つ"}),
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "gib cryptocurrency price from CoinGecko"
+    assert "༼" not in query
+
+
+def test_user_answerability_query_preserves_numeric_coingecko_slug_when_humanized_generic():
+    row = {
+        "provider": "CoinGecko",
+        "code": "01-token",
+        "name": "01",
+        "description": "",
+        "raw_metadata": json.dumps({"id": "01-token", "symbol": "01", "name": "01"}),
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "01-token cryptocurrency price from CoinGecko"
+    assert "Token cryptocurrency price" not in query
+
+
+def test_user_answerability_query_preserves_short_coingecko_acronym_slug():
+    row = {
+        "provider": "CoinGecko",
+        "code": "3a-lending-protocol",
+        "name": "3A",
+        "description": "",
+        "synonyms": "a3a",
+        "raw_metadata": json.dumps({"id": "3a-lending-protocol", "symbol": "a3a", "name": "3A"}),
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "3a-lending-protocol cryptocurrency price from CoinGecko"
+    assert "3A Lending Protocol" not in query
+
+
+def test_user_answerability_query_preserves_uppercase_coingecko_acronym_slug():
+    row = {
+        "provider": "CoinGecko",
+        "code": "aag-ventures",
+        "name": "AAG",
+        "description": "",
+        "synonyms": "aag",
+        "raw_metadata": json.dumps({"id": "aag-ventures", "symbol": "aag", "name": "AAG"}),
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "aag-ventures cryptocurrency price from CoinGecko"
+    assert "Aag Ventures" not in query
+
+
+def test_user_answerability_query_preserves_short_coingecko_slug_with_suffix_qualifier():
+    row = {
+        "provider": "CoinGecko",
+        "code": "aevo-exchange",
+        "name": "Aevo",
+        "description": "",
+        "synonyms": "aevo",
+        "raw_metadata": json.dumps({"id": "aevo-exchange", "symbol": "aevo", "name": "Aevo"}),
+    }
+
+    query = default_query_for_row(
+        row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert query == "aevo-exchange cryptocurrency price from CoinGecko"
+    assert "Aevo Exchange" not in query
+
+    token_suffix_row = {
+        "provider": "CoinGecko",
+        "code": "aga-token",
+        "name": "AGA",
+        "description": "",
+        "synonyms": "aga",
+        "raw_metadata": json.dumps({"id": "aga-token", "symbol": "aga", "name": "AGA"}),
+    }
+
+    token_suffix_query = default_query_for_row(
+        token_suffix_row,
+        certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    )
+
+    assert token_suffix_query == "aga-token cryptocurrency price from CoinGecko"
+    assert "Aga Token" not in token_suffix_query
+
+
 def test_default_query_for_row_makes_exchange_rate_provider_explicit():
     row = {
         "provider": "ExchangeRate",
@@ -1009,6 +1372,21 @@ def test_default_query_for_row_does_not_treat_nor_conjunction_as_country() -> No
     }
 
     assert not default_query_for_row(row).startswith("Nor ")
+
+
+def test_default_query_for_row_does_not_treat_comtrade_commodity_country_word_as_reporter() -> None:
+    row = {
+        "provider": "Comtrade",
+        "code": "0105",
+        "name": "0105 - Poultry; live, fowls of the species Gallus domesticus, ducks, geese, turkeys and guinea fowls",
+        "description": "",
+    }
+
+    query = default_query_for_row(row, certification_target=CERTIFICATION_TARGET_USER_ANSWERABILITY)
+
+    assert not query.startswith("Guinea exports")
+    assert "exports of HS 0105 Poultry" in query
+    assert query.endswith(" from Comtrade")
 
 
 def test_detect_single_country_from_text_ignores_ambiguous_america_region_alias() -> None:

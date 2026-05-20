@@ -39,7 +39,7 @@ def _assert_valid_results(results, *, expected_countries: tuple[str, ...] = ()) 
 async def test_credit_to_gdp() -> None:
     provider = BISProvider()
     results = await provider.fetch_indicator(
-        indicator="CREDIT_TO_GDP",
+        indicator="WS_TC",
         country="US",
         start_year=2020,
         end_year=2023,
@@ -52,7 +52,7 @@ async def test_credit_to_gdp() -> None:
 async def test_policy_rate() -> None:
     provider = BISProvider()
     results = await provider.fetch_indicator(
-        indicator="POLICY_RATE",
+        indicator="WS_CBPOL",
         country="Germany",
         start_year=2020,
         end_year=2023,
@@ -65,7 +65,7 @@ async def test_policy_rate() -> None:
 async def test_property_prices() -> None:
     provider = BISProvider()
     results = await provider.fetch_indicator(
-        indicator="PROPERTY_PRICES",
+        indicator="WS_SPP",
         country="UK",
         start_year=2020,
         end_year=2023,

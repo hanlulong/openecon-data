@@ -50,7 +50,7 @@ def lightweight_query_service() -> QueryService:
                 clarificationNeeded=False,
             ),
             "Canada GDP",
-            "STATSCAN",
+            "WORLDBANK",
         ),
         (
             ParsedIntent(
@@ -60,7 +60,7 @@ def lightweight_query_service() -> QueryService:
                 clarificationNeeded=False,
             ),
             "Germany house prices",
-            "BIS",
+            "WORLDBANK",
         ),
         (
             ParsedIntent(
@@ -70,7 +70,7 @@ def lightweight_query_service() -> QueryService:
                 clarificationNeeded=False,
             ),
             "US imports",
-            "COMTRADE",
+            "WORLDBANK",
         ),
     ],
 )

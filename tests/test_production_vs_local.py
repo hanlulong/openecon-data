@@ -50,7 +50,7 @@ class QueryResult:
             "http_status": self.http_status
         }
 
-def test_single_query(query: str, expected_provider: str, api_url: str, environment: str) -> QueryResult:
+def run_single_query(query: str, expected_provider: str, api_url: str, environment: str) -> QueryResult:
     """Test a single query against specified API"""
     result = QueryResult(query, expected_provider, environment)
 
@@ -108,11 +108,11 @@ def run_parallel_test(query: str, provider: str, query_num: int, total: int) -> 
 
     # Test production
     print(f"  Testing PRODUCTION...")
-    prod_result = test_single_query(query, provider, PRODUCTION_API, "production")
+    prod_result = run_single_query(query, provider, PRODUCTION_API, "production")
 
     # Test local
     print(f"  Testing LOCAL...")
-    local_result = test_single_query(query, provider, LOCAL_API, "local")
+    local_result = run_single_query(query, provider, LOCAL_API, "local")
 
     # Print comparison
     print(f"    PRODUCTION: {prod_result.status.upper():15} | {prod_result.response_time:.2f}s | {prod_result.data_points} pts")

@@ -20,9 +20,10 @@ from scripts.test_multiround_10x10 import evaluate_round, extract_observed
 def test_multiround_suite_catalog_exposes_baseline_and_alternative() -> None:
     assert DEFAULT_SUITE_NAME == "baseline"
     assert SUITES_VERSION >= 3
-    assert list_suite_names() == ["baseline", "alternative", "regression"]
+    assert list_suite_names() == ["baseline", "alternative", "regression", "hardening"]
     assert "Alternative 10x10 benchmark" in get_suite_description("alternative")
     assert "StatsCan decomposition + timeframe retention" in get_suite_description("regression")
+    assert "Stricter certification suite" in get_suite_description("hardening")
 
 
 @pytest.mark.unit

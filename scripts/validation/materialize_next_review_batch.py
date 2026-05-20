@@ -17,6 +17,7 @@ from scripts.validation.common import (  # noqa: E402
     CERTIFICATION_TARGETS,
     DEFAULT_DB,
     USER_ANSWERABILITY_INVENTORY_ONLY_RISK_REASONS,
+    answerability_supportability_exclusion_reason,
     apply_selection_supportability_probe_query,
     certification_target_for_row,
     provider_family_key,
@@ -55,6 +56,8 @@ MULTI_BUILDERS = {
     'fx_pair_chain': fx_rotation,
 }
 
+SUPPORTABILITY_PREFILTER_MIN_ROWS = 10_000
+
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding='utf-8'))
@@ -66,6 +69,111 @@ def snapshot_id(snapshot: dict) -> str:
 
 def normalize_provider_name(value: str) -> str:
     return str(value or '').strip()
+
+
+def normalize_batch_targets(targets: object) -> list[dict]:
+    """Normalize review-expansion target shapes for materialization.
+
+    ``build_review_expansion_plan.py`` writes targets as a mapping keyed by
+    provider/family name with ``additional_target_sessions`` and
+    ``recommended_total_n``.  The original materializer accepted only a list of
+    records with ``name`` and ``planned_batch_sessions``.  Keep both contracts
+    mechanical and schema-level: this adapter does not change sampling,
+    provider selection, supportability filtering, or pass/fail semantics.
+    """
+    if not targets:
+        return []
+
+    if isinstance(targets, dict):
+        normalized: list[dict] = []
+        for name, payload in targets.items():
+            if not isinstance(payload, dict):
+                payload = {}
+            record = dict(payload)
+            record.setdefault('name', str(name))
+            if 'planned_batch_sessions' not in record:
+                record['planned_batch_sessions'] = int(record.get('additional_target_sessions') or 0)
+            if 'target_n' not in record and 'recommended_total_n' in record:
+                record['target_n'] = record.get('recommended_total_n')
+            normalized.append(record)
+        return normalized
+
+    if isinstance(targets, list):
+        return [dict(target) for target in targets if isinstance(target, dict)]
+
+    raise TypeError(f'Unsupported batch target shape: {type(targets).__name__}')
+
+
+def planned_batch_sessions(target: dict) -> int:
+    return int(target.get('planned_batch_sessions') or target.get('additional_target_sessions') or 0)
+
+
+def raw_selection_supportability_reason(row: dict) -> str | None:
+    provider = str(row.get('provider') or '').strip()
+    return selection_supportability_reason_for_row(
+        {
+            'provider_stratum': provider,
+            'origin': {
+                'source_provider': provider,
+                'source_indicator_code': row.get('code'),
+                'name': row.get('name'),
+                'category': row.get('category'),
+            },
+        }
+    )
+
+
+def supportability_prefilter_samples(
+    provider: str,
+    samples: list[dict],
+    count: int,
+    *,
+    certification_target: str,
+    include_supportability_probes: bool,
+    min_candidate_rows: int = SUPPORTABILITY_PREFILTER_MIN_ROWS,
+) -> tuple[list[dict], int, bool]:
+    """Drop provider-native unsupported rows before expensive record synthesis.
+
+    This preserves the answerability/supportability boundary for large IMF
+    expansion slices.  It is intentionally mechanical: it consults the same
+    provider-native supportability reason used after record synthesis, never
+    user-query semantics, and it only runs when probe rows are not allowed.
+    """
+    if (
+        certification_target != CERTIFICATION_TARGET_USER_ANSWERABILITY
+        or include_supportability_probes
+    ):
+        return samples, 0, False
+    provider_upper = str(provider or '').strip().upper()
+    if provider_upper not in {'IMF', 'BIS'}:
+        return samples, 0, False
+    if provider_upper == 'IMF' and len(samples) < min_candidate_rows:
+        return samples, 0, False
+
+    selectable: list[dict] = []
+    excluded_count = 0
+    for row in samples:
+        if raw_selection_supportability_reason(row):
+            excluded_count += 1
+        else:
+            selectable.append(row)
+
+    if len(selectable) < count:
+        raise RuntimeError(
+            'user_answerability direct materialization could not fill '
+            f'{provider} planned count {count} without selecting '
+            f'{excluded_count} supportability-inventory candidates; '
+            'split/supportability-inventory replacement is required'
+        )
+
+    return selectable, excluded_count, True
+
+
+def prefixed_session_id(session_id: str, prefix: str = '') -> str:
+    clean_prefix = str(prefix or '').strip().strip('-')
+    if not clean_prefix:
+        return session_id
+    return f'{clean_prefix}-{session_id}'
 
 
 def apply_certification_target(record: dict, certification_target: str) -> dict:
@@ -101,9 +209,17 @@ def direct_oversample_count(provider: str, count: int, provider_population: int)
         base_count = max(count * 50, count + 200)
     if provider_upper == 'IMF':
         if count >= 100:
-            base_count = max(base_count, count * 5, 3_000)
+            # Supportability-safe IMF answerability rows are sparse in the
+            # frozen catalog.  Large lower-bound expansion slices must sample
+            # deeply enough to find provider-native supported rows without
+            # admitting supportability-probe rows.
+            base_count = max(base_count, count * 1_000, 15_000)
         elif count >= 20:
-            base_count = max(base_count, count * 100, 5_000)
+            # Medium user-answerability IMF slices can be dominated by
+            # provider-native public-surface supportability inventory.  Sample
+            # deeply enough that same-provider replacements can fill evidence
+            # batches without admitting supportability-probe rows.
+            base_count = max(base_count, count * 500, 15_000)
         elif count >= 5:
             base_count = max(base_count, count * 500, 5_000)
     elif provider_upper == 'WORLDBANK' and count >= 100:
@@ -111,7 +227,12 @@ def direct_oversample_count(provider: str, count: int, provider_population: int)
     return min(provider_population, base_count)
 
 
-def select_quality_screened_direct_records(records: list[dict], count: int) -> list[dict]:
+def select_quality_screened_direct_records(
+    records: list[dict],
+    count: int,
+    *,
+    include_supportability_probes: bool = False,
+) -> list[dict]:
     def sort_key(record: dict) -> tuple:
         provenance = dict(record.get('provenance') or {})
         origin = dict(record.get('origin') or {})
@@ -152,9 +273,15 @@ def select_quality_screened_direct_records(records: list[dict], count: int) -> l
             len(reasons),
             len(str(record.get('query') or '')),
             str(record.get('id') or ''),
-        )
+            )
 
-    ranked = sorted(records, key=sort_key)
+    selectable_records = [
+        record
+        for record in records
+        if include_supportability_probes
+        or not answerability_supportability_exclusion_reason(record)
+    ]
+    ranked = sorted(selectable_records, key=sort_key)
 
     base_provider_family_caps = {
         "WORLDBANK": 1,
@@ -215,13 +342,16 @@ def materialize_direct(
     dataset_tier: str,
     db_path: Path,
     certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    include_supportability_probes: bool = False,
+    supportability_inventory: list[dict] | None = None,
+    session_id_prefix: str = '',
 ) -> list[dict]:
     rows = []
     seq = 1
     provider_counts = dict(snapshot_meta.get('provider_counts') or {})
     for target in targets:
         provider = normalize_provider_name(target['name'])
-        count = int(target.get('planned_batch_sessions') or 0)
+        count = planned_batch_sessions(target)
         if count <= 0:
             continue
         provider_population = int(provider_counts.get(provider, count))
@@ -229,6 +359,13 @@ def materialize_direct(
         samples = sample_indicator_rows(provider, oversample_count, db_path=db_path.resolve(), seed=seed)
         if certification_target == CERTIFICATION_TARGET_USER_ANSWERABILITY:
             samples = _merge_provider_anchor_rows(provider, samples, db_path=db_path.resolve())
+        samples, _prefiltered_supportability_count, _supportability_prefiltered = supportability_prefilter_samples(
+            provider,
+            samples,
+            count,
+            certification_target=certification_target,
+            include_supportability_probes=include_supportability_probes,
+        )
         candidate_records = []
         for row in samples:
             record = build_direct_record(
@@ -242,9 +379,15 @@ def materialize_direct(
                 dataset_tier=dataset_tier,
                 certification_target=certification_target,
             )
-            record['id'] = f"batch-direct-{provider.lower()}-{seq:06d}"
+            record['id'] = prefixed_session_id(f"batch-direct-{provider.lower()}-{seq:06d}", session_id_prefix)
             quality = audit_direct_query_shape(record)
             record['provenance']['batch_plan'] = 'next_review_batch'
+            supportability_reason = selection_supportability_reason_for_row(record)
+            if supportability_reason:
+                record['provenance']['selection_supportability_reason'] = supportability_reason
+                if include_supportability_probes:
+                    apply_selection_supportability_probe_query(record)
+            quality = audit_direct_query_shape(record)
             record['provenance']['query_quality_risk'] = quality['risk_level']
             record['provenance']['query_quality_reasons'] = quality['reasons']
             selection_quality_record = dict(record)
@@ -255,19 +398,76 @@ def materialize_direct(
             selection_quality_record['gold']['evaluation_target'] = CERTIFICATION_TARGET_LEGACY_CATALOG_REPLAY
             selection_quality = audit_direct_query_shape(selection_quality_record)
             record['provenance']['selection_quality_reasons'] = selection_quality['reasons']
-            supportability_reason = selection_supportability_reason_for_row(record)
-            if supportability_reason:
-                record['provenance']['selection_supportability_reason'] = supportability_reason
-                apply_selection_supportability_probe_query(record)
-                quality = audit_direct_query_shape(record)
-                record['provenance']['query_quality_risk'] = quality['risk_level']
-                record['provenance']['query_quality_reasons'] = quality['reasons']
             anchor_reason = _user_answerability_sampling_anchor_reason(row)
             if anchor_reason:
                 record['provenance']['user_answerability_sampling_anchor'] = anchor_reason
             candidate_records.append(record)
             seq += 1
-        selected_records = select_quality_screened_direct_records(candidate_records, count)
+        baseline_selected_records = select_quality_screened_direct_records(
+            candidate_records,
+            count,
+            include_supportability_probes=True,
+        )
+        selected_records = select_quality_screened_direct_records(
+            candidate_records,
+            count,
+            include_supportability_probes=include_supportability_probes,
+        )
+        if (
+            certification_target == CERTIFICATION_TARGET_USER_ANSWERABILITY
+            and not include_supportability_probes
+        ):
+            baseline_ids = {str(record.get('id') or '') for record in baseline_selected_records}
+            replacement_records = [
+                record
+                for record in selected_records
+                if str(record.get('id') or '') not in baseline_ids
+            ]
+            excluded_records = [
+                record
+                for record in baseline_selected_records
+                if answerability_supportability_exclusion_reason(record)
+            ]
+            if excluded_records and supportability_inventory is not None:
+                for index, excluded in enumerate(excluded_records):
+                    provenance = dict(excluded.get('provenance') or {})
+                    origin = dict(excluded.get('origin') or {})
+                    replacement = replacement_records[index] if index < len(replacement_records) else None
+                    item = {
+                        'session_id': str(excluded.get('id') or ''),
+                        'provider': provider,
+                        'supportability_reason': answerability_supportability_exclusion_reason(excluded),
+                        'source_indicator_code': origin.get('source_indicator_code'),
+                        'source_indicator_name': origin.get('name'),
+                        'query': excluded.get('query'),
+                        'original_user_answerability_query': provenance.get('original_user_answerability_query'),
+                        'supportability_probe_query': provenance.get('supportability_probe_query'),
+                        'snapshot_id': provenance.get('snapshot_id'),
+                        'selection_weight': provenance.get('selection_weight'),
+                        'disposition': (
+                            'excluded_with_replacement'
+                            if replacement is not None
+                            else 'excluded_pending_replacement'
+                        ),
+                        'replacement_session_ids': (
+                            [str(replacement.get('id') or '')]
+                            if replacement is not None
+                            else []
+                        ),
+                    }
+                    supportability_inventory.append(item)
+            if len(selected_records) < count:
+                excluded_count = sum(
+                    1
+                    for record in candidate_records
+                    if answerability_supportability_exclusion_reason(record)
+                )
+                raise RuntimeError(
+                    'user_answerability direct materialization could not fill '
+                    f'{provider} planned count {count} without selecting '
+                    f'{excluded_count} supportability-inventory candidates; '
+                    'split/supportability-inventory replacement is required'
+                )
         rows.extend(selected_records)
     return rows
 
@@ -280,18 +480,19 @@ def materialize_multiround(
     holdout_split: str,
     dataset_tier: str,
     certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    session_id_prefix: str = '',
 ) -> list[dict]:
     rows = []
     counters = {name: 0 for name in MULTI_BUILDERS}
     for target in targets:
         family = str(target['name'])
-        count = int(target.get('planned_batch_sessions') or 0)
+        count = planned_batch_sessions(target)
         builder = MULTI_BUILDERS[family]
         counters[family] = max(counters.get(family, 0), int(target.get('current_n') or 0))
         for _ in range(count):
             counters[family] += 1
             session = builder(counters[family])
-            session['id'] = f"batch-{family}-{counters[family]:06d}"
+            session['id'] = prefixed_session_id(f"batch-{family}-{counters[family]:06d}", session_id_prefix)
             rows.append(
                 apply_certification_target(
                     annotate_multiround(
@@ -317,36 +518,37 @@ def materialize_ambiguity(
     holdout_split: str,
     dataset_tier: str,
     certification_target: str = CERTIFICATION_TARGET_USER_ANSWERABILITY,
+    session_id_prefix: str = '',
 ) -> list[dict]:
     rows = []
     counters = {name: 0 for name in FAMILY_TEMPLATES}
     for target in targets:
         family = str(target['name'])
-        count = int(target.get('planned_batch_sessions') or 0)
+        count = planned_batch_sessions(target)
         templates = FAMILY_TEMPLATES[family]
         total_target = max(int(target.get('target_n') or count), count)
         counters[family] = max(counters.get(family, 0), int(target.get('current_n') or 0))
         for idx in range(count):
             query, behavior, outcomes = templates[counters[family] % len(templates)]
             counters[family] += 1
-            rows.append(
-                apply_certification_target(
-                    make_ambiguity_record(
-                        family,
-                        counters[family],
-                        query,
-                        behavior,
-                        outcomes,
-                        snapshot_id=snapshot_id(snapshot_meta),
-                        seed=seed,
-                        holdout_split=holdout_split,
-                        dataset_tier=dataset_tier,
-                        family_total_count=total_target,
-                        family_sample_count=count,
-                    ),
-                    certification_target,
-                )
+            record = apply_certification_target(
+                make_ambiguity_record(
+                    family,
+                    counters[family],
+                    query,
+                    behavior,
+                    outcomes,
+                    snapshot_id=snapshot_id(snapshot_meta),
+                    seed=seed,
+                    holdout_split=holdout_split,
+                    dataset_tier=dataset_tier,
+                    family_total_count=total_target,
+                    family_sample_count=count,
+                ),
+                certification_target,
             )
+            record['id'] = prefixed_session_id(str(record.get('id') or ''), session_id_prefix)
+            rows.append(record)
     return rows
 
 
@@ -365,19 +567,34 @@ def main() -> int:
         default=CERTIFICATION_TARGET_USER_ANSWERABILITY,
         help='Direct rows default to real user answerability; legacy_catalog_replay is inventory-only replay.',
     )
+    parser.add_argument(
+        '--include-supportability-probes',
+        action='store_true',
+        help=(
+            'Allow rows marked with selection_supportability_reason into '
+            'user_answerability direct output. Intended only for explicit '
+            'supportability-inventory/probe runs, not answerability evidence.'
+        ),
+    )
+    parser.add_argument(
+        '--session-id-prefix',
+        default='',
+        help='Optional deterministic prefix for all emitted session ids to avoid cross-batch id collisions.',
+    )
     args = parser.parse_args()
 
     batch_plan = load_json(args.batch_plan.resolve())
     snapshot_meta = load_json(args.snapshot.resolve())
 
     allocation = dict(batch_plan.get('allocation') or {})
-    direct_targets = list((allocation.get('direct') or {}).get('targets') or [])
-    multiround_targets = list((allocation.get('multiround') or {}).get('targets') or [])
-    ambiguity_targets = list((allocation.get('ambiguity') or {}).get('targets') or [])
+    direct_targets = normalize_batch_targets((allocation.get('direct') or {}).get('targets') or [])
+    multiround_targets = normalize_batch_targets((allocation.get('multiround') or {}).get('targets') or [])
+    ambiguity_targets = normalize_batch_targets((allocation.get('ambiguity') or {}).get('targets') or [])
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    supportability_inventory: list[dict] = []
     direct_rows = materialize_direct(
         direct_targets,
         snapshot_meta=snapshot_meta,
@@ -386,6 +603,9 @@ def main() -> int:
         dataset_tier=args.dataset_tier,
         db_path=args.db_path,
         certification_target=args.certification_target,
+        include_supportability_probes=args.include_supportability_probes,
+        supportability_inventory=supportability_inventory,
+        session_id_prefix=args.session_id_prefix,
     )
     multiround_rows = materialize_multiround(
         multiround_targets,
@@ -394,6 +614,7 @@ def main() -> int:
         holdout_split=args.holdout_split,
         dataset_tier=args.dataset_tier,
         certification_target=args.certification_target,
+        session_id_prefix=args.session_id_prefix,
     )
     ambiguity_rows = materialize_ambiguity(
         ambiguity_targets,
@@ -402,6 +623,7 @@ def main() -> int:
         holdout_split=args.holdout_split,
         dataset_tier=args.dataset_tier,
         certification_target=args.certification_target,
+        session_id_prefix=args.session_id_prefix,
     )
 
     direct_path = output_dir / 'next_batch_direct.jsonl'
@@ -412,6 +634,17 @@ def main() -> int:
     write_jsonl(multiround_path, multiround_rows)
     write_jsonl(ambiguity_path, ambiguity_rows)
     write_jsonl(all_path, direct_rows + multiround_rows + ambiguity_rows)
+    supportability_inventory_path = output_dir / 'supportability_inventory.json'
+    supportability_inventory_payload = {
+        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'certification_target': args.certification_target,
+        'include_supportability_probes': bool(args.include_supportability_probes),
+        'items': supportability_inventory,
+    }
+    supportability_inventory_path.write_text(
+        json.dumps(supportability_inventory_payload, indent=2, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
 
     print(
         json.dumps(
@@ -423,6 +656,8 @@ def main() -> int:
                 'ambiguity_records': len(ambiguity_rows),
                 'batch_size': len(direct_rows) + len(multiround_rows) + len(ambiguity_rows),
                 'certification_target': args.certification_target,
+                'supportability_inventory': str(supportability_inventory_path),
+                'supportability_inventory_items': len(supportability_inventory),
             },
             indent=2,
         )

@@ -38,6 +38,7 @@ def test_worldbank_exact_title_without_country_defaults_to_all() -> None:
     assert valid is True
     assert error is None
     assert intent.parameters["country"] == "all"
+    assert intent.parameters["__worldbank_defaulted_country_all"] is True
     assert suggestions and "Defaulted exact WorldBank" in suggestions["note"]
 
 

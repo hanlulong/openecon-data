@@ -63,6 +63,50 @@ def test_extract_response_signals_counts_nested_datasets_with_values():
     assert signals["series_ids"] == ["GDP", "NGDP"]
 
 
+def test_runtime_supportability_reason_classifies_eurostat_not_disseminated():
+    module = load_module()
+
+    reason = module.runtime_supportability_reason(
+        {
+            "id": "direct-eurostat-not-disseminated",
+            "provider_stratum": "Eurostat",
+            "query": "Historical one-off dataset from Eurostat",
+        },
+        {
+            "error": "data_not_available",
+            "message": (
+                "fail-closed supportability block: "
+                "reason=eurostat_dataset_not_disseminated; "
+                "dataset=lfso_19fxwt05; country=ALL_AVAILABLE"
+            ),
+        },
+    )
+
+    assert reason == "eurostat_dataset_not_disseminated"
+
+
+def test_runtime_supportability_reason_classifies_imf_detailed_surface_message():
+    module = load_module()
+
+    reason = module.runtime_supportability_reason(
+        {
+            "id": "direct-imf-detail",
+            "provider_stratum": "IMF",
+            "query": "Detailed IMF public surface from IMF",
+        },
+        {
+            "error": "data_not_available",
+            "message": (
+                "IMF query targets a detailed IMF public-data surface that is "
+                "not yet executable by OpenEcon's production IMF dataset-family "
+                "routing. This is a fail-closed supportability block."
+            ),
+        },
+    )
+
+    assert reason == "imf_non_weo_public_surface_unsupported"
+
+
 def test_extract_response_signals_preserves_answer_surface_metadata():
     module = load_module()
 

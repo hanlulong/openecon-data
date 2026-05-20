@@ -1112,6 +1112,81 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("/country/ALL/", client.urls[0])
         self.assertEqual(client.params[0].get("MRNEV"), 1)
 
+    def test_worldbank_exact_no_country_retries_world_aggregate_after_empty_all(self) -> None:
+        provider = WorldBankProvider()
+
+        class RecordingClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append({"url": str(url), "params": dict(params or {})})
+                if not self.responses:
+                    raise AssertionError("No more mock responses available")
+                response = self.responses.pop(0)
+                response.request = MockAsyncResponse([], request_url=str(url)).request
+                return response
+
+        empty_all_response = MockAsyncResponse([{"page": 1, "pages": 1, "total": 0}, []])
+        world_response = MockAsyncResponse(
+            [
+                {"page": 1, "pages": 1, "per_page": 1000, "total": 1},
+                [
+                    {
+                        "indicator": {
+                            "id": "SI.POV.LMIC",
+                            "value": "Poverty headcount ratio at $4.20 a day (2021 PPP) (% of population)",
+                        },
+                        "country": {"id": "WLD", "value": "World"},
+                        "countryiso3code": "WLD",
+                        "date": "2024",
+                        "value": 18.9,
+                        "unit": "",
+                        "obs_status": "",
+                        "decimal": 0,
+                    }
+                ],
+            ]
+        )
+        client = RecordingClient([empty_all_response, world_response])
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
+             patch.object(provider, "_indicator_source_id", return_value="2"):
+            results = run(provider.fetch_indicator(indicator="SI.POV.LMIC"))
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata.seriesId, "SI.POV.LMIC")
+        self.assertEqual(results[0].metadata.country, "World")
+        self.assertEqual(len(client.calls), 2)
+        self.assertIn("/country/all/indicator/SI.POV.LMIC", client.calls[0]["url"])
+        self.assertIn("/country/WLD/indicator/SI.POV.LMIC", client.calls[1]["url"])
+        self.assertEqual(client.calls[0]["params"].get("MRNEV"), 1)
+        self.assertEqual(client.calls[1]["params"].get("MRNEV"), 1)
+
+    def test_worldbank_explicit_all_does_not_retry_world_aggregate(self) -> None:
+        provider = WorldBankProvider()
+
+        class RecordingClient:
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append({"url": str(url), "params": dict(params or {})})
+                self.response.request = MockAsyncResponse([], request_url=str(url)).request
+                return self.response
+
+        client = RecordingClient(MockAsyncResponse([{"page": 1, "pages": 1, "total": 0}, []]))
+
+        with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
+             patch.object(provider, "_indicator_source_id", return_value="2"), \
+             self.assertRaises(DataNotAvailableError):
+            run(provider.fetch_indicator(indicator="SI.POV.LMIC", country="all"))
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertIn("/country/all/indicator/SI.POV.LMIC", client.calls[0]["url"])
+
     def test_worldbank_exact_short_catalog_code_uses_source_endpoint_when_generic_empty(self) -> None:
         provider = WorldBankProvider()
         calls = []
@@ -2834,6 +2909,110 @@ class ProviderTests(unittest.TestCase):
             ("WS_XRU", None),
         )
 
+    def test_bis_exact_dataflow_fallback_selects_requested_country_series(self) -> None:
+        provider = BISProvider(metadata_search_service=None)
+
+        no_data = MockAsyncResponse({"errors": [{"code": 404}]}, status_code=404)
+        fallback_payload = {
+            "data": {
+                "dataSets": [
+                    {
+                        "series": {
+                            "0:0:0": {"observations": {"0": [10], "1": [11]}},
+                            "0:1:0": {"observations": {"0": [20], "1": [21], "2": [22]}},
+                        }
+                    }
+                ],
+                "structure": {
+                    "dimensions": {
+                        "series": [
+                            {"id": "FREQ", "values": [{"id": "A", "name": "Annual"}]},
+                            {
+                                "id": "REP_CTY",
+                                "name": "Reporting country",
+                                "values": [
+                                    {"id": "US", "name": "United States"},
+                                    {"id": "JP", "name": "Japan"},
+                                ],
+                            },
+                            {"id": "MEASURE", "values": [{"id": "A", "name": "All"}]},
+                        ],
+                        "observation": [
+                            {
+                                "id": "TIME_PERIOD",
+                                "values": [
+                                    {"id": "2020"},
+                                    {"id": "2021"},
+                                    {"id": "2022"},
+                                ],
+                            }
+                        ],
+                    }
+                },
+            }
+        }
+
+        client = MockAsyncClient([no_data, no_data, MockAsyncResponse(fallback_payload)])
+        with patch("backend.providers.bis.get_http_client", return_value=client):
+            series_list = run(
+                provider.fetch_indicator(
+                    indicator="BIS_WS_CPMI_CASHLESS",
+                    country="United States",
+                    frequency="A",
+                )
+            )
+
+        self.assertEqual(len(series_list), 1)
+        self.assertEqual(series_list[0].metadata.source, "BIS")
+        self.assertEqual(series_list[0].metadata.country, "United States")
+        self.assertEqual(series_list[0].metadata.frequency, "annual")
+        self.assertIn("WS_CPMI_CASHLESS/A/0:0:0", series_list[0].metadata.seriesId)
+        self.assertIn("/data/WS_CPMI_CASHLESS/A", series_list[0].metadata.apiUrl)
+        self.assertEqual(series_list[0].data[0].value, 10.0)
+
+    def test_bis_exact_dataflow_fallback_fails_closed_on_country_mismatch(self) -> None:
+        provider = BISProvider(metadata_search_service=None)
+
+        no_data = MockAsyncResponse({"errors": [{"code": 404}]}, status_code=404)
+        fallback_payload = {
+            "data": {
+                "dataSets": [{"series": {"0:0:0": {"observations": {"0": [10]}}}}],
+                "structure": {
+                    "dimensions": {
+                        "series": [
+                            {"id": "FREQ", "values": [{"id": "A", "name": "Annual"}]},
+                            {
+                                "id": "REP_CTY",
+                                "name": "Reporting country",
+                                "values": [{"id": "JP", "name": "Japan"}],
+                            },
+                            {"id": "MEASURE", "values": [{"id": "A", "name": "All"}]},
+                        ],
+                        "observation": [{"id": "TIME_PERIOD", "values": [{"id": "2020"}]}],
+                    }
+                },
+            }
+        }
+
+        client = MockAsyncClient([
+            no_data,
+            no_data,
+            MockAsyncResponse(fallback_payload),
+            no_data,
+            no_data,
+            no_data,
+            no_data,
+        ])
+        with patch("backend.providers.bis.get_http_client", return_value=client):
+            with self.assertRaises(DataNotAvailableError):
+                run(
+                    provider.fetch_indicator(
+                        indicator="BIS_WS_CPMI_CASHLESS",
+                        country="United States",
+                        frequency="A",
+                    )
+                )
+
     def test_imf_bop_bridge_fails_closed_before_label_matching(self) -> None:
         provider = IMFProvider(metadata_search_service=None)
 
@@ -3307,6 +3486,117 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("sinceTimePeriod", first_params)
         self.assertNotIn("freq", retry_params)
         self.assertNotIn("sinceTimePeriod", retry_params)
+        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+
+    def test_eurostat_all_available_404_retries_latest_without_inferred_freq(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class NotFoundResponse(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__({}, status_code=404, request_url="https://example.com/eurostat")
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    404,
+                    request=httpx.Request("GET", "https://example.com/eurostat"),
+                )
+                raise httpx.HTTPStatusError("not found", request=response.request, response=response)
+
+        latest_response = MockAsyncResponse(
+            {
+                "value": {"0": 32.0},
+                "dimension": {
+                    "freq": {"category": {"index": {"A": 0}, "label": {"A": "Annual"}}},
+                    "geo": {"category": {"index": {"EU27_2020": 0}, "label": {"EU27_2020": "European Union"}}},
+                    "time": {"category": {"index": {"2019": 0}}},
+                },
+                "id": ["freq", "geo", "time"],
+                "size": [1, 1, 1],
+                "updated": "2026-02-03",
+            }
+        )
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                if len(self.calls) == 1:
+                    return NotFoundResponse()
+                latest_response.request = MockAsyncResponse([], request_url=str(url)).request
+                return latest_response
+
+        client = RecordingClient()
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            series = run(provider.fetch_indicator(indicator="LFSO_19FXWT05", country="__ALL__"))
+
+        self.assertEqual(len(series.data), 1)
+        self.assertEqual(series.metadata.seriesId, "lfso_19fxwt05")
+        self.assertEqual(series.metadata.apiUrl and "lastTimePeriod=1" in series.metadata.apiUrl, True)
+        self.assertEqual(len(client.calls), 2)
+        _, first_params = client.calls[0]
+        _, retry_params = client.calls[1]
+        self.assertEqual(first_params.get("freq"), "A")
+        self.assertIn("sinceTimePeriod", first_params)
+        self.assertNotIn("freq", retry_params)
+        self.assertNotIn("sinceTimePeriod", retry_params)
+        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+
+    def test_eurostat_all_available_404_then_500_is_dataset_supportability(self) -> None:
+        provider = EurostatProvider(metadata_search_service=None)
+
+        class NotFoundResponse(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__(
+                    {"error": [{"label": "ERR_NOT_FOUND_4: LFSO_19FXWT05 is not available for dissemination."}]},
+                    status_code=404,
+                    request_url="https://example.com/eurostat",
+                )
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    404,
+                    json={"error": [{"label": "ERR_NOT_FOUND_4: LFSO_19FXWT05 is not available for dissemination."}]},
+                    request=httpx.Request("GET", "https://example.com/eurostat"),
+                )
+                raise httpx.HTTPStatusError("not found", request=response.request, response=response)
+
+        class ServerErrorResponse(MockAsyncResponse):
+            def __init__(self) -> None:
+                super().__init__(
+                    {},
+                    status_code=500,
+                    request_url="https://example.com/eurostat",
+                )
+
+            def raise_for_status(self) -> None:
+                response = httpx.Response(
+                    500,
+                    text="Request failed.",
+                    request=httpx.Request("GET", "https://example.com/eurostat"),
+                )
+                raise httpx.HTTPStatusError("server error", request=response.request, response=response)
+
+        class RecordingClient:
+            def __init__(self):
+                self.calls = []
+
+            async def get(self, url, *, params=None, **_kwargs):
+                self.calls.append((str(url), dict(params or {})))
+                return NotFoundResponse() if len(self.calls) == 1 else ServerErrorResponse()
+
+        client = RecordingClient()
+        with patch("backend.providers.eurostat.get_http_client", return_value=client):
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(provider.fetch_indicator(indicator="LFSO_19FXWT05", country="__ALL__"))
+
+        message = str(raised.exception)
+        self.assertIn("eurostat_dataset_not_disseminated", message)
+        self.assertIn("dataset=lfso_19fxwt05", message)
+        self.assertIn("country=ALL_AVAILABLE", message)
+        self.assertEqual(len(client.calls), 2)
+        _, retry_params = client.calls[1]
         self.assertEqual(retry_params.get("lastTimePeriod"), "1")
 
     def test_eurostat_country_default_empty_window_retries_latest_period(self) -> None:

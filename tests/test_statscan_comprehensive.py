@@ -64,7 +64,7 @@ TEST_QUERIES = [
 ]
 
 
-async def test_query(provider, query_info):
+async def run_query(provider, query_info):
     """Test a single query and return results."""
     query = query_info["query"]
     expected = query_info["expected"]
@@ -161,7 +161,7 @@ async def main():
     results = []
     for i, query_info in enumerate(TEST_QUERIES, 1):
         print(f"[{i}/{len(TEST_QUERIES)}] Testing: {query_info['query']}")
-        result = await test_query(provider, query_info)
+        result = await run_query(provider, query_info)
         results.append(result)
 
         if result["success"]:

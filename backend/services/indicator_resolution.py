@@ -17,6 +17,7 @@ This module provides:
 from __future__ import annotations
 
 import logging
+import json
 import re
 from collections import Counter
 from typing import Any, Dict, List, Optional
@@ -97,32 +98,34 @@ def _normalize_exact_title_unit_text(text: str) -> str:
 def _extract_exact_title_frequency_tokens(text: str) -> set[str]:
     """Extract explicit frequency words from exact-title query wrappers."""
 
-    normalized = _normalize_exact_title_unit_text(text)
-    all_tokens = normalized.split()
-    tokens = set(all_tokens)
     found: set[str] = set()
+    # Only explicit wrappers such as "(Monthly)" or "(Weekly, Ending Monday)"
+    # constrain exact-title disambiguation.  Provider-native titles can contain
+    # words like "Semi-Annual" as literal title text; using those embedded title
+    # words as frequency filters incorrectly rejects exact provider-title rows.
+    normalized_wrappers = [
+        _normalize_exact_title_unit_text(wrapper)
+        for wrapper in re.findall(r"\(([^()]*)\)", str(text or ""))
+        if _normalize_exact_title_unit_text(wrapper)
+    ]
     for canonical, aliases in _EXACT_TITLE_FREQUENCY_ALIASES.items():
         normalized_aliases = {_normalize_exact_title_unit_text(alias) for alias in aliases}
         long_aliases = {alias for alias in normalized_aliases if len(alias) > 1}
         one_letter_aliases = {alias for alias in normalized_aliases if len(alias) == 1}
-        # Avoid treating descriptive duration phrases in provider-native
-        # titles, such as FRED ACS "(5-year estimate)", as a requested data
-        # frequency.  Frequency wrappers are standalone qualifiers like
-        # "(Annual)" or "(Monthly)", not arbitrary "<number>-year" title text.
-        if canonical == "annual":
-            long_aliases = {
-                alias
-                for alias in long_aliases
-                if not re.search(rf"\b\d+\s*{re.escape(alias)}\b", normalized)
-            }
-        if tokens & long_aliases:
-            found.add(canonical)
-            continue
-        # One-letter frequency abbreviations (M/Q/A/D/W) are too ambiguous in
-        # natural titles; accept them only inside explicit parenthetical
-        # frequency wrappers.
-        for letter in one_letter_aliases:
-            if re.search(rf"\(\s*{re.escape(letter)}\s*\)", normalized):
+        for wrapper in normalized_wrappers:
+            # Avoid treating descriptive duration phrases in provider-native
+            # titles, such as FRED ACS "(5-year estimate)", as requested data
+            # frequency. Standalone wrappers like "(Annual)" still count.
+            if canonical == "annual" and re.search(r"\b\d+\s*(?:annual|year|yearly)\b", wrapper):
+                continue
+            wrapper_tokens = set(wrapper.split())
+            if wrapper in long_aliases or any(wrapper.startswith(f"{alias} ") for alias in long_aliases):
+                found.add(canonical)
+                break
+            # One-letter frequency abbreviations (M/Q/A/D/W) are too ambiguous
+            # outside explicit parenthetical wrappers; within a wrapper, accept
+            # only the standalone letter.
+            if wrapper in one_letter_aliases or wrapper_tokens & one_letter_aliases:
                 found.add(canonical)
                 break
     return found
@@ -235,6 +238,30 @@ def _strip_trailing_exact_title_unit_suffix(text: str) -> Optional[str]:
     if not unit_suffix:
         return None
     stripped = str(text or "")[: unit_suffix.start()].strip(" ,;:-")
+    return stripped or None
+
+
+def _strip_trailing_exact_title_frequency_wrapper(text: str) -> Optional[str]:
+    """Strip a mechanical trailing provider frequency wrapper when present.
+
+    Exact-title direct-cert rows sometimes append provider-native frequency
+    metadata after the title, for example ``(Daily, 7-Day)``.  That wrapper is
+    not part of the catalog title, but it is still useful for disambiguating
+    duplicate provider titles.  Keep the behavior mechanical: strip only the
+    final parenthetical when it contains a recognized frequency token that
+    :func:`_extract_exact_title_frequency_tokens` already understands.  The
+    caller still carries the original query into candidate-frequency filtering.
+    """
+
+    query_text = str(text or "").strip()
+    if not query_text:
+        return None
+    wrapper = re.search(r"\s+\((?P<frequency>[^()]*)\)\s*$", query_text)
+    if not wrapper:
+        return None
+    if not _extract_exact_title_frequency_tokens(f"({wrapper.group('frequency')})"):
+        return None
+    stripped = query_text[: wrapper.start()].strip(" ,;:-")
     return stripped or None
 
 
@@ -420,6 +447,79 @@ def _imf_catalog_entry_supports_exact_code(candidate: str, metadata: Any) -> boo
     return bool(has_namespace or category == "WEO" or category.endswith("REO"))
 
 
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            loaded = json.loads(value)
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _short_imf_exact_title_tokens(text: str) -> set[str]:
+    normalized = _normalize_exact_title_unit_text(str(text or "").replace("%", " percent "))
+    return {
+        token
+        for token in normalized.split()
+        if len(token) > 2
+        and token not in {
+            "and",
+            "the",
+            "from",
+            "with",
+            "data",
+            "source",
+            "database",
+        }
+    }
+
+
+def _imf_short_exact_title_with_catalog_context(
+    query_text: str,
+    candidate: dict[str, Any],
+) -> bool:
+    """Allow short IMF titles only when explicit row-native context is present.
+
+    IMF DataMapper has a few provider-native titles that are genuine exact
+    names but too short for the broad exact-title floor (for example ``DEBT``
+    and ``Revenue``).  A short title alone is ambiguous, so this branch requires
+    the user query to also contain public catalog unit/source context from the
+    same row.  It never infers a code from synonyms or prose.
+    """
+    category = str(candidate.get("category") or "").strip().upper()
+    if not category or category in {"INDICATOR", "DATAFLOW"}:
+        return False
+
+    name = str(candidate.get("name") or "").strip()
+    name_tokens = _short_imf_exact_title_tokens(name)
+    name_is_short = len(name_tokens) <= 2 or bool(re.fullmatch(r"[A-Z0-9_ -]{2,12}", name))
+    if not name_is_short:
+        return False
+
+    raw_metadata = _metadata_dict(candidate.get("raw_metadata") or candidate.get("metadata"))
+    source = raw_metadata.get("source") or ""
+    if isinstance(source, dict):
+        source = source.get("value") or ""
+    source_tokens = _short_imf_exact_title_tokens(source)
+    if len(source_tokens) < 2:
+        return False
+
+    unit = str(candidate.get("unit") or raw_metadata.get("unit") or "").strip()
+    unit_tokens = _short_imf_exact_title_tokens(unit)
+    if not unit_tokens:
+        return False
+
+    query_tokens = _short_imf_exact_title_tokens(query_text)
+    if not unit_tokens <= query_tokens:
+        return False
+    if len(source_tokens & query_tokens) < min(2, len(source_tokens)):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Provider name normalization (shared utility — no circular imports)
 # ---------------------------------------------------------------------------
@@ -512,7 +612,14 @@ def build_exact_indicator_title_intent(
     if isinstance(candidate_params, dict):
         params.update(candidate_params)
     if provider == "COINGECKO":
-        params["coinIds"] = [code]
+        raw_coin_ids = params.get("coinIds")
+        if isinstance(raw_coin_ids, list):
+            coin_ids = [str(coin_id).strip().lower() for coin_id in raw_coin_ids if str(coin_id or "").strip()]
+        elif isinstance(raw_coin_ids, str):
+            coin_ids = [coin_id.strip().lower() for coin_id in raw_coin_ids.split(",") if coin_id.strip()]
+        else:
+            coin_ids = []
+        params["coinIds"] = list(dict.fromkeys(coin_ids)) or [code]
 
     countries = _countries_outside_exact_title(
         query,
@@ -726,6 +833,47 @@ def _with_provider_native_comtrade_hs_metadata(candidate: dict[str, Any]) -> dic
         "comtrade_hs_reference": dict(entry),
     }
     return enriched
+
+
+def _normalized_bis_alias_dataflow(code: str) -> str:
+    """Return canonical BIS dataflow for mechanical BIS_/WS_ aliases."""
+    normalized = str(code or "").strip().upper().replace(".", "_")
+    if normalized.startswith("BIS_WS_"):
+        return normalized.removeprefix("BIS_")
+    if normalized.startswith("BIS_") and normalized.removeprefix("BIS_").startswith("WS_"):
+        return normalized.removeprefix("BIS_")
+    return normalized
+
+
+def _prefer_bis_catalog_alias_candidate(candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Collapse duplicate BIS exact-title aliases for the same dataflow."""
+    if not candidates:
+        return None
+    alias_keys = {
+        _normalized_bis_alias_dataflow(str(candidate.get("code") or ""))
+        for candidate in candidates
+        if str(candidate.get("code") or "").strip()
+    }
+    if len(alias_keys) != 1:
+        return None
+    signatures = {
+        (
+            re.sub(r"[^a-z0-9]+", " ", str(candidate.get("name") or "").lower()).strip(),
+            re.sub(r"[^a-z0-9]+", " ", str(candidate.get("unit") or "").lower()).strip(),
+            re.sub(r"[^a-z0-9]+", " ", str(candidate.get("frequency") or "").lower()).strip(),
+        )
+        for candidate in candidates
+    }
+    if len(signatures) != 1:
+        return None
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda candidate: (
+            0 if str(candidate.get("code") or "").strip().upper().startswith("BIS_WS_") else 1,
+            str(candidate.get("code") or ""),
+        ),
+    )
+    return sorted_candidates[0]
 
 
 def looks_like_exact_provider_title_match(text: str, provider_name: str) -> bool:
@@ -1027,6 +1175,31 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                     continue
 
     if exact_name_candidates:
+        if provider_key == "IMF":
+            qualified_short_by_code: dict[str, dict[str, Any]] = {}
+            for raw_candidate in exact_name_candidates:
+                candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
+                code = str(candidate.get("code") or "").strip()
+                candidate_name = str(candidate.get("name") or "").strip().lower()
+                normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
+                if not code or not normalized_name or len(normalized_name) >= min_name_len:
+                    continue
+                if normalized_name not in exact_query_norms:
+                    continue
+                if not _imf_short_exact_title_with_catalog_context(query_text, candidate):
+                    continue
+                qualified = dict(candidate)
+                qualified["params"] = {
+                    **dict(qualified.get("params") or {}),
+                    "__semantic_authority": "exact_user_input",
+                    "__decision_source": "exact_title_qualified_short",
+                }
+                qualified_short_by_code.setdefault(code.upper(), qualified)
+            if len(qualified_short_by_code) == 1:
+                return next(iter(qualified_short_by_code.values()))
+            if len(qualified_short_by_code) > 1:
+                return None
+
         strict_exact_by_code: dict[str, dict[str, Any]] = {}
         for raw_candidate in exact_name_candidates:
             candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
@@ -1078,6 +1251,13 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             strict_exact_by_code.setdefault(code.upper(), dict(candidate))
         if len(strict_exact_by_code) == 1:
             return next(iter(strict_exact_by_code.values()))
+        if provider_key == "BIS" and len(strict_exact_by_code) > 1:
+            canonical_candidate = _prefer_bis_catalog_alias_candidate(
+                list(strict_exact_by_code.values())
+            )
+            if canonical_candidate is not None:
+                return canonical_candidate
+            return None
 
     for search_text, raw_candidate in candidates_by_input:
         candidate = _with_provider_native_comtrade_hs_metadata(raw_candidate)
@@ -1244,7 +1424,51 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         if explicit_unit_tokens and best_rank[1] <= -100:
             return None
         if len(top_codes) > 1:
+            if provider_key == "BIS":
+                canonical_candidate = _prefer_bis_catalog_alias_candidate(top_matches)
+                if canonical_candidate is not None:
+                    return canonical_candidate
             if explicit_frequency_tokens:
+                return best_candidate
+            best_name_signature = re.sub(
+                r"[^a-z0-9]+",
+                " ",
+                str((best_candidate or {}).get("name") or "").lower(),
+            ).strip()
+            if (
+                provider_key == "COINGECKO"
+                and len(top_title_unit_signatures) <= 1
+                and len(best_name_signature.split()) >= 2
+                and best_name_signature in exact_query_norms
+            ):
+                # CoinGecko can expose multiple provider-native asset ids with
+                # the same exact display name.  For a literal two-plus-token
+                # asset title, carry all exact provider-native ids forward
+                # instead of arbitrarily choosing one or falling through to a
+                # low-confidence LLM parse / generic bitcoin fallback.
+                exact_coin_ids: list[str] = []
+                seen_coin_ids: set[str] = set()
+                for candidate in top_matches:
+                    coin_id = str(candidate.get("code") or "").strip().lower()
+                    if (
+                        coin_id
+                        and re.fullmatch(r"[a-z0-9][a-z0-9\-]{1,127}", coin_id)
+                        and coin_id not in seen_coin_ids
+                    ):
+                        exact_coin_ids.append(coin_id)
+                        seen_coin_ids.add(coin_id)
+                if len(exact_coin_ids) > 10:
+                    return None
+                if len(exact_coin_ids) > 1:
+                    combined = dict(best_candidate or top_matches[0])
+                    combined["code"] = exact_coin_ids[0]
+                    combined["params"] = {
+                        **dict(combined.get("params") or {}),
+                        "coinIds": exact_coin_ids,
+                        "__semantic_authority": "exact_user_input",
+                        "__decision_source": "exact_title_multi_asset",
+                    }
+                    return combined
                 return best_candidate
             if len(top_title_unit_signatures) <= 1 and len(normalized_name.split()) >= 3:
                 return best_candidate
@@ -1311,14 +1535,7 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
         ):
             queue.append(without_leading_transform)
 
-        without_trailing_frequency = re.sub(
-            r"\s+\((?:daily|weekly(?:,\s*ending\s+[a-z]+)?|biweekly|"
-            r"monthly|quarterly|semiannual|semi-annual|annual|yearly)"
-            r"\)\s*$",
-            "",
-            candidate,
-            flags=re.IGNORECASE,
-        ).strip(" ,;:-")
+        without_trailing_frequency = _strip_trailing_exact_title_frequency_wrapper(candidate)
         if (
             without_trailing_frequency
             and without_trailing_frequency != candidate
@@ -2557,92 +2774,103 @@ async def resolve_indicator_for_fetch(
             provider,
             exact_title_query,
         )
-        params = _apply_indicator_with_semantic_label(indicator_query)
-        params["__indicator_selection_status"] = "exact_title_unresolved"
-        intent.parameters = params
-        return params
-    else:
-        selector_attempted = False
-        selector_without_final_authority = False
-        selector_source = ""
-        selector_rejection_reason = ""
-        selector_retry_query = ""
-        try:
-            from .indicator_selector import IndicatorSelector
-            selector = IndicatorSelector()
-            selector_attempted = True
-            metadata_query = None
-            if (
-                provider == "FRED"
-                and original_selector_query
-                and indicator_query
-                and _lost_explicit_frequency_tokens(original_selector_query, indicator_query)
-            ):
-                metadata_query = original_selector_query
-            if metadata_query:
-                selection = await selector.select(selector_query, provider, metadata_query=metadata_query)
-            else:
-                selection = await selector.select(selector_query, provider)
-            selector_source = str(getattr(selection, "source", "") or "")
-            selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
-            selector_retry_query = str(getattr(selection, "retry_query", "") or "")
-            if selection.code:
-                selection_name = str(getattr(selection, "name", "") or "")
-                if is_placeholder_indicator_code(selection.code):
-                    selector_without_final_authority = True
-                    selector_rejection_reason = "placeholder_llm_pick"
-                else:
-                    logger.info(
-                        "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
-                        indicator_query, selection.code, selection.source,
-                    )
-                    params = _apply_indicator_with_semantic_label(
-                        selection.code,
-                        __semantic_authority="llm_adjudication",
-                        __decision_source="llm_pick",
-                        __indicator_selection_source=selection.source,
-                        **_statscan_selected_product_extra(selection.code, "llm_adjudication"),
-                    )
-                    if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
-                        logger.info(
-                            "🔎 Collapsing World Bank multi-indicator intent to selector-resolved indicator '%s'",
-                            selection.code,
-                        )
-                        intent.indicators = [selection.code]
-                    intent.parameters = params
-                    return params
-            if selection.needs_user_choice:
-                logger.info(
-                    "🔵 IndicatorSelector needs user choice: %d options",
-                    len(selection.options),
-                )
-                params = {**params, "__indicator_options": selection.options}
-                intent.parameters = params
-                selector_without_final_authority = True
-            elif not selection.code:
-                selector_without_final_authority = True
-        except Exception as e:
-            logger.debug("IndicatorSelector unavailable; failing closed without retired fallback: %s", e)
-            selector_attempted = True
-            selector_without_final_authority = True
-            selector_source = "selector_unavailable"
-
-        if (
-            selector_attempted
-            and selector_without_final_authority
-        ):
-            logger.info(
-                "🚫 Skipping retired indicator fallback on no-shortcut path after selector source=%s",
-                selector_source or "unknown",
-            )
+        provider_locked_natural_language = (
+            is_provider_locked(intent.parameters or params)
+            and not has_explicit_code
+            and not is_exact_match_locked(intent.parameters or params)
+        )
+        if not provider_locked_natural_language:
             params = _apply_indicator_with_semantic_label(indicator_query)
-            params["__indicator_selection_status"] = selector_source or "no_decision"
-            if selector_rejection_reason:
-                params["__indicator_rejection_reason"] = selector_rejection_reason
-            if selector_retry_query:
-                params["__indicator_retry_query"] = selector_retry_query
+            params["__indicator_selection_status"] = "exact_title_unresolved"
             intent.parameters = params
             return params
+        logger.info(
+            "↪️ Continuing provider-locked %s natural-language query through selector after exact-title miss: %s",
+            provider,
+            selector_query,
+        )
+
+    selector_attempted = False
+    selector_without_final_authority = False
+    selector_source = ""
+    selector_rejection_reason = ""
+    selector_retry_query = ""
+    try:
+        from .indicator_selector import IndicatorSelector
+        selector = IndicatorSelector()
+        selector_attempted = True
+        metadata_query = None
+        if (
+            provider == "FRED"
+            and original_selector_query
+            and indicator_query
+            and _lost_explicit_frequency_tokens(original_selector_query, indicator_query)
+        ):
+            metadata_query = original_selector_query
+        if metadata_query:
+            selection = await selector.select(selector_query, provider, metadata_query=metadata_query)
+        else:
+            selection = await selector.select(selector_query, provider)
+        selector_source = str(getattr(selection, "source", "") or "")
+        selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
+        selector_retry_query = str(getattr(selection, "retry_query", "") or "")
+        if selection.code:
+            selection_name = str(getattr(selection, "name", "") or "")
+            if is_placeholder_indicator_code(selection.code):
+                selector_without_final_authority = True
+                selector_rejection_reason = "placeholder_llm_pick"
+            else:
+                logger.info(
+                    "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
+                    indicator_query, selection.code, selection.source,
+                )
+                params = _apply_indicator_with_semantic_label(
+                    selection.code,
+                    __semantic_authority="llm_adjudication",
+                    __decision_source="llm_pick",
+                    __indicator_selection_source=selection.source,
+                    **_statscan_selected_product_extra(selection.code, "llm_adjudication"),
+                )
+                if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
+                    logger.info(
+                        "🔎 Collapsing World Bank multi-indicator intent to selector-resolved indicator '%s'",
+                        selection.code,
+                    )
+                    intent.indicators = [selection.code]
+                intent.parameters = params
+                return params
+        if selection.needs_user_choice:
+            logger.info(
+                "🔵 IndicatorSelector needs user choice: %d options",
+                len(selection.options),
+            )
+            params = {**params, "__indicator_options": selection.options}
+            intent.parameters = params
+            selector_without_final_authority = True
+        elif not selection.code:
+            selector_without_final_authority = True
+    except Exception as e:
+        logger.debug("IndicatorSelector unavailable; failing closed without retired fallback: %s", e)
+        selector_attempted = True
+        selector_without_final_authority = True
+        selector_source = "selector_unavailable"
+
+    if (
+        selector_attempted
+        and selector_without_final_authority
+    ):
+        logger.info(
+            "🚫 Skipping retired indicator fallback on no-shortcut path after selector source=%s",
+            selector_source or "unknown",
+        )
+        params = _apply_indicator_with_semantic_label(indicator_query)
+        params["__indicator_selection_status"] = selector_source or "no_decision"
+        if selector_rejection_reason:
+            params["__indicator_rejection_reason"] = selector_rejection_reason
+        if selector_retry_query:
+            params["__indicator_retry_query"] = selector_retry_query
+        intent.parameters = params
+        return params
 
     # No selector final authority. Keep provider-neutral semantic text and let
     # provider retrieval fail closed or ask for clarification; do not invoke the
@@ -2714,6 +2942,12 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
         return _fallback_to_original_or_distilled()
 
     if provider and looks_like_exact_provider_title_match(original_query, provider):
+        if provider_locked and not is_exact_match_locked(intent.parameters or {}) and len(intent.indicators or []) <= 1:
+            logger.info(
+                "🔎 Provider-locked original query looks like an exact %s title; using parsed/distilled indicator phrase for selector fallback.",
+                provider,
+            )
+            return semantic_indicator_label or indicator_query or distilled_original or original_query
         logger.info(
             "🔎 Original query looks like an exact %s indicator title. Using original query for resolution.",
             provider,
