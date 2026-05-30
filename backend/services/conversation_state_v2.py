@@ -1229,6 +1229,17 @@ def merge_new_state_with_previous(
         and previous.indicator
         and str(new_state.indicator).strip().lower() != str(previous.indicator).strip().lower()
     )
+    # Provider-change detection runs BEFORE the provider carry-forward below
+    # so we can correctly invalidate provider-specific resolved codes
+    # (Phase 2.9 — fixes A#100). A resolved_indicator_code is by definition
+    # provider-specific (FRED's "CPIAUCSL" is meaningless against WorldBank);
+    # carrying it forward across a provider switch leaks the previous
+    # provider's namespace and produces silent wrong-data answers.
+    provider_changed = bool(
+        new_state.provider
+        and previous.provider
+        and str(new_state.provider).strip().upper() != str(previous.provider).strip().upper()
+    )
 
     # --- Geography ---
     _new_has_geo = new_state.country or new_state.countries
@@ -1254,8 +1265,13 @@ def merge_new_state_with_previous(
         new_state.frequency = previous.frequency
 
     # --- Indicator resolution ---
+    # Carry forward the previous resolved code ONLY when (a) the indicator
+    # name has not changed AND (b) the provider has not changed. A code is
+    # always provider-specific, so a provider switch invalidates it even
+    # when the human-readable indicator name is identical.
     if (
         not indicator_changed
+        and not provider_changed
         and not new_state.resolved_indicator_code
         and previous.resolved_indicator_code
     ):
@@ -1264,18 +1280,29 @@ def merge_new_state_with_previous(
         new_state.base_indicator = previous.base_indicator
     if (
         not indicator_changed
+        and not provider_changed
         and not new_state.last_indicators_resolved
         and previous.last_indicators_resolved
     ):
         new_state.last_indicators_resolved = previous.last_indicators_resolved
 
     # --- StatsCanada dimension context ---
+    # StatsCan product IDs and cube metadata are provider-specific. If the
+    # provider switches away from StatsCan, drop them so they cannot leak
+    # into a downstream FRED/WB/IMF query path. Phase 2.9 — invariant #3
+    # preserved (statscan_cube_metadata still survives intra-StatsCan turns).
     if not new_state.dimensions and previous.dimensions:
         new_state.dimensions = previous.dimensions
-    if not indicator_changed and not new_state.statscan_product_id and previous.statscan_product_id:
+    if (
+        not indicator_changed
+        and not provider_changed
+        and not new_state.statscan_product_id
+        and previous.statscan_product_id
+    ):
         new_state.statscan_product_id = previous.statscan_product_id
     if (
         not indicator_changed
+        and not provider_changed
         and not new_state.statscan_cube_metadata
         and previous.statscan_cube_metadata
     ):
