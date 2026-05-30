@@ -43,6 +43,14 @@ class Settings(BaseSettings):
         alias="ALLOWED_ORIGINS"
     )
     app_url: str = Field(default="https://data.openecon.ai", alias="APP_URL")
+    # Trusted reverse-proxy source IPs whose X-Forwarded-For header is honored.
+    # Default: loopback only (Apache/nginx on same host). For CDN/LB termination,
+    # set TRUSTED_PROXIES to the comma-separated source IPs (or CIDRs not supported here).
+    trusted_proxies: List[str] = Field(
+        default_factory=lambda: ["127.0.0.1", "::1"],
+        alias="TRUSTED_PROXIES",
+        description="IPs whose X-Forwarded-For header is trusted for client-IP attribution"
+    )
 
     # LLM Configuration
     # LLM_PROVIDER options: openrouter, vllm, ollama, lm-studio
@@ -202,6 +210,14 @@ class Settings(BaseSettings):
             # Split by comma and strip whitespace
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v or []
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def parse_trusted_proxies(cls, v):
+        """Parse TRUSTED_PROXIES from comma-separated string or list"""
+        if isinstance(v, str):
+            return [ip.strip() for ip in v.split(",") if ip.strip()]
+        return v or ["127.0.0.1", "::1"]
 
     @model_validator(mode="after")
     def validate_llm_provider_keys(self):

@@ -258,15 +258,28 @@ class RateLimitASGIMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # In production, get real client IP from proxy headers
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
-        else:
-            client_ip = get_remote_address(request)
+        # In production, get real client IP. Only honor X-Forwarded-For when
+        # the direct connection comes from a TRUSTED_PROXIES allowlist —
+        # otherwise an attacker can spoof XFF to bypass per-IP rate limits or
+        # poison the rate-limit bucket of an arbitrary IP.
+        direct_ip = get_remote_address(request)
+        forwarded_for_header = request.headers.get("X-Forwarded-For")
+        trusted_proxies = set(self.settings.trusted_proxies or [])
 
-        # Skip rate limiting for direct localhost connections (not proxied)
-        if not forwarded_for and client_ip in ("127.0.0.1", "::1", "localhost"):
+        if forwarded_for_header and direct_ip in trusted_proxies:
+            # Trusted reverse proxy — take the leftmost (originating) client IP
+            client_ip = forwarded_for_header.split(",")[0].strip() or direct_ip
+        else:
+            # Untrusted source — use direct connection IP, ignore XFF
+            client_ip = direct_ip
+            if forwarded_for_header:
+                logger.warning(
+                    "Ignoring X-Forwarded-For from untrusted source %s (set TRUSTED_PROXIES to allow)",
+                    direct_ip,
+                )
+
+        # Skip rate limiting for direct localhost connections (no XFF present)
+        if not forwarded_for_header and client_ip in ("127.0.0.1", "::1", "localhost"):
             await self.app(scope, receive, send)
             return
 
