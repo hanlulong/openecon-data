@@ -808,12 +808,18 @@ class EurostatProvider(BaseProvider):
             return data_points, frequency
 
         # Fallback: try SDMX-JSON format (data/sdmx API) - legacy support
+        # Phase 3.4 error-handling convention: distinguish "API success with
+        # zero rows" (return [], "annual") from "malformed payload"
+        # (raise DataNotAvailableError). Conflating them defeats the
+        # verification harness — silent empties hide parser bugs as data
+        # gaps and the accuracy suite can't tell the difference.
         data_section = payload.get("data", {})
         datasets = data_section.get("dataset") or data_section.get("datasets") or []
         if isinstance(datasets, dict):
             datasets = [datasets]
         if not datasets:
-            return [], "annual"  # Return empty instead of raising error
+            # Empty dataset list is legitimate "no data" from the API.
+            return [], "annual"
 
         dataset = datasets[0]
         values = dataset.get("value", {})
@@ -821,15 +827,29 @@ class EurostatProvider(BaseProvider):
             values = {str(idx): val for idx, val in enumerate(values)}
 
         if not values:
-            return [], "annual"  # Return empty if no values
+            # API returned a dataset envelope but no observations — treat
+            # as legitimate "no data" rather than parse failure.
+            return [], "annual"
 
         dimensions = dataset.get("dimension", {})
+        if not dimensions:
+            # Values without dimension metadata is structurally invalid
+            # SDMX-JSON; bubble up as a parser failure so callers don't
+            # silently absorb it as "no data".
+            raise DataNotAvailableError(
+                f"Eurostat dataset {dataset_code!r} returned values without dimension metadata"
+            )
         time_dim = dimensions.get("time") or {}
         category = time_dim.get("category") or {}
         indexes = category.get("index") or {}
 
         if not indexes:
-            return [], "annual"  # Return empty if no time dimension
+            # Time dimension is the index axis for any temporal Eurostat
+            # series. Missing time index with values present is structurally
+            # invalid — raise so the issue surfaces in monitoring.
+            raise DataNotAvailableError(
+                f"Eurostat dataset {dataset_code!r} returned values but no time-dimension index"
+            )
 
         ordered = sorted(indexes.items(), key=lambda item: item[1])
 
