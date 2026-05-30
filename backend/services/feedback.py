@@ -7,6 +7,7 @@ Supports two email methods:
 2. SMTP (fallback) - set SMTP_HOST, SMTP_USER, SMTP_PASSWORD
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -73,7 +74,11 @@ class FeedbackService:
 
     def submit_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
         """
-        Submit user feedback.
+        Submit user feedback (synchronous, blocking — kept for test parity).
+
+        Prefer submit_feedback_async() from async endpoints; the blocking
+        SMTP/HTTP send inside _send_email_notification would otherwise stall
+        the event loop for the whole feedback flow.
 
         Args:
             request: The feedback request containing type, message, and optional session info
@@ -81,10 +86,59 @@ class FeedbackService:
         Returns:
             FeedbackResponse with success status and feedback ID
         """
+        feedback_id, feedback_entry = self._record_feedback(request)
+        # Try to send email notification (blocking — sync entry point only)
+        email_sent = self._send_email_notification(feedback_entry)
+        if email_sent:
+            logger.info(f"Email notification sent for feedback {feedback_id}")
+        else:
+            logger.info(f"Email notification skipped (SMTP not configured) for feedback {feedback_id}")
+        return FeedbackResponse(
+            success=True,
+            message="Thank you for your feedback! We'll review it and get back to you if needed.",
+            feedbackId=feedback_id,
+        )
+
+    async def submit_feedback_async(self, request: FeedbackRequest) -> FeedbackResponse:
+        """
+        Async entry point for FastAPI handlers.
+
+        Records the feedback synchronously (cheap — JSON file append) and
+        fires the email send as a background asyncio task that itself runs
+        inside asyncio.to_thread so the blocking httpx/smtplib calls never
+        touch the event loop. The response returns immediately whether or
+        not the email succeeds.
+
+        A#6/7/13/16: synchronous _send_email_notification was stalling the
+        event loop on every feedback submit. Now the user-facing response
+        latency is bounded by the (already-fast) file save, and the email
+        delivery is best-effort in the background.
+        """
+        feedback_id, feedback_entry = self._record_feedback(request)
+        # Fire-and-forget: schedule the blocking email send on a thread.
+        # Wrapping in asyncio.create_task means we return to the caller
+        # immediately; the task is tracked so it can be reaped/observed.
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(asyncio.to_thread(self._send_email_notification, feedback_entry))
+        except RuntimeError:
+            # No running loop — fall back to the synchronous path.
+            self._send_email_notification(feedback_entry)
+        return FeedbackResponse(
+            success=True,
+            message="Thank you for your feedback! We'll review it and get back to you if needed.",
+            feedbackId=feedback_id,
+        )
+
+    def _record_feedback(self, request: FeedbackRequest) -> tuple[str, dict]:
+        """Build, persist, and return the canonical feedback record.
+
+        Extracted from submit_feedback so both the sync entry point and
+        submit_feedback_async share the exact same persistence semantics
+        (id, timestamp, JSON shape, file-append, logging).
+        """
         feedback_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
-
-        # Create feedback entry
         feedback_entry = {
             "id": feedback_id,
             "type": request.type,
@@ -96,25 +150,10 @@ class FeedbackService:
             "sessionInfo": request.sessionInfo.model_dump() if request.sessionInfo else None,
             "conversation": request.conversation.model_dump() if request.conversation else None,
         }
-
-        # Save to file
         self._feedback.append(feedback_entry)
         self._save_feedback()
-
         logger.info(f"Feedback submitted: {feedback_id} (type={request.type})")
-
-        # Try to send email notification
-        email_sent = self._send_email_notification(feedback_entry)
-        if email_sent:
-            logger.info(f"Email notification sent for feedback {feedback_id}")
-        else:
-            logger.info(f"Email notification skipped (SMTP not configured) for feedback {feedback_id}")
-
-        return FeedbackResponse(
-            success=True,
-            message="Thank you for your feedback! We'll review it and get back to you if needed.",
-            feedbackId=feedback_id,
-        )
+        return feedback_id, feedback_entry
 
     def _send_email_notification(self, feedback: dict) -> bool:
         """

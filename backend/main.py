@@ -1794,11 +1794,12 @@ async def submit_feedback(request: FeedbackRequest):
     """
     Submit user feedback (bug report, feature request, or other).
 
-    This endpoint accepts feedback from users and stores it for review.
-    Email notifications are sent if SMTP is configured.
+    Persists the feedback synchronously (fast — JSON append) and dispatches
+    the email notification as a background asyncio.to_thread task so the
+    blocking SMTP/HTTP calls do not stall the event loop. Phase 3.8.
     """
     try:
-        response = feedback_service.submit_feedback(request)
+        response = await feedback_service.submit_feedback_async(request)
         return response
     except Exception as e:
         logger.error(f"Failed to submit feedback: {e}")
