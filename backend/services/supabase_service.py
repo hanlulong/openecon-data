@@ -279,11 +279,24 @@ class SupabaseService:
     """
 
     def __init__(self):
-        """Initialize SupabaseService with async wrapper."""
+        """Initialize SupabaseService with async wrapper.
+
+        SECURITY: Fails closed in production. Matches the auth_factory pattern
+        — silently returning an unconfigured client allowed silent data loss
+        when Supabase env vars were missing in production. Now: production
+        must have credentials configured at startup; development/test still
+        degrades gracefully to an unconfigured (None) client.
+        """
         settings = get_settings()
 
         if not settings.supabase_url or not settings.supabase_service_key:
-            logger.warning("Supabase credentials not configured - database operations will fail")
+            if settings.environment == "production":
+                raise RuntimeError(
+                    "SECURITY ERROR: Supabase must be configured in production. "
+                    "Set SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables, "
+                    "or set NODE_ENV=development for local testing."
+                )
+            logger.warning("Supabase credentials not configured - database operations will be skipped (dev mode)")
             self.client = None
         else:
             self.client = AsyncSupabase(
