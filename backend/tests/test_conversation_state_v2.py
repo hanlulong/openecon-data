@@ -2549,3 +2549,42 @@ class TestResolvedIndicatorCodePreservation:
         assert retrieved.active_answer_members[0].provider == "WORLDBANK"
         assert retrieved.recent_answer_members is not None
         assert [member.provider for member in retrieved.recent_answer_members] == ["FRED", "WORLDBANK"]
+
+
+# ─── Phase 2.6 schema bump: telemetry fields ──────────────────────────
+
+class TestPhase26TelemetryFields:
+    """The schema bump adds delta_confidence + needs_full_rewrite to FollowUpDelta.
+
+    Behavior is TELEMETRY ONLY in this PR — merge_state must not consume them
+    yet. These tests freeze that contract so a future PR that wires them up
+    has to deliberately update the tests.
+    """
+
+    def test_defaults_are_inert(self):
+        delta = FollowUpDelta()
+        assert delta.delta_confidence is None
+        assert delta.needs_full_rewrite is False
+
+    def test_fields_round_trip_through_model_dump(self):
+        delta = FollowUpDelta(delta_confidence=0.42, needs_full_rewrite=True)
+        dumped = delta.model_dump()
+        assert dumped["delta_confidence"] == 0.42
+        assert dumped["needs_full_rewrite"] is True
+        # Existing fields untouched
+        assert dumped["changed_indicator"] is None
+
+    def test_merge_state_ignores_new_fields(self):
+        """Telemetry-only contract: merge_state must NOT consume these fields.
+
+        If this test starts failing because someone wired the fields into
+        merge_state, that wiring belongs in a separate PR with shadow-mode
+        telemetry per docs/DEEP_REVIEW_2026-05-30.md §6 invariant #8.
+        """
+        current = ConversationState(indicator="GDP", country="USA", provider="FRED")
+        delta = FollowUpDelta(delta_confidence=0.2, needs_full_rewrite=True)
+        merged = merge_state(current, delta)
+        # State preserved — no field-level changes
+        assert merged.indicator == "GDP"
+        assert merged.country == "USA"
+        assert merged.provider == "FRED"

@@ -963,7 +963,21 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
    - CRITICAL: "show by province" / "by province" / "break down by province" (no specific province named)
      → changed_decomposition = {{"type": "provinces", "entities": null, "axis": "Geography"}}
    - "show for Ontario" / "Ontario only" → added_dimensions = {{"Geography": "Ontario"}}
+   - "break it down by sector" / "by industry" → changed_decomposition = {{"type": "sectors", "entities": null, "axis": "Sector"}}
+   - "by age group" (no specific group) → changed_decomposition = {{"type": "age_groups", "entities": null, "axis": "Age"}}
+   - "by category" / "by sub-category" → changed_decomposition = {{"type": "categories", "entities": null, "axis": "Category"}}
+   - "by region" (sub-national, no specific region) → changed_decomposition = {{"type": "regions", "entities": null, "axis": "Geography"}}
 11. "also show X" / "add X" / "include X" / "and also X" where X is a DIFFERENT indicator → added_indicators (list). This ADDS to the existing indicators, not replaces. Example: after "US GDP", "also show inflation" → added_indicators=["inflation"].
+
+STEP 3 — TELEMETRY (always populate):
+- delta_confidence: float between 0.0 and 1.0 reflecting your confidence in the extracted delta.
+  - 0.9-1.0: query maps cleanly to one or two fields (e.g., "switch to Japan").
+  - 0.6-0.9: query is mostly clear but has some ambiguity (e.g., "what about the latest data" — frequency or time range?).
+  - <0.6: query is ambiguous, restructures the conversation, or you had to guess which fields apply.
+- needs_full_rewrite: true ONLY when the user's message restructures the conversation in a way that the
+  field-by-field delta cannot capture — e.g., a compound query that switches indicator, country, and
+  decomposition all at once with new constraints, or a query whose intent depends on details no delta field
+  represents. Default false; prefer normal delta extraction when possible.
 
 IMPORTANT DISTINCTIONS:
 - "Show unemployment instead" → changed_indicator (replaces current)

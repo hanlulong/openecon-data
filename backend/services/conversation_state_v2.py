@@ -560,6 +560,18 @@ class FollowUpDelta(BaseModel):
     # clarification_answer, informational.
     query_type: Optional[str] = None
 
+    # --- Telemetry / escalation (Phase 2.6 schema bump) ---
+    # Populated by the LLM extractor; consumed in Phase 2.7 (Tier-3 escape
+    # hatch). In this PR these fields are TELEMETRY ONLY — neither merge_state
+    # nor any production caller reads them yet, so adding them is a
+    # zero-behavior-change schema extension. The wiring (escalate to a full
+    # state rewrite when confidence is low or needs_full_rewrite is true)
+    # ships behind DELTA_FULL_REWRITE_ENABLED in a follow-up PR with
+    # ≥7d shadow-mode validation per docs/DEEP_REVIEW_2026-05-30.md §6
+    # invariant #8.
+    delta_confidence: Optional[float] = None
+    needs_full_rewrite: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Helpers
