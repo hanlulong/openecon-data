@@ -98,6 +98,7 @@ backend/data/faiss_index/
 scripts/test_data/
 scripts/test_results/
 backend/data/test_*.json
+backend/data/feedback/
 tests/*.json
 
 # Duplicate package files in scripts (use root package.json)
