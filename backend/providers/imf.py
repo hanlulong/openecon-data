@@ -865,39 +865,9 @@ class IMFProvider(BaseProvider):
 
         return results
     def _normalize_percentage_values(self, data: list[dict], indicator_name: str) -> list[dict]:
-        """
-        Normalize percentage values that are stored as decimals.
-        If indicator mentions 'percent', 'rate', 'ratio' and values are < 1, multiply by 100.
-
-        Args:
-            data: List of data points with 'date' and 'value' keys
-            indicator_name: Name of the indicator for detection logic
-
-        Returns:
-            Normalized data points with percentage values (e.g., 60 instead of 0.60)
-        """
-        if not data:
-            return data
-
-        # Check if values look like decimals (all non-null absolute values < 1.5)
-        # We use 1.5 as threshold because some rates can exceed 1% (e.g., 1.2% inflation)
-        # but values like 60% (debt/GDP) would never be stored as 60.0
-        non_null_values = [abs(d['value']) for d in data if d['value'] is not None]
-        if not non_null_values:
-            return data
-
-        max_value = max(non_null_values)
-
-        # If max value < 1.5, likely stored as decimals (0.012 = 1.2%)
-        # Exception: Negative values (deficits) can be < -1, so we use absolute values
-        if max_value < 1.5:
-            logger.info(f"Normalizing percentage values for indicator: {indicator_name} (max value: {max_value})")
-            return [
-                {'date': d['date'], 'value': d['value'] * 100 if d['value'] is not None else None}
-                for d in data
-            ]
-
-        return data
+        """Delegate to the shared SDMX percentage-normalizer (Phase 3.1)."""
+        from ._sdmx import normalize_percentage_values as _shared
+        return _shared(data, label=indicator_name)
 
     @staticmethod
     def _indicator_catalog_lookup_keys(indicator_code: str) -> List[str]:

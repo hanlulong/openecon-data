@@ -485,38 +485,16 @@ class FREDProvider(BaseProvider):
         return self.FREQUENCY_MAP.get(fred_frequency, fred_frequency.lower())
 
     def _normalize_percentage_values(self, data: list[dict], series_id: str, unit: str) -> list[dict]:
+        """Delegate to the shared SDMX percentage-normalizer.
+
+        Phase 3.1 extraction: the previous in-place implementation was
+        byte-identical to the IMF and Eurostat copies. The `unit` argument
+        is preserved in the signature for caller compatibility but is
+        unused — the normalizer is driven purely by the value distribution.
         """
-        Normalize percentage values that are stored as decimals.
-        If values are < 1.5 in absolute value, multiply by 100.
-
-        Args:
-            data: List of data points with 'date' and 'value' keys
-            series_id: FRED series ID for detection logic
-            unit: Unit string from FRED metadata
-
-        Returns:
-            Normalized data points with percentage values (e.g., 2.5 instead of 0.025)
-        """
-        if not data:
-            return data
-
-        # Check if values look like decimals (all non-null absolute values < 1.5)
-        non_null_values = [abs(d['value']) for d in data if d['value'] is not None]
-        if not non_null_values:
-            return data
-
-        max_value = max(non_null_values)
-
-        # If max value < 1.5, likely stored as decimals (0.025 = 2.5%)
-        # Exception: Negative values can be < -1, so we use absolute values
-        if max_value < 1.5:
-            logger.info(f"Normalizing percentage values for series: {series_id} (max value: {max_value})")
-            return [
-                {'date': d['date'], 'value': d['value'] * 100 if d['value'] is not None else None}
-                for d in data
-            ]
-
-        return data
+        from ._sdmx import normalize_percentage_values as _shared
+        del unit  # unused — kept for caller signature stability
+        return _shared(data, label=series_id)
 
     async def fetch_series(
         self, params: Dict[str, Any]

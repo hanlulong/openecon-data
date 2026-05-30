@@ -1231,34 +1231,6 @@ class EurostatProvider(BaseProvider):
         return self._infer_unit_fallback(dataset_code)
 
     def _normalize_percentage_values(self, data: list[dict], dataset_code: str) -> list[dict]:
-        """
-        Normalize percentage values that are stored as decimals.
-        If values are < 1.5 in absolute value, multiply by 100.
-
-        Args:
-            data: List of data points with 'date' and 'value' keys
-            dataset_code: Dataset code for detection logic
-
-        Returns:
-            Normalized data points with percentage values (e.g., 2.5 instead of 0.025)
-        """
-        if not data:
-            return data
-
-        # Check if values look like decimals (all non-null absolute values < 1.5)
-        non_null_values = [abs(d['value']) for d in data if d['value'] is not None]
-        if not non_null_values:
-            return data
-
-        max_value = max(non_null_values)
-
-        # If max value < 1.5, likely stored as decimals (0.025 = 2.5%)
-        # Exception: Negative values (e.g., GDP contraction) can be < -1, so we use absolute values
-        if max_value < 1.5:
-            logger.info(f"Normalizing percentage values for dataset: {dataset_code} (max value: {max_value})")
-            return [
-                {'date': d['date'], 'value': d['value'] * 100 if d['value'] is not None else None}
-                for d in data
-            ]
-
-        return data
+        """Delegate to the shared SDMX percentage-normalizer (Phase 3.1)."""
+        from ._sdmx import normalize_percentage_values as _shared
+        return _shared(data, label=dataset_code)
