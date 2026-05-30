@@ -1649,8 +1649,17 @@ async def submit_feedback(request: FeedbackRequest):
 
 
 @app.get("/api/debug/conversation-state/{conversation_id}")
-async def debug_conversation_state(conversation_id: str):
-    """Debug endpoint: inspect conversation state for a given ID. Dev-only."""
+async def debug_conversation_state(
+    conversation_id: str,
+    user: User = Depends(get_required_user),
+):
+    """Debug endpoint: inspect conversation state for a given ID. Dev-only.
+
+    SECURITY: previously gated solely on ALLOW_TEST_USER env var. An accidental
+    production flag flip would expose every conversation's state (including
+    other users') to anonymous callers. Now requires authentication AND the
+    dev gate.
+    """
     # Only available when ALLOW_TEST_USER is set (development/testing)
     import os as _os
     if not _os.getenv("ALLOW_TEST_USER"):
