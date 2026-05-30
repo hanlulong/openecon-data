@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Test script to verify WorldBank over-selection fix.
+Legacy diagnostic script for historical WorldBank over-selection cases.
 
-Tests the 13 misrouted queries against the enhanced ProviderRouter.
+The production router now follows the no-shortcut contract: the legacy
+ProviderRouter import path delegates to UnifiedRouter and must not force
+semantic provider changes for these query-shaped cases.
 """
 import sys
 import os
@@ -14,8 +16,7 @@ from backend.services.provider_router import ProviderRouter
 from backend.models import ParsedIntent
 
 
-# The 13 misrouted queries with expected providers
-MISROUTED_QUERIES = [
+LEGACY_REROUTE_CASES = [
     # COMTRADE (1 query)
     {
         "id": 22,
@@ -123,23 +124,23 @@ MISROUTED_QUERIES = [
 ]
 
 
-def test_routing_fix():
-    """Test that all 13 misrouted queries now route correctly."""
+def run_routing_fix_diagnostic() -> bool:
+    """Print the historical before/after diagnostic without acting as a pytest test."""
     print("=" * 80)
-    print("WORLDBANK ROUTING FIX TEST")
+    print("LEGACY WORLDBANK REROUTE DIAGNOSTIC")
     print("=" * 80)
     print()
-    print(f"Testing {len(MISROUTED_QUERIES)} misrouted queries...")
+    print(f"Testing {len(LEGACY_REROUTE_CASES)} historical cases for no forced semantic overrides...")
     print()
 
     passed = 0
     failed = 0
     results = []
 
-    for test_case in MISROUTED_QUERIES:
+    for test_case in LEGACY_REROUTE_CASES:
         query_id = test_case["id"]
         query = test_case["query"]
-        expected = test_case["expected_provider"]
+        legacy_expected = test_case["expected_provider"]
         llm_choice = test_case["llm_provider"]
         indicators = test_case["indicators"]
 
@@ -155,8 +156,9 @@ def test_routing_fix():
         # Route using ProviderRouter
         routed_provider = ProviderRouter.route_provider(intent, query)
 
-        # Check if routing is correct
-        is_correct = routed_provider.upper() == expected.upper()
+        # Current no-shortcut contract: keep the LLM/default provider unless
+        # explicit provider-native authority exists.
+        is_correct = routed_provider.upper() == llm_choice.upper()
 
         if is_correct:
             passed += 1
@@ -168,14 +170,17 @@ def test_routing_fix():
         result = {
             "id": query_id,
             "query": query,
-            "expected": expected,
+            "legacy_expected": legacy_expected,
             "llm_choice": llm_choice,
             "routed_to": routed_provider,
             "status": status
         }
         results.append(result)
 
-        print(f"{status} | Q{query_id:3d} | {llm_choice:12s} → {routed_provider:12s} (expected: {expected})")
+        print(
+            f"{status} | Q{query_id:3d} | {llm_choice:12s} → {routed_provider:12s} "
+            f"(legacy reroute target: {legacy_expected})"
+        )
         if not is_correct:
             print(f"         | Query: {query[:70]}")
         print()
@@ -184,26 +189,26 @@ def test_routing_fix():
     print("=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"Total:  {len(MISROUTED_QUERIES)}")
-    print(f"Passed: {passed} ({passed/len(MISROUTED_QUERIES)*100:.1f}%)")
-    print(f"Failed: {failed} ({failed/len(MISROUTED_QUERIES)*100:.1f}%)")
+    print(f"Total:  {len(LEGACY_REROUTE_CASES)}")
+    print(f"Passed: {passed} ({passed/len(LEGACY_REROUTE_CASES)*100:.1f}%)")
+    print(f"Failed: {failed} ({failed/len(LEGACY_REROUTE_CASES)*100:.1f}%)")
     print()
 
     if failed > 0:
-        print("❌ ROUTING FIX INCOMPLETE - Some queries still misroute")
+        print("❌ NO-SHORTCUT CONTRACT VIOLATED - Some cases still force semantic reroutes")
         print()
         print("Failed queries:")
         for result in results:
             if result["status"] == "❌ FAIL":
                 print(f"  Q{result['id']}: {result['query'][:60]}")
-                print(f"    Expected: {result['expected']}, Got: {result['routed_to']}")
+                print(f"    Expected current provider: {result['llm_choice']}, Got: {result['routed_to']}")
         return False
     else:
-        print("✅ ROUTING FIX SUCCESSFUL - All queries route correctly!")
+        print("✅ NO-SHORTCUT CONTRACT OK - No legacy semantic reroutes forced")
         return True
 
 
-def test_before_after_comparison():
+def print_before_after_comparison() -> None:
     """Show before/after comparison for each query."""
     print()
     print("=" * 80)
@@ -214,7 +219,7 @@ def test_before_after_comparison():
     print("| Q# | LLM Choice (Before) | ProviderRouter (After) | Expected | Status |")
     print("|----|--------------------|------------------------|----------|--------|")
 
-    for test_case in MISROUTED_QUERIES:
+    for test_case in LEGACY_REROUTE_CASES:
         query_id = test_case["id"]
         expected = test_case["expected_provider"]
         llm_choice = test_case["llm_provider"]
@@ -235,8 +240,25 @@ def test_before_after_comparison():
         print(f"| {query_id:3d} | {llm_choice:18s} | {routed:22s} | {expected:8s} | {status:6s} |")
 
 
+def test_legacy_reroute_cases_do_not_force_semantic_provider_overrides():
+    """Historical cases must keep the LLM/default provider unless explicit authority exists."""
+
+    for test_case in LEGACY_REROUTE_CASES:
+        intent = ParsedIntent(
+            apiProvider=test_case["llm_provider"],
+            indicators=test_case["indicators"],
+            parameters={},
+            clarificationNeeded=False,
+            confidence=0.9,
+        )
+
+        routed = ProviderRouter.route_provider(intent, test_case["query"])
+
+        assert routed.upper() == test_case["llm_provider"].upper()
+
+
 if __name__ == "__main__":
-    success = test_routing_fix()
-    test_before_after_comparison()
+    success = run_routing_fix_diagnostic()
+    print_before_after_comparison()
 
     sys.exit(0 if success else 1)

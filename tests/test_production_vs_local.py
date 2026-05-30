@@ -129,7 +129,7 @@ def run_parallel_test(query: str, provider: str, query_num: int, total: int) -> 
         "local": local_result
     }
 
-class TestRunner:
+class ComparisonRunner:
     """Main test runner that compares production vs local"""
 
     def __init__(self):
@@ -364,7 +364,7 @@ def main():
     print(f"Starting Production vs Local API Comparison")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    runner = TestRunner()
+    runner = ComparisonRunner()
 
     try:
         # Run all tests
