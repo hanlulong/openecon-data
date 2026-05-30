@@ -790,16 +790,17 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
             timeout=float(settings.query_timeout_seconds),
         )
     except asyncio.TimeoutError:
+        timeout_conversation_id = conversation_id or str(uuid.uuid4())
         logger.warning(
             "Query timed out after %ss: %s (conversation=%s)",
             settings.query_timeout_seconds,
             request.query[:120],
-            conversation_id,
+            timeout_conversation_id,
         )
         return JSONResponse(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             content=QueryResponse(
-                conversationId=conversation_id,
+                conversationId=timeout_conversation_id,
                 clarificationNeeded=False,
                 error="request_timeout",
                 message=(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -85,6 +86,29 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(result.conversationId, "session-123")
         process_query.assert_awaited_once_with("1", "session-123", auto_pro_mode=True)
+
+    def test_query_endpoint_timeout_without_session_returns_json_504(self) -> None:
+        async def slow_process_query(*_args, **_kwargs):
+            await asyncio.sleep(0.05)
+
+        with (
+            patch("backend.main.settings.query_timeout_seconds", 0.001),
+            patch("backend.main.query_service.process_query", AsyncMock(side_effect=slow_process_query)) as process_query,
+        ):
+            result = asyncio.run(
+                query_endpoint(
+                    QueryRequest(query="Canada GDP", conversationId=None, sessionId=None),
+                    user=None,
+                )
+            )
+
+        self.assertEqual(result.status_code, 504)
+        body = json.loads(result.body)
+        self.assertEqual(body["error"], "request_timeout")
+        self.assertFalse(body["clarificationNeeded"])
+        self.assertIsInstance(body["conversationId"], str)
+        self.assertTrue(body["conversationId"])
+        process_query.assert_awaited_once_with("Canada GDP", None, auto_pro_mode=True)
 
     def test_get_request_conversation_id_prefers_explicit_conversation(self) -> None:
         request = QueryRequest(query="GDP", conversationId="conv-1", sessionId="session-1")
