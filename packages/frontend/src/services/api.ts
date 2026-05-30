@@ -62,7 +62,16 @@ axios.interceptors.request.use((config) => {
 
 // Add axios response interceptor for 401 errors (auto logout)
 axios.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Successful response — clear the isLoggingOut flag so a subsequent
+    // 401 (e.g. after re-login on the same page) can trigger logout again.
+    // Without this, a logout/login cycle on the same page leaves the flag
+    // stuck and silently masks future expirations.
+    if (isLoggingOut) {
+      isLoggingOut = false;
+    }
+    return response;
+  },
   (error: AxiosError<ApiError>) => {
     // Handle 401 Unauthorized - token expired or invalid
     // Use isLoggingOut flag to prevent multiple logout calls from parallel requests
@@ -208,6 +217,56 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // Parse and dispatch a single SSE event block. Extracted so we can also
+    // drain the trailing buffer on stream end — without this, an event sent
+    // without a final "\n\n" (server flush right before close) was silently
+    // dropped, leaving the UI stuck in "loading" forever.
+    const dispatchEvent = (eventText: string): void => {
+      if (!eventText.trim()) return;
+
+      const lines = eventText.split('\n');
+      let eventType = 'message';
+      let eventData = '';
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          eventData = line.substring(5).trim();
+        }
+      }
+
+      if (!eventData) return;
+
+      try {
+        const data = JSON.parse(eventData);
+
+        switch (eventType) {
+          case 'step':
+            callbacks.onStep?.(data);
+            break;
+          case 'data':
+            callbacks.onData?.(data);
+            break;
+          case 'error':
+            callbacks.onError?.(data);
+            break;
+          case 'done':
+            // Only invoke onDone with a real conversation ID — the prior code
+            // forwarded undefined when the server's done payload was empty,
+            // poisoning the client-side conversation cache.
+            if (typeof data.conversationId === 'string' && data.conversationId) {
+              callbacks.onDone?.(data.conversationId);
+            } else {
+              console.warn('SSE done event missing conversationId; ignoring');
+            }
+            break;
+        }
+      } catch (e) {
+        console.error('Failed to parse event data:', e, eventData);
+      }
+    };
+
     try {
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -222,44 +281,15 @@ export const api = {
         buffer = events.pop() || ''; // Keep incomplete event in buffer
 
         for (const eventText of events) {
-          if (!eventText.trim()) continue;
-
-          // Parse SSE format: "event: type\ndata: json"
-          const lines = eventText.split('\n');
-          let eventType = 'message';
-          let eventData = '';
-
-          for (const line of lines) {
-            if (line.startsWith('event:')) {
-              eventType = line.substring(6).trim();
-            } else if (line.startsWith('data:')) {
-              eventData = line.substring(5).trim();
-            }
-          }
-
-          if (!eventData) continue;
-
-          try {
-            const data = JSON.parse(eventData);
-
-            switch (eventType) {
-              case 'step':
-                callbacks.onStep?.(data);
-                break;
-              case 'data':
-                callbacks.onData?.(data);
-                break;
-              case 'error':
-                callbacks.onError?.(data);
-                break;
-              case 'done':
-                callbacks.onDone?.(data.conversationId);
-                break;
-            }
-          } catch (e) {
-            console.error('Failed to parse event data:', e, eventData);
-          }
+          dispatchEvent(eventText);
         }
+      }
+
+      // Stream closed. Flush any remaining event in the buffer — final
+      // events that arrive without a trailing "\n\n" must still fire.
+      if (buffer.trim()) {
+        dispatchEvent(buffer);
+        buffer = '';
       }
     } finally {
       reader.releaseLock();
