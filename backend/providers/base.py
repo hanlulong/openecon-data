@@ -224,10 +224,16 @@ class BaseProvider(ABC):
     ) -> httpx.Response:
         """Post request with automatic retry on transient failures (powered by tenacity).
 
+        Mirrors _get_with_retry's timeout contract: callers may pass an explicit
+        `timeout=` kwarg, otherwise self.timeout is used, and the active
+        effective_timeout context manager always wins. Previously this method
+        hard-coded `timeout=self.timeout`, ignoring both caller overrides and
+        the multi-provider extended_timeout context — A#3/65.
+
         Args:
             client: httpx AsyncClient
             url: Request URL
-            **kwargs: Additional httpx parameters
+            **kwargs: Additional httpx parameters (timeout=… is honored)
 
         Returns:
             HTTP response
@@ -235,6 +241,8 @@ class BaseProvider(ABC):
         Raises:
             DataNotAvailableError: If all retries fail
         """
+        req_timeout = effective_timeout(kwargs.pop("timeout", self.timeout))
+
         @retry(
             stop=stop_after_attempt(self.MAX_RETRIES),
             wait=wait_exponential(multiplier=self.RETRY_BACKOFF_FACTOR, min=1, max=30),
@@ -247,7 +255,7 @@ class BaseProvider(ABC):
             reraise=True,
         )
         async def _do_post():
-            response = await client.post(url, **kwargs, timeout=self.timeout)
+            response = await client.post(url, **kwargs, timeout=req_timeout)
             if response.status_code >= 500:
                 raise _TransientHTTPError(f"Server error ({response.status_code})")
             response.raise_for_status()
