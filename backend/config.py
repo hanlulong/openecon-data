@@ -137,6 +137,16 @@ class Settings(BaseSettings):
         alias="INDICATOR_TELEMETRY_ENABLED",
         description="Emit structured per-query telemetry from IndicatorSelector covering FTS5/embedding/fused/final stages."
     )
+    # Phase 1.6: per-call LLM token-usage telemetry. Default disabled; when
+    # enabled, every LLM completion emits a one-line JSON record with
+    # prompt/completion/total token counts and the originating call site.
+    # Used to evaluate the include_provider_hints gating cost-benefit and
+    # to monitor token spend across providers/models.
+    llm_telemetry_enabled: bool = Field(
+        default=False,
+        alias="LLM_TELEMETRY_ENABLED",
+        description="Emit structured token-usage telemetry on every LLM completion."
+    )
     # Pro Mode configuration - cross-platform defaults
     promode_enabled: bool = Field(
         default=False,

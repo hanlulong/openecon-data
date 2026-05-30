@@ -107,6 +107,42 @@ class BaseLLMProvider(ABC):
             return self.model_config.extract_response(raw_response)
         return raw_response
 
+    def _log_token_usage(self, result: Dict[str, Any], call_site: str = "") -> None:
+        """Phase 1.6 telemetry: emit a structured token-usage record per call.
+
+        Reads `usage.prompt_tokens / completion_tokens / total_tokens` from the
+        provider response (OpenAI-compatible shape; vLLM/OpenRouter/Ollama all
+        populate it). Never raises. Gated by LLM_TELEMETRY_ENABLED so dev
+        runs don't bloat logs.
+
+        Once enough samples land, the matrix-gating decision (Phase 1.3 — set
+        include_provider_hints=False) and the encoder-swap impact for
+        Phase 2.2 RRF can be evaluated empirically instead of by guess.
+        """
+        try:
+            from ..config import get_settings
+            if not getattr(get_settings(), "llm_telemetry_enabled", False):
+                return
+        except Exception:
+            return
+        if not isinstance(result, dict):
+            return
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            return
+        try:
+            import json as _json
+            payload = {
+                "model": str(self.model or ""),
+                "call_site": str(call_site or ""),
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "total_tokens": int(usage.get("total_tokens") or 0),
+            }
+            logger.info("llm_token_usage %s", _json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:
+            logger.debug("token telemetry emit failed: %s", exc)
+
     def _should_use_json_mode(self, response_format: Optional[Dict]) -> bool:
         """Check if JSON mode should be used"""
         if not response_format:
@@ -188,6 +224,7 @@ class OpenRouterProvider(BaseLLMProvider):
                     # Store original for debugging
                     result["choices"][0]["message"]["_original_content"] = content
 
+                self._log_token_usage(result, call_site="openrouter.generate")
                 return result
 
         except httpx.HTTPError as e:
@@ -316,6 +353,7 @@ class VLLMProvider(BaseLLMProvider):
                         result["choices"][0]["message"]["_thinking"] = reasoning_content
                         logger.debug(f"Found reasoning_content ({len(reasoning_content)} chars)")
 
+                self._log_token_usage(result, call_site="vllm.generate")
                 return result
 
         except httpx.TimeoutException:
@@ -415,7 +453,7 @@ class OllamaProvider(BaseLLMProvider):
                 content = ollama_response.get("message", {}).get("content", "")
                 processed = self._extract_response(content)
 
-                return {
+                ollama_result = {
                     "choices": [{
                         "message": {
                             "content": processed,
@@ -426,8 +464,14 @@ class OllamaProvider(BaseLLMProvider):
                     "usage": {
                         "prompt_tokens": ollama_response.get("prompt_eval_count", 0),
                         "completion_tokens": ollama_response.get("eval_count", 0),
+                        "total_tokens": (
+                            int(ollama_response.get("prompt_eval_count") or 0)
+                            + int(ollama_response.get("eval_count") or 0)
+                        ),
                     }
                 }
+                self._log_token_usage(ollama_result, call_site="ollama.generate")
+                return ollama_result
 
         except httpx.HTTPError as e:
             logger.error(f"Ollama API error: {e}")
