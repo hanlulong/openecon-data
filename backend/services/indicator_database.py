@@ -705,10 +705,17 @@ class IndicatorLookup:
 
         # For provider-scoped exact-title matching, add a bounded Python
         # casefold equality pass so Unicode titles still match when the user
-        # uses lowercase Unicode text (for example "æ coin").  This is literal
-        # equality over provider catalog names, not transliteration, fuzzy
-        # matching, synonym expansion, or semantic code inference.
-        if normalized_provider and len(raw_exact_rows) < limit:
+        # uses lowercase Unicode text (for example "æ coin"). SQLite lower()
+        # is ASCII-oriented, so this pass is only needed for non-ASCII user
+        # input. Avoid scanning the full provider catalog for ordinary ASCII
+        # exact-title probes such as "Canada GDP"; SQL exact/lower lookup and
+        # the bounded normalized recall path below already cover those without
+        # adding semantic shortcuts.
+        needs_unicode_casefold_scan = any(
+            not raw_name.isascii()
+            for raw_name in raw_deduped
+        )
+        if normalized_provider and len(raw_exact_rows) < limit and needs_unicode_casefold_scan:
             cursor.execute(
                 "SELECT * FROM indicators WHERE provider = ? "
                 "ORDER BY COALESCE(popularity, 0) DESC, code",
