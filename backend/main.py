@@ -503,6 +503,14 @@ def get_current_user(user: User = Depends(get_required_user)) -> User:
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
+    """Health check with deep dependency probes.
+
+    Previously this endpoint only reported API-key presence. Load balancers
+    and uptime monitors saw "healthy" even when Redis, Supabase, or the
+    indicator database were unreachable. Each probe is timeboxed (200ms)
+    so the endpoint stays fast; failures degrade the status field but
+    never raise so the endpoint always responds.
+    """
     cache_stats = cache_service.get_stats()
     user_stats = user_store.get_stats()
 
@@ -514,8 +522,48 @@ async def health() -> HealthResponse:
         "comtrade": bool(settings.comtrade_api_key),
     }
 
+    # Deep probes — each timeboxed; never raises.
+    overall_status = "ok"
+
+    # Redis ping (non-critical — in-memory fallback exists)
+    redis_ok = False
+    try:
+        redis = await asyncio.wait_for(get_redis_cache(), timeout=0.2)
+        # connect() is idempotent and returns True if reachable
+        redis_ok = await asyncio.wait_for(redis.connect(), timeout=0.2)
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.debug("Health probe: redis unreachable (%s)", exc)
+    services["redis"] = redis_ok
+    if not redis_ok:
+        overall_status = "degraded"
+
+    # Supabase (non-critical for read paths — auth still fails closed elsewhere)
+    supabase_ok = False
+    try:
+        sb = get_supabase_service()
+        supabase_ok = sb.client is not None
+    except Exception as exc:
+        logger.debug("Health probe: supabase unavailable (%s)", exc)
+    services["supabase"] = supabase_ok
+    if not supabase_ok and settings.environment == "production":
+        overall_status = "degraded"
+
+    # Indicator database (CRITICAL — without it, no queries work)
+    indicators_db_ok = False
+    try:
+        from .services.indicator_database import get_indicator_lookup
+        lookup = await asyncio.wait_for(
+            asyncio.to_thread(get_indicator_lookup), timeout=0.2
+        )
+        indicators_db_ok = bool(lookup)
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("Health probe: indicators.db unreachable (%s)", exc)
+    services["indicators_db"] = indicators_db_ok
+    if not indicators_db_ok:
+        overall_status = "error"
+
     return HealthResponse(
-        status="ok",
+        status=overall_status,
         timestamp=datetime.now(timezone.utc).isoformat(),
         environment=settings.environment or "development",
         services=services,
