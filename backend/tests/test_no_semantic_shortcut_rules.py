@@ -30,7 +30,6 @@ RUNTIME_FILES = [
     Path("backend/services/query.py"),
     Path("backend/services/data_fetcher.py"),
     Path("backend/routing/unified_router.py"),
-    Path("backend/routing/hybrid_router.py"),
     Path("backend/services/indicator_selector.py"),
     Path("backend/services/indicator_clarification.py"),
     Path("backend/services/query_helpers.py"),
@@ -138,8 +137,6 @@ def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> N
 
     required = {
         "backend/routing/unified_router.py",
-        "backend/routing/hybrid_router.py",
-        "backend/routing/semantic_provider_router.py",
         "backend/services/indicator_resolution.py",
         "backend/services/indicator_selector.py",
         "backend/services/indicator_clarification.py",

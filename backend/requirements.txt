@@ -27,9 +27,6 @@ tiktoken>=0.12.0
 faiss-cpu>=1.8.0
 sentence-transformers>=5.2.3
 rapidfuzz>=3.14.3
-semantic-router>=0.1.12
-litellm>=1.81.13
-deepagents>=0.3.1
 
 # Redis Integration (2025-11-22)
 redis[hiredis]>=5.0.0

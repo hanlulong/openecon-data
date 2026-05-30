@@ -3159,7 +3159,6 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="research and development spending share of gdp",
         )
 
-        self.service.semantic_provider_router = None
         self.service.unified_router.route = Mock(
             return_value=RoutingDecision(
                 provider="OECD",
@@ -9990,72 +9989,6 @@ class QueryServiceTests(unittest.TestCase):
         )
         self.assertIsNone(provider)
 
-    def test_select_routed_provider_prefers_semantic_router_when_available(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="WorldBank",
-            indicators=["government debt to gdp"],
-            parameters={"country": "CN"},
-            clarificationNeeded=False,
-        )
-
-        class _SemanticRouter:
-            async def route(self, **kwargs):
-                return RoutingDecision(
-                    provider="IMF",
-                    confidence=0.88,
-                    fallbacks=["WorldBank"],
-                    reasoning="LLM router match",
-                    match_type="litellm",
-                    decision_source="llm_provider",
-                    semantic_authority="llm_adjudication",
-                    final_authority=True,
-                )
-
-        class _HybridRouter:
-            async def route(self, **kwargs):
-                raise AssertionError("Hybrid router should not run when semantic router is enabled")
-
-        self.service.semantic_provider_router = _SemanticRouter()
-        self.service.hybrid_router = _HybridRouter()
-
-        provider = run(self.service._select_routed_provider(intent, "government debt in china"))  # pylint: disable=protected-access
-        self.assertEqual(provider, "IMF")
-
-    def test_select_routed_provider_rejects_candidate_only_semantic_router_match(self) -> None:
-        intent = ParsedIntent(
-            apiProvider="WorldBank",
-            indicators=["gdp to debt ratio"],
-            parameters={"country": "CN"},
-            clarificationNeeded=False,
-        )
-
-        class _UnifiedRouter:
-            def route(self, **kwargs):
-                return RoutingDecision(
-                    provider="IMF",
-                    confidence=0.90,
-                    fallbacks=["WorldBank", "BIS"],
-                    reasoning="candidate-only macro debt evidence",
-                    match_type="indicator",
-                )
-
-        class _SemanticRouter:
-            async def route(self, **kwargs):
-                return RoutingDecision(
-                    provider="BIS",
-                    confidence=0.58,
-                    fallbacks=["IMF", "WorldBank"],
-                    reasoning="semantic-router similarity match (0.58)",
-                    match_type="semantic",
-                )
-
-        self.service.unified_router = _UnifiedRouter()
-        self.service.semantic_provider_router = _SemanticRouter()
-        self.service.hybrid_router = None
-
-        provider = run(self.service._select_routed_provider(intent, "gdp to debt ratio in china"))  # pylint: disable=protected-access
-        self.assertEqual(provider, "WORLDBANK")
-
     def test_select_routed_provider_keeps_llm_provider_for_candidate_only_router_baseline(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
@@ -10075,8 +10008,6 @@ class QueryServiceTests(unittest.TestCase):
                 )
 
         self.service.unified_router = _UnifiedRouter()
-        self.service.semantic_provider_router = None
-        self.service.hybrid_router = None
 
         with patch("backend.services.query.unified_route_provider", side_effect=AssertionError("legacy baseline should not run")):
             provider = run(self.service._select_routed_provider(intent, "gdp growth germany"))  # pylint: disable=protected-access

@@ -75,11 +75,6 @@ class Settings(BaseSettings):
         alias="USE_LANGCHAIN_ORCHESTRATOR",
         description="Use LangChain orchestrator with LangGraph for intelligent query routing and state persistence"
     )
-    use_hybrid_router: bool = Field(
-        default=False,
-        alias="USE_HYBRID_ROUTER",
-        description="Enable hybrid provider routing (disabled: UnifiedRouter handles all routing)"
-    )
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
         alias="EMBEDDING_MODEL",
@@ -125,37 +120,6 @@ class Settings(BaseSettings):
         alias="INDICATOR_VECTOR_CANDIDATES",
         description="Number of semantic candidates to retrieve for indicator hybrid ranking"
     )
-    use_semantic_provider_router: bool = Field(
-        default=False,
-        alias="USE_SEMANTIC_PROVIDER_ROUTER",
-        description="Enable semantic-router-based provider routing with LiteLLM fallback (disabled: UnifiedRouter + LLM hint is sufficient)"
-    )
-    semantic_router_similarity_threshold: float = Field(
-        default=0.58,
-        alias="SEMANTIC_ROUTER_SIMILARITY_THRESHOLD",
-        description="Minimum semantic-router similarity required before accepting semantic route"
-    )
-    semantic_router_top_k: int = Field(
-        default=5,
-        alias="SEMANTIC_ROUTER_TOP_K",
-        description="Top-k semantic route candidates to evaluate"
-    )
-    semantic_router_encoder_model: str | None = Field(
-        default=None,
-        alias="SEMANTIC_ROUTER_ENCODER_MODEL",
-        description="Embedding model name used by semantic-router encoder"
-    )
-    use_litellm_router_fallback: bool = Field(
-        default=False,
-        alias="USE_LITELLM_ROUTER_FALLBACK",
-        description="Enable LiteLLM JSON routing fallback (disabled: no Layer C routing)"
-    )
-    semantic_router_litellm_timeout: int = Field(
-        default=20,
-        alias="SEMANTIC_ROUTER_LITELLM_TIMEOUT",
-        description="LiteLLM routing timeout in seconds"
-    )
-
     # Pro Mode configuration - cross-platform defaults
     promode_enabled: bool = Field(
         default=False,
@@ -234,22 +198,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_llm_provider_keys(self):
         """Validate that required API keys are set for the selected providers."""
-        if not self.semantic_router_encoder_model:
-            self.semantic_router_encoder_model = self.embedding_model
-
         if self.llm_provider == "openrouter" and not self.openrouter_api_key:
             raise ValueError(
                 "OPENROUTER_API_KEY is required when LLM_PROVIDER is 'openrouter'. "
                 "Set LLM_PROVIDER to 'vllm', 'ollama', or 'lm-studio' for local models."
             )
 
-        if (
-            is_openai_embedding_model(self.embedding_model)
-            or is_openai_embedding_model(self.semantic_router_encoder_model)
-        ) and not self.openai_api_key:
+        if is_openai_embedding_model(self.embedding_model) and not self.openai_api_key:
             raise ValueError(
-                "OPENAI_API_KEY is required when EMBEDDING_MODEL or "
-                "SEMANTIC_ROUTER_ENCODER_MODEL uses an OpenAI embedding model."
+                "OPENAI_API_KEY is required when EMBEDDING_MODEL uses an "
+                "OpenAI embedding model."
             )
         return self
 

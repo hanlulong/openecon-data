@@ -82,20 +82,6 @@ PATTERNS = (
         rationale="Broad topic/country provider routing must not be reintroduced as final authority.",
     ),
     ShortcutPattern(
-        id="semantic_router_seed_utterances",
-        path_glob="backend/routing/semantic_provider_router.py",
-        regex=r"_ROUTE_UTTERANCES|_PROVIDER_HINTS",
-        classification="candidate_generation_only",
-        rationale="Semantic-router examples/hints may only contribute provider candidates; LiteLLM/LLM authority is required for final semantic routing.",
-    ),
-    ShortcutPattern(
-        id="hybrid_router_prompt_rules",
-        path_glob="backend/routing/hybrid_router.py",
-        regex=r"_PROVIDER_HINTS|Decision contract:",
-        classification="candidate_generation_only",
-        rationale="Hybrid router provider descriptions are candidate context for LLM adjudication, not hidden keyword-to-provider rules.",
-    ),
-    ShortcutPattern(
         id="indicator_resolution_legacy_fallback",
         path_glob="backend/services/indicator_resolution.py",
         regex=r"Legacy IndicatorResolver|_resolver\(\)\.resolve|fall through to legacy resolver",

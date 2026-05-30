@@ -45,8 +45,6 @@ from ..routing.unified_router import (
 from ..services.query_pipeline import ParseRouteResult, QueryPipeline, ValidationResult
 from ..routing.country_resolver import CountryResolver
 from ..routing.unified_router import UnifiedRouter
-from ..routing.hybrid_router import HybridRouter
-from ..routing.semantic_provider_router import SemanticProviderRouter
 from ..providers.fred import FREDProvider
 from ..providers.worldbank import WorldBankProvider
 from ..providers.comtrade import ComtradeProvider
@@ -349,20 +347,12 @@ class QueryService:
         # CoinGecko: Cryptocurrency prices and market data
         self.coingecko_provider = CoinGeckoProvider(coingecko_key)
 
-        # Semantic provider router (default): semantic-router + LiteLLM fallback.
-        self.semantic_provider_router: Optional[SemanticProviderRouter] = None
-        if self.settings.use_semantic_provider_router:
-            self.semantic_provider_router = SemanticProviderRouter(settings=self.settings)
-            logger.info("🧭 SemanticProviderRouter enabled (USE_SEMANTIC_PROVIDER_ROUTER=true)")
-
-        # Optional hybrid router: deterministic candidates + LLM ranking.
-        # Kept as fallback/legacy path when semantic provider router is disabled.
-        self.hybrid_router: Optional[HybridRouter] = None
-        if self.settings.use_hybrid_router and not self.settings.use_semantic_provider_router:
-            self.hybrid_router = HybridRouter(llm_provider=self.openrouter.llm_provider)
-            logger.info("🧠 HybridRouter enabled (USE_HYBRID_ROUTER=true)")
-
-        # Deterministic baseline router (single source of routing truth).
+        # UnifiedRouter is the single source of routing truth. The legacy
+        # SemanticProviderRouter (semantic-router + LiteLLM fallback) and
+        # HybridRouter (deterministic candidates + LLM ranking) were removed
+        # in the 2026-05-30 deep review — both were default-disabled, unused
+        # in production, and added 765 LOC plus ~63MB of deps for no
+        # measurable routing improvement (Workflow B Position B).
         self.unified_router = UnifiedRouter()
         # Small in-memory cache to avoid repeated cross-provider fallback scans.
         self._fallback_provider_cache: "OrderedDict[Tuple[str, Tuple[str, ...]], List[str]]" = OrderedDict()
@@ -970,9 +960,11 @@ class QueryService:
         return _qh_build_intent(self, pending, selected_option, refined_query)
 
     async def _select_routed_provider(self, intent: ParsedIntent, query: str) -> str:
-        """
-        Select provider using deterministic router, optionally enhanced by
-        SemanticProviderRouter (default) or HybridRouter (legacy fallback path).
+        """Select provider using the UnifiedRouter (single source of truth).
+
+        Previously this method routed through two additional optional layers
+        (SemanticProviderRouter + LiteLLM, then HybridRouter) — both removed
+        in the 2026-05-30 deep review.
         """
         params = intent.parameters or {}
         raw_countries = params.get("countries")
@@ -1040,122 +1032,7 @@ class QueryService:
             deterministic_match_type = "coverage_override"
             deterministic_confidence = min(deterministic_confidence or 0.0, 0.78)
 
-        if self.semantic_provider_router:
-            try:
-                decision = await self.semantic_provider_router.route(
-                    query=query,
-                    indicators=intent.indicators,
-                    country=params.get("country"),
-                    countries=countries,
-                    llm_provider_hint=intent.apiProvider,
-                    baseline_decision=deterministic_decision,
-                )
-                semantic_provider = normalize_provider_name(decision.provider)
-                semantic_provider = unified_correct_coingecko_misrouting(
-                    semantic_provider,
-                    query,
-                    intent.indicators,
-                )
-                semantic_has_final_authority = bool(
-                    getattr(decision, "final_authority", False)
-                    and getattr(decision, "semantic_authority", "") == "llm_adjudication"
-                )
-                if semantic_provider != routed_provider and not semantic_has_final_authority:
-                    logger.info(
-                        "🧭 Semantic router candidate only: keeping provider=%s; candidate=%s source=%s",
-                        routed_provider,
-                        semantic_provider,
-                        getattr(decision, "decision_source", decision.match_type),
-                    )
-                    return routed_provider
-                if countries and len(countries) > 1 and not self._provider_covers_country_list(semantic_provider, countries):
-                    logger.info(
-                        "🧭 Semantic provider rejected by coverage: %s for countries=%s",
-                        semantic_provider,
-                        countries,
-                    )
-                    return routed_provider
-                semantic_confidence = float(getattr(decision, "confidence", 0.0) or 0.0)
-                # Framework guardrail: preserve high-confidence deterministic decisions unless
-                # semantic routing is materially stronger. This prevents low-similarity
-                # semantic matches from overriding precise structural routing.
-                #
-                # Two tiers:
-                # - High-confidence structural (explicit, indicator): locked at 0.88+
-                # - Membership-based structural (country, region): locked at 0.70+
-                #   Country/region routing is factual (Italy IS in EU → Eurostat),
-                #   so semantic overrides should only win with strong evidence.
-                if semantic_provider != routed_provider:
-                    _HIGH_CONF_TYPES = {"explicit", "us_only", "indicator"}
-                    _STRUCTURAL_TYPES = {"country", "region"}
-                    deterministic_locked = (
-                        getattr(deterministic_decision, "can_override_llm_provider", False)
-                        and (
-                            (deterministic_confidence >= 0.88 and deterministic_match_type in _HIGH_CONF_TYPES)
-                            or (deterministic_confidence >= 0.70 and deterministic_match_type in _STRUCTURAL_TYPES)
-                        )
-                    )
-                    semantic_materially_stronger = semantic_confidence >= (deterministic_confidence + 0.10)
-                    if deterministic_locked and not semantic_materially_stronger:
-                        logger.info(
-                            "🧭 Semantic override skipped: keep %s (deterministic conf=%.2f type=%s, semantic conf=%.2f)",
-                            routed_provider,
-                            deterministic_confidence,
-                            deterministic_match_type,
-                            semantic_confidence,
-                        )
-                        return routed_provider
-                if semantic_provider != routed_provider:
-                    logger.info(
-                        "🧭 Semantic routing override: %s -> %s (%s)",
-                        routed_provider,
-                        semantic_provider,
-                        decision.reasoning,
-                    )
-                return semantic_provider
-            except Exception as exc:
-                logger.warning("Semantic provider routing failed, using deterministic provider: %s", exc)
-                return routed_provider
-
-        if not self.hybrid_router:
-            return routed_provider
-
-        try:
-            decision = await self.hybrid_router.route(
-                query=query,
-                indicators=intent.indicators,
-                country=params.get("country"),
-                countries=countries,
-                llm_provider_hint=intent.apiProvider,
-            )
-            hybrid_provider = normalize_provider_name(decision.provider)
-            hybrid_provider = unified_correct_coingecko_misrouting(
-                hybrid_provider,
-                query,
-                intent.indicators,
-            )
-            hybrid_has_final_authority = bool(
-                getattr(decision, "final_authority", False)
-                and getattr(decision, "semantic_authority", "") == "llm_adjudication"
-            )
-            if hybrid_provider != routed_provider and not hybrid_has_final_authority:
-                logger.info(
-                    "🧠 Hybrid router candidate only: keeping provider=%s; candidate=%s",
-                    routed_provider,
-                    hybrid_provider,
-                )
-                return routed_provider
-            if hybrid_provider != routed_provider:
-                logger.info(
-                    "🧠 Hybrid routing override: %s -> %s (%s)",
-                    routed_provider,
-                    hybrid_provider,
-                    decision.reasoning,
-                )
-            return hybrid_provider
-        except Exception as exc:
-            logger.warning("Hybrid routing failed, using deterministic provider: %s", exc)
-            return routed_provider
+        return routed_provider
 
     def _tokenize_indicator_terms(self, text: str) -> set[str]:
         """Tokenize indicator text into comparable semantic terms.
