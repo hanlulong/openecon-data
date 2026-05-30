@@ -120,6 +120,23 @@ class Settings(BaseSettings):
         alias="INDICATOR_VECTOR_CANDIDATES",
         description="Number of semantic candidates to retrieve for indicator hybrid ranking"
     )
+    # Phase 2.2: switch between the legacy magic-constant fusion in
+    # IndicatorSelector._effective_rank and canonical parameterless RRF
+    # (k = INDICATOR_RRF_K = 60). Default remains "legacy" until shadow-mode
+    # telemetry shows RRF parity per docs/DEEP_REVIEW_2026-05-30.md §6
+    # invariant #8 (≥7d, ≥10k queries, no per-provider regression).
+    indicator_fusion: str = Field(
+        default="legacy",
+        alias="INDICATOR_FUSION",
+        description="Indicator-retrieval fusion strategy. 'legacy' = current score-aware merge; 'rrf' = canonical Reciprocal Rank Fusion."
+    )
+    # Phase 2.1: per-stage telemetry baseline for IndicatorSelector. Default
+    # disabled to avoid log volume on dev. Enable for shadow validation runs.
+    indicator_telemetry_enabled: bool = Field(
+        default=False,
+        alias="INDICATOR_TELEMETRY_ENABLED",
+        description="Emit structured per-query telemetry from IndicatorSelector covering FTS5/embedding/fused/final stages."
+    )
     # Pro Mode configuration - cross-platform defaults
     promode_enabled: bool = Field(
         default=False,

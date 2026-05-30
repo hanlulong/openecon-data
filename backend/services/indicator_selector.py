@@ -286,6 +286,9 @@ class IndicatorSelector:
         Returns:
             SelectionResult with selected code or options for user choice
         """
+        telemetry_enabled = bool(getattr(self._settings, "indicator_telemetry_enabled", False))
+        fusion_mode = str(getattr(self._settings, "indicator_fusion", "legacy") or "legacy").lower()
+
         # Step 1: Find candidates via embedding similarity (with scores)
         candidates, scores = self._get_candidates_with_scores(query, provider)
 
@@ -350,13 +353,58 @@ class IndicatorSelector:
             return result
 
         if result and (result.code or result.needs_user_choice):
+            self._emit_telemetry(
+                telemetry_enabled,
+                fusion_mode,
+                query,
+                provider,
+                candidates,
+                result,
+            )
             return result
 
         logger.info(
             "🔵 IndicatorSelector made no final selection for '%s'; refusing top-candidate fallback",
             query[:80],
         )
-        return SelectionResult(code=None, source="no_decision")
+        final = SelectionResult(code=None, source="no_decision")
+        self._emit_telemetry(telemetry_enabled, fusion_mode, query, provider, candidates, final)
+        return final
+
+    @staticmethod
+    def _emit_telemetry(
+        enabled: bool,
+        fusion_mode: str,
+        query: str,
+        provider: str,
+        fused_candidates: List[tuple[str, str]],
+        result: SelectionResult,
+    ) -> None:
+        """Phase 2.1 baseline telemetry — structured per-query record.
+
+        Logs the fused candidate codes + the LLM's final pick + the
+        selection source. Used as a baseline to compare RRF vs legacy
+        fusion during the Phase 2.2 shadow window before any default flip.
+        Gated by INDICATOR_TELEMETRY_ENABLED so dev/test traffic doesn't
+        flood logs.
+        """
+        if not enabled:
+            return
+        import json as _json
+        try:
+            top_fused = [code for code, _name in (fused_candidates or [])[:10]]
+            payload = {
+                "fusion": fusion_mode,
+                "provider": str(provider or ""),
+                "query": str(query or "")[:200],
+                "fused_top10": top_fused,
+                "final_code": getattr(result, "code", None),
+                "final_source": getattr(result, "source", None),
+                "needs_user_choice": bool(getattr(result, "needs_user_choice", False)),
+            }
+            logger.info("indicator_selector_telemetry %s", _json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:  # never raise from telemetry path
+            logger.debug("telemetry emit failed: %s", exc)
 
     @staticmethod
     def _scores_are_ambiguous(scores: List[float]) -> bool:
@@ -464,6 +512,18 @@ class IndicatorSelector:
                     entry["embedding_score"] = score
                     entry["embedding_rank"] = rank
 
+            # Two fusion strategies behind INDICATOR_FUSION:
+            # - "legacy" (default): the score-aware merge with magic constants
+            #   (0.02, 0.55, 0.10, 0.005). Kept as the rollback path during the
+            #   shadow-mode validation period for Phase 2.2.
+            # - "rrf": canonical parameterless Reciprocal Rank Fusion,
+            #   score(c) = Σ 1/(k + rank_i(c)). One constant (k), one citation
+            #   (Cormack et al., SIGIR 2009), encoder-independent. Replaces
+            #   the magic constants entirely. Default off until shadow shows
+            #   parity per docs/DEEP_REVIEW_2026-05-30.md §6 invariant #8.
+            rrf_k = max(1, int(getattr(self._settings, "indicator_rrf_k", 60) or 60))
+            fusion_mode = str(getattr(self._settings, "indicator_fusion", "legacy") or "legacy").lower()
+
             def _effective_rank(item: tuple[str, Dict[str, Any]]) -> tuple[float, int, int, str]:
                 code, entry = item
                 embedding_score = entry["embedding_score"]
@@ -483,12 +543,29 @@ class IndicatorSelector:
                     code,
                 )
 
-            ranked_entries = sorted(merged_by_code.items(), key=_effective_rank)[:top_k]
-            merged_candidates = [entry["candidate"] for _code, entry in ranked_entries]
-            merged_scores = [
-                -_effective_rank((code, entry))[0]
-                for code, entry in ranked_entries
-            ]
+            def _rrf_rank(item: tuple[str, Dict[str, Any]]) -> tuple[float, str]:
+                """Reciprocal Rank Fusion: score(c) = Σ 1/(k + rank_i(c))."""
+                _code, entry = item
+                fts_rank = entry["fts_rank"]
+                embedding_rank = entry["embedding_rank"]
+                score = 0.0
+                if fts_rank is not None:
+                    score += 1.0 / (rrf_k + int(fts_rank) + 1)
+                if embedding_rank is not None:
+                    score += 1.0 / (rrf_k + int(embedding_rank) + 1)
+                return (-score, _code)
+
+            if fusion_mode == "rrf":
+                ranked_entries = sorted(merged_by_code.items(), key=_rrf_rank)[:top_k]
+                merged_candidates = [entry["candidate"] for _code, entry in ranked_entries]
+                merged_scores = [-_rrf_rank((code, entry))[0] for code, entry in ranked_entries]
+            else:
+                ranked_entries = sorted(merged_by_code.items(), key=_effective_rank)[:top_k]
+                merged_candidates = [entry["candidate"] for _code, entry in ranked_entries]
+                merged_scores = [
+                    -_effective_rank((code, entry))[0]
+                    for code, entry in ranked_entries
+                ]
 
             prioritized_candidates, prioritized_scores = self._prioritize_candidates_by_provider_surface(
                 merged_candidates,
