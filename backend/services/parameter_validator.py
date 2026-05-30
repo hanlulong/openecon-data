@@ -251,64 +251,16 @@ class ParameterValidator:
                 intent.parameters = params
                 return True, None, None
 
-            # Smart fallback: if the indicator term matches a high-confidence
-            # FRED-native series (e.g. "VIX", "M2", "10Y treasury", "PCE"),
-            # switch the intent to FRED + USA rather than failing.  This is a
-            # general infrastructure fix — uses the FTS5 indicator database to
-            # detect FRED-native US indicators rather than hardcoded keywords.
-            try:
-                # Use the original natural-language query for FRED lookup, NOT the
-                # resolved WorldBank indicator code (e.g., FM.LBL.BMNY.ZG).
-                # The code was set by concept_provider_override and is WB-specific.
-                indicator_query = (
-                    str(intent.originalQuery or "").strip()
-                    or (intent.indicators[0] if intent.indicators else "")
-                    or indicator
-                ).strip()
-                if indicator_query:
-                    from .indicator_database import IndicatorDatabase
-                    db = IndicatorDatabase()
-                    fred_results = db.search(indicator_query, provider="FRED", limit=3)
-                    if fred_results:
-                        top = fred_results[0]
-                        # High-confidence: top FRED result has a relevance score
-                        # well above a noise floor.  bm25 scores are negative,
-                        # so we use rank position + presence of all query terms.
-                        top_name = str(top.get("name", "")).lower()
-                        top_code = str(top.get("code", "")).lower()
-                        query_lower = indicator_query.lower()
-                        query_words = [
-                            w for w in query_lower.split()
-                            if len(w) > 2 and w not in {"the", "and", "for", "rate", "us", "usa"}
-                        ]
-                        # Match if ANY of: word overlap, code overlap, or
-                        # query contains a 2+ char substring of the code.
-                        word_match = (
-                            sum(1 for w in query_words if w in top_name)
-                            / max(1, len(query_words))
-                        )
-                        code_match = (
-                            top_code in query_lower  # query contains series code
-                            or any(w == top_code for w in query_lower.split())
-                        )
-                        # Relaxed threshold: 0.3 instead of 0.5, OR code match.
-                        # Previously "M2 money supply growth rate" failed because
-                        # only "money" matched "M2 Money Stock" (0.33 < 0.5).
-                        if word_match >= 0.3 or code_match:
-                            # FRED-native US indicator detected — auto-default
-                            # to USA and switch provider.
-                            intent.apiProvider = "FRED"
-                            params['country'] = 'US'
-                            params.pop('countries', None)
-                            intent.parameters = params
-                            return True, None, {
-                                'note': f'Defaulted to FRED+USA for "{indicator_query}" '
-                                        f'(matches {top.get("code","?")})',
-                            }
-            except Exception:
-                # Fall through to error response on any lookup failure
-                pass
-
+            # Phase 2.5: deleted the FRED-USA word-overlap override (was H6 in
+            # the deep review). Previously this block searched FRED via FTS5
+            # and silently re-routed WorldBank → FRED + USA when query word
+            # overlap >= 0.3 or the FRED series code appeared in the query.
+            # That was a hardcoded-heuristic override of the LLM's provider
+            # choice — exactly the Rule-1 violation
+            # docs/DEEP_REVIEW_2026-05-30.md §4 flagged. Removing it means a
+            # countryless WorldBank query now fails with the clear validation
+            # message below, and the LLM/UnifiedRouter is the single source
+            # of provider truth.
             return False, "World Bank query requires a country or list of countries", {
                 'suggestion': 'Specify which country/countries you want data for',
                 'example': 'Try: "China GDP" or "Compare GDP between US and UK"'
