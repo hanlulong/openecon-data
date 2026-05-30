@@ -7,6 +7,25 @@ interface CodeExecutionDisplayProps {
   codeExecution: CodeExecutionResult
 }
 
+/**
+ * Allowlist for code-execution media URLs. Pro Mode generates file URLs
+ * server-side; if a malicious or buggy generator emitted javascript:/data:
+ * URLs, rendering them in an <img src> or <a href> would execute script in
+ * the page origin (XSS). Only allow same-origin relative paths and explicit
+ * http(s) URLs. Returns null when the URL should be suppressed.
+ */
+const isSafeMediaUrl = (raw: string): boolean => {
+  if (!raw) return false
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('/')) return !trimmed.startsWith('//')  // relative same-origin, reject protocol-relative
+  try {
+    const parsed = new URL(trimmed, window.location.origin)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function CodeExecutionDisplay({ codeExecution }: CodeExecutionDisplayProps) {
   const [showCode, setShowCode] = useState(true)
 
@@ -79,6 +98,10 @@ export function CodeExecutionDisplay({ codeExecution }: CodeExecutionDisplayProp
           </div>
           <div className="files-content">
             {codeExecution.files.map((file, index) => {
+              if (!isSafeMediaUrl(file.url)) {
+                logger.warn('Suppressed unsafe code-execution media URL', file.url)
+                return null
+              }
               const isImage = file.type === 'image' || file.url.match(/\.(png|jpg|jpeg|gif|svg)$/i)
 
               return (
