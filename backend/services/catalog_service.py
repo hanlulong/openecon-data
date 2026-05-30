@@ -226,15 +226,9 @@ def is_excluded_term(term: str, concept_name: str) -> bool:
     """
     Check if a term is explicitly excluded from a concept.
 
-    Note: This is a simple substring check. For robust semantic matching,
-    the LLM-based indicator selection in MetadataSearchService should be used.
-
-    Args:
-        term: The term to check (e.g., "production index")
-        concept_name: The concept to check against (e.g., "productivity")
-
-    Returns:
-        True if the term contains an explicit exclusion phrase
+    Internal helper for find_concept_by_term — kept until the broader
+    catalog runtime-authority migration (see docs/DEEP_REVIEW_2026-05-30.md
+    Phase 1.2 deferred work). Not exported.
     """
     concept = get_concept(concept_name)
     if not concept:
@@ -280,14 +274,6 @@ def get_all_synonyms(concept_name: str) -> List[str]:
     secondary = synonyms.get("secondary", [])
 
     return [concept_name.replace("_", " ")] + primary + secondary
-
-
-def get_exclusions(concept_name: str) -> List[str]:
-    """Get explicit exclusions for a concept."""
-    concept = get_concept(concept_name)
-    if not concept:
-        return []
-    return concept.get("explicit_exclusions", [])
 
 
 def get_indicator_code(
@@ -850,105 +836,6 @@ def get_fallback_providers(
     # Sort by confidence (highest first)
     fallbacks.sort(key=lambda x: x[2], reverse=True)
     return fallbacks
-
-
-def validate_indicator_match(indicator_name: str, concept_name: str) -> Tuple[bool, str]:
-    """
-    Validate if an indicator name matches a concept.
-
-    Uses explicit exclusions to prevent false positives. The validation is
-    permissive by default - only rejecting known false positives.
-
-    Logic:
-    1. If indicator contains an explicit exclusion term -> REJECT
-    2. If indicator contains a synonym -> ACCEPT with high confidence
-    3. Otherwise -> ACCEPT (permissive - let search/LLM decide relevance)
-
-    Args:
-        indicator_name: The indicator name from search results
-        concept_name: The concept to validate against
-
-    Returns:
-        Tuple of (is_valid, reason)
-    """
-    # First, reject explicit exclusions (known false positives)
-    if is_excluded_term(indicator_name, concept_name):
-        return False, f"'{indicator_name}' is an explicit exclusion for '{concept_name}'"
-
-    # Check if any synonym is in the indicator name (high confidence match)
-    synonyms = get_all_synonyms(concept_name)
-    indicator_lower = indicator_name.lower()
-
-    for synonym in synonyms:
-        if synonym.lower() in indicator_lower:
-            return True, f"Matches synonym '{synonym}'"
-
-    # Permissive: accept if not an exclusion
-    # This allows the search system to return relevant results that
-    # might not exactly match synonyms but are still valid
-    return True, "Accepted (not an explicit exclusion)"
-
-
-# ============================================================================
-# COMPATIBILITY LAYER - Functions for backward compatibility with old modules
-# ============================================================================
-
-def expand_indicator(indicator: str) -> Dict[str, Any]:
-    """
-    Expand user's indicator term to full concept with synonyms and exclusions.
-
-    This provides backward compatibility with indicator_synonyms.py interface.
-
-    Args:
-        indicator: User's indicator term (e.g., "productivity", "gdp growth")
-
-    Returns:
-        Dict with concept, synonyms, NOT_synonyms, default_indicators
-    """
-    concept_name = find_concept_by_term(indicator)
-    if not concept_name:
-        concept_name = indicator.lower().replace(" ", "_")
-
-    concept = get_concept(concept_name)
-    if not concept:
-        return {
-            "concept": concept_name,
-            "synonyms": [],
-            "NOT_synonyms": [],
-            "default_indicators": {}
-        }
-
-    # Build default_indicators from providers
-    default_indicators = {}
-    for provider, provider_info in concept.get("providers", {}).items():
-        primary = provider_info.get("primary", {})
-        if isinstance(primary, dict) and primary.get("code"):
-            default_indicators[provider] = primary["code"]
-
-    synonyms = concept.get("synonyms", {})
-    return {
-        "concept": concept_name,
-        "synonyms": synonyms.get("primary", []) + synonyms.get("secondary", []),
-        "NOT_synonyms": concept.get("explicit_exclusions", []),
-        "default_indicators": default_indicators
-    }
-
-
-def is_false_positive(indicator_name: str, concept_info: Dict[str, Any]) -> bool:
-    """
-    Check if an indicator name is a known false positive for the concept.
-
-    This provides backward compatibility with indicator_synonyms.py interface.
-    """
-    if not indicator_name or not concept_info.get("NOT_synonyms"):
-        return False
-
-    indicator_lower = indicator_name.lower()
-    for exclusion in concept_info["NOT_synonyms"]:
-        if exclusion.lower() in indicator_lower:
-            return True
-
-    return False
 
 
 def get_default_indicator(concept: str, provider: str) -> Optional[str]:
