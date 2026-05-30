@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi_mcp import FastApiMCP
@@ -203,6 +204,48 @@ app = FastAPI(title="OpenEcon Data API", version="1.0.0", lifespan=lifespan)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Return a clean user-facing error instead of FastAPI's raw Pydantic dump.
+
+    The default RequestValidationError response serializes the internal
+    validator errors with field paths like ['body', 'sessionId'] and Pydantic
+    enum codes. Frontends had to special-case parsing those for human-readable
+    messages; if they didn't, users saw walls of JSON. Now every validation
+    error returns a stable {error, message, fields} contract that the frontend
+    can render directly.
+    """
+    field_messages: list[dict[str, str]] = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p not in ("body", "query", "path"))
+        msg = str(err.get("msg") or "Invalid value")
+        if loc:
+            field_messages.append({"field": loc, "message": msg})
+        else:
+            field_messages.append({"message": msg})
+
+    primary = field_messages[0]["message"] if field_messages else "Invalid request payload"
+    if field_messages and "field" in field_messages[0]:
+        primary = f"{field_messages[0]['field']}: {primary}"
+
+    logger.info(
+        "Validation error on %s %s: %s",
+        request.method,
+        request.url.path,
+        primary,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": "validation_error",
+            "message": primary,
+            "fields": field_messages,
+        },
+    )
 
 # Rate limit configuration per endpoint pattern
 RATE_LIMITS = {
