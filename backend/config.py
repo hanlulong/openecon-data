@@ -172,6 +172,18 @@ class Settings(BaseSettings):
         description="Conversation expiration time in hours (Redis TTL and in-memory max age)"
     )
 
+    # Sync /api/query and /api/query/pro request-level deadline
+    query_timeout_seconds: int = Field(
+        default=120,
+        alias="QUERY_TIMEOUT_SECONDS",
+        description="Server-side deadline for non-streaming query endpoints. Beyond this, the request returns 504 with error='request_timeout'."
+    )
+    pro_query_timeout_seconds: int = Field(
+        default=180,
+        alias="PRO_QUERY_TIMEOUT_SECONDS",
+        description="Server-side deadline for /api/query/pro (Grok code generation + sandboxed execution can be slower than standard queries)."
+    )
+
     # Vector Search Configuration
     enable_metadata_loading: bool = Field(
         default=True,

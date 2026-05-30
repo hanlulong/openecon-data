@@ -738,7 +738,34 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     # Auto-detect complex queries and route to Pro Mode (code execution)
     # when needed. Available for all users (no auth required).
     auto_pro = settings.promode_enabled
-    result = await query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro)
+    # Request-level deadline. Without this the sync endpoint can hang
+    # indefinitely on slow provider responses, blocking the event loop and
+    # exposing the service to resource exhaustion.
+    try:
+        result = await asyncio.wait_for(
+            query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro),
+            timeout=float(settings.query_timeout_seconds),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Query timed out after %ss: %s (conversation=%s)",
+            settings.query_timeout_seconds,
+            request.query[:120],
+            conversation_id,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content=QueryResponse(
+                conversationId=conversation_id,
+                clarificationNeeded=False,
+                error="request_timeout",
+                message=(
+                    f"Query exceeded the {settings.query_timeout_seconds}s server deadline. "
+                    "Try the streaming endpoint /api/query/stream for long-running queries."
+                ),
+                processingTimeMs=round((time.perf_counter() - query_start) * 1000, 1),
+            ).model_dump(),
+        )
 
     # Guaranteed post-query conversation state save.
     # This ensures the v2 ConversationState is ALWAYS saved after a successful
@@ -1028,6 +1055,35 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
 
     logger.info("⚡ Pro Mode Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id)
 
+    _pro_start = time.perf_counter()
+    try:
+        return await asyncio.wait_for(
+            _pro_query_inner(request, user),
+            timeout=float(settings.pro_query_timeout_seconds),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Pro mode query timed out after %ss: %s",
+            settings.pro_query_timeout_seconds,
+            request.query[:120],
+        )
+        return QueryResponse(
+            conversationId=request.conversationId or str(uuid.uuid4()),
+            clarificationNeeded=False,
+            error="request_timeout",
+            message=(
+                f"Pro Mode query exceeded the {settings.pro_query_timeout_seconds}s server deadline. "
+                "Try a simpler query or use the streaming endpoint /api/query/pro/stream."
+            ),
+            isProMode=True,
+            processingTimeMs=round((time.perf_counter() - _pro_start) * 1000, 1),
+        )
+
+
+async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> QueryResponse:
+    """Inner body of /api/query/pro. Extracted so the outer endpoint can wrap
+    it in asyncio.wait_for. Preserves the original try/except contract.
+    """
     try:
         # Import services here to avoid circular imports
         from backend.services.grok import get_grok_service
