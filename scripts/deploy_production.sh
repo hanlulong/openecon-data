@@ -9,6 +9,30 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
+wait_for_url() {
+  local label="$1"
+  local url="$2"
+  local max_wait="${DEPLOY_HEALTH_MAX_WAIT_SECONDS:-240}"
+  local poll_seconds="${DEPLOY_HEALTH_POLL_SECONDS:-5}"
+  local start_time="$SECONDS"
+
+  echo "Waiting for ${label}: ${url}"
+  while true; do
+    if curl -fsS --max-time 10 "$url"; then
+      echo
+      echo "${label} OK"
+      return 0
+    fi
+
+    if (( SECONDS - start_time >= max_wait )); then
+      echo "Timed out waiting ${max_wait}s for ${label}: ${url}" >&2
+      return 1
+    fi
+
+    sleep "$poll_seconds"
+  done
+}
+
 echo "== deploy_production.sh =="
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "TARGET_BRANCH=main"
@@ -31,7 +55,8 @@ else
   "$SCRIPT_DIR/start_backend.sh" production
 fi
 
-curl -fsS https://data.openecon.ai/api/health
+wait_for_url "local backend health" "http://localhost:3001/api/health"
+wait_for_url "public backend health" "https://data.openecon.ai/api/health"
 
 echo "DEPLOY_HEALTH_OK"
 echo "DEPLOY_COMPLETE_SHA=$DEPLOY_COMMIT_SHA"
