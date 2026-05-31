@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from backend.models import ParsedIntent
 from backend.services.indicator_resolution import (
+    _country_reordered_exact_title_variants,
+    _extract_country_codes_from_text,
+    exact_title_search_inputs,
     find_exact_provider_title_match,
     resolve_indicator_for_fetch,
     select_indicator_query_for_resolution,
@@ -15,6 +19,20 @@ from backend.services.indicator_selector import SelectionResult
 
 
 class IndicatorResolutionTests(unittest.TestCase):
+    def test_country_alias_exact_title_helpers_preserve_behavior_and_stay_fast(self) -> None:
+        self.assertEqual(_extract_country_codes_from_text("US GDP"), {"US"})
+        self.assertEqual(_extract_country_codes_from_text("United States GDP and Canada GDP"), {"US", "CA"})
+        self.assertIn("United States GDP", _country_reordered_exact_title_variants("GDP for United States"))
+        self.assertIn("GDP", exact_title_search_inputs("US GDP from FRED", "FRED"))
+
+        start = time.perf_counter()
+        for _ in range(200):
+            self.assertEqual(
+                _extract_country_codes_from_text("US GDP and Canada GDP for United States"),
+                {"US", "CA"},
+            )
+        self.assertLess(time.perf_counter() - start, 1.5)
+
     def test_find_exact_provider_title_match_prefers_closest_worldbank_completion_variant(self) -> None:
         match = find_exact_provider_title_match(
             "Completion rate, upper secondary education, female (%)",

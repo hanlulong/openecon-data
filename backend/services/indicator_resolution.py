@@ -20,7 +20,7 @@ import logging
 import json
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from ..models import NormalizedData, ParsedIntent
 from ..routing.country_resolver import CountryResolver
@@ -37,6 +37,64 @@ logger = logging.getLogger(__name__)
 # Pre-compiled regex patterns used by this module
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
+
+
+class _CountryAliasRegex(NamedTuple):
+    alias: str
+    code: str
+    boundary: re.Pattern[str]
+    leading_space: re.Pattern[str]
+    for_suffix: re.Pattern[str]
+    punct_prefix: re.Pattern[str]
+
+
+def _build_country_alias_regex_rows() -> tuple[_CountryAliasRegex, ...]:
+    """Precompile existing country-alias patterns used in exact-title helpers.
+
+    Keep this strictly mechanical: same alias source, same length-descending
+    order, same escaping, and same boundary/prefix semantics as the previous
+    per-call ``re`` loops.  This removes regex compilation from hot exact-title
+    probes without adding provider/indicator shortcut authority.
+    """
+
+    rows: list[_CountryAliasRegex] = []
+    aliases = sorted(
+        {
+            str(alias).strip()
+            for alias in CountryResolver.COUNTRY_ALIASES.keys()
+            if str(alias).strip()
+        },
+        key=len,
+        reverse=True,
+    )
+    for alias_text in aliases:
+        escaped = re.escape(alias_text)
+        rows.append(
+            _CountryAliasRegex(
+                alias=alias_text,
+                code=CountryResolver.normalize(alias_text) or "",
+                boundary=re.compile(
+                    rf"(?<![a-z0-9]){escaped}(?![a-z0-9])",
+                    flags=re.IGNORECASE,
+                ),
+                leading_space=re.compile(
+                    rf"^(?:{escaped})\s+",
+                    flags=re.IGNORECASE,
+                ),
+                for_suffix=re.compile(
+                    rf"^(?P<head>.+?)\s+for\s+(?P<country>{escaped})$",
+                    flags=re.IGNORECASE,
+                ),
+                punct_prefix=re.compile(
+                    rf"^(?P<country>{escaped})\s*[-,:]\s*(?P<head>.+)$",
+                    flags=re.IGNORECASE,
+                ),
+            )
+        )
+    return tuple(rows)
+
+
+_COUNTRY_ALIAS_REGEX_ROWS = _build_country_alias_regex_rows()
 
 # GDP ratio patterns — used by 5 functions to detect "X as % of GDP" style queries.
 # Hoisted to module level to eliminate duplication (was copy-pasted 5 times).
@@ -1133,13 +1191,8 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
                     search_text,
                     flags=re.IGNORECASE,
                 )
-                for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-                    cleaned_search = re.sub(
-                        rf"^(?:{re.escape(str(alias).strip())})\s+",
-                        " ",
-                        cleaned_search,
-                        flags=re.IGNORECASE,
-                    )
+                for alias_row in _COUNTRY_ALIAS_REGEX_ROWS:
+                    cleaned_search = alias_row.leading_space.sub(" ", cleaned_search, count=1)
                 cleaned_search = re.sub(r"\s+", " ", cleaned_search).strip(" ,;:-")
                 if not cleaned_search:
                     continue
@@ -1553,13 +1606,8 @@ def exact_title_search_inputs(text: str, provider_name: str) -> list[str]:
                 queue.append(without_unit_suffix)
 
         # Strip a leading country alias only when it appears as a plain prefix.
-        for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-            stripped_country = re.sub(
-                rf"^(?:{re.escape(str(alias).strip())})\s+",
-                "",
-                candidate,
-                flags=re.IGNORECASE,
-            ).strip()
+        for alias_row in _COUNTRY_ALIAS_REGEX_ROWS:
+            stripped_country = alias_row.leading_space.sub("", candidate, count=1).strip()
             if stripped_country != candidate and stripped_country not in seen:
                 queue.append(stripped_country)
 
@@ -1713,18 +1761,9 @@ def _extract_country_codes_from_text(text: str) -> set[str]:
         return set()
 
     codes: set[str] = set()
-    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-        alias_text = str(alias).strip()
-        if not alias_text:
-            continue
-        if re.search(
-            rf"(?<![a-z0-9]){re.escape(alias_text)}(?![a-z0-9])",
-            query_text,
-            flags=re.IGNORECASE,
-        ):
-            normalized = CountryResolver.normalize(alias_text)
-            if normalized:
-                codes.add(normalized)
+    for alias_row in _COUNTRY_ALIAS_REGEX_ROWS:
+        if alias_row.boundary.search(query_text) and alias_row.code:
+            codes.add(alias_row.code)
     return codes
 
 
@@ -1735,27 +1774,15 @@ def _country_reordered_exact_title_variants(candidate: str) -> list[str]:
         return []
 
     variants: list[str] = []
-    for alias in sorted(CountryResolver.COUNTRY_ALIASES.keys(), key=len, reverse=True):
-        alias_text = str(alias).strip()
-        if not alias_text:
-            continue
-
-        suffix_match = re.match(
-            rf"^(?P<head>.+?)\s+for\s+(?P<country>{re.escape(alias_text)})$",
-            candidate_text,
-            flags=re.IGNORECASE,
-        )
+    for alias_row in _COUNTRY_ALIAS_REGEX_ROWS:
+        suffix_match = alias_row.for_suffix.match(candidate_text)
         if suffix_match:
             head = suffix_match.group("head").strip(" ,;:-")
             country = suffix_match.group("country").strip()
             if head and country:
                 variants.append(f"{country} {head}".strip())
 
-        prefixed_match = re.match(
-            rf"^(?P<country>{re.escape(alias_text)})\s*[-,:]\s*(?P<head>.+)$",
-            candidate_text,
-            flags=re.IGNORECASE,
-        )
+        prefixed_match = alias_row.punct_prefix.match(candidate_text)
         if prefixed_match:
             country = prefixed_match.group("country").strip()
             head = prefixed_match.group("head").strip(" ,;:-")
