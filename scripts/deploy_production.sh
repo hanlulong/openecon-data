@@ -22,7 +22,14 @@ echo "DEPLOY_COMMIT_SHA=$DEPLOY_COMMIT_SHA"
 npm run build:frontend
 mkdir -p "${PROJECT_ROOT}/packages/frontend/dist-data"
 rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/"
-"$SCRIPT_DIR/start_backend.sh" production
+
+if systemctl cat openecon-backend.service >/dev/null 2>&1; then
+  echo "Restarting backend via systemd openecon-backend.service"
+  sudo -n systemctl daemon-reload
+  sudo -n systemctl restart openecon-backend.service
+else
+  "$SCRIPT_DIR/start_backend.sh" production
+fi
 
 curl -fsS https://data.openecon.ai/api/health
 
