@@ -33,6 +33,16 @@ wait_for_url() {
   done
 }
 
+service_exists() {
+  systemctl cat "$1" >/dev/null 2>&1
+}
+
+restart_service() {
+  local service_name="$1"
+  echo "Restarting ${service_name}"
+  sudo -n systemctl restart "$service_name"
+}
+
 echo "== deploy_production.sh =="
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "TARGET_BRANCH=main"
@@ -47,15 +57,21 @@ npm run build:frontend
 mkdir -p "${PROJECT_ROOT}/packages/frontend/dist-data"
 rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/"
 
-if systemctl cat openecon-backend.service >/dev/null 2>&1; then
-  echo "Restarting backend via systemd openecon-backend.service"
+if service_exists openecon-backend.service; then
+  echo "Restarting backend via systemd"
   sudo -n systemctl daemon-reload
-  sudo -n systemctl restart openecon-backend.service
+  restart_service openecon-backend.service
+  if service_exists openecon-mcp.service; then
+    restart_service openecon-mcp.service
+  fi
 else
   "$SCRIPT_DIR/start_backend.sh" production
 fi
 
 wait_for_url "local backend health" "http://localhost:3001/api/health"
+if service_exists openecon-mcp.service; then
+  wait_for_url "local MCP service health" "http://localhost:3002/api/health"
+fi
 wait_for_url "public backend health" "https://data.openecon.ai/api/health"
 
 echo "DEPLOY_HEALTH_OK"
