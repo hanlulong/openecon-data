@@ -67,6 +67,9 @@ MAX_ATTEMPTS=$(( HEALTH_MAX_WAIT_SECONDS / HEALTH_POLL_SECONDS ))
 
 if [ "$MODE" = "production" ]; then
   echo "🚀 Starting backend in PRODUCTION mode (no auto-reload)..."
+  UVICORN_WORKERS="${UVICORN_WORKERS:-2}"
+  echo "   Workers: $UVICORN_WORKERS"
+  CMD+=(--workers "$UVICORN_WORKERS")
 elif [ "$MODE" = "development" ]; then
   echo "🔧 Starting backend in DEVELOPMENT mode (with auto-reload)..."
   CMD+=(--reload --reload-dir backend)
