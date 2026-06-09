@@ -60,7 +60,7 @@ sleep 2
 source "${VENV_PATH}/bin/activate"
 
 LOG_PATH="${LOG_DIR}/backend-${MODE}.log"
-CMD=(uvicorn backend.main:app --host 0.0.0.0 --port 3001)
+CMD=(uvicorn backend.main:app --host 127.0.0.1 --port 3001)
 HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-2}"
 HEALTH_MAX_WAIT_SECONDS="${HEALTH_MAX_WAIT_SECONDS:-180}"
 MAX_ATTEMPTS=$(( HEALTH_MAX_WAIT_SECONDS / HEALTH_POLL_SECONDS ))
