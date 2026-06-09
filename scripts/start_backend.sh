@@ -84,7 +84,7 @@ BACKEND_PID=$!
 
 HEALTH_OK=0
 for _attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-  if curl -s http://localhost:3001/api/health > /dev/null 2>&1; then
+  if curl -s http://127.0.0.1:3001/api/health > /dev/null 2>&1; then
     HEALTH_OK=1
     break
   fi

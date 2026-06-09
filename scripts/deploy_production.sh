@@ -68,9 +68,9 @@ else
   "$SCRIPT_DIR/start_backend.sh" production
 fi
 
-wait_for_url "local backend health" "http://localhost:3001/api/health"
+wait_for_url "local backend health" "http://127.0.0.1:3001/api/health"
 if service_exists openecon-mcp.service; then
-  wait_for_url "local MCP service health" "http://localhost:3002/api/health"
+  wait_for_url "local MCP service health" "http://127.0.0.1:3002/api/health"
 fi
 wait_for_url "public backend health" "https://data.openecon.ai/api/health"
 
