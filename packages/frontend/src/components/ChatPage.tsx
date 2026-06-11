@@ -553,8 +553,16 @@ export function ChatPage() {
     setQuery('')
     setSearchQuery('')
 
-    // Clear prefetch cache
-    sessionStorage.clear()
+    // Clear only the prefetch cache — NOT all of sessionStorage. A blanket
+    // clear() also wipes the auth-bridge attempt key (openecon_auth_bridge_*),
+    // which forces the hidden cross-domain bridge iframe to re-run on the next
+    // load, plus any other third-party keys.
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i)
+      if (key && key.startsWith('prefetched_')) {
+        sessionStorage.removeItem(key)
+      }
+    }
 
     // If we have query params, navigate to clean /chat
     if (location.search) {
@@ -584,7 +592,15 @@ export function ChatPage() {
       const blob = await api.exportData(data, exportFormat)
       downloadExport(blob, exportFormat)
     } catch (error) {
+      // Don't fail silently — a 401/timeout/rate-limit on export used to do
+      // nothing visible, leaving the user to think the click was ignored.
       logger.error('Export error:', error)
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `⚠️ Export to ${format.toUpperCase()} failed: ${extractApiErrorMessage(error, 'please try again')}`,
+        timestamp: new Date(),
+        isError: true,
+      }])
     }
   }
 

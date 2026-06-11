@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { Message } from '../types'
 import { api } from '../services/api'
 import { extractApiErrorMessage } from '../lib/errors'
@@ -34,10 +34,16 @@ export function FeedbackModal({ isOpen, onClose, messages, conversationId }: Fee
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { user } = useAuth()
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Reset state when modal opens
+  // Reset state when modal opens; cancel any pending auto-close so a stale
+  // post-submit timer can't close a freshly-reopened modal 2s later.
   useEffect(() => {
     if (isOpen) {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current)
+        closeTimerRef.current = null
+      }
       setMessage('')
       setFeedbackType('bug')
       setIncludeSession(true)
@@ -49,6 +55,11 @@ export function FeedbackModal({ isOpen, onClose, messages, conversationId }: Fee
       }
     }
   }, [isOpen, user])
+
+  // Clear the auto-close timer on unmount.
+  useEffect(() => () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+  }, [])
 
   const collectSessionInfo = (): SessionInfo => {
     return {
@@ -112,8 +123,9 @@ export function FeedbackModal({ isOpen, onClose, messages, conversationId }: Fee
       })
 
       setSubmitted(true)
-      // Auto-close after success
-      setTimeout(() => {
+      // Auto-close after success (tracked so reopen/unmount can cancel it)
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null
         onClose()
       }, 2000)
     } catch (error: unknown) {
