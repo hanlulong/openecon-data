@@ -97,6 +97,21 @@ class ConversationContext:
 
 _REDIS_KEY_PREFIX = "conv:"
 
+# Per-conversation cross-worker lock (production runs 2 uvicorn workers, so the
+# in-process RLock does not serialize them). The locked section is sub-second
+# (re-read + field mutate + SETEX); the TTL is a generous safety auto-expire in
+# case a worker dies mid-section, and the wait bound keeps a contended write
+# from blocking the event loop for long (it proceeds degraded after the wait,
+# never dropping the write).
+_CONV_LOCK_TTL_MS = 10_000
+_CONV_LOCK_WAIT_S = 2.0
+# Token-guarded release: only the owner that set the token may delete the lock,
+# so a slow worker can't release a lock that already expired and was re-taken.
+_CONV_LOCK_RELEASE_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
 
 def _get_ttl_seconds() -> int:
     """Return conversation TTL in seconds from config (default 24 hours)."""
@@ -234,6 +249,78 @@ class ConversationManager:
         except Exception as exc:
             logger.debug("Redis delete failed for %s: %s", conversation_id, exc)
 
+    def _locked_redis_update(self, conversation_id, mutate_fn, *, require_existing=True):
+        """Cross-worker-safe read-merge-write for ONE conversation.
+
+        Production runs 2 uvicorn workers; the per-process ``self._lock`` does
+        not serialize them, and ``_redis_save`` blind-overwrites the whole blob,
+        so two workers handling the same conversation erase each other's turn.
+        This wraps a SHORT critical section — re-read the FRESH context from
+        Redis, apply ONLY this operation's field via ``mutate_fn``, then save —
+        in a per-conversation Redis lock. Because each writer mutates only its
+        own field on top of the freshest base, concurrent writers to DIFFERENT
+        fields (e.g. add_message vs set_conversation_state) no longer clobber.
+        The expensive LLM/provider work happens OUTSIDE this call, so the lock
+        is held for milliseconds.
+
+        ``mutate_fn(ctx)`` must mutate only the field(s) this operation owns.
+        Returns the saved context, or None when ``require_existing`` is True and
+        the conversation does not exist.
+        """
+        client = _get_sync_redis()
+        lock_key = f"{_REDIS_KEY_PREFIX}lock:{conversation_id}"
+        token = uuid.uuid4().hex
+        acquired = False
+        if client is not None:
+            import time as _time
+            deadline = _time.monotonic() + _CONV_LOCK_WAIT_S
+            while True:
+                try:
+                    if client.set(lock_key, token, nx=True, px=_CONV_LOCK_TTL_MS):
+                        acquired = True
+                        break
+                except Exception as exc:
+                    logger.debug("conv lock acquire error for %s: %s", conversation_id, exc)
+                    break
+                if _time.monotonic() >= deadline:
+                    logger.warning(
+                        "conv lock wait timed out for %s; proceeding without it (degraded)",
+                        conversation_id,
+                    )
+                    break
+                _time.sleep(0.02)
+        try:
+            with self._lock:
+                # Re-read the freshest context: Redis is the cross-worker source
+                # of truth, so we see any turn the other worker just committed.
+                # (_redis_load already drops expired entries.)
+                fresh = self._redis_load(conversation_id) if client is not None else None
+                if fresh is None:
+                    cached = self._conversations.get(conversation_id)
+                    if cached is not None and self._is_expired(cached):
+                        # Honor TTL on the in-memory fallback too, matching the
+                        # old _get_locked behavior (callers like add_message_safe
+                        # rely on expired conversations being treated as absent).
+                        self._conversations.pop(conversation_id, None)
+                        self._redis_delete(conversation_id)
+                        cached = None
+                    fresh = cached
+                if fresh is None:
+                    if require_existing:
+                        return None
+                    fresh = ConversationContext(id=conversation_id)
+                mutate_fn(fresh)
+                fresh.updated_at = self._now()
+                self._conversations[conversation_id] = fresh
+                self._redis_save(fresh)
+                return fresh
+        finally:
+            if acquired and client is not None:
+                try:
+                    client.eval(_CONV_LOCK_RELEASE_LUA, 1, lock_key, token)
+                except Exception:
+                    pass
+
     # ── Core helpers ─────────────────────────────────────────────────
 
     @staticmethod
@@ -279,22 +366,20 @@ class ConversationManager:
             return self._get_locked(conversation_id)
 
     def add_message(self, conversation_id: str, role: str, content: str, intent: Optional[ParsedIntent] = None) -> None:
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                raise ValueError("Conversation not found")
-
-            now = self._now()
-            conversation.messages.append(
-                ConversationMessage(role=role, content=content, timestamp=now)
+        def _mut(ctx: ConversationContext) -> None:
+            # Append onto the FRESH message list so a concurrent worker's just-
+            # appended turn is preserved (the old code appended to a possibly
+            # stale in-memory copy, then blind-saved, dropping the other turn).
+            ctx.messages.append(
+                ConversationMessage(role=role, content=content, timestamp=self._now())
             )
-            # Trim oldest messages if over cap (keep last MAX_MESSAGES)
-            if len(conversation.messages) > self.MAX_MESSAGES:
-                conversation.messages = conversation.messages[-self.MAX_MESSAGES:]
+            if len(ctx.messages) > self.MAX_MESSAGES:
+                ctx.messages = ctx.messages[-self.MAX_MESSAGES:]
             if intent:
-                conversation.last_intent = intent
-            conversation.updated_at = now
-            self._redis_save(conversation)
+                ctx.last_intent = intent
+
+        if self._locked_redis_update(conversation_id, _mut) is None:
+            raise ValueError("Conversation not found")
 
     def add_message_safe(
         self,
@@ -363,12 +448,10 @@ class ConversationManager:
         When a round fails, the previous successful intent is restored so
         that subsequent follow-ups can still reference it correctly.
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                return
-            conversation.last_intent = intent
-            self._redis_save(conversation)
+        self._locked_redis_update(
+            conversation_id,
+            lambda ctx: setattr(ctx, "last_intent", intent),
+        )
 
     # ── Conversation State (v2 architecture) ─────────────────────────
 
@@ -407,30 +490,27 @@ class ConversationManager:
         state : ConversationState
             The new conversation state to store.
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                logger.warning("set_conversation_state(%s): conversation NOT FOUND — state NOT saved!", conversation_id)
-                return
-            conversation.conversation_state = state
-            conversation.updated_at = self._now()
-            self._redis_save(conversation)
-            logger.debug("set_conversation_state(%s): SAVED (indicator=%s, provider=%s, base=%s, cube=%s, turn=%d)",
-                         conversation_id, getattr(state, 'indicator', '?'), getattr(state, 'provider', '?'),
-                         getattr(state, 'base_indicator', '?'), getattr(state, 'statscan_cube_metadata', None) is not None,
-                         getattr(state, 'turn_number', -1))
+        result = self._locked_redis_update(
+            conversation_id,
+            lambda ctx: setattr(ctx, "conversation_state", state),
+        )
+        if result is None:
+            logger.warning("set_conversation_state(%s): conversation NOT FOUND — state NOT saved!", conversation_id)
+            return
+        logger.debug("set_conversation_state(%s): SAVED (indicator=%s, provider=%s, base=%s, cube=%s, turn=%d)",
+                     conversation_id, getattr(state, 'indicator', '?'), getattr(state, 'provider', '?'),
+                     getattr(state, 'base_indicator', '?'), getattr(state, 'statscan_cube_metadata', None) is not None,
+                     getattr(state, 'turn_number', -1))
 
     def restore_conversation_state(self, conversation_id: str, state) -> None:
         """Restore conversation_state to a previous value after a failure.
 
         Mirrors :meth:`restore_last_intent` for the v2 state model.
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                return
-            conversation.conversation_state = state
-            self._redis_save(conversation)
+        self._locked_redis_update(
+            conversation_id,
+            lambda ctx: setattr(ctx, "conversation_state", state),
+        )
 
     def refresh_from_redis(self, conversation_id: str) -> bool:
         """Refresh in-memory context from Redis when persisted state exists.
@@ -491,28 +571,21 @@ class ConversationManager:
         Call at the start of process_query to prevent stale state
         from interfering with new queries.
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                return
-            conversation.pending_indicator_options = None
-            conversation.pending_semantic_clarification = None
-            self._redis_save(conversation)
+        def _mut(ctx: ConversationContext) -> None:
+            ctx.pending_indicator_options = None
+            ctx.pending_semantic_clarification = None
+        self._locked_redis_update(conversation_id, _mut)
 
     def set_pending_indicator_options(self, conversation_id: str, payload: Dict[str, Any]) -> None:
         """Persist pending indicator-choice clarification options for a conversation.
 
         Clears any pending semantic clarification (mutual exclusion).
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                raise ValueError("Conversation not found")
-
-            conversation.pending_indicator_options = dict(payload or {})
-            conversation.pending_semantic_clarification = None  # mutual exclusion
-            conversation.updated_at = self._now()
-            self._redis_save(conversation)
+        def _mut(ctx: ConversationContext) -> None:
+            ctx.pending_indicator_options = dict(payload or {})
+            ctx.pending_semantic_clarification = None  # mutual exclusion
+        if self._locked_redis_update(conversation_id, _mut) is None:
+            raise ValueError("Conversation not found")
 
     def get_pending_indicator_options(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get pending indicator-choice clarification payload if present."""
@@ -525,28 +598,21 @@ class ConversationManager:
 
     def clear_pending_indicator_options(self, conversation_id: str) -> None:
         """Clear pending indicator-choice clarification state."""
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                return
-            conversation.pending_indicator_options = None
-            conversation.updated_at = self._now()
-            self._redis_save(conversation)
+        self._locked_redis_update(
+            conversation_id,
+            lambda ctx: setattr(ctx, "pending_indicator_options", None),
+        )
 
     def set_pending_semantic_clarification(self, conversation_id: str, payload: Dict[str, Any]) -> None:
         """Persist pending semantic clarification state for a conversation.
 
         Clears any pending indicator options (mutual exclusion).
         """
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                raise ValueError("Conversation not found")
-
-            conversation.pending_semantic_clarification = dict(payload or {})
-            conversation.pending_indicator_options = None  # mutual exclusion
-            conversation.updated_at = self._now()
-            self._redis_save(conversation)
+        def _mut(ctx: ConversationContext) -> None:
+            ctx.pending_semantic_clarification = dict(payload or {})
+            ctx.pending_indicator_options = None  # mutual exclusion
+        if self._locked_redis_update(conversation_id, _mut) is None:
+            raise ValueError("Conversation not found")
 
     def get_pending_semantic_clarification(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get pending semantic clarification payload if present."""
@@ -559,13 +625,10 @@ class ConversationManager:
 
     def clear_pending_semantic_clarification(self, conversation_id: str) -> None:
         """Clear pending semantic clarification state."""
-        with self._lock:
-            conversation = self._get_locked(conversation_id)
-            if not conversation:
-                return
-            conversation.pending_semantic_clarification = None
-            conversation.updated_at = self._now()
-            self._redis_save(conversation)
+        self._locked_redis_update(
+            conversation_id,
+            lambda ctx: setattr(ctx, "pending_semantic_clarification", None),
+        )
 
     def get_or_create(self, conversation_id: Optional[str]) -> str:
         """
@@ -588,11 +651,14 @@ class ConversationManager:
             # Check if conversation exists (in-memory or Redis)
             if self._get(conversation_id):
                 return conversation_id
-            # Create conversation with the provided ID (don't generate new UUID)
-            with self._lock:
-                ctx = ConversationContext(id=conversation_id)
-                self._conversations[conversation_id] = ctx
-                self._redis_save(ctx)
+            # Create conversation with the provided ID (don't generate new UUID).
+            # Go through the locked update with require_existing=False: it
+            # re-reads Redis first, so if the OTHER worker already created (and
+            # populated) this id in the race window, that context is preserved
+            # instead of being clobbered by a fresh empty blob.
+            self._locked_redis_update(
+                conversation_id, lambda ctx: None, require_existing=False
+            )
             return conversation_id
         # No ID provided - generate new one
         return self.create_conversation()
