@@ -324,6 +324,67 @@ async def test_post_with_retry_404_immediate_fail():
     assert client.post.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_post_with_retry_429_retries_then_fails():
+    """POST 429 should now retry + record rate-limit reset (parity with GET)."""
+    provider = _fresh_provider()
+    provider.MAX_RETRIES = 2
+
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_response(429, headers={"Retry-After": "1"})
+
+    with pytest.raises(DataNotAvailableError, match="retries"):
+        await provider._post_with_retry(client, "https://api.example.com/data")
+    assert provider.rate_limit_reset is not None
+    assert client.post.call_count == 2  # retried, not one-shot
+
+
+@pytest.mark.asyncio
+async def test_post_with_retry_raise_on_status_false_returns_4xx():
+    """raise_on_status=False returns a non-2xx response for caller inspection."""
+    provider = _fresh_provider()
+
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_response(404, text="not found")
+
+    resp = await provider._post_with_retry(
+        client, "https://api.example.com/data", raise_on_status=False
+    )
+    assert resp.status_code == 404  # returned, NOT raised
+    assert client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_with_retry_raise_on_status_false_returns_4xx():
+    """The GET helper's opt-out mirrors POST: a 4xx is returned, not raised."""
+    provider = _fresh_provider()
+
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get.return_value = _mock_response(404, text="not found")
+
+    resp = await provider._get_with_retry(
+        client, "https://api.example.com/data", raise_on_status=False
+    )
+    assert resp.status_code == 404
+    assert client.get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_post_with_retry_raise_on_status_false_still_retries_5xx():
+    """raise_on_status=False still retries transient 5xx (only the terminal raise is suppressed)."""
+    provider = _fresh_provider()
+    provider.MAX_RETRIES = 2
+
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_response(503)
+
+    with pytest.raises(DataNotAvailableError, match="retries"):
+        await provider._post_with_retry(
+            client, "https://api.example.com/data", raise_on_status=False
+        )
+    assert client.post.call_count == 2  # 5xx is transient regardless of raise_on_status
+
+
 # ─── Provider Name Tests ────────────────────────────────────────────
 
 def test_provider_name_used_for_circuit_breaker():
