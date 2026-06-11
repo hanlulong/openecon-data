@@ -1122,7 +1122,7 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
-    logger.info("⚡ Pro Mode Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id)
+    logger.info("⚡ Pro Mode Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id if user else "anonymous")
 
     _pro_start = time.perf_counter()
     try:
