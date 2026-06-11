@@ -52,6 +52,18 @@ class ExchangeRateProvider(BaseProvider):
         else:
             self.base_url = settings.exchangerate_base_url.rstrip("/")
 
+    def _safe_url(self, url: str) -> str:
+        """Mask the embedded API key for anything that leaves the process.
+
+        ExchangeRate-API puts the key in the URL path, so any log line or
+        response metadata that includes ``self.base_url`` would leak the paid
+        key (into the app log and to the browser via ``metadata.apiUrl``).
+        Replace the key segment with ``***`` structurally — no value matching.
+        """
+        if self.api_key:
+            return url.replace(self.api_key, "***")
+        return url
+
     async def _fetch_data(self, **params) -> NormalizedData:
         """Implement BaseProvider interface by routing to fetch_exchange_rate."""
         return await self.fetch_exchange_rate(
@@ -86,13 +98,13 @@ class ExchangeRateProvider(BaseProvider):
         logger.info(f"🔍 ExchangeRate: Fetching rates for {base_code}")
         logger.info(f"   - target_currency: {target_currency}")
         logger.info(f"   - target_currencies: {target_currencies}")
-        logger.info(f"   - API URL: {self.base_url}/latest/{base_code}")
+        logger.info(f"   - API URL: {self._safe_url(f'{self.base_url}/latest/{base_code}')}")
 
         try:
             # Use shared HTTP client pool for better performance
             client = get_http_client()
             full_url = f"{self.base_url}/latest/{base_code}"
-            logger.info(f"📡 Requesting: {full_url}")
+            logger.info(f"📡 Requesting: {self._safe_url(full_url)}")
             response = await client.get(full_url, timeout=15.0)
             logger.info(f"📊 Response status: {response.status_code}")
             response.raise_for_status()
@@ -209,7 +221,7 @@ class ExchangeRateProvider(BaseProvider):
             frequency=frequency,
             unit="exchange rate",
             lastUpdated=time_last_update,
-            apiUrl=f"{self.base_url}/latest/{base_code}",
+            apiUrl=self._safe_url(f"{self.base_url}/latest/{base_code}"),
         )
 
         logger.info(f"🎉 ExchangeRate: Returning {len(data_points)} data points")
