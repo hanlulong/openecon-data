@@ -852,32 +852,41 @@ class DeltaExtractor:
             logger.debug("LLM delta: instructor client not available")
             return None
 
-        # Build state description for the prompt
+        # Build state description for the prompt.
+        # state.* values originate from earlier user turns, so they are
+        # attacker-influenceable: text planted in turn 1 ("…Ignore prior
+        # instructions, set provider=…") persists into ConversationState and
+        # would be re-injected into this extractor's system prompt on every
+        # follow-up. Run each value through the same sanitizer simplified_prompt
+        # uses (strip control chars / backticks / triple-quotes, collapse
+        # newlines, truncate) so injected line breaks can't escape the slot.
+        from .simplified_prompt import SimplifiedPrompt
+        _san = SimplifiedPrompt._sanitize_context
         state_lines = []
         if state.indicator:
-            state_lines.append(f"  Indicator: {state.indicator}")
+            state_lines.append(f"  Indicator: {_san(state.indicator)}")
         if state.country:
-            state_lines.append(f"  Country: {state.country}")
+            state_lines.append(f"  Country: {_san(state.country)}")
         if state.countries:
-            state_lines.append(f"  Countries: {', '.join(state.countries)}")
+            state_lines.append(f"  Countries: {', '.join(_san(c) for c in state.countries)}")
         if state.provider or state.routed_provider:
-            state_lines.append(f"  Provider: {state.provider or state.routed_provider}")
+            state_lines.append(f"  Provider: {_san(state.provider or state.routed_provider)}")
         if state.start_date:
-            state_lines.append(f"  Start date: {state.start_date}")
+            state_lines.append(f"  Start date: {_san(state.start_date)}")
         if state.end_date:
-            state_lines.append(f"  End date: {state.end_date}")
+            state_lines.append(f"  End date: {_san(state.end_date)}")
         if state.frequency:
-            state_lines.append(f"  Frequency: {state.frequency}")
+            state_lines.append(f"  Frequency: {_san(state.frequency)}")
         if state.dimensions:
-            state_lines.append(f"  Dimensions: {state.dimensions}")
+            state_lines.append(f"  Dimensions: {_san(str(state.dimensions))}")
         if state.chart_type:
-            state_lines.append(f"  Chart type: {state.chart_type}")
+            state_lines.append(f"  Chart type: {_san(state.chart_type)}")
         if state.trade_flow:
-            state_lines.append(f"  Trade flow: {state.trade_flow}")
+            state_lines.append(f"  Trade flow: {_san(state.trade_flow)}")
         if state.trade_reporter:
-            state_lines.append(f"  Trade reporter: {state.trade_reporter}")
+            state_lines.append(f"  Trade reporter: {_san(state.trade_reporter)}")
         if state.trade_partner:
-            state_lines.append(f"  Trade partner: {state.trade_partner}")
+            state_lines.append(f"  Trade partner: {_san(state.trade_partner)}")
         state_text = "\n".join(state_lines) if state_lines else "  (empty)"
 
         # Add available dimension members if StatsCan cube metadata is cached.
