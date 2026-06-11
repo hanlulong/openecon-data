@@ -1128,9 +1128,21 @@ class BISProvider(BaseProvider):
                 )
                 results.append(NormalizedData(metadata=metadata, data=data_points))
 
-        except Exception:
-            # Return empty list if error
-            pass
+        except DataNotAvailableError:
+            raise
+        except Exception as exc:
+            # Distinguish a genuine empty result from a broken fetch/parse. The
+            # legitimate "no data" branches above already `return results` (empty),
+            # so reaching here means a transport/HTTP/JSON/parse failure — which
+            # must surface (Phase 3.4 convention) so the orchestrator can fall
+            # back to another provider instead of treating it as "no data".
+            # If we already parsed some series, a later failure shouldn't discard
+            # them; return the partial set. Only a total failure raises.
+            logger.warning("BIS GLI fetch/parse failed: %s", exc)
+            if not results:
+                raise DataNotAvailableError(
+                    f"BIS Global Liquidity Indicators request failed: {exc}"
+                ) from exc
 
         return results
 
