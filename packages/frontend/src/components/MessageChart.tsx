@@ -93,9 +93,41 @@ function getSeriesLabels(data: NormalizedData[]): string[] {
   }
 
   // If countries are different, use country names
-  return data.map((series, index) =>
+  const labels = data.map((series, index) =>
     series.metadata.country || `${series.metadata.indicator || 'Series'} ${index + 1}`
   )
+  return dedupeSeriesLabels(labels, data)
+}
+
+// Distinct series must keep distinct labels: transformDataForChart uses the
+// label as the column key, so a collision silently overwrites one series'
+// values with another's (e.g. two indicators for the same country both
+// labeled "United States"). Disambiguate with the remaining metadata
+// dimension, then a numeric suffix as a last resort.
+function dedupeSeriesLabels(labels: string[], data: NormalizedData[]): string[] {
+  const hasCollision = (ls: string[]) => new Set(ls).size !== ls.length
+  if (!hasCollision(labels)) return labels
+
+  const counts = new Map<string, number>()
+  labels.forEach((l) => counts.set(l, (counts.get(l) ?? 0) + 1))
+  let deduped = labels.map((label, index) => {
+    if ((counts.get(label) ?? 0) <= 1) return label
+    const { country, indicator } = data[index].metadata
+    const parts = [country, getShortIndicatorLabel(indicator || 'Series')]
+      .filter(Boolean)
+      .filter((part, i, arr) => arr.indexOf(part) === i)
+    return parts.join(' — ') || label
+  })
+
+  if (hasCollision(deduped)) {
+    const seen = new Map<string, number>()
+    deduped = deduped.map((label) => {
+      const n = (seen.get(label) ?? 0) + 1
+      seen.set(label, n)
+      return n === 1 ? label : `${label} (${n})`
+    })
+  }
+  return deduped
 }
 
 // Pure functions moved outside component for performance
@@ -339,7 +371,13 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
                 <span style={{ color: CHART_STYLE.axis }}>{entry.name}</span>
               </span>
               <span style={{ fontWeight: 600, color: CHART_STYLE.text }}>
-                {formatNumber(typeof entry.value === 'number' ? entry.value : Number(entry.value))}
+                {formatNumber(
+                  typeof entry.value === 'number'
+                    ? entry.value
+                    : entry.value == null
+                      ? null
+                      : Number(entry.value)
+                )}
               </span>
             </div>
           ))}
@@ -362,7 +400,11 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
   )
 
   const renderChart = (): JSX.Element => {
-    if (chartType === 'line') {
+    // The backend may recommend 'scatter' (models.py allows it) but there is no
+    // scatter renderer and no scatter button, so it used to fall through to a
+    // bare axis-less LineChart that rendered an empty box. Degrade scatter to
+    // the full line chart instead of a blank one.
+    if (chartType === 'line' || chartType === 'scatter') {
       return (
         <LineChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
           {chartGradients}
