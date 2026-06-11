@@ -73,10 +73,16 @@ class CoinGeckoProvider(BaseProvider):
                 vs_currency=vs_currency,
             )
 
-    def _build_url(self, endpoint: str, params: Dict[str, Any]) -> str:
-        """Build URL with API key if available."""
+    def _build_url(self, endpoint: str, params: Dict[str, Any], use_api_key: bool = True) -> str:
+        """Build URL with API key if available.
+
+        use_api_key lets a single request opt out of the key (used to retry
+        once keyless after a 401) WITHOUT mutating self.api_key — the provider
+        is a process-wide singleton, so a transient 401 must not permanently
+        downgrade every later request to the keyless free tier.
+        """
         # Add appropriate API key parameter based on key type
-        if self.api_key:
+        if self.api_key and use_api_key:
             if self.is_demo:
                 params["x_cg_demo_api_key"] = self.api_key
             elif self.is_pro:
@@ -96,10 +102,11 @@ class CoinGeckoProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         client = get_http_client()
         request_state = dict(params or {})
+        use_key = True  # per-request; flipped off on a 401 without touching self.api_key
         for attempt in range(max_retries):
             # Build URL with current API key state (may change if key is invalid)
             request_params = request_state.copy()
-            url = self._build_url(endpoint, request_params)
+            url = self._build_url(endpoint, request_params, use_api_key=use_key)
             try:
                 response = await client.get(url, params=request_params, timeout=30.0)
 
@@ -139,17 +146,22 @@ class CoinGeckoProvider(BaseProvider):
                         and current_vs_currency != "usd"
                         and ("vs_currency" in response_text or "invalid" in response_text)
                     ):
-                        logger.warning(
-                            "⚠️ CoinGecko rejected vs_currency='%s'; retrying with 'usd'",
-                            current_vs_currency,
+                        # Fail closed, do NOT silently substitute USD: the callers
+                        # label the series unit from the ORIGINAL requested currency
+                        # (vs_currency.upper()), so swapping to USD here returns USD
+                        # values mislabeled as EUR/GBP/etc. — wrong data presented as
+                        # success. A clear error is correct; wrong numbers are not.
+                        raise DataNotAvailableError(
+                            f"CoinGecko does not support the requested currency "
+                            f"'{current_vs_currency.upper()}'. Try USD."
                         )
-                        request_state["vs_currency"] = "usd"
-                        continue
                 elif status_code == 401:
-                    # API key might be invalid/expired - try without key
-                    if self.api_key and attempt == 0:
-                        logger.warning(f"⚠️ CoinGecko API key invalid, retrying without key")
-                        self.api_key = None  # Disable key for subsequent requests
+                    # API key might be invalid/expired — retry THIS request keyless,
+                    # but never null self.api_key (singleton: a transient 401 would
+                    # downgrade every later request to the free tier until restart).
+                    if self.api_key and use_key and attempt == 0:
+                        logger.warning("⚠️ CoinGecko API key rejected; retrying this request without it")
+                        use_key = False
                         continue
                     logger.error(f"❌ CoinGecko API error: Invalid API key")
                     raise DataNotAvailableError("CoinGecko API authentication failed")
