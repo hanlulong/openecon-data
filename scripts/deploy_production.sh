@@ -57,6 +57,19 @@ npm run build:frontend
 mkdir -p "${PROJECT_ROOT}/packages/frontend/dist-data"
 rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/"
 
+# Pro Mode sandbox Layer-2 provisioning (idempotent). Creates the dedicated
+# 'promode' uid, shared group, scoped sudoers, and uid-scoped egress allowlist.
+# Non-fatal: if it fails, Pro Mode falls back to Layer-1 mount isolation (which
+# already hides all secrets); we only lose the SSRF/loopback egress restriction.
+if [ -x "${SCRIPT_DIR}/setup_promode_sandbox.sh" ]; then
+  echo "Provisioning Pro Mode sandbox (Layer 2)"
+  PROMODE_PUBLIC_DIR="${PROMODE_PUBLIC_DIR:-${PROJECT_ROOT}/public_media/promode}" \
+  PROMODE_SESSION_DIR="${PROMODE_SESSION_DIR:-/tmp/promode_sessions}" \
+  BACKEND_USER="${BACKEND_USER:-hanlulong}" \
+    sudo -n -E bash "${SCRIPT_DIR}/setup_promode_sandbox.sh" \
+    || echo "WARNING: Pro Mode Layer-2 provisioning failed; continuing with Layer-1-only." >&2
+fi
+
 if service_exists openecon-backend.service; then
   echo "Restarting backend via systemd"
   sudo -n systemctl daemon-reload

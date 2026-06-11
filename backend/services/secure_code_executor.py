@@ -318,6 +318,27 @@ class SecurityValidator:
 class SecureCodeExecutor:
     """Secure code execution with comprehensive sandboxing"""
 
+    # ----- Layer-1 namespace jail wiring (see backend/sandbox/promode_jail.sh) -----
+    # Absolute, checked-in path to the static jail script. SECURITY INVARIANT: this
+    # path is constant and the file is read-only; it is never derived from or written
+    # by LLM output, so the LLM cannot influence the mount set.
+    _SANDBOX_DIR = Path(__file__).resolve().parent.parent / "sandbox"
+    JAIL_SCRIPT = _SANDBOX_DIR / "promode_jail.sh"
+    MPL_CACHE_DIR = _SANDBOX_DIR / "mpl_cache"
+    # The venv whose site-packages (numpy/pandas/matplotlib/httpx + numpy.libs) the
+    # jail bind-mounts read-only. Derived from the running interpreter so it tracks
+    # the actual deployment.
+    VENV_DIR = Path(sys.prefix)
+    VENV_PY = Path(sys.executable)
+    UNSHARE = Path("/usr/bin/unshare")
+    # Fixed mount points INSIDE the jail (must match promode_jail.sh).
+    JAIL_SESS_PATH = "/sess"   # persistent session dir is bound here
+    JAIL_TMP_PATH = "/tmp"     # per-exec output dir is bound here (plots land here)
+
+    # Lazily-computed result of the boot canary self-test. None=not yet run,
+    # True=jail healthy, False=jail broken (Pro Mode fails closed).
+    _canary_ok: Optional[bool] = None
+
     def __init__(
         self,
         security_level: SecurityLevel = SecurityLevel.STRICT,
@@ -420,6 +441,12 @@ class SecureCodeExecutor:
         work_dir = self.session_dir / "work" / execution_id
         work_dir.mkdir(mode=0o700, exist_ok=True, parents=True)
 
+        # Under Layer 2 the jail runs as the 'promode' uid, which must read the
+        # exec script and write into the scratch binds. Open these dirs to the
+        # shared group (group rwx) so the cross-uid handoff works while still
+        # excluding "other". Under Layer-1-only this is a no-op (stays 0o700).
+        self._apply_sharing_perms(work_dir)
+
         logger.info(f"Executing code in isolated directory: {work_dir}")
 
         # Persistent session directory - uses same structure as SessionStorage class
@@ -428,21 +455,39 @@ class SecureCodeExecutor:
         persistent_session_dir = self.session_dir / sanitized_session_id
         persistent_session_dir.mkdir(mode=0o700, exist_ok=True, parents=True)
 
+        # Per-execution OUTPUT directory. This is bound to the jail's /tmp, so any
+        # file the generated code writes to /tmp/promode_*.png lands HERE (and only
+        # here) rather than the world-writable host /tmp. SECURITY INVARIANT: file
+        # collection globs THIS dir, not global /tmp, which closes the previous
+        # TOCTOU / arbitrary-file-publish hole (predictable promode_{session}_* names
+        # in shared /tmp could be planted/raced by any local user).
+        tmp_out_dir = self.session_dir / "work" / f"{execution_id}_out"
+        tmp_out_dir.mkdir(mode=0o700, exist_ok=True, parents=True)
+        self._apply_sharing_perms(persistent_session_dir)
+        self._apply_sharing_perms(tmp_out_dir)
+
         try:
-            # Step 3: Prepare execution script with safety wrappers
+            # Step 3: Prepare execution script with safety wrappers.
+            # The session dir the wrapped code reads/writes is the jail-internal
+            # path (/sess), since the host path does not exist inside the namespace.
             exec_script = work_dir / "exec.py"
-            wrapped_code = self._wrap_code(code, work_dir, persistent_session_dir, max_output_size)
+            wrapped_code = self._wrap_code(
+                code, work_dir, Path(self.JAIL_SESS_PATH), max_output_size
+            )
 
             with open(exec_script, 'w') as f:
                 f.write(wrapped_code)
 
-            # Set secure file permissions
-            os.chmod(exec_script, 0o600)
+            # Set secure file permissions. Group-readable only when Layer 2 is
+            # active (so the promode uid can read the script); otherwise 0o600.
+            os.chmod(exec_script, 0o640 if self._layer2_active() else 0o600)
 
             # Step 4: Execute in subprocess with resource restrictions
             result = await self._run_sandboxed(
                 exec_script,
                 work_dir,
+                persistent_session_dir,
+                tmp_out_dir,
                 timeout,
                 memory_limit_mb,
                 max_output_size
@@ -452,9 +497,10 @@ class SecureCodeExecutor:
             if warnings:
                 result["warnings"] = warnings
 
-            # Step 6: Detect and collect generated files
+            # Step 6: Detect and collect generated files from the PER-EXEC output
+            # dir (not global /tmp).
             if result.get("success"):
-                files = self._collect_generated_files(session_id, result.get("output", ""))
+                files = self._collect_generated_files(tmp_out_dir, session_id)
                 if files:
                     result["files"] = files
                     logger.info(f"Collected {len(files)} generated file(s) for session {session_id}")
@@ -468,60 +514,79 @@ class SecureCodeExecutor:
                 "success": False,
                 "error": f"Execution error: {str(e)}"
             }
+        finally:
+            # Clean up the per-exec output dir. Files are already collected/moved by
+            # this point; anything left is a stale/uncollected artifact.
+            try:
+                if tmp_out_dir.exists():
+                    shutil.rmtree(tmp_out_dir, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Failed to clean up output dir {tmp_out_dir}: {e}")
 
-    def _collect_generated_files(self, session_id: str, output: str) -> List[Dict[str, str]]:
+    def _collect_generated_files(self, tmp_out_dir: Path, session_id: str) -> List[Dict[str, str]]:
         """
-        Detect and collect generated files from /tmp, move to public directory.
+        Detect and collect generated files from the PER-EXECUTION output dir.
+
+        SECURITY INVARIANT: we glob ``tmp_out_dir`` (the host dir bound to the
+        jail's /tmp), NOT the world-writable global /tmp. The generated code is
+        told to write plots to /tmp/promode_*.<ext>, which — because /tmp inside
+        the jail IS this dir outside — appears here and nowhere else. This removes
+        the old TOCTOU / arbitrary-file-publish vector where a local attacker could
+        pre-create predictable promode_{session}_* names in shared /tmp and have
+        them published to the public web dir.
 
         Args:
-            session_id: Session identifier
-            output: Code execution output (may contain file paths)
+            tmp_out_dir: Per-execution output directory (bound to jail /tmp)
+            session_id: Session identifier (used only to namespace published names)
 
         Returns:
             List of file dictionaries with 'url', 'name', and 'type'
         """
-        import shutil
-
         files = []
 
-        # Look for promode files in /tmp matching this session
-        tmp_pattern = Path("/tmp")
-        file_patterns = [
-            f"promode_{session_id}_*.png",
-            f"promode_{session_id}_*.csv",
-            f"promode_{session_id}_*.html",
-            f"promode_{session_id}_*.json",
-        ]
+        if not tmp_out_dir.exists():
+            return files
 
-        for pattern in file_patterns:
-            for tmp_file in tmp_pattern.glob(pattern):
+        # Collect any promode_* artifact written inside the isolated output dir.
+        # The dir is already per-execution, so we do not need to match session_id
+        # in the glob; we only accept the known publishable extensions.
+        allowed_suffixes = {".png", ".csv", ".html", ".json"}
+
+        for out_file in sorted(tmp_out_dir.glob("promode_*")):
+            try:
+                if not out_file.is_file():
+                    continue
+                suffix = out_file.suffix.lower()
+                if suffix not in allowed_suffixes:
+                    continue
+
+                # Publish under a name that is unique across executions to avoid
+                # collisions in the shared public dir (the per-exec dir name is a
+                # 16-hex execution hash). Keep the leading 'promode_' so existing
+                # /static/promode/ URL handling and cleanup globs still match.
+                unique_name = f"promode_{tmp_out_dir.name}_{out_file.name[len('promode_'):]}"
+                dest_file = self.public_dir / unique_name
+
+                shutil.move(str(out_file), str(dest_file))
+                # World-readable so Apache can serve it; not writable.
                 try:
-                    # Move to public directory
-                    dest_file = self.public_dir / tmp_file.name
-                    shutil.move(str(tmp_file), str(dest_file))
+                    os.chmod(dest_file, 0o644)
+                except OSError:
+                    pass
 
-                    # Generate URL (Apache serves /static/promode/)
-                    url = f"/static/promode/{tmp_file.name}"
+                url = f"/static/promode/{unique_name}"
+                file_type = {
+                    ".png": "image",
+                    ".csv": "data",
+                    ".html": "html",
+                    ".json": "data",
+                }.get(suffix, "file")
 
-                    # Determine file type
-                    suffix = tmp_file.suffix.lower()
-                    file_type = {
-                        ".png": "image",
-                        ".csv": "data",
-                        ".html": "html",
-                        ".json": "data",
-                    }.get(suffix, "file")
+                files.append({"url": url, "name": unique_name, "type": file_type})
+                logger.info(f"Collected file: {out_file.name} -> {url}")
 
-                    files.append({
-                        "url": url,
-                        "name": tmp_file.name,
-                        "type": file_type,
-                    })
-
-                    logger.info(f"Collected file: {tmp_file.name} -> {url}")
-
-                except Exception as e:
-                    logger.warning(f"Failed to collect file {tmp_file}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to collect file {out_file}: {e}")
 
         return files
 
@@ -554,13 +619,12 @@ import os
 import hashlib
 import re
 
-# Reset resource limits for threading (needed for httpx/pandas)
-try:
-    import resource
-    # Remove process/thread limits that might be inherited
-    resource.setrlimit(resource.RLIMIT_NPROC, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
-except:
-    pass
+# NOTE: We intentionally do NOT touch RLIMIT_NPROC here.
+# The parent sets resource limits via preexec_fn (RLIMIT_AS/CPU/FSIZE/NOFILE/CORE)
+# but deliberately leaves RLIMIT_NPROC unset so OpenBLAS/httpx worker threads can
+# still be created. The old code raised RLIMIT_NPROC to INFINITY to undo a limit
+# that is no longer applied — removing it avoids a no-op that also failed silently
+# inside the namespace jail.
 
 # Set threading environment variables
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
@@ -739,23 +803,30 @@ finally:
         self,
         script_path: Path,
         work_dir: Path,
+        session_dir: Path,
+        tmp_out_dir: Path,
         timeout: int,
         memory_limit_mb: int,
         max_output_size: int
     ) -> Dict[str, Any]:
         """
-        Run script in sandboxed subprocess with resource limits.
+        Run script inside the Layer-1 namespace mount-isolation jail with
+        RLIMIT resource caps.
 
         Args:
-            script_path: Path to script to execute
-            work_dir: Working directory
+            script_path: Host path to the wrapped script (lives in work_dir)
+            work_dir: Per-exec scratch dir (bound to jail /work, also HOME)
+            session_dir: Persistent session dir (bound to jail /sess)
+            tmp_out_dir: Per-exec output dir (bound to jail /tmp; plots land here)
             timeout: Timeout in seconds
-            memory_limit_mb: Memory limit in MB
+            memory_limit_mb: Memory limit in MB (informational; RLIMIT_AS caps hard)
             max_output_size: Maximum output size
 
         Returns:
             Execution result dictionary
         """
+        self._memory_limit_mb = memory_limit_mb
+        self._cpu_timeout = timeout
         try:
             # Build environment by inheriting from parent and filtering sensitive vars
             # This ensures threading/library dependencies work correctly
@@ -800,7 +871,9 @@ finally:
                 elif any(sensitive in key_upper for sensitive in ['KEY', 'SECRET', 'TOKEN', 'PASSWORD', 'CREDENTIAL']):
                     del env[key]
 
-            # Set custom environment values AFTER filtering (so they don't get deleted)
+            # Set custom environment values AFTER filtering (so they don't get deleted).
+            # NOTE: the jail script re-exports HOME/MPLCONFIGDIR/*_NUM_THREADS for the
+            # final python process; these here mostly affect the unshare/bash wrapper.
             env["HOME"] = str(work_dir)
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             env["PYTHONUNBUFFERED"] = "1"
@@ -811,30 +884,102 @@ finally:
             env["NUMEXPR_NUM_THREADS"] = "1"
             env["OMP_NUM_THREADS"] = "1"
 
-            # Create subprocess with restrictions
-            # Note: preexec_fn disabled because resource limits prevent httpx/numpy
-            # from creating necessary threads. Security maintained via timeout,
-            # environment isolation, and sandboxed directory.
+            # ----------------------------------------------------------------
+            # Build the jailed command.
+            #
+            # SECURITY INVARIANT: the LLM-generated code never runs directly on the
+            # host. It runs as the python process inside:
+            #   unshare --user --map-root-user --mount --pid --fork
+            #     -> /bin/bash promode_jail.sh
+            #        -> pivot_root into a tmpfs root with ONLY system runtime + venv
+            #           + 3 scratch binds; real /home, /etc, repo, .env are absent.
+            #
+            #  --user --map-root-user : unprivileged user namespace; "root" inside is
+            #                           our own uid, no real host privilege. This is
+            #                           what lets us mount/pivot_root WITHOUT sudo.
+            #  --mount                : private mount namespace (binds don't leak out).
+            #  --pid --fork           : new PID namespace so the jail can mount a fresh
+            #                           /proc that only shows jail processes.
+            #
+            # The script path passed to the jail is the JAIL-INTERNAL path
+            # (/work/<name>), because work_dir is bound at /work inside the jail.
+            # ----------------------------------------------------------------
+            jail_script_path = f"/work/{script_path.name}"
+            inner_cmd = [
+                str(self.UNSHARE),
+                "--user", "--map-root-user", "--mount", "--pid", "--fork",
+                # --kill-child=SIGKILL: when the unshare process dies (e.g. our
+                # timeout handler SIGKILLs the process group), it SIGKILLs the
+                # forked jail init (PID 1 of the new pid namespace), which cascades
+                # to every process inside. WITHOUT this, a `while True: pass` jail
+                # gets orphaned (reparented to host init) and burns CPU forever,
+                # because killing the unshare parent does NOT reach the forked
+                # grandchild across the pid-namespace boundary. This is the control
+                # that makes the wall-clock timeout actually terminate runaway code.
+                "--kill-child=SIGKILL",
+                "--", "/bin/bash", str(self.JAIL_SCRIPT),
+                str(self.VENV_PY),     # $1 venv python to exec
+                jail_script_path,      # $2 script (jail-internal path)
+                str(work_dir),         # $3 -> /work
+                str(session_dir),      # $4 -> /sess
+                str(tmp_out_dir),      # $5 -> /tmp
+                str(self.MPL_CACHE_DIR),  # $6 -> /mpl (prebaked fonts)
+                str(self.VENV_DIR),    # $7 venv root to bind RO
+                str(int(timeout)),     # $8 hard in-jail timeout (timeout(1) SIGKILL)
+                str(self._jail_mem_bytes(memory_limit_mb)),  # $9 RLIMIT_AS (prlimit)
+            ]
+
+            # LAYER 2 (optional hardening): run the whole jail as the dedicated,
+            # network-allowlisted 'promode' uid via passwordless `sudo -u promode`.
+            # Enabled only when that user exists AND the scoped sudoers drop-in is in
+            # place (provisioned by scripts/setup_promode_sandbox.sh). If absent we
+            # fall back to Layer-1-only (still safe: mount isolation hides all secrets).
+            argv = self._maybe_wrap_with_promode_uid(inner_cmd)
+
+            # Re-enable preexec_fn: apply RLIMIT_AS/CPU/FSIZE/NOFILE/CORE in the child
+            # before exec. This bounds memory/CPU/file-size DoS. We deliberately do NOT
+            # set RLIMIT_NPROC (it strangles OpenBLAS/httpx threads — the original
+            # reason the whole preexec_fn was disabled).
             process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                str(script_path),
+                *argv,
                 cwd=str(work_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
-                # preexec_fn=self._set_resource_limits if sys.platform != 'win32' else None
+                preexec_fn=self._set_resource_limits if sys.platform != 'win32' else None
             )
 
-            # Wait with timeout
+            # Wait with timeout. The AUTHORITATIVE wall-clock kill happens INSIDE
+            # the jail via timeout(1) at `timeout` seconds (it runs as the jail uid
+            # and can always SIGKILL python). We wait a bit longer here so the jail's
+            # self-kill fires first and we still collect any partial output. The
+            # external _kill_process_tree below is only a backstop for the rare case
+            # the jail wedges before timeout(1) takes effect.
+            outer_timeout = timeout + 8
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
-                    timeout=timeout
+                    timeout=outer_timeout
                 )
             except asyncio.TimeoutError:
-                process.kill()
+                # Backstop: the in-jail timeout(1) should have killed python already.
+                # If we are still here, force-kill the whole tree (see method doc for
+                # the Layer-2 cross-uid + pid-namespace subtleties).
+                self._kill_process_tree(process)
                 await process.wait()
                 logger.error(f"Code execution timed out after {timeout} seconds")
+                return {
+                    "success": False,
+                    "error": f"Code execution timed out after {timeout} seconds"
+                }
+
+            # Detect the in-jail hard timeout. `timeout(1)` (PID 1 of the jail) exits
+            # 124 when the deadline is hit, or 137 (128+SIGKILL) when it had to
+            # SIGKILL after the grace period. In either case python was killed before
+            # it could write result.json, so surface a clear timeout error rather than
+            # the generic "No result produced".
+            if process.returncode in (124, 137) and not (work_dir / "result.json").exists():
+                logger.error(f"Code execution timed out after {timeout} seconds (in-jail timeout)")
                 return {
                     "success": False,
                     "error": f"Code execution timed out after {timeout} seconds"
@@ -888,36 +1033,241 @@ finally:
                 logger.warning(f"Failed to clean up {work_dir}: {e}")
 
     def _set_resource_limits(self) -> None:
-        """Set resource limits for subprocess (Unix only)"""
+        """
+        preexec_fn: set hard RLIMITs in the child before exec, and detach into a new
+        session/process group so the timeout path can kill the entire jail tree.
+
+        These limits are INHERITED by every descendant (unshare -> bash -> python),
+        so they bound the jailed code even though python is several execs deep.
+
+        IMPORTANT: we do NOT set RLIMIT_NPROC. Capping process/thread count strangles
+        OpenBLAS and httpx worker-thread creation — that was the original reason the
+        entire preexec_fn was disabled. Memory/CPU/file caps below give DoS protection
+        without breaking the scientific stack.
+        """
         try:
+            import os as _os
             import resource
 
-            # CPU time limit (30 seconds)
-            resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+            # New session + process group. The timeout handler kills this whole group
+            # (killpg) so the unshare-forked python child can't outlive the timeout.
+            try:
+                _os.setsid()
+            except OSError:
+                pass
 
-            # Memory limit (512 MB)
-            resource.setrlimit(
-                resource.RLIMIT_AS,
-                (512 * 1024 * 1024, 512 * 1024 * 1024)
-            )
+            # Address-space (virtual memory) cap. Bounds runaway allocations like
+            # bytearray(10**10) -> raises MemoryError instead of OOM-killing the box.
+            # 1 GiB: numpy/OpenBLAS reserve large virtual ranges, so too-tight an AS
+            # cap breaks legitimate sci code; 1 GiB is comfortably above real use.
+            mem_bytes = max(int(getattr(self, "_memory_limit_mb", 512)), 768) * 1024 * 1024
+            mem_bytes = max(mem_bytes, 1024 * 1024 * 1024)  # floor at 1 GiB
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
 
-            # File descriptor limit (100 files) - needed for httpx connections
-            resource.setrlimit(resource.RLIMIT_NOFILE, (100, 100))
+            # CPU-seconds cap (SIGXCPU then SIGKILL). Bounds `while True: pass` even if
+            # the wall-clock timeout path were to fail. Add margin over wall timeout
+            # because wall != CPU time (I/O waits don't count as CPU).
+            cpu_limit = int(getattr(self, "_cpu_timeout", 30)) + 5
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit + 2))
 
-            # Note: RLIMIT_NPROC removed because it prevents httpx/numpy from creating
-            # necessary threads. Security is maintained via CPU time limit, memory limit,
-            # timeout, and sandboxed working directory.
-
-            # File size limit (100 MB)
+            # Max written file size: 100 MiB. Caps disk-fill DoS via huge plot/CSV.
             resource.setrlimit(
                 resource.RLIMIT_FSIZE,
                 (100 * 1024 * 1024, 100 * 1024 * 1024)
             )
 
+            # Open file descriptors: 256. Enough for httpx connection pools + numpy
+            # mmaps; bounds fd-exhaustion. (Was 100 — too tight once the bash wrapper
+            # and TLS sockets are added.)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+
+            # No core dumps (could otherwise leak in-memory data to disk).
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
             logger.debug("Resource limits set for subprocess")
 
         except Exception as e:
             logger.warning(f"Failed to set resource limits: {e}")
+
+    @staticmethod
+    def _jail_mem_bytes(memory_limit_mb: int) -> int:
+        """RLIMIT_AS in bytes for the in-jail prlimit. Floored at 1 GiB because
+        numpy/OpenBLAS reserve large virtual ranges; too-tight an AS cap breaks
+        legitimate scientific code. Mirrors the floor in _set_resource_limits."""
+        mb = max(int(memory_limit_mb or 512), 768)
+        return max(mb * 1024 * 1024, 1024 * 1024 * 1024)
+
+    def _kill_process_tree(self, process) -> None:
+        """
+        Forcibly terminate the entire jail process tree on timeout.
+
+        This is subtle and security-critical. Two layers of indirection sit between
+        our child `process` and the runaway code:
+          Layer 1:  process = unshare  -> (forked) jail python
+          Layer 2:  process = sudo     -> unshare -> (forked) jail python
+        and SUDO runs its child in a SEPARATE session/process group, so a simple
+        killpg(getpgid(process.pid)) kills sudo but NOT the unshare beneath it,
+        orphaning the namespaced python (which then burns CPU forever — observed).
+
+        Robust strategy: walk the descendant tree via /proc PPIDs and SIGKILL every
+        descendant (and the root). Killing the `unshare` process triggers its
+        --kill-child=SIGKILL, which reaps the forked jail init (PID 1 of the pid ns)
+        and thus the whole namespace. We also killpg as a belt-and-suspenders.
+        """
+        import os as _os
+        import signal as _signal
+
+        root = process.pid
+
+        # Build PID -> PPID map from /proc, then collect all descendants of root.
+        def _descendants(rootpid: int):
+            children = {}
+            try:
+                for entry in _os.listdir("/proc"):
+                    if not entry.isdigit():
+                        continue
+                    pid = int(entry)
+                    try:
+                        with open(f"/proc/{pid}/stat", "rb") as fh:
+                            data = fh.read()
+                        # field 4 (ppid) — parse robustly around the comm in parens.
+                        rparen = data.rfind(b")")
+                        fields = data[rparen + 2:].split()
+                        ppid = int(fields[1])
+                    except (OSError, ValueError, IndexError):
+                        continue
+                    children.setdefault(ppid, []).append(pid)
+            except OSError:
+                return []
+            out, stack = [], [rootpid]
+            while stack:
+                cur = stack.pop()
+                for ch in children.get(cur, []):
+                    out.append(ch)
+                    stack.append(ch)
+            return out
+
+        # Kill deepest-first: descendants then the root. Under Layer 2 this includes
+        # the `unshare` process, whose death --kill-child uses to reap the namespace.
+        try:
+            for pid in reversed([root, *_descendants(root)]):
+                try:
+                    _os.kill(pid, _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        except Exception:
+            pass
+
+        # Belt-and-suspenders: also nuke the process group of the root.
+        try:
+            _os.killpg(_os.getpgid(root), _signal.SIGKILL)
+        except Exception:
+            pass
+
+        # Last resort: the asyncio handle's own kill.
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+    def _layer2_active(self) -> bool:
+        """True if the promode uid + sudoers drop-in are provisioned (Layer 2)."""
+        try:
+            if getattr(self, "_promode_uid_available", None) is None:
+                # Trigger detection (also caches) without building a command.
+                self._maybe_wrap_with_promode_uid([])
+            return bool(self._promode_uid_available)
+        except Exception:
+            return False
+
+    def _apply_sharing_perms(self, path: Path) -> None:
+        """
+        When Layer 2 is active, make a scratch dir (and the parent chain up to and
+        including the session root) group-shared + setgid so the promode uid can:
+          (a) TRAVERSE every ancestor dir to reach the per-exec dir (needs g+x on
+              each ancestor), and
+          (b) READ/WRITE the leaf dirs, with files it creates inheriting the shared
+              group so the backend uid can collect them.
+        No-op under Layer-1 (dirs stay 0o700, owned only by the backend uid).
+        """
+        if not self._layer2_active():
+            return
+        try:
+            import grp
+            gid = grp.getgrnam("promode-share").gr_gid
+            session_root = self.session_dir.resolve()
+            # Walk from the target up to (and including) the session root, applying
+            # group ownership + setgid + group-rwx so the whole path is reachable.
+            cur = path.resolve()
+            while True:
+                try:
+                    os.chown(cur, -1, gid)
+                    os.chmod(cur, 0o2770)  # rwx owner+group, setgid, none for other
+                except (PermissionError, FileNotFoundError):
+                    pass
+                if cur == session_root or cur == cur.parent:
+                    break
+                cur = cur.parent
+        except Exception as e:
+            logger.warning(f"Could not apply Layer-2 sharing perms to {path}: {e}")
+
+    def _maybe_wrap_with_promode_uid(self, inner_cmd: List[str]) -> List[str]:
+        """
+        LAYER 2: if the dedicated 'promode' user and the scoped sudoers drop-in are
+        provisioned, run the jail as that uid via passwordless `sudo -n -u promode`.
+        The promode uid is the one the egress iptables allowlist is scoped to, and it
+        has NO secrets in its environment/home. If not provisioned, return the command
+        unchanged (Layer-1-only: still safe — mount isolation already hides secrets).
+
+        Detection is best-effort and cached, so a missing user simply degrades to
+        Layer 1 instead of breaking Pro Mode.
+        """
+        try:
+            if getattr(self, "_promode_uid_available", None) is None:
+                import grp
+                import os as _os
+                import pwd
+                import shutil as _shutil
+                available = False
+                reason = ""
+                try:
+                    pwd.getpwnam("promode")
+                    # 1. The scoped sudoers drop-in must exist (provisioning marker).
+                    marker = Path("/etc/sudoers.d/promode")
+                    has_sudoers = marker.exists() and bool(_shutil.which("sudo"))
+                    # 2. CRITICAL: THIS process must be a member of 'promode-share'.
+                    #    Without it, _apply_sharing_perms cannot chgrp the scratch
+                    #    dirs to the shared group, so the promode uid cannot read the
+                    #    exec script ("/work/exec.py: Permission denied") nor write
+                    #    output we can collect. Group membership is only picked up on
+                    #    a fresh process (service restart after provisioning), so we
+                    #    must NOT claim Layer 2 is usable until then — otherwise every
+                    #    Pro Mode call hard-fails. Falling back to Layer-1 is safe.
+                    try:
+                        share_gid = grp.getgrnam("promode-share").gr_gid
+                        in_group = share_gid in _os.getgroups()
+                    except KeyError:
+                        in_group = False
+                    available = bool(has_sudoers and in_group)
+                    if not available:
+                        if not has_sudoers:
+                            reason = "sudoers drop-in /etc/sudoers.d/promode missing"
+                        elif not in_group:
+                            reason = ("backend process not in 'promode-share' group "
+                                      "(restart the service after provisioning)")
+                except KeyError:
+                    reason = "promode user does not exist"
+                self._promode_uid_available = available
+                if available:
+                    logger.info("Layer-2 promode uid available: jail will run as 'promode'")
+                else:
+                    logger.info(f"Layer-2 not active ({reason}): using Layer-1-only jail")
+
+            if self._promode_uid_available:
+                return ["sudo", "-n", "-u", "promode", *inner_cmd]
+        except Exception as e:
+            logger.warning(f"promode uid detection failed, using Layer-1-only: {e}")
+        return inner_cmd
 
     def cleanup_old_sessions(self, max_age_hours: int = 24) -> int:
         """
@@ -968,6 +1318,48 @@ finally:
             logger.error(f"Error during session cleanup: {e}")
 
         return deleted_count
+
+    async def canary_self_test(self, force: bool = False) -> bool:
+        """
+        Boot canary: run the jail once with a tiny script that exercises the full
+        scientific stack inside the sandbox. If it fails, the jail is misconfigured
+        (e.g. a venv/python bump moved a path out of the bind set) and Pro Mode must
+        fail closed rather than silently 500 on every real request at 3am.
+
+        Caches the result on the class so it runs once per process. Returns True if
+        the jail is healthy. Callers should treat False as "Pro Mode unavailable".
+        """
+        if not force and SecureCodeExecutor._canary_ok is not None:
+            return SecureCodeExecutor._canary_ok
+
+        canary_code = (
+            "import numpy, pandas, matplotlib\n"
+            "matplotlib.use('Agg')\n"
+            "import matplotlib.pyplot as plt\n"
+            "import httpx\n"
+            "print('CANARY_OK')\n"
+        )
+        try:
+            result = await self.execute_code(
+                canary_code,
+                session_id="__canary__",
+                timeout=30,
+                memory_limit_mb=768,
+            )
+            ok = bool(result.get("success")) and "CANARY_OK" in (result.get("output") or "")
+            if not ok:
+                logger.error(
+                    "Pro Mode sandbox CANARY FAILED — jail is broken, failing closed. "
+                    f"result={result!r}"
+                )
+            else:
+                logger.info("Pro Mode sandbox canary passed: jail is healthy")
+        except Exception as e:
+            ok = False
+            logger.error(f"Pro Mode sandbox canary raised — failing closed: {e}")
+
+        SecureCodeExecutor._canary_ok = ok
+        return ok
 
 
 # Singleton instance
