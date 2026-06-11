@@ -112,7 +112,7 @@ class CacheService:
     def get_data_stale(self, provider: str, params: dict) -> Any | None:
         """Get cached data even if expired, for provider failure fallback."""
         key = self._key(provider, params)
-        return self.get_stale(key)
+        return self._copy_data(self.get_stale(key))
 
     def delete(self, key: str) -> bool:
         """Delete a raw cache key. Returns True when key existed."""
@@ -161,9 +161,28 @@ class CacheService:
         # Set with calculated TTL (atomic operation within set method)
         self.set(key, data, ttl)
 
+    @staticmethod
+    def _copy_data(
+        value: NormalizedData | list[NormalizedData] | None,
+    ) -> NormalizedData | list[NormalizedData] | None:
+        """Deep-copy cached NormalizedData on read.
+
+        get()/get_stale() return the stored object itself, so a downstream
+        in-place mutation (sorting series, filtering members, merging
+        decomposition results) would corrupt the cached entry for every later
+        hit on the hottest cache. The Redis path re-validates into fresh models
+        and the intent cache already model_copy(deep=True)s — this brings the
+        in-memory data cache to the same copy-on-read invariant.
+        """
+        if isinstance(value, list):
+            return [v.model_copy(deep=True) if isinstance(v, NormalizedData) else v for v in value]
+        if isinstance(value, NormalizedData):
+            return value.model_copy(deep=True)
+        return value
+
     def get_data(self, provider: str, params: Dict[str, Any]) -> NormalizedData | list[NormalizedData] | None:
         key = self._key(provider, params)
-        return self.get(key)
+        return self._copy_data(self.get(key))
 
     def clear(self) -> None:
         with self._lock:
