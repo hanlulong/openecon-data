@@ -1282,7 +1282,12 @@ finally:
                     logger.info(f"Layer-2 not active ({reason}): using Layer-1-only jail")
 
             if self._promode_uid_available:
-                return ["sudo", "-n", "-u", "promode", *inner_cmd]
+                # Absolute sudo path: the subprocess is launched with a scrubbed
+                # env under systemd, so a bare "sudo" argv[0] fails PATH lookup
+                # with [Errno 2]. The inner unshare/bash are already absolute.
+                import shutil as _shutil2
+                sudo_bin = _shutil2.which("sudo") or "/usr/bin/sudo"
+                return [sudo_bin, "-n", "-u", "promode", *inner_cmd]
         except Exception as e:
             logger.warning(f"promode uid detection failed, using Layer-1-only: {e}")
         return inner_cmd
