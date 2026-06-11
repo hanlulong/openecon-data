@@ -1232,9 +1232,22 @@ finally:
                 reason = ""
                 try:
                     pwd.getpwnam("promode")
-                    # 1. The scoped sudoers drop-in must exist (provisioning marker).
-                    marker = Path("/etc/sudoers.d/promode")
-                    has_sudoers = marker.exists() and bool(_shutil.which("sudo"))
+                    # 1. The backend uid CANNOT stat /etc/sudoers.d/* (the dir is
+                    #    root-only 0750), so probe the actual capability instead:
+                    #    does passwordless `sudo -n -u promode true` succeed? This
+                    #    tests exactly what we need and is immune to PATH/readability
+                    #    quirks under systemd. Cached via _promode_uid_available.
+                    import subprocess as _subprocess
+                    sudo_bin = _shutil.which("sudo") or "/usr/bin/sudo"
+                    true_bin = _shutil.which("true") or "/usr/bin/true"
+                    try:
+                        _probe = _subprocess.run(
+                            [sudo_bin, "-n", "-u", "promode", true_bin],
+                            capture_output=True, timeout=5,
+                        )
+                        has_sudoers = (_probe.returncode == 0)
+                    except Exception:
+                        has_sudoers = False
                     # 2. CRITICAL: THIS process must be a member of 'promode-share'.
                     #    Without it, _apply_sharing_perms cannot chgrp the scratch
                     #    dirs to the shared group, so the promode uid cannot read the
@@ -1251,7 +1264,7 @@ finally:
                     available = bool(has_sudoers and in_group)
                     if not available:
                         if not has_sudoers:
-                            reason = "sudoers drop-in /etc/sudoers.d/promode missing"
+                            reason = "sudo -n -u promode probe failed (sudoers not provisioned)"
                         elif not in_group:
                             reason = ("backend process not in 'promode-share' group "
                                       "(restart the service after provisioning)")

@@ -35,6 +35,16 @@
 ###############################################################################
 set -euo pipefail
 
+# Pin a full PATH FIRST. This script's early commands (mktemp, mount, mkdir, cp,
+# pivot_root, umount, timeout, prlimit) run before the locked-down PATH export
+# below, using whatever env we were launched with. Under systemd the service env
+# is minimal, and under Layer 2 `sudo` strips the env entirely — so a bare
+# `mktemp` resolved to "command not found" and the jail (hence the canary) failed
+# closed. Set the PATH up front so the jail behaves identically in every launch
+# context. (A separate, narrower PATH is re-exported just before the final python
+# exec so the jailed code itself sees only /usr/bin:/bin.)
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+
 VENV_PY="$1"
 SCRIPT="$2"
 WORK_DIR="$3"
