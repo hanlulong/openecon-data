@@ -1237,12 +1237,17 @@ finally:
                     #    does passwordless `sudo -n -u promode true` succeed? This
                     #    tests exactly what we need and is immune to PATH/readability
                     #    quirks under systemd. Cached via _promode_uid_available.
+                    # Probe with the EXACT granted command. The sudoers drop-in
+                    # grants ONLY `/usr/bin/unshare` to promode, so a probe with a
+                    # different binary (e.g. /usr/bin/true) is denied ("a password
+                    # is required") even though the real jail invocation would
+                    # succeed. Running `unshare --version` is harmless and exercises
+                    # the precise grant the jail relies on.
                     import subprocess as _subprocess
                     sudo_bin = _shutil.which("sudo") or "/usr/bin/sudo"
-                    true_bin = _shutil.which("true") or "/usr/bin/true"
                     try:
                         _probe = _subprocess.run(
-                            [sudo_bin, "-n", "-u", "promode", true_bin],
+                            [sudo_bin, "-n", "-u", "promode", str(self.UNSHARE), "--version"],
                             capture_output=True, timeout=5,
                         )
                         has_sudoers = (_probe.returncode == 0)
