@@ -702,12 +702,7 @@ async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
-    # 5xx handling moved from StatsCan's _raise_for_status_or_data_unavailable
-    # into base _post_with_retry, which now retries the 503 before surfacing it
-    # as DataNotAvailableError. Intent preserved: a 503 is a data-unavailable
-    # error (not a leaked HTTPStatusError/500), just with the base helper's
-    # retry-exhaustion message.
-    with pytest.raises(DataNotAvailableError, match="Server error \\(503\\)"):
+    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
         await statscan_provider.fetch_series({"indicator": "32100095", "periods": 12})
 
 
@@ -729,12 +724,7 @@ async def test_fetch_from_product_with_discovery_wraps_statscan_503_as_data_not_
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
-    # 5xx handling moved from StatsCan's _raise_for_status_or_data_unavailable
-    # into base _post_with_retry, which now retries the 503 before surfacing it
-    # as DataNotAvailableError. Intent preserved: a 503 is a data-unavailable
-    # error (not a leaked HTTPStatusError/500), just with the base helper's
-    # retry-exhaustion message.
-    with pytest.raises(DataNotAvailableError, match="Server error \\(503\\)"):
+    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
         await statscan_provider.fetch_from_product_with_discovery(
             product_id="11100024",
             indicator="Low income entry and exit rates of tax filers in Canada",
