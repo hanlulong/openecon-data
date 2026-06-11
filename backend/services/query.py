@@ -241,7 +241,18 @@ def _normalize_province_decomposition_entities(
 
 
 def _put_cached_parse_result(query_hash: str, result: Any) -> None:
-    """Store a ParseRouteResult in the intent cache."""
+    """Store a ParseRouteResult in the intent cache.
+
+    Store a deep snapshot, not the live object. The caller keeps mutating
+    `result.intent` after this returns (originalQuery, router overrides,
+    provider locks, resolved codes, expanded country scopes), so caching the
+    reference would let a later HIT replay the first request's post-execution
+    state as if the parser had produced it — nondeterministic divergence on
+    repeat queries. Reads already deepcopy on the way out; this freezes the
+    entry on the way in so both ends of the cache are isolated.
+    """
+    import copy
+    result = copy.deepcopy(result)
     # Simple size cap: drop oldest entries when over limit
     if len(_intent_cache) >= _INTENT_CACHE_MAX_SIZE:
         oldest_key = min(_intent_cache, key=lambda k: _intent_cache[k][1])
