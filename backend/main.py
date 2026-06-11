@@ -52,13 +52,28 @@ from .utils.dependencies import require_promode
 
 logger = logging.getLogger("openecon")
 logging.basicConfig(level=logging.INFO)
+# httpx/httpcore log every outbound request URL at INFO. Several provider APIs
+# carry their key in the query string or path (FRED ?api_key=, Comtrade,
+# CoinGecko, ExchangeRate), so INFO-level HTTP logging writes live secrets into
+# the app log verbatim. Cap these loggers at WARNING so request URLs never
+# reach the log; this is the structural fix for the leak class, independent of
+# any per-provider URL masking.
+for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 # File handler for debugging (uvicorn reloader pipes child output through sockets)
 _LOG_DIR = Path(__file__).resolve().parents[1] / ".omx" / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _fh = logging.FileHandler(_LOG_DIR / "backend-app.log", mode="a")
 _fh.setLevel(logging.INFO)
 _fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+# Lock down the log file: it has historically captured request URLs and user
+# emails, so it must never be world-readable.
 logging.getLogger().addHandler(_fh)
+try:
+    import os as _os
+    _os.chmod(_LOG_DIR / "backend-app.log", 0o600)
+except OSError:
+    pass
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -310,8 +325,18 @@ class RateLimitASGIMiddleware:
         trusted_proxies = set(self.settings.trusted_proxies or [])
 
         if forwarded_for_header and direct_ip in trusted_proxies:
-            # Trusted reverse proxy — take the leftmost (originating) client IP
-            client_ip = forwarded_for_header.split(",")[0].strip() or direct_ip
+            # Trusted reverse proxy. Apache (and most proxies) APPEND the peer
+            # they received from, so the chain reads "client-supplied …, real
+            # client". The leftmost entry is therefore attacker-controlled — a
+            # spoofed "X-Forwarded-For: 1.2.3.4" arrives as "1.2.3.4, <real>".
+            # Resolve rightmost-untrusted: walk from the right, skip our own
+            # trusted proxies, and take the first hop we did not add ourselves.
+            chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
+            client_ip = direct_ip
+            for hop in reversed(chain):
+                if hop not in trusted_proxies:
+                    client_ip = hop
+                    break
         else:
             # Untrusted source — use direct connection IP, ignore XFF
             client_ip = direct_ip
