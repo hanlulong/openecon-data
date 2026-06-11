@@ -1524,13 +1524,13 @@ class IMFProvider(BaseProvider):
         url = f"{self.SDMX_STRUCTURE_BASE_URL}/{flow}/latest"
         client = get_http1_client()
         try:
-            response = await client.get(
+            response = await self._get_with_retry(
+                client,
                 url,
                 params={"references": "all"},
                 headers={"Accept": "application/vnd.sdmx.structure+json;version=1.0.0"},
                 timeout=effective_timeout(30.0),
             )
-            response.raise_for_status()
             response_text = str(getattr(response, "text", "") or "").strip()
             if response_text.startswith("<"):
                 metadata = self._parse_imf_dataflow_structure(response_text)
@@ -1639,10 +1639,16 @@ class IMFProvider(BaseProvider):
             )
             attempted.append(f"{flow}/{key}")
             try:
-                response = await client.get(
+                # raise_on_status=False: this candidate ladder inspects the
+                # status code to decide whether to fall through to the next
+                # flow/key candidate, so the helper must hand back the response
+                # rather than raise. It still applies retry/rate-limit/breaker.
+                response = await self._get_with_retry(
+                    client,
                     url,
                     headers={"Accept": "text/csv, application/vnd.sdmx.data+csv;version=2.0.0"},
                     timeout=effective_timeout(30.0),
+                    raise_on_status=False,
                 )
                 if response.status_code >= 500:
                     last_error = DataNotAvailableError(f"HTTP {response.status_code}")
@@ -2004,12 +2010,12 @@ class IMFProvider(BaseProvider):
     async def _submit_engine_query(self, payload: Dict[str, Any]) -> str:
         """Submit a SDMX engine query and return the OTT token."""
         client = get_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.engine_base_url}/platform/rest/v2/engine/data/sync/submit",
             json=payload,
             timeout=effective_timeout(60.0),
         )
-        response.raise_for_status()
         token = str(getattr(response, "text", "") or "").strip()
         if not token:
             raise DataNotAvailableError("IMF engine query returned no OTT token")
@@ -2018,9 +2024,14 @@ class IMFProvider(BaseProvider):
     async def _retrieve_engine_ott(self, ott_token: str) -> httpx.Response:
         """Retrieve the result of a previously submitted SDMX engine query."""
         client = get_http_client()
-        response = await client.get(
+        # raise_on_status=False: the caller parses embedded engine errors out of
+        # the raw response body (including non-2xx), so the helper must return
+        # the response untouched (still with retry/rate-limit/breaker applied).
+        response = await self._get_with_retry(
+            client,
             f"{self.engine_base_url}/api/platform/v2/engine/data/sync/ott/{ott_token}",
             timeout=effective_timeout(60.0),
+            raise_on_status=False,
         )
         return response
 

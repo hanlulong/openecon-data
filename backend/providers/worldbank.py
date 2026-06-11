@@ -842,13 +842,13 @@ class WorldBankProvider(BaseProvider):
             params["MRNEV"] = 5
         logger.info("WorldBank source endpoint call: %s | params=%s", url, params)
 
-        response = await client.get(
+        response = await self._get_with_retry(
+            client,
             url,
             params=params,
             headers=headers,
             timeout=effective_timeout(25.0),
         )
-        response.raise_for_status()
         try:
             payload = response.json()
         except ValueError:
@@ -868,13 +868,13 @@ class WorldBankProvider(BaseProvider):
         if 1 < total_pages <= 10:
             for page_num in range(2, total_pages + 1):
                 page_params = {**params, "page": page_num}
-                page_response = await client.get(
+                page_response = await self._get_with_retry(
+                    client,
                     url,
                     params=page_params,
                     headers=headers,
                     timeout=effective_timeout(25.0),
                 )
-                page_response.raise_for_status()
                 try:
                     page_payload = page_response.json()
                 except ValueError:
@@ -1262,13 +1262,13 @@ class WorldBankProvider(BaseProvider):
                             all_records = list(payload[1] or [])
                             for page_num in range(2, total_pages + 1):
                                 page_params = {**params, "page": page_num}
-                                page_response = await client.get(
+                                page_response = await self._get_with_retry(
+                                    client,
                                     url,
                                     params=page_params,
                                     headers=headers,
                                     timeout=effective_timeout(25.0),
                                 )
-                                page_response.raise_for_status()
                                 page_payload = page_response.json()
                                 if (
                                     isinstance(page_payload, list)
@@ -1350,8 +1350,7 @@ class WorldBankProvider(BaseProvider):
                     try:
                         country_code = self._country_code(country_code_raw)
                         single_url = f"{self.base_url}/country/{country_code}/indicator/{indic}"
-                        response = await client.get(single_url, params=params, headers=headers, timeout=effective_timeout(15.0))
-                        response.raise_for_status()
+                        response = await self._get_with_retry(client, single_url, params=params, headers=headers, timeout=effective_timeout(15.0))
                         single_payload = response.json()
                         if isinstance(single_payload, list) and len(single_payload) >= 2 and single_payload[1]:
                             return single_payload
@@ -1413,13 +1412,13 @@ class WorldBankProvider(BaseProvider):
                     "trying World aggregate for indicator %s",
                     indic,
                 )
-                world_response = await client.get(
+                world_response = await self._get_with_retry(
+                    client,
                     world_url,
                     params=world_params,
                     headers=headers,
                     timeout=effective_timeout(15.0),
                 )
-                world_response.raise_for_status()
                 world_payload = world_response.json()
                 if (
                     isinstance(world_payload, list)

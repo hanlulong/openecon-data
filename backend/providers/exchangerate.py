@@ -130,9 +130,8 @@ class ExchangeRateProvider(BaseProvider):
             client = get_http_client()
             full_url = f"{self.base_url}/latest/{base_code}"
             logger.info(f"📡 Requesting: {self._safe_url(full_url)}")
-            response = await client.get(full_url, timeout=15.0)
+            response = await self._get_with_retry(client, full_url, timeout=15.0)
             logger.info(f"📊 Response status: {response.status_code}")
-            response.raise_for_status()
             data = response.json()
             logger.info(f"✅ Response received. Result: {data.get('result')}, Rates count: {len(data.get('rates', {}))}")
 
@@ -274,11 +273,11 @@ class ExchangeRateProvider(BaseProvider):
         try:
             # Use shared HTTP client pool for better performance
             client = get_http_client()
-            response = await client.get(
+            response = await self._get_with_retry(
+                client,
                 f"https://v6.exchangerate-api.com/v6/{self.api_key}/history/{base_code}/{year}/{month}/{day}",
-                timeout=15.0
+                timeout=15.0,
             )
-            response.raise_for_status()
             data = response.json()
 
             if data.get("result") != "success":

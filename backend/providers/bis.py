@@ -347,11 +347,17 @@ class BISProvider(BaseProvider):
             url = f"{self.base_url}/data/{indicator_code}/{frequency}"
             payload = None
             try:
-                response = await client.get(
+                # raise_on_status=False: BIS branches on the status code and
+                # retries WITHOUT date params on a non-200/error payload, so the
+                # helper must return the response to inspect (retry/rate-limit/
+                # breaker still applied), not raise on 4xx.
+                response = await self._get_with_retry(
+                    client,
                     url,
                     params=date_params,
                     headers={"Accept": "application/vnd.sdmx.data+json;version=1.0.0"},
                     timeout=30.0,
+                    raise_on_status=False,
                 )
                 if response.status_code == 200 and response.content:
                     try:
@@ -359,10 +365,12 @@ class BISProvider(BaseProvider):
                     except Exception:
                         payload = None
                 if payload is None or "errors" in payload:
-                    response = await client.get(
+                    response = await self._get_with_retry(
+                        client,
                         url,
                         headers={"Accept": "application/vnd.sdmx.data+json;version=1.0.0"},
                         timeout=30.0,
+                        raise_on_status=False,
                     )
                     if response.status_code != 200 or not response.content:
                         continue
@@ -773,10 +781,14 @@ class BISProvider(BaseProvider):
                     url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
 
                     try:
-                        # First attempt: with date parameters
-                        response = await client.get(url, params=date_params, headers={
+                        # First attempt: with date parameters.
+                        # raise_on_status=False: BIS inspects the status and
+                        # retries WITHOUT date params when a dataflow rejects
+                        # them, so the helper must return the response (retry/
+                        # rate-limit/breaker still applied), not raise on 4xx.
+                        response = await self._get_with_retry(client, url, params=date_params, headers={
                             "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-                        }, timeout=20.0)
+                        }, timeout=20.0, raise_on_status=False)
 
                         payload = None
                         if response.status_code == 200 and response.content:
@@ -787,9 +799,9 @@ class BISProvider(BaseProvider):
 
                         # Some BIS dataflows don't support startPeriod/endPeriod parameters
                         if payload is None or "errors" in payload or response.status_code != 200:
-                            response = await client.get(url, headers={
+                            response = await self._get_with_retry(client, url, headers={
                                 "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-                            }, timeout=20.0)
+                            }, timeout=20.0, raise_on_status=False)
                             if response.status_code != 200 or not response.content:
                                 logger.debug(f"BIS: No data for {current_country_code} (status: {response.status_code})")
                                 continue
@@ -1029,15 +1041,20 @@ class BISProvider(BaseProvider):
             params["endPeriod"] = str(end_year)
 
         try:
-            response = await client.get(url, params=params, headers={
+            # raise_on_status=False: BIS inspects the status and retries WITHOUT
+            # date params on a non-200 (some dataflows reject startPeriod/
+            # endPeriod). The helper returns the response to branch on (retry/
+            # rate-limit/breaker still applied); the explicit raise_for_status()
+            # below preserves the terminal failure path exactly as before.
+            response = await self._get_with_retry(client, url, params=params, headers={
                 "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-            }, timeout=30.0)
+            }, timeout=30.0, raise_on_status=False)
 
             # Retry without date params if error
             if response.status_code != 200:
-                response = await client.get(url, headers={
+                response = await self._get_with_retry(client, url, headers={
                     "Accept": "application/vnd.sdmx.data+json;version=1.0.0"
-                }, timeout=30.0)
+                }, timeout=30.0, raise_on_status=False)
 
             response.raise_for_status()
             payload = response.json()
