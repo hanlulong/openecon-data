@@ -412,6 +412,7 @@ export function ChatPage() {
             role: 'assistant',
             content: `⚠️ ${error.message || error.error}`,
             timestamp: new Date(),
+            isError: true,
           }])
         },
         onDone: (convId) => {
@@ -439,7 +440,20 @@ export function ChatPage() {
         role: 'assistant',
         content: `Error: ${extractApiErrorMessage(error, 'An unexpected error occurred')}`,
         timestamp: new Date(),
+        isError: true,
       }])
+    } finally {
+      // Recover from a stream that closes without onData/onError/onDone firing
+      // (idle proxy timeout, backend restart mid-deploy, a done-only stream):
+      // otherwise processingQuery.current stays set and the input is disabled
+      // forever. Only clear if THIS call still owns the marker — a newer query
+      // that aborted us will have already claimed processingQuery.current, and
+      // we must not wipe its in-flight state.
+      if (processingQuery.current === q) {
+        processingQuery.current = null
+        setLoadingStatus('')
+        setActiveProcessingSteps([])
+      }
     }
   }, [conversationId, isAuthenticated, loadHistory, loadSessionHistory])
 
