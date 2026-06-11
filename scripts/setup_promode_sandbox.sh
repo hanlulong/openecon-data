@@ -30,6 +30,14 @@
 ###############################################################################
 set -euo pipefail
 
+# systemd ExecStartPre runs with a minimal PATH that omits /usr/sbin and even
+# /usr/bin, so bare `id`/`getent`/`groupadd`/`useradd`/`iptables` resolve to
+# "command not found" and the whole re-provision silently no-ops (the unit uses
+# `ExecStartPre=-` so the failure is ignored). That would leave the ephemeral
+# iptables egress rules un-applied after a reboot. Pin a full PATH so this
+# script behaves identically whether run from a deploy shell or from systemd.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 PROMODE_USER="promode"
 SHARE_GROUP="promode-share"
 BACKEND_USER="${BACKEND_USER:-hanlulong}"
