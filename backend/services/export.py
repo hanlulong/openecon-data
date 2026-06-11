@@ -20,15 +20,15 @@ class ExportService:
 
         # Write metadata as comments
         first = data[0]
-        buffer.write(f"# Source: {first.metadata.source}\n")
+        buffer.write(f"# Source: {self._csv_safe(first.metadata.source)}\n")
         buffer.write(f"# Retrieved: {datetime.now(timezone.utc).isoformat()}\n")
-        buffer.write(f"# Indicator: {first.metadata.indicator}\n")
+        buffer.write(f"# Indicator: {self._csv_safe(first.metadata.indicator)}\n")
         if first.metadata.seriesId:
-            buffer.write(f"# Series ID: {first.metadata.seriesId}\n")
-        buffer.write(f"# Unit: {first.metadata.unit}\n")
-        buffer.write(f"# Frequency: {first.metadata.frequency}\n")
+            buffer.write(f"# Series ID: {self._csv_safe(first.metadata.seriesId)}\n")
+        buffer.write(f"# Unit: {self._csv_safe(first.metadata.unit)}\n")
+        buffer.write(f"# Frequency: {self._csv_safe(first.metadata.frequency)}\n")
         if first.metadata.apiUrl:
-            buffer.write(f"# API URL: {first.metadata.apiUrl}\n")
+            buffer.write(f"# API URL: {self._csv_safe(first.metadata.apiUrl)}\n")
         buffer.write("#\n")
 
         if len(data) == 1:
@@ -44,9 +44,9 @@ class ExportService:
                     {
                         "date": point.date,
                         "value": "" if point.value is None else point.value,
-                        "indicator": series.metadata.indicator,
-                        "country": series.metadata.country or "",
-                        "unit": series.metadata.unit,
+                        "indicator": self._csv_safe(series.metadata.indicator),
+                        "country": self._csv_safe(series.metadata.country or ""),
+                        "unit": self._csv_safe(series.metadata.unit),
                     }
                 )
         else:
@@ -165,6 +165,24 @@ class ExportService:
         if not any(parts[:-1]):
             parts.insert(0, "export")
         return f"{'_'.join(parts)}.{file_format}"
+
+    @staticmethod
+    def _csv_safe(value: Optional[str]) -> str:
+        """Neutralize spreadsheet formula injection in string cells.
+
+        Excel/Sheets evaluate a cell whose first character is one of = + - @
+        (or a leading TAB/CR before such a trigger). Provider-supplied strings
+        (indicator/country/unit/source/apiUrl) flow into the CSV verbatim, so a
+        crafted value like ``=HYPERLINK("http://evil",...)`` would execute on
+        open. Prefixing a single quote forces the cell to render as text. This
+        is structural (first-character guard), not a semantic denylist.
+        """
+        if value is None:
+            return ""
+        text = str(value)
+        if text and text.lstrip("\t\r")[:1] in ("=", "+", "-", "@"):
+            return "'" + text
+        return text
 
     @staticmethod
     def _slug(value: Optional[str], limit: Optional[int] = None) -> str:
