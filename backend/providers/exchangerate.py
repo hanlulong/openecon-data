@@ -14,6 +14,31 @@ from .base import BaseProvider
 logger = logging.getLogger(__name__)
 
 
+# Structural set of active ISO-4217 currency codes.  This is the published
+# standard code list (not a semantic mapping) used to validate that a
+# "X to Y" / "X/Y" / "X vs Y" token pair refers to a real currency pair
+# rather than two unrelated 3-letter economic acronyms (e.g. "CPI vs PCE",
+# "GDP to GNP").  Kept here as the canonical home for currency knowledge.
+ISO_4217_CURRENCY_CODES: frozenset[str] = frozenset({
+    "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
+    "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL",
+    "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNY",
+    "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP",
+    "ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP", "GMD",
+    "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS",
+    "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR",
+    "KMF", "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD",
+    "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
+    "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK",
+    "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG",
+    "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK",
+    "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL",
+    "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
+    "UGX", "USD", "UYU", "UZS", "VED", "VES", "VND", "VUV", "WST", "XAF",
+    "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL",
+})
+
+
 class ExchangeRateProvider(BaseProvider):
     """ExchangeRate-API provider for currency exchange rates.
 

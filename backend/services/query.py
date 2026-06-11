@@ -31,6 +31,7 @@ from ..services.conversation_state_v2 import (
     materialize_intent,
     merge_new_state_with_previous,
     merge_state,
+    reset_state_for_topic_change,
     update_answer_members_from_data,
 )
 from ..services.delta_extractor import DeltaExtractor
@@ -2153,6 +2154,30 @@ class QueryService:
             keys.append((iso2 or country).upper())
         return list(dict.fromkeys(keys))
 
+    # Providers whose series codes are GEOGRAPHY-ENCODED: a single code names a
+    # specific country (FRED "UNRATE" = US only, StatsCan vectors are bound to a
+    # province/country).  For these, a collective share-key MUST include the
+    # member's country so one member's code is never reused for a different
+    # country (F6).  Country-AGNOSTIC providers (World Bank, IMF, Eurostat,
+    # OECD, BIS) take the country as a separate parameter, so the SAME code
+    # (e.g. "NY.GDP.PCAP.CD") is correct for every country and may be shared.
+    _GEOGRAPHY_ENCODED_PROVIDERS = {"FRED", "STATSCAN", "COMTRADE", "COINGECKO"}
+
+    def _collective_share_country_key(self, member: Any) -> str:
+        """Canonical country component for a collective share-key (F6).
+
+        Returns the member's canonical geography ONLY for geography-encoded
+        providers (FRED/StatsCan/...); returns "" for country-agnostic
+        providers so their codes can still be shared across countries.
+        """
+        provider = normalize_provider_name(str(getattr(member, "provider", "") or "")).upper()
+        if provider not in self._GEOGRAPHY_ENCODED_PROVIDERS:
+            return ""
+        keys = self._member_country_keys(member)
+        if not keys:
+            return ""
+        return "|".join(sorted(keys))
+
     def _current_collective_indicator_label(self, state: Any) -> str:
         labels = [
             str(getattr(member, "indicator_label", "") or "").strip()
@@ -2647,7 +2672,11 @@ class QueryService:
 
         combined_data: List[NormalizedData] = []
         failed_members: List[str] = []
-        shared_resolution_codes: Dict[tuple[str, str], str] = {}
+        # Share-key includes the member's canonical country so a geography-
+        # encoded provider code (FRED/StatsCan) is never reused across
+        # countries (F6).  Country-agnostic providers (WB/IMF) simply key per
+        # country, which still resolves correctly.
+        shared_resolution_codes: Dict[tuple[str, str, str], str] = {}
         shared_label_key = collective_indicator_label.lower()
 
         for member in target_members:
@@ -2667,7 +2696,10 @@ class QueryService:
             member_provider_key = normalize_provider_name(
                 str(getattr(member, "provider", "") or member_intent.apiProvider or "")
             )
-            shared_code = shared_resolution_codes.get((member_provider_key, shared_label_key))
+            member_country_key = self._collective_share_country_key(member)
+            shared_code = shared_resolution_codes.get(
+                (member_provider_key, member_country_key, shared_label_key)
+            )
             if shared_code and delta.changed_indicator:
                 # A collection-wide transform should resolve one provider's
                 # target indicator once, then apply that provider-native code
@@ -2778,7 +2810,7 @@ class QueryService:
                 }
                 if resolution_provider_key and len(returned_codes) == 1:
                     shared_resolution_codes.setdefault(
-                        (resolution_provider_key, shared_label_key),
+                        (resolution_provider_key, member_country_key, shared_label_key),
                         next(iter(returned_codes)),
                     )
 
@@ -4254,6 +4286,7 @@ class QueryService:
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
             _query_type = None
             _delta = None
+            _llm_new_query = False
             if _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
                 # Tier 1: fast regex for structural patterns (country, time, provider)
@@ -4273,6 +4306,13 @@ class QueryService:
                             # Non-delta types: clear delta, dispatch to correct handler
                             if _query_type != "parameter_delta":
                                 _delta = None
+                                # Remember a TRUE new_query classification so the
+                                # LLM-parse path below can apply a gated
+                                # topic-change reset (F3) — provider-scoped/
+                                # contextual fields from the previous topic must
+                                # not silently leak into an unrelated new topic.
+                                if _query_type == "new_query":
+                                    _llm_new_query = True
                     except Exception as _llm_err:
                         logger.warning("LLM delta extraction error: %s", _llm_err)
 
@@ -4991,6 +5031,9 @@ class QueryService:
             try:
                 _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                 _new_conv_state = merge_new_state_with_previous(_new_conv_state, _prev_good_state)
+                _new_conv_state = reset_state_for_topic_change(
+                    _new_conv_state, _prev_good_state, llm_new_query=_llm_new_query,
+                )
                 _pending_conv_state = _new_conv_state
                 if not self._use_staged_state_commit():
                     conversation_manager.set_conversation_state(conv_id, _new_conv_state)
@@ -5031,6 +5074,9 @@ class QueryService:
                 try:
                     _new_conv_state = extract_state_from_intent(intent, statscan_provider=self.statscan_provider)
                     _new_conv_state = merge_new_state_with_previous(_new_conv_state, _prev_good_state)
+                    _new_conv_state = reset_state_for_topic_change(
+                        _new_conv_state, _prev_good_state, llm_new_query=_llm_new_query,
+                    )
                     _pending_conv_state = _new_conv_state
                     if not self._use_staged_state_commit():
                         conversation_manager.set_conversation_state(conv_id, _new_conv_state)

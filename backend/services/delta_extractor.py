@@ -217,7 +217,10 @@ class DeltaExtractor:
         self._qs = query_service
 
     @staticmethod
-    def _looks_like_pure_time_change_query(query: str) -> bool:
+    def _looks_like_pure_time_change_query(
+        query: str,
+        state: Optional["ConversationState"] = None,
+    ) -> bool:
         query_lower = str(query or "").lower().strip()
         if not query_lower:
             return False
@@ -227,12 +230,44 @@ class DeltaExtractor:
             t for t in tokens
             if t not in _FILLER_WORDS and t not in {
                 "years", "year", "months", "month", "quarters", "quarter",
-                "decades", "decade", "since", "last", "from", "to", "between",
+                "decades", "decade", "weeks", "week", "days", "day",
+                "since", "last", "from", "to", "between",
                 "past", "recent", "latest", "change", "switch", "update", "set",
                 "period", "range", "time", "dates", "date", "timeframe",
             }
         ]
-        return len(non_filler) <= 1
+        if len(non_filler) <= 1 and state is None:
+            return True
+        if not non_filler:
+            return True
+
+        # A residual content token survives.  If it is NOT part of the current
+        # indicator's token set, this is NOT a pure time change — it is an
+        # indicator switch wearing a time modifier ("inflation since 2010",
+        # "unemployment last 5 years", "exports 2010-2020").  Falling through to
+        # the time handler would silently keep the OLD indicator and only move
+        # the date window (F2).  Return False so the query falls through to the
+        # indicator-switch / LLM tier.  Tokens that DO restate the current
+        # indicator (e.g. "GDP last 10 years" when state.indicator is GDP)
+        # remain a pure time change.
+        if state is None:
+            return len(non_filler) <= 1
+
+        indicator_tokens = DeltaExtractor._indicator_token_set(state.indicator)
+        residual_content = {
+            t for t in non_filler
+            if t not in _INDICATOR_NOISE_WORDS and len(t) > 1
+        }
+        # Expand residual tokens through indicator aliases so "gdp" matches a
+        # "gross domestic product" indicator label and vice-versa.
+        expanded_residual = DeltaExtractor._indicator_token_set(" ".join(residual_content))
+        unmatched = (residual_content | expanded_residual) - indicator_tokens
+        # Drop pure alias-expansion artifacts that resolve back into the
+        # indicator set; only flag tokens that are genuinely foreign.
+        unmatched = {t for t in unmatched if t in residual_content and t not in indicator_tokens}
+        if unmatched:
+            return False
+        return True
 
     @staticmethod
     def _normalize_frequency(value: str) -> str:
@@ -314,18 +349,31 @@ class DeltaExtractor:
             return delta
 
         stripped_query = _PROVIDER_SWITCH_RE.sub(" ", str(query_text or ""))
+        # detect_all_countries_in_query returns ISO2 codes ("DE"); the LLM emits
+        # full names ("GERMANY").  Normalize BOTH sides through CountryResolver
+        # so a valid country change is not silently nulled by a code/name
+        # mismatch (F5).  Fall back to the upper-cased raw token when a value
+        # cannot be normalized, so non-country artifacts (e.g. "1W") still get
+        # filtered out by the membership check.
+        def _canon(value: object) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            return (CountryResolver.normalize(text) or text).upper()
+
         retained_countries = {
-            str(country).upper()
+            _canon(country)
             for country in CountryResolver.detect_all_countries_in_query(stripped_query)
         }
+        retained_countries.discard("")
 
-        if delta.changed_country and str(delta.changed_country).upper() not in retained_countries:
+        if delta.changed_country and _canon(delta.changed_country) not in retained_countries:
             delta.changed_country = None
         if delta.changed_countries:
             kept = [
                 country
                 for country in delta.changed_countries
-                if str(country).upper() in retained_countries
+                if _canon(country) in retained_countries
             ]
             delta.changed_countries = kept or None
 
@@ -461,7 +509,12 @@ class DeltaExtractor:
     ) -> Optional[FollowUpDelta]:
         provider = str(state.provider or state.routed_provider or "").strip().upper()
         indicator_text = str(state.indicator or "").strip().lower()
-        if provider not in {"EXCHANGERATE", "FRED"} and "exchange" not in indicator_text:
+        # Only the exchange-rate domain owns currency-pair switches.  The old
+        # blanket "FRED" allowlist let this greedy regex hijack FRED indicator
+        # follow-ups like "CPI vs PCE" / "GDP to GNP" into a bogus Currency
+        # Pair dimension (F1).  Gate strictly on the EXCHANGERATE provider or an
+        # exchange-rate indicator.
+        if provider != "EXCHANGERATE" and "exchange" not in indicator_text:
             return None
 
         match = _CURRENCY_PAIR_RE.search(query)
@@ -470,6 +523,13 @@ class DeltaExtractor:
 
         base, target = match.group(1).upper(), match.group(2).upper()
         if base == target:
+            return None
+
+        # Both tokens must be real ISO-4217 currency codes.  _CURRENCY_PAIR_RE
+        # matches ANY two 3-letter tokens around to/vs//, so without this guard
+        # "CPI vs PCE" would slip through even on the exchange-rate path.
+        from ..providers.exchangerate import ISO_4217_CURRENCY_CODES
+        if base not in ISO_4217_CURRENCY_CODES or target not in ISO_4217_CURRENCY_CODES:
             return None
 
         pair_text = f"{base} to {target}"
@@ -1067,7 +1127,7 @@ Output the query_type and any changed fields as JSON."""
                 logger.info("LLM delta: no changes detected, returning None")
                 return None
 
-            if delta.delta_type == "time_change" and not self._looks_like_pure_time_change_query(query_text):
+            if delta.delta_type == "time_change" and not self._looks_like_pure_time_change_query(query_text, state):
                 logger.info(
                     "LLM delta guard: ignoring time_change for contentful query: %s",
                     query_text[:80],
@@ -1623,8 +1683,10 @@ Output the query_type and any changed fields as JSON."""
         if not query_lower:
             return None
 
-        # Only match if query is very short and mostly about time.
-        if not self._looks_like_pure_time_change_query(query):
+        # Only match if query is very short and mostly about time AND any
+        # residual content token restates the current indicator (otherwise this
+        # is an indicator switch + time modifier — see F2).
+        if not self._looks_like_pure_time_change_query(query, state):
             return None
 
         # Try "from YYYY to YYYY"

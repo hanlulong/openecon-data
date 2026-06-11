@@ -661,6 +661,11 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         if not delta.is_dimension_modifier_change:
             merged.dimensions = None
             merged.statscan_cube_metadata = None  # Clear stale cube metadata when indicator changes
+            # A StatsCan product ID is bound to the previous indicator's table.
+            # Carrying it forward re-locks STATSCAN to the WRONG cube with
+            # "verified" authority, so the new indicator silently returns the
+            # old table's data (F4).  Drop it so the new indicator re-resolves.
+            merged.statscan_product_id = None
         # Auto-detect crypto indicator switches and update coin_ids/provider
         _coin = _indicator_to_coin_id(delta.changed_indicator)
         if _coin:
@@ -752,6 +757,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.provider_locked = True
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
+        # StatsCan product IDs / cube metadata are provider-namespaced; a
+        # provider switch invalidates them.  Drop them alongside the resolved
+        # code so a leftover STATSCAN product can't re-lock the new provider
+        # path with "verified" authority (F4 sibling case).
+        merged.statscan_product_id = None
+        merged.statscan_cube_metadata = None
 
     # --- Time ---
     if delta.changed_start_date:
@@ -1341,6 +1352,145 @@ def merge_new_state_with_previous(
         new_state.active_answer_members = previous.active_answer_members
     if not new_state.recent_answer_members and previous.recent_answer_members:
         new_state.recent_answer_members = previous.recent_answer_members
+
+    return new_state
+
+
+# ---------------------------------------------------------------------------
+# Provider-family classification (for topic-change gating)
+# ---------------------------------------------------------------------------
+
+# Providers grouped by the kind of geography/namespace they serve.  Two
+# providers in the SAME family answer the same broad family of questions for
+# the same kinds of geographies, so an indicator switch between them is a
+# normal in-conversation refinement (e.g. FRED <-> WorldBank for US macro),
+# NOT a true topic change.  A jump to a DIFFERENT family (e.g. macro -> crypto,
+# macro -> trade) is a strong corroborating topic-change signal.
+_PROVIDER_FAMILY: Dict[str, str] = {
+    "FRED": "macro",
+    "WORLDBANK": "macro",
+    "IMF": "macro",
+    "OECD": "macro",
+    "EUROSTAT": "macro",
+    "BIS": "macro",
+    "STATSCAN": "macro",
+    "COMTRADE": "trade",
+    "COINGECKO": "crypto",
+    "EXCHANGERATE": "fx",
+    "ALPHAVANTAGE": "equity",
+}
+
+
+def _provider_family(provider: Optional[str]) -> Optional[str]:
+    key = normalize_provider_name(str(provider or "")) if provider else ""
+    if not key:
+        return None
+    return _PROVIDER_FAMILY.get(key.upper())
+
+
+def reset_state_for_topic_change(
+    new_state: ConversationState,
+    previous: Optional[ConversationState],
+    *,
+    llm_new_query: bool,
+) -> ConversationState:
+    """Reset stale provider-scoped context on a TRUE topic change (F3).
+
+    ``new_query`` is an LLM *label*, not ground truth — the LLM over-applies it
+    to borderline indicator switches.  So this helper does NOT reset anything
+    on the bare label.  It resets the provider-scoped/contextual fields a true
+    topic change invalidates ONLY when there is a corroborating signal:
+
+        provider-family change AND concept (indicator) change.
+
+    When the gate fires, the fields that belong to the *previous* topic and
+    were carried forward by ``merge_new_state_with_previous`` are dropped:
+    ``provider_locked``, all ``trade_*`` fields, ``statscan_*`` artifacts,
+    ``decomposition``, and the previous time window — UNLESS the new state set
+    them explicitly (explicit new values always win).
+
+    Sacred guard: a related indicator switch the LLM mislabels new_query
+    (e.g. "US GDP 2010-2020" -> "show unemployment", same macro family) does
+    NOT trip the gate, so dates + country + provider context are preserved.
+    """
+    if previous is None or not llm_new_query:
+        return new_state
+
+    prev_family = _provider_family(previous.provider or previous.routed_provider)
+    new_family = _provider_family(new_state.provider or new_state.routed_provider)
+    provider_family_changed = bool(
+        prev_family and new_family and prev_family != new_family
+    )
+
+    concept_changed = bool(
+        new_state.indicator
+        and previous.indicator
+        and str(new_state.indicator).strip().lower() != str(previous.indicator).strip().lower()
+    )
+
+    # Geography change is the second corroborating signal.  Compare canonical
+    # ISO2 geography so "US"/"United States" don't register as a change.
+    def _geo_key(state: ConversationState) -> tuple[str, ...]:
+        raw = list(state.countries or ([state.country] if state.country else []))
+        return tuple(sorted(_normalize_country_to_iso2(c) for c in raw if c))
+
+    prev_geo = _geo_key(previous)
+    new_geo = _geo_key(new_state)
+    geography_changed = bool(prev_geo and new_geo and prev_geo != new_geo)
+
+    # Corroborating topic-change signal: the indicator concept changed AND the
+    # turn also moved to a different provider family OR a different geography.
+    # A bare indicator switch within the same provider family AND same
+    # geography (the LLM's most common new_query false-positive, e.g. "US GDP"
+    # -> "show unemployment") is NOT a topic change and is left untouched.
+    if not (concept_changed and (provider_family_changed or geography_changed)):
+        return new_state
+
+    logger.info(
+        "Topic-change reset: family %s->%s, geo %s->%s, concept '%s'->'%s' — "
+        "dropping stale provider-scoped context",
+        prev_family, new_family, prev_geo, new_geo,
+        previous.indicator, new_state.indicator,
+    )
+
+    # Provider lock from the previous topic must release so the new topic can
+    # route freely.  The gate already requires a provider-FAMILY change, so the
+    # new state's provider belongs to a different family than the locked one —
+    # a carried-forward lock here is, by construction, stale.  Release it.  The
+    # new provider value itself stays in new_state.provider (routing chose it);
+    # only the pin is dropped so later turns and re-routing aren't constrained
+    # by the previous topic's lock.
+    new_state.provider_locked = False
+
+    # Trade fields: drop unless the new topic explicitly re-introduced them.
+    # (A true topic change away from trade should not carry COMTRADE scope.)
+    if new_family != "trade":
+        new_state.trade_flow = None
+        new_state.trade_reporter = None
+        new_state.trade_partner = None
+        new_state.trade_commodity = None
+
+    # StatsCan artifacts are namespaced to the prior table; drop on topic change
+    # unless the new topic is itself StatsCan (provider explicitly set).
+    if normalize_provider_name(str(new_state.provider or "")) != "STATSCAN":
+        new_state.statscan_product_id = None
+        new_state.statscan_cube_metadata = None
+
+    # Decomposition belongs to the previous indicator's structure; drop it on a
+    # concept change unless new_state explicitly carried a fresh decomposition.
+    if previous.decomposition is not None and new_state.decomposition == previous.decomposition:
+        new_state.decomposition = None
+    new_state.dimensions = new_state.dimensions if new_state.dimensions != previous.dimensions else None
+
+    # Time window from the previous topic: drop it unless the new state set
+    # dates explicitly.  We can only tell "explicit" from "carried forward" by
+    # comparing against previous — if identical to previous, it was carried.
+    if previous.start_date is not None and new_state.start_date == previous.start_date:
+        new_state.start_date = None
+    if previous.end_date is not None and new_state.end_date == previous.end_date:
+        new_state.end_date = None
+    if previous.frequency is not None and new_state.frequency == previous.frequency:
+        new_state.frequency = None
 
     return new_state
 
