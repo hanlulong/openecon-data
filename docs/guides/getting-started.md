@@ -37,7 +37,6 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 # OPENAI_API_KEY=sk-...
 # EMBEDDING_MODEL=text-embedding-3-small
 # EMBEDDING_DIMENSIONS=1536
-# SEMANTIC_ROUTER_ENCODER_MODEL=text-embedding-3-small
 FRED_API_KEY=optional
 COMTRADE_API_KEY=optional
 JWT_SECRET=generate_a_random_string

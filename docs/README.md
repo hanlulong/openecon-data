@@ -252,18 +252,6 @@ curl http://localhost:3001/api/health
 
 ---
 
-## Recent Improvements
-
-| Document | Description |
-|----------|-------------|
-| [Provider Testing Summary](improvements/provider_testing_summary_2025-11-21.md) | Latest test results |
-| [Eurostat Fixes](improvements/eurostat_fixes_summary.md) | Eurostat provider improvements |
-| [OECD Improvements](improvements/oecd_improvements_report.md) | OECD provider enhancements |
-| [IMF Provider Improvements](improvements/IMF_PROVIDER_IMPROVEMENTS.md) | IMF data quality fixes |
-| [OECD Rate Limit Fix](improvements/OECD_RATE_LIMIT_FIX_TECHNICAL_ANALYSIS.md) | Rate limiting implementation |
-
----
-
 ## Archive
 
 Historical documentation and development logs are available in the [archive/](archive/) directory.
