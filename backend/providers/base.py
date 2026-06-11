@@ -37,6 +37,22 @@ logger = logging.getLogger(__name__)
 _provider_breakers: Dict[str, pybreaker.CircuitBreaker] = {}
 
 
+def _is_client_request_error(exc: BaseException) -> bool:
+    """True for deterministic 4xx responses (except 429).
+
+    A 400/403/404 means *this request* was wrong (e.g. a nonexistent series id
+    that indicator discovery probed) — not that the provider is down. Counting
+    these toward the breaker lets a handful of long-tail discovery misses trip
+    the breaker and black out every query to a healthy provider. Excluding them
+    keeps the breaker measuring availability (transport errors, 5xx, and the
+    429s we surface as _TransientHTTPError), not request validity.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return 400 <= status < 500 and status != 429
+    return False
+
+
 def _get_breaker(provider_name: str) -> pybreaker.CircuitBreaker:
     """Get or create a circuit breaker for a provider."""
     if provider_name not in _provider_breakers:
@@ -44,6 +60,7 @@ def _get_breaker(provider_name: str) -> pybreaker.CircuitBreaker:
             fail_max=5,
             reset_timeout=60,
             name=provider_name,
+            exclude=[_is_client_request_error],
         )
     return _provider_breakers[provider_name]
 
