@@ -1055,15 +1055,15 @@ class EurostatProvider(BaseProvider):
         return points
 
     def _normalize_time_label(self, label: str) -> str:
-        if label and "-" in label:
-            if "Q" in label:
-                year, quarter = label.split("-Q")
-                month = (int(quarter) - 1) * 3 + 1
-                return f"{year}-{month:02d}-01"
-            if "M" in label:
-                year, month = label.split("-")
-                return f"{year}-{month}-01"
-        return f"{label}-01-01"
+        """Delegate to the shared SDMX period parser (Phase 3.2).
+
+        The shared parser reproduces the start-of-quarter convention this
+        method used for "YYYY" and "YYYY-Qn" labels, and additionally fixes
+        the monthly "YYYY-MM" case which the old inline logic turned into a
+        malformed "YYYY-MM-01-01" (it fell through both inner branches).
+        """
+        from ._sdmx import period_to_iso_date as _shared
+        return _shared(label)
 
     def _should_calculate_rate(self, indicator: str, query: str = "") -> bool:
         """Determine if we should calculate year-over-year rate from index data.

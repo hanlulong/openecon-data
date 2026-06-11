@@ -12,6 +12,7 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError, retry_async
+from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 from ..services.dsd_cache import get_dimension_key_builder
 from ..services.cache import cache_service
@@ -2261,20 +2262,14 @@ class OECDProvider(BaseProvider):
                     if value_id and _default_value_matches(dim_id, value_id):
                         default_match_score += 1
 
-            # Convert time period to ISO date
-            # OECD returns formats like "2020", "2020-Q1", "2020-01"
+            # Convert time period to ISO date via the shared SDMX parser
+            # (Phase 3.2). OECD returns "2020", "2020-Q1", "2020-01". This
+            # fixes a prior divergence where quarters were anchored to the
+            # END of the quarter's start-month (Q1 -> "2020-03-01", two
+            # months late) instead of the start-of-quarter convention every
+            # other SDMX provider uses (Q1 -> "2020-01-01").
             time_period = str(time_period)
-            if "-Q" in time_period:
-                # Quarterly: convert 2020-Q1 to 2020-03-31
-                year, quarter = time_period.split("-Q")
-                month = int(quarter) * 3
-                date_str = f"{year}-{month:02d}-01"
-            elif "-" in time_period and len(time_period.split("-")) == 2:
-                # Monthly: 2020-01
-                date_str = f"{time_period}-01"
-            else:
-                # Annual: 2020
-                date_str = f"{time_period}-01-01"
+            date_str = _period_to_iso_date(time_period)
 
             data_points.append(
                 {

@@ -10,6 +10,7 @@ from ..config import get_settings
 from ..services.http_pool import get_http_client
 from ..models import Metadata, NormalizedData
 from ..utils.retry import DataNotAvailableError
+from ._sdmx import period_to_iso_date as _period_to_iso_date
 from .base import BaseProvider
 
 if TYPE_CHECKING:
@@ -416,18 +417,8 @@ class BISProvider(BaseProvider):
                             value = float(value_str)
                     except (ValueError, TypeError, IndexError):
                         value = None
-                if "-" in time_period:
-                    if "Q" in time_period:
-                        year, quarter = time_period.split("-Q", 1)
-                        month = (int(quarter) - 1) * 3 + 1
-                        date_str = f"{year}-{month:02d}-01"
-                        year_int = int(year)
-                    else:
-                        date_str = f"{time_period}-01"
-                        year_int = int(time_period.split("-")[0])
-                else:
-                    date_str = f"{time_period}-01-01"
-                    year_int = int(time_period)
+                date_str = _period_to_iso_date(time_period)
+                year_int = int(str(time_period).split("-")[0])
                 if start_year and year_int < start_year:
                     continue
                 if end_year and year_int > end_year:
@@ -854,18 +845,8 @@ class BISProvider(BaseProvider):
                                     except (ValueError, TypeError, IndexError):
                                         value = None
 
-                                if "-" in time_period:
-                                    if "Q" in time_period:
-                                        year, quarter = time_period.split("-Q")
-                                        month = (int(quarter) - 1) * 3 + 1
-                                        date_str = f"{year}-{month:02d}-01"
-                                        year_int = int(year)
-                                    else:
-                                        date_str = f"{time_period}-01"
-                                        year_int = int(time_period.split("-")[0])
-                                else:
-                                    date_str = f"{time_period}-01-01"
-                                    year_int = int(time_period)
+                                date_str = _period_to_iso_date(time_period)
+                                year_int = int(str(time_period).split("-")[0])
 
                                 if start_year and year_int < start_year:
                                     continue
@@ -1106,15 +1087,9 @@ class BISProvider(BaseProvider):
                         except (ValueError, TypeError, IndexError):
                             value = None
 
-                    # Convert time period
-                    if "Q" in time_period:
-                        year, quarter = time_period.split("-Q")
-                        month = (int(quarter) - 1) * 3 + 1
-                        date_str = f"{year}-{month:02d}-01"
-                        year_int = int(year)
-                    else:
-                        date_str = f"{time_period}-01-01"
-                        year_int = int(time_period.split("-")[0])
+                    # Convert time period (shared SDMX parser, Phase 3.2)
+                    date_str = _period_to_iso_date(time_period)
+                    year_int = int(str(time_period).split("-")[0])
 
                     if start_year and year_int < start_year:
                         continue

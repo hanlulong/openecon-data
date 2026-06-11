@@ -977,29 +977,19 @@ class IMFProvider(BaseProvider):
 
     @staticmethod
     def _period_to_date(period: str) -> str:
-        """Normalize SDMX period strings to the API's date shape."""
-        value = str(period or "").strip()
-        if re.fullmatch(r"\d{4}", value):
-            return f"{value}-01-01"
-        match = re.fullmatch(r"(\d{4})-Q([1-4])", value)
-        if match:
-            month = {"1": "01", "2": "04", "3": "07", "4": "10"}[match.group(2)]
-            return f"{match.group(1)}-{month}-01"
-        match = re.fullmatch(r"(\d{4})-M(\d{1,2})", value)
-        if match:
-            return f"{match.group(1)}-{int(match.group(2)):02d}-01"
-        if re.fullmatch(r"\d{4}-\d{2}", value):
-            return f"{value}-01"
-        return value
+        """Normalize SDMX period strings to the API's date shape.
+
+        Delegates to the shared SDMX period parser (Phase 3.2); this method
+        is the correctness reference that parser reproduces.
+        """
+        from ._sdmx import period_to_iso_date as _shared
+        return _shared(period)
 
     @staticmethod
     def _frequency_label(code: str) -> str:
-        return {
-            "A": "annual",
-            "Q": "quarterly",
-            "M": "monthly",
-            "D": "daily",
-        }.get(str(code or "").strip().upper(), str(code or "").strip() or "annual")
+        """Delegate to the shared SDMX frequency-label map (Phase 3.2)."""
+        from ._sdmx import frequency_label as _shared
+        return _shared(code)
 
     @staticmethod
     def _float_or_none(value: Any) -> Optional[float]:
