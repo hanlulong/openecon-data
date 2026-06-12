@@ -52,7 +52,7 @@ def _get_labour_metadata(statscan_provider):
 
 @pytest.mark.asyncio
 async def test_get_cube_metadata_uses_local_cache_for_known_product(monkeypatch, statscan_provider):
-    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _FailingHttpClient())
+    monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _FailingHttpClient())
 
     metadata = await statscan_provider._get_cube_metadata("1410028701")
 
@@ -62,7 +62,7 @@ async def test_get_cube_metadata_uses_local_cache_for_known_product(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_search_vectors_falls_back_to_local_catalog(monkeypatch, statscan_provider):
-    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _FailingHttpClient())
+    monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _FailingHttpClient())
 
     results = await statscan_provider.search_vectors("employment", limit=5)
 
@@ -249,7 +249,7 @@ async def test_fetch_multi_province_data_fails_closed_on_incomplete_batch_payloa
         }
     ]
     monkeypatch.setattr(
-        "backend.providers.statscan.get_http_client",
+        "backend.providers.statscan.get_statscan_http_client",
         lambda: _MockPostClient(payload),
     )
 
@@ -359,7 +359,7 @@ async def test_fetch_dynamic_data_exact_product_uses_metadata_geography_default(
             return _MockResponse()
 
     monkeypatch.setattr(statscan_provider, "_get_cube_metadata", fake_get_cube_metadata)
-    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+    monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
 
     result = await statscan_provider.fetch_dynamic_data(
         {
@@ -434,7 +434,7 @@ async def test_fetch_dynamic_data_exact_product_falls_back_to_valid_coordinate(m
             ])
 
     monkeypatch.setattr(statscan_provider, "_get_cube_metadata", fake_get_cube_metadata)
-    monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _FallbackClient())
+    monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _FallbackClient())
 
     result = await statscan_provider.fetch_dynamic_data(
         {
@@ -493,7 +493,7 @@ async def test_exact_product_falls_back_to_full_table_csv_when_wds_metadata_time
         async def get(self, *args, **kwargs):
             return _TimeoutResponse()
 
-    monkeypatch.setattr('backend.providers.statscan.get_http_client', lambda: _FallbackClient())
+    monkeypatch.setattr('backend.providers.statscan.get_statscan_http_client', lambda: _FallbackClient())
 
     result = await statscan_provider.fetch_dynamic_data({
         'indicator': '13100071',
@@ -687,7 +687,7 @@ async def test_full_table_csv_rejects_oversize_uncompressed_members(monkeypatch,
             async def get(self, *args, **kwargs):
                 return _OversizeResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _OversizeClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _OversizeClient())
 
         with pytest.raises(DataNotAvailableError, match="exceeds the safe exact-table fallback size"):
             await statscan_provider._download_full_table_csv_bundle("13100071")
@@ -698,7 +698,7 @@ async def test_full_table_csv_rejects_oversize_uncompressed_members(monkeypatch,
 @pytest.mark.asyncio
 async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch, statscan_provider):
     monkeypatch.setattr(
-        "backend.providers.statscan.get_http_client",
+        "backend.providers.statscan.get_statscan_http_client",
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
@@ -720,7 +720,7 @@ async def test_fetch_from_product_with_discovery_wraps_statscan_503_as_data_not_
         ]
     }
     monkeypatch.setattr(
-        "backend.providers.statscan.get_http_client",
+        "backend.providers.statscan.get_statscan_http_client",
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
@@ -920,7 +920,7 @@ class TestFetchWithDimensionsCoordinates:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         # Ensure metadata is in cache
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
@@ -969,7 +969,7 @@ class TestFetchWithDimensionsCoordinates:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         result = await statscan_provider.fetch_with_dimensions(
@@ -1016,7 +1016,7 @@ class TestFetchWithDimensionsCoordinates:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         result = await statscan_provider.fetch_with_dimensions(
@@ -1064,7 +1064,7 @@ class TestFetchWithDimensionsCoordinates:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         await statscan_provider.fetch_with_dimensions(
@@ -1104,7 +1104,7 @@ class TestFetchWithDimensionsCoordinates:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         await statscan_provider.fetch_with_dimensions(
@@ -1154,7 +1154,7 @@ class TestFetchWithDimensionsCoordinates:
             async def post(self, url, json=None, **kwargs):
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         result = await statscan_provider.fetch_with_dimensions(
@@ -1209,7 +1209,7 @@ class TestFetchMultiDimensionData:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         results = await statscan_provider.fetch_multi_dimension_data(
@@ -1271,7 +1271,7 @@ class TestFetchMultiDimensionData:
                 captured_requests.append(json)
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         results = await statscan_provider.fetch_multi_dimension_data(
@@ -1330,7 +1330,7 @@ class TestFetchMultiDimensionData:
             async def post(self, *args, **kwargs):
                 raise AssertionError("required-dimension supportability block should happen before WDS data request")
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _UnexpectedClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _UnexpectedClient())
         statscan_provider._cube_metadata_cache["17100147"] = metadata
 
         with pytest.raises(DataNotAvailableError) as raised:
@@ -1381,7 +1381,7 @@ class TestFetchCategoricalData:
             async def post(self, url, json=None, **kwargs):
                 return _MockResponse()
 
-        monkeypatch.setattr("backend.providers.statscan.get_http_client", lambda: _MockClient())
+        monkeypatch.setattr("backend.providers.statscan.get_statscan_http_client", lambda: _MockClient())
         statscan_provider._cube_metadata_cache["14100287"] = metadata
 
         result = await statscan_provider.fetch_categorical_data(

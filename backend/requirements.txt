@@ -36,3 +36,5 @@ slowapi>=0.1.9
 
 # Data Export (2025-11-29)
 pandas>=2.0.0
+
+curl_cffi>=0.7.0  # StatsCan TLS-fingerprint WAF bypass (Chrome impersonation)

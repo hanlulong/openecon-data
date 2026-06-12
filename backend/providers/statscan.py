@@ -10,7 +10,7 @@ import zipfile
 import httpx
 
 from ..config import get_settings
-from ..services.http_pool import get_http_client
+from ..services.statscan_http import get_statscan_http_client
 from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
 from ..utils.geographies import canonicalize_canadian_region
@@ -1180,7 +1180,7 @@ class StatsCanProvider(BaseProvider):
 
         try:
             # Use shared HTTP client pool for better performance
-            client = get_http_client()
+            client = get_statscan_http_client()
             logger.info(f"📊 Fetching metadata for product {normalized_product_id}")
             response = await client.post(
                 f"{self.base_url}/getCubeMetadata",
@@ -1368,7 +1368,7 @@ class StatsCanProvider(BaseProvider):
 
         # Fetch data using coordinate
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
@@ -1471,7 +1471,7 @@ class StatsCanProvider(BaseProvider):
         # Query StatsCan API for vector metadata
         logger.info(f"🔍 Querying StatsCan API for product ID of vector {vector_id}")
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         try:
             response = await client.post(
                 f"{self.base_url}/getSeriesInfoFromVector",
@@ -1532,7 +1532,7 @@ class StatsCanProvider(BaseProvider):
         logger.info(f"📊 Using exact coordinate query for {description}: product={product_id}, coord={coordinate}")
 
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
@@ -1625,7 +1625,7 @@ class StatsCanProvider(BaseProvider):
         # Use extended timeout (300s = 5 minutes) to handle complex multi-province queries
         # StatsCan API can be slow, especially for batch coordinate queries
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         # Fetch data using the vector ID
         response = await client.post(
             f"{self.base_url}/getDataFromVectorsAndLatestNPeriods",
@@ -1838,7 +1838,7 @@ class StatsCanProvider(BaseProvider):
             }
 
         try:
-            client = get_http_client()
+            client = get_statscan_http_client()
             logger.info(f"🔍 Searching StatsCan for: {keyword}")
             response = await client.get(
                 f"{self.base_url}/getAllCubesListLite",
@@ -2017,7 +2017,7 @@ class StatsCanProvider(BaseProvider):
         )
 
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
@@ -2270,7 +2270,7 @@ class StatsCanProvider(BaseProvider):
             raise DataNotAvailableError(f"Invalid Statistics Canada product ID: {product_id}")
 
         url = f"https://www150.statcan.gc.ca/n1/tbl/csv/{normalized_product_id}-eng.zip"
-        client = get_http_client()
+        client = get_statscan_http_client()
         if hasattr(client, "stream"):
             content = bytearray()
             async with client.stream("GET", url, timeout=30.0, follow_redirects=True) as response:
@@ -2823,7 +2823,7 @@ class StatsCanProvider(BaseProvider):
         # Use extended timeout (300s = 5 minutes) to handle complex multi-province queries
         # StatsCan API can be slow, especially for batch coordinate queries
         # Use shared HTTP client pool for better performance
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
@@ -3108,7 +3108,7 @@ class StatsCanProvider(BaseProvider):
         start_date = f"{start_year}-01-01" if start_year else None
         end_date = f"{end_year}-12-31" if end_year else None
 
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
@@ -3630,7 +3630,7 @@ class StatsCanProvider(BaseProvider):
                 logger.info(f"⏳ StatsCan rate limiter applied {wait_delay:.1f}s delay")
 
             # Use shared HTTP client pool for better performance
-            client = get_http_client()
+            client = get_statscan_http_client()
             response = await client.post(
                 f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
                 json=coordinate_requests,  # Send array of coordinate requests
@@ -3898,7 +3898,7 @@ class StatsCanProvider(BaseProvider):
             )
             member_name_by_coordinate[coordinate] = str(member_name or "").strip()
 
-        client = get_http_client()
+        client = get_statscan_http_client()
         response = await client.post(
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=coordinate_requests,
