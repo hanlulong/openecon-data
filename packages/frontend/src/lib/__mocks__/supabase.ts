@@ -16,6 +16,9 @@ export const supabase = {
       },
     })),
     getSession: vi.fn(() => Promise.resolve({ data: { session: null } })),
+    setSession: vi.fn(() =>
+      Promise.resolve({ data: { session: null, user: null }, error: null })
+    ),
     signOut: vi.fn(() => Promise.resolve({ error: null })),
     getUser: vi.fn(() => Promise.resolve({ data: { user: null } })),
   },
@@ -37,6 +40,8 @@ export const getSession = vi.fn(() => Promise.resolve(null));
 export const signOut = vi.fn(() => Promise.resolve());
 export const trackAnonymousSession = vi.fn(() => Promise.resolve());
 export const getOrCreateSessionId = vi.fn(() => 'test-session-id');
+export const getExistingSessionId = vi.fn(() => 'test-session-id');
+export const setSessionId = vi.fn();
 export const isSupabaseAvailable = false;
 export const signInWithGoogle = vi.fn();
 export const signInWithPassword = vi.fn();

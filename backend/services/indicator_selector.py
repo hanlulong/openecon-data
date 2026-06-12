@@ -11,16 +11,94 @@ candidate evidence; the LLM adjudicates the user's requested measure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from ..config import Settings
+from ..routing.country_resolver import CountryResolver
 from ..utils.providers import normalize_provider_name
+
+
+_BILATERAL_TITLE_MARKER_RE = re.compile(r"\b(?:from|to|with|vis-a-vis|versus|vs\.?)\b", re.IGNORECASE)
+
+
+@lru_cache(maxsize=4096)
+def _iso3_suffix_family_exists(code: str) -> bool:
+    """Data-driven check that a code's trailing ISO3 really is a country-family
+    suffix: true only when sibling codes sharing the prefix but carrying a
+    DIFFERENT ISO3 suffix exist in the indicator database (e.g. FPCPITOTLZGUSA
+    has siblings ...ZGIND/...ZGFRA). Prevents codes that merely *end* in an
+    ISO3 string (DEXCAUS, codes ending PER/AND/...) from being mis-tagged.
+    Fails neutral (False) on any error.
+    """
+    prefix = str(code or "")[:-3]
+    if len(prefix) < 3:
+        return False
+    try:
+        conn = sqlite3.connect(str(_INDICATORS_DB))
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT substr(code, -3) FROM indicators "
+                "WHERE code LIKE ? || '___' AND code != ? LIMIT 200",
+                (prefix, code),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    own_suffix = str(code or "").strip().upper()[-3:]
+    return any(
+        CountryResolver.ISO3_TO_ISO2.get(str(row[0] or "").strip().upper())
+        and str(row[0] or "").strip().upper() != own_suffix
+        for row in rows
+    )
+
+
+def _derive_candidate_country(code: str, name: str) -> Optional[str]:
+    """Best-effort ISO2 country a candidate series is *specifically about*, or
+    None when it is country-agnostic / global / US-domestic-without-marker.
+
+    Purely data-driven — NO per-indicator mapping:
+      1. an explicit country named in the series title ("... for Canada"),
+      2. trailing ISO3 in the provider code (FRED ``FPCPITOTLZG**USA**``
+         family), verified against the catalog: trusted only when sibling
+         codes with other ISO3 suffixes exist for the same prefix.
+
+    Used to enforce that a resolved series matches the requested country, so
+    country-suffixed families can't be picked for the wrong country by text
+    similarity alone. Returns None for codes/titles with no country evidence
+    (e.g. ``CPIAUCSL``, ``GDP``, ``bitcoin``) — those are treated as neutral and
+    never filtered out. Neutral is always the safe direction: neutral
+    candidates are never dropped, they just get no country-rank preference.
+    """
+    title = str(name or "")
+    titled = CountryResolver.detect_all_countries_in_query(title)
+    if len(titled) > 1:
+        # Bilateral/cross-country series (FX pairs, "US exports to China"):
+        # the series is about a relationship, not a single country.
+        return None
+    if len(titled) == 1:
+        # A partner preposition next to the only detected country means the
+        # detected country is likely the PARTNER, not the subject ("Imports of
+        # Goods from China" queried for the US). Structural guard only — when
+        # in doubt we stay neutral, never mis-tag.
+        if _BILATERAL_TITLE_MARKER_RE.search(title):
+            return None
+        return titled[0]
+    code_raw = str(code or "").strip()
+    code_s = code_raw.upper()
+    if len(code_s) >= 6:
+        iso2 = CountryResolver.ISO3_TO_ISO2.get(code_s[-3:])
+        if iso2 and _iso3_suffix_family_exists(code_raw):
+            return iso2
+    return None
 
 # Indicators database path
 _INDICATORS_DB = Path(__file__).parent.parent / "data" / "indicators.db"
@@ -206,6 +284,18 @@ Defaults for broad queries:
 - "agriculture" → agriculture value added (% of GDP)
 - "manufacturing" → manufacturing value added (% of GDP)
 
+CRITICAL RULE — Match the MEASURE TYPE the user asked for:
+- "inflation rate", "growth rate", "year-over-year change", "% change" → the
+  candidate must itself BE a rate/percent-change series (unit like "Percent",
+  "Annual %", "% change"). An index LEVEL (unit like "Index 1982-84=100") or a
+  currency LEVEL is NOT the requested measure — never PICK a level series when
+  the user asked for a rate, even if its name mentions the same concept.
+- Conversely, "CPI", "price index", "GDP" with no rate wording → a level/index
+  series is the correct answer.
+- Use each candidate's unit/metadata shown in parentheses to decide. If no
+  candidate carries the requested measure type, REJECT and put the measure in
+  the SEARCH terms (e.g. "consumer price inflation annual percent change").
+
 CRITICAL RULE — Match specificity of answer to specificity of question:
 - "unemployment rate" → NATIONAL/AGGREGATE (never county or MSA level)
 - "unemployment rate Florida" → STATE level Florida
@@ -289,11 +379,32 @@ class IndicatorSelector:
         telemetry_enabled = bool(getattr(self._settings, "indicator_telemetry_enabled", False))
         fusion_mode = str(getattr(self._settings, "indicator_fusion", "legacy") or "legacy").lower()
 
-        # Step 1: Find candidates via embedding similarity (with scores)
-        candidates, scores = self._get_candidates_with_scores(query, provider)
+        # Step 1: Find candidates via embedding similarity (with scores).
+        # Offloaded to a worker thread: this does a blocking embedding HTTP call,
+        # a ~125ms numpy matmul over the 330K×1536 index, and a sqlite FTS5 query
+        # — running it inline would park the event loop for ~400ms and serialize
+        # every concurrent request behind it. (Made thread-safe by the locked
+        # lazy-init in embedding_retrieval/indicator_database and the per-call
+        # sqlite connection in _get_candidates_fts5.)
+        candidates, scores = await asyncio.to_thread(self._get_candidates_with_scores, query, provider)
 
         if not candidates:
             return SelectionResult(code=None, source="no_candidates")
+
+        # Step 1.1: Country constraint. When the query targets a specific country,
+        # never let a country-suffixed series for a DIFFERENT country win on text
+        # similarity (e.g. "US CPI inflation" must not resolve to FRED's India
+        # variant FPCPITOTLZGIND). Data-driven; a strict no-op for country-agnostic
+        # queries/providers. If only cross-country candidates exist, refuse so the
+        # resolver can fall back to a country-agnostic provider or clarify.
+        if country:
+            candidates, scores, all_conflict = self._apply_country_constraint(country, candidates, scores)
+            if all_conflict:
+                logger.info(
+                    "🌍 No %s candidate for '%s' among country-tagged options — refusing wrong-country pick",
+                    country, query[:80],
+                )
+                return SelectionResult(code=None, source="country_mismatch")
 
         # Step 1.5: If top candidates have very similar scores, retrieval can't
         # confidently distinguish them. Tell the LLM to ASK the user instead of
@@ -323,14 +434,27 @@ class IndicatorSelector:
                     query[:80],
                     retry_query[:80],
                 )
-                retry_candidates, retry_scores = self._get_candidates_with_scores(retry_query, provider)
+                retry_candidates, retry_scores = await asyncio.to_thread(
+                    self._get_candidates_with_scores, retry_query, provider
+                )
+                if retry_candidates and country:
+                    retry_candidates, retry_scores, retry_conflict = self._apply_country_constraint(
+                        country, retry_candidates, retry_scores
+                    )
+                    if retry_conflict:
+                        return SelectionResult(code=None, source="country_mismatch")
                 if retry_candidates:
-                    retry_ambiguous = self._scores_are_ambiguous(retry_scores)
+                    # The first adjudication already concluded NOTHING in the
+                    # primary candidate set measures the request. The retry
+                    # must therefore be conservative: a confident single PICK
+                    # against a fresh-but-similar pool is exactly how a near
+                    # miss (index level for a rate query) slips through. ASK
+                    # unless one candidate is clearly the requested measure.
                     retry_result = await self._llm_pick(
                         retry_query,
                         retry_candidates[:20],
                         provider,
-                        prefer_ask=retry_ambiguous,
+                        prefer_ask=True,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
                         return await self._retry_if_metadata_conflict(
@@ -405,6 +529,55 @@ class IndicatorSelector:
             logger.info("indicator_selector_telemetry %s", _json.dumps(payload, ensure_ascii=False))
         except Exception as exc:  # never raise from telemetry path
             logger.debug("telemetry emit failed: %s", exc)
+
+    @staticmethod
+    def _apply_country_constraint(
+        country: str,
+        candidates: List[tuple],
+        scores: List[float],
+    ) -> tuple[List[tuple], List[float], bool]:
+        """Drop candidates whose series is explicitly about a DIFFERENT country
+        than requested, and rank country-matching candidates ahead of neutral
+        (country-agnostic) ones. Data-driven via :func:`_derive_candidate_country`
+        — no hardcoded indicator→code mappings.
+
+        Returns ``(candidates, scores, all_conflict)``. ``all_conflict`` is True
+        only when EVERY candidate names a different country (nothing matching and
+        nothing neutral) — the caller should then refuse rather than return a
+        wrong-country series. A no-op when ``country`` doesn't resolve or no
+        candidate carries a derivable country (e.g. crypto/FX/index queries).
+        """
+        target = CountryResolver.normalize(country) if country else None
+        if not target:
+            return candidates, scores, False
+
+        matching: List[tuple] = []
+        matching_scores: List[float] = []
+        neutral: List[tuple] = []
+        neutral_scores: List[float] = []
+        conflicting = 0
+        for cand, score in zip(candidates, scores):
+            cand_country = _derive_candidate_country(cand[0], cand[1] if len(cand) > 1 else "")
+            if cand_country is None:
+                neutral.append(cand)
+                neutral_scores.append(score)
+            elif cand_country == target:
+                matching.append(cand)
+                matching_scores.append(score)
+            else:
+                conflicting += 1  # explicitly a different country → drop
+
+        kept = matching + neutral
+        kept_scores = matching_scores + neutral_scores
+        if not kept:
+            # Every candidate is tagged for some other country and none matches.
+            return candidates, scores, True
+        if conflicting:
+            logger.info(
+                "🌍 Country constraint (%s): kept %d matching + %d neutral, dropped %d cross-country candidate(s)",
+                target, len(matching), len(neutral), conflicting,
+            )
+        return kept, kept_scores, False
 
     @staticmethod
     def _scores_are_ambiguous(scores: List[float]) -> bool:
@@ -671,7 +844,9 @@ class IndicatorSelector:
         if not result or not result.code or not candidates:
             return result
 
-        compatible = self._metadata_compatible_subset(query, candidates, provider)
+        compatible = await asyncio.to_thread(
+            self._metadata_compatible_subset, query, candidates, provider
+        )
         if not compatible:
             return result
 
@@ -804,7 +979,14 @@ class IndicatorSelector:
     def _get_candidates_fts5(
         self, query: str, provider: str, top_k: int = 20,
     ) -> List[tuple[str, str]]:
-        """FTS5 fallback when embeddings unavailable."""
+        """FTS5 fallback when embeddings unavailable.
+
+        Opens its OWN sqlite connection per call (not the shared singleton), so
+        it is safe to run from the thread the selector now offloads retrieval to.
+        The connection is always closed in `finally` to avoid leaking one per
+        query under concurrent load.
+        """
+        conn = None
         try:
             from .indicator_database import IndicatorDatabase
             db = IndicatorDatabase()
@@ -830,8 +1012,13 @@ class IndicatorSelector:
             return cur.fetchall()
         except Exception as e:
             logger.warning("FTS5 fallback failed: %s", e)
-
-        return []
+            return []
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _enrich_candidates(
         self,
@@ -844,6 +1031,8 @@ class IndicatorSelector:
         This gives the LLM visibility into whether a series is active or obsolete.
         """
         enriched = []
+        meta_map: Dict[str, Dict[str, Any]] = {}
+        conn = None
         try:
             conn = sqlite3.connect(str(_INDICATORS_DB))
             conn.row_factory = sqlite3.Row
@@ -857,7 +1046,6 @@ class IndicatorSelector:
                 f"WHERE provider = ? AND code IN ({placeholders})",
                 [self._catalog_provider_name(provider)] + codes,
             )
-            meta_map: Dict[str, Dict[str, Any]] = {}
             for row in cur.fetchall():
                 meta_map[row["code"]] = {
                     "frequency": row["frequency"] or "",
@@ -867,10 +1055,15 @@ class IndicatorSelector:
                     "description": row["description"] or "",
                     "keywords": row["keywords"] or "",
                 }
-            conn.close()
         except Exception as e:
             logger.warning("Failed to enrich candidates from DB: %s", e)
             meta_map = {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         for code, name in candidates:
             meta = meta_map.get(code, {})
@@ -912,8 +1105,9 @@ class IndicatorSelector:
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates."""
         # Enrich candidates with metadata so the LLM can see frequency,
-        # unit, and whether a series is discontinued/obsolete.
-        enriched = self._enrich_candidates(candidates, provider)
+        # unit, and whether a series is discontinued/obsolete. The sqlite
+        # lookup is blocking — keep it off the event loop.
+        enriched = await asyncio.to_thread(self._enrich_candidates, candidates, provider)
 
         option_lines = []
         for i, item in enumerate(enriched):
@@ -969,27 +1163,33 @@ class IndicatorSelector:
             url = (settings.llm_base_url or "http://localhost:8000").rstrip("/") + "/v1/chat/completions"
             headers = {"Content-Type": "application/json"}
 
+        payload = {
+            "model": settings.llm_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 500,
+            "temperature": 0,
+        }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    url, headers=headers,
-                    json={
-                        "model": settings.llm_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 500,
-                        "temperature": 0,
-                    },
-                )
-                data = resp.json()
-                content = (data["choices"][0]["message"].get("content") or "").strip()
+            from .http_pool import get_http_client
 
-                if not content:
-                    return None
+            client = get_http_client()
+            resp = await client.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # One bounded retry for transient LLM-gateway errors so an
+                # infra blip doesn't silently become a "no decision" refusal.
+                await asyncio.sleep(1.0)
+                resp = await client.post(url, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            content = (data["choices"][0]["message"].get("content") or "").strip()
 
-                return self._parse_llm_response(content, candidates, provider, query)
+            if not content:
+                return None
+
+            return self._parse_llm_response(content, candidates, provider, query)
 
         except Exception as e:
-            logger.warning("LLM selection failed: %s", e)
+            logger.warning("LLM selection failed (%s/%s): %s", provider, query[:40], e)
 
         return None
 
@@ -1015,8 +1215,21 @@ class IndicatorSelector:
         reject_line = next((line for line in lines if re.match(r"^REJECT\b", line, re.IGNORECASE)), "")
         if reject_line:
             search_line = next((line for line in lines if re.match(r"^SEARCH\b", line, re.IGNORECASE)), "")
+            if not search_line:
+                # The LLM often emits "REJECT: ... SEARCH: ..." on one line;
+                # honor the alternative search terms wherever they appear.
+                inline = re.search(r"\bSEARCH\s*[:\-]\s*(.+)$", reject_line, flags=re.IGNORECASE)
+                if inline:
+                    search_line = f"SEARCH: {inline.group(1)}"
+                    reject_line = reject_line[: inline.start()].strip()
             rejection_reason = re.sub(r"^REJECT\s*[:\-]?\s*", "", reject_line, flags=re.IGNORECASE).strip()
             retry_query = re.sub(r"^SEARCH\s*[:\-]?\s*", "", search_line, flags=re.IGNORECASE).strip()
+            # SEARCH content is typically a quoted, comma-separated term list.
+            # Use the terms verbatim (joined) as the retry retrieval query, but
+            # drop surrounding quotes so the embedding query reads naturally.
+            retry_query = " ".join(
+                term for term in re.findall(r'"([^"]+)"', retry_query)
+            ) or retry_query.strip('"’ ')
             logger.info(
                 "🚫 LLM rejected all candidates for '%s': %s",
                 query[:40],

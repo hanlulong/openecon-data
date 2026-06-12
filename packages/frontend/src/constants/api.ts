@@ -41,11 +41,6 @@ export const API_ENDPOINTS = {
     HISTORY: '/user/history',
   },
 
-  // Session
-  SESSION: {
-    HISTORY: '/session/history',
-  },
-
   // Export
   EXPORT: '/export',
 

@@ -12,7 +12,6 @@ Supports:
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-import asyncio
 import httpx
 
 from ..models import NormalizedData, DataPoint, Metadata
@@ -96,104 +95,65 @@ class CoinGeckoProvider(BaseProvider):
         max_retries: int = 3,
     ) -> Dict[str, Any]:
         """
-        Make a request to CoinGecko API with exponential backoff retry logic.
-        Handles rate limiting (429) gracefully.
+        Make a request to CoinGecko API via the shared BaseProvider retry helper.
+
+        Transient failures (429 rate limits, 5xx, connection errors, timeouts)
+        are retried by _get_with_retry, which also enforces the COINGECKO
+        rate-limiter config and circuit breaker. The one CoinGecko-specific
+        recovery kept here: a 401 retries THIS request once without the API
+        key (demo vs pro key handling) — without mutating self.api_key.
+
+        max_retries is retained for signature compatibility; retry count is
+        governed by BaseProvider.MAX_RETRIES.
         """
         # Use shared HTTP client pool for better performance
         client = get_http_client()
         request_state = dict(params or {})
-        use_key = True  # per-request; flipped off on a 401 without touching self.api_key
-        for attempt in range(max_retries):
-            # Build URL with current API key state (may change if key is invalid)
+
+        async def _request(use_key: bool) -> httpx.Response:
+            # _build_url mutates its params dict (adds the API key), so copy
             request_params = request_state.copy()
             url = self._build_url(endpoint, request_params, use_api_key=use_key)
-            try:
-                response = await client.get(url, params=request_params, timeout=30.0)
+            return await self._get_with_retry(
+                client, url, raise_on_status=False, params=request_params
+            )
 
-                # Handle rate limiting
-                if response.status_code == 429:
-                    if attempt < max_retries - 1:
-                        # Exponential backoff: wait 1, 2, 4 seconds
-                        wait_time = 2 ** attempt
-                        logger.warning(
-                            f"⚠️  CoinGecko rate limit hit. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})"
-                        )
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        raise DataNotAvailableError(
-                            "CoinGecko rate limit exceeded. Please try again in a few minutes."
-                        )
+        response = await _request(use_key=True)
 
-                response.raise_for_status()
-                return response.json()
+        if response.status_code == 401 and self.api_key:
+            # API key might be invalid/expired — retry THIS request keyless,
+            # but never null self.api_key (singleton: a transient 401 would
+            # downgrade every later request to the free tier until restart).
+            logger.warning("⚠️ CoinGecko API key rejected; retrying this request without it")
+            response = await _request(use_key=False)
 
-            except httpx.HTTPStatusError as e:
-                status_code = e.response.status_code
-                if status_code == 429:
-                    if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt
-                        logger.warning(f"⚠️  CoinGecko rate limit hit (429). Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        raise DataNotAvailableError("CoinGecko rate limit exceeded. Please try again in a few minutes.")
-                elif status_code == 400:
-                    current_vs_currency = str(request_state.get("vs_currency") or "").lower()
-                    response_text = (e.response.text or "").lower()
-                    if (
-                        current_vs_currency
-                        and current_vs_currency != "usd"
-                        and ("vs_currency" in response_text or "invalid" in response_text)
-                    ):
-                        # Fail closed, do NOT silently substitute USD: the callers
-                        # label the series unit from the ORIGINAL requested currency
-                        # (vs_currency.upper()), so swapping to USD here returns USD
-                        # values mislabeled as EUR/GBP/etc. — wrong data presented as
-                        # success. A clear error is correct; wrong numbers are not.
-                        raise DataNotAvailableError(
-                            f"CoinGecko does not support the requested currency "
-                            f"'{current_vs_currency.upper()}'. Try USD."
-                        )
-                elif status_code == 401:
-                    # API key might be invalid/expired — retry THIS request keyless,
-                    # but never null self.api_key (singleton: a transient 401 would
-                    # downgrade every later request to the free tier until restart).
-                    if self.api_key and use_key and attempt == 0:
-                        logger.warning("⚠️ CoinGecko API key rejected; retrying this request without it")
-                        use_key = False
-                        continue
-                    logger.error(f"❌ CoinGecko API error: Invalid API key")
-                    raise DataNotAvailableError("CoinGecko API authentication failed")
-                elif status_code >= 500:
-                    # Server errors might be temporary, retry once
-                    if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt
-                        logger.warning(f"⚠️  CoinGecko server error ({status_code}). Retrying in {wait_time}s")
-                        await asyncio.sleep(wait_time)
-                        continue
-                logger.error(f"❌ CoinGecko API error: {status_code} - {e.response.text}")
-                raise DataNotAvailableError(f"CoinGecko API error: HTTP {status_code}")
-            except httpx.TimeoutException:
-                logger.error(f"❌ CoinGecko request timed out (attempt {attempt + 1}/{max_retries})")
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    logger.warning(f"⚠️  Retrying in {wait_time}s")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise DataNotAvailableError("CoinGecko request timed out after multiple retries")
-            except DataNotAvailableError:
-                raise  # Re-raise our custom exceptions
-            except Exception as e:
-                logger.error(f"❌ CoinGecko request failed: {e}")
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    logger.warning(f"⚠️  Retrying in {wait_time}s")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise DataNotAvailableError(f"CoinGecko request failed: {str(e)}")
+        if response.status_code == 401:
+            logger.error(f"❌ CoinGecko API error: Invalid API key")
+            raise DataNotAvailableError("CoinGecko API authentication failed")
 
-        raise DataNotAvailableError("CoinGecko request failed after retries")
+        if response.status_code == 400:
+            current_vs_currency = str(request_state.get("vs_currency") or "").lower()
+            response_text = (response.text or "").lower()
+            if (
+                current_vs_currency
+                and current_vs_currency != "usd"
+                and ("vs_currency" in response_text or "invalid" in response_text)
+            ):
+                # Fail closed, do NOT silently substitute USD: the callers
+                # label the series unit from the ORIGINAL requested currency
+                # (vs_currency.upper()), so swapping to USD here returns USD
+                # values mislabeled as EUR/GBP/etc. — wrong data presented as
+                # success. A clear error is correct; wrong numbers are not.
+                raise DataNotAvailableError(
+                    f"CoinGecko does not support the requested currency "
+                    f"'{current_vs_currency.upper()}'. Try USD."
+                )
+
+        if response.status_code >= 400:
+            logger.error(f"❌ CoinGecko API error: {response.status_code} - {response.text}")
+            raise DataNotAvailableError(f"CoinGecko API error: HTTP {response.status_code}")
+
+        return self._parse_json_safe(response)
 
     async def get_simple_price(
         self,

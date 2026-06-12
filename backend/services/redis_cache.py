@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import hashlib
+import time
 from typing import Any, Optional, Dict
 import asyncio
 from pydantic import BaseModel
@@ -42,12 +43,19 @@ class RedisCacheService:
     - Provider-specific cache namespaces
     """
 
+    # Minimum seconds between inline reconnect attempts after a transient
+    # Redis failure flips _connected to False.
+    RECONNECT_INTERVAL = 30.0
+
     def __init__(self):
         self.settings = get_settings()
         self.redis_client: Optional[redis.Redis] = None
         self.fallback_cache = CacheService()  # In-memory fallback
         self._connected = False
         self._lock = asyncio.Lock()
+        # Monotonic timestamp of the last reconnect attempt (event-loop only;
+        # get()/set() are coroutines, so plain attribute access is safe).
+        self._last_reconnect_attempt = 0.0
 
         # Cache TTL configuration per provider (in seconds)
         self.ttl_config = {
@@ -117,6 +125,22 @@ class RedisCacheService:
             if self._connected:
                 return True
 
+            # A transient error flips _connected without destroying the
+            # client. If the existing client recovered, reuse it instead of
+            # building a new connection pool (and leaking the old one).
+            if self.redis_client is not None:
+                try:
+                    await self.redis_client.ping()
+                    self._connected = True
+                    logger.info("✅ Reconnected to Redis (existing client recovered)")
+                    return True
+                except Exception:
+                    try:
+                        await self.redis_client.close()
+                    except Exception:
+                        pass
+                    self.redis_client = None
+
             try:
                 # Get Redis configuration from environment
                 redis_url = (
@@ -149,6 +173,24 @@ class RedisCacheService:
                 self.redis_client = None
                 self._connected = False
                 return False
+
+    async def _maybe_reconnect(self) -> None:
+        """Time-based inline reconnect from the request path.
+
+        A transient Redis error flips _connected=False; without this, nothing
+        on the request path ever reconnects (only /api/health does). Retry at
+        most once every RECONNECT_INTERVAL seconds. connect() uses short
+        socket timeouts (socket_connect_timeout=5, socket_timeout=5), so a
+        failed attempt is bounded and subsequent requests within the window
+        skip straight to the fallback cache.
+        """
+        if self._connected or not REDIS_AVAILABLE:
+            return
+        now = time.monotonic()
+        if now - self._last_reconnect_attempt < self.RECONNECT_INTERVAL:
+            return
+        self._last_reconnect_attempt = now
+        await self.connect()
 
     async def disconnect(self):
         """Disconnect from Redis gracefully."""
@@ -201,7 +243,8 @@ class RedisCacheService:
         """
         key = self._generate_key(provider, query, params)
 
-        # Try Redis first
+        # Try Redis first (attempting a time-gated reconnect if disconnected)
+        await self._maybe_reconnect()
         if self._connected and self.redis_client:
             try:
                 data = await self.redis_client.get(key)
@@ -212,8 +255,10 @@ class RedisCacheService:
                 logger.warning(f"Redis get error: {e}. Falling back to in-memory cache.")
                 self._connected = False  # Mark as disconnected for reconnection attempt
 
-        # Fallback to in-memory cache
-        data = self.fallback_cache.get(key)
+        # Fallback to in-memory cache. Read-side copy is owned here:
+        # CacheService.get() returns the stored object itself, so deep-copy
+        # before handing it to callers that may mutate it in place.
+        data = CacheService._copy_data(self.fallback_cache.get(key))
         if data:
             logger.debug(f"💾 In-memory cache hit for {provider}: {query[:50]}...")
         return data
@@ -238,7 +283,8 @@ class RedisCacheService:
         if ttl is None:
             ttl = self.ttl_config.get(provider.upper(), self.ttl_config["default"])
 
-        # Try Redis first
+        # Try Redis first (attempting a time-gated reconnect if disconnected)
+        await self._maybe_reconnect()
         success = False
         if self._connected and self.redis_client:
             try:
@@ -250,8 +296,13 @@ class RedisCacheService:
                 logger.warning(f"Redis set error: {e}. Using in-memory cache.")
                 self._connected = False
 
-        # Always cache to in-memory as well for redundancy
-        self.fallback_cache.set(key, data, ttl)
+        if not success:
+            # Only populate the in-memory fallback when the Redis write failed
+            # or Redis is unavailable. Mirroring every write tripled memory
+            # across the 3 backend processes; the tradeoff is a cold fallback
+            # if Redis dies mid-flight. Write-side deep copy is owned by
+            # CacheService.set(), so no extra copy is needed here.
+            self.fallback_cache.set(key, data, ttl)
 
         return success
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,6 +34,77 @@ EMBEDDING_DIM = 1536
 INDEX_DIR = Path(__file__).parent.parent / "data" / "openai_embeddings"
 INDEX_FILE = INDEX_DIR / "indicator_embeddings.npz"
 META_FILE = INDEX_DIR / "indicator_metadata.json"
+# Pre-normalized float32 matrix stored as a raw .npy so every process can
+# np.load(..., mmap_mode="r") it. The OS page cache then shares ONE copy of
+# the ~2GB matrix across all workers instead of each process holding its own
+# in-RAM copy (3 processes × 1.9GB previously).
+INDEX_NPY = INDEX_DIR / "indicator_embeddings_normalized.npy"
+
+
+def _write_normalized_npy_atomic(embeddings: np.ndarray) -> None:
+    """Atomically write the pre-normalized float32 matrix to INDEX_NPY.
+
+    Writes to a temp file in the same directory then os.replace()s it so
+    readers never see a partially written file (os.replace is atomic on the
+    same filesystem). Safe to call while other processes have the old file
+    mmap'd — their mapping keeps pointing at the old inode.
+    """
+    import tempfile
+
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(INDEX_DIR), prefix=INDEX_NPY.stem + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            np.save(f, embeddings)
+        # mkstemp creates 0600 files; match the other index artifacts so any
+        # service user can mmap the file read-only.
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, INDEX_NPY)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def convert_index_to_mmap(force: bool = False) -> bool:
+    """Convert INDEX_FILE (npz) into the pre-normalized .npy used for mmap.
+
+    Idempotent: skips work when INDEX_NPY already exists and is newer than the
+    npz (pass force=True to rebuild anyway). Loads the full matrix into RAM
+    transiently (~2GB for 330K×1536 float32) — run explicitly via
+    `python -m backend.services.embedding_retrieval`, NOT from the loader,
+    so concurrent worker processes never race on the conversion.
+    """
+    if not INDEX_FILE.exists():
+        logger.error("Cannot convert: %s does not exist", INDEX_FILE)
+        return False
+    if (
+        not force
+        and INDEX_NPY.exists()
+        and INDEX_NPY.stat().st_mtime >= INDEX_FILE.stat().st_mtime
+    ):
+        logger.info("Normalized index already up to date: %s", INDEX_NPY)
+        return True
+
+    start = time.time()
+    logger.info("Loading %s ...", INDEX_FILE)
+    data = np.load(INDEX_FILE)
+    emb = data["embeddings"].astype(np.float32)
+    # Same normalization as the legacy in-RAM path: L2 rows, zero rows kept.
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    emb /= norms
+    _write_normalized_npy_atomic(emb)
+    logger.info(
+        "Wrote pre-normalized index %s (%d×%d float32, %.0fMB) in %.0fs",
+        INDEX_NPY, emb.shape[0], emb.shape[1],
+        emb.nbytes / (1024 * 1024), time.time() - start,
+    )
+    return True
 
 
 class EmbeddingRetrieval:
@@ -45,9 +117,18 @@ class EmbeddingRetrieval:
         self._providers: List[str] = []
         self._client = None
         self._loaded = False
+        # Guard lazy init so concurrent threads (the selector now offloads
+        # retrieval via asyncio.to_thread) can't double-load the ~1GB index or
+        # build two embedding clients.
+        self._load_lock = threading.Lock()
+        self._client_lock = threading.Lock()
 
     def _get_client(self):
-        if self._client is None:
+        if self._client is not None:
+            return self._client
+        with self._client_lock:
+            if self._client is not None:  # another thread built it
+                return self._client
             import openai
             from ..config import Settings
             settings = Settings()
@@ -63,29 +144,66 @@ class EmbeddingRetrieval:
     def _load_index(self) -> bool:
         """Load pre-built embedding index from disk.
 
-        Performance: Stores embeddings as float32 in memory (not float16).
-        The float16→float32 cast on every search was taking 3.2s for 330K vectors.
-        Keeping float32 in memory reduces search to ~125ms (25x speedup).
-        Tradeoff: +1GB RAM (from ~965MB to ~1.9GB).
+        Preferred path: INDEX_NPY, a pre-normalized float32 .npy opened with
+        mmap_mode="r". The matrix is never copied into process RAM — pages are
+        faulted in on demand and shared across ALL processes (uvicorn workers,
+        MCP service) through the OS page cache, so N processes cost ~2GB once
+        instead of N×1.9GB.
+
+        Fallback: the compressed npz (full RAM load + normalize), used only
+        when the .npy is missing. Run
+        `python -m backend.services.embedding_retrieval` to create it.
         """
         if self._loaded:
             return True
-        if not INDEX_FILE.exists() or not META_FILE.exists():
+        with self._load_lock:
+            if self._loaded:  # another thread finished the load while we waited
+                return True
+            return self._load_index_locked()
+
+    def _load_index_locked(self) -> bool:
+        if not META_FILE.exists() or not (INDEX_NPY.exists() or INDEX_FILE.exists()):
             return False
         try:
-            data = np.load(INDEX_FILE)
             with open(META_FILE) as f:
                 meta = json.load(f)
             self._codes = meta["codes"]
             self._names = meta["names"]
             self._providers = meta["providers"]
-            # Normalize for cosine similarity and keep as float32 in memory.
-            # Previous approach stored as float16 then cast to float32 on every
-            # search — that cast alone took 3.2s for 330K×1536 vectors.
-            emb_f32 = data["embeddings"].astype(np.float32)
-            norms = np.linalg.norm(emb_f32, axis=1, keepdims=True)
-            norms[norms == 0] = 1
-            self._embeddings = emb_f32 / norms
+
+            embeddings = None
+            mmap_loaded = False
+            if INDEX_NPY.exists():
+                candidate = np.load(INDEX_NPY, mmap_mode="r")
+                # Guard against a stale/foreign .npy: row count must match the
+                # metadata and dtype must be float32 (search assumes both).
+                if candidate.dtype == np.float32 and candidate.shape[0] == len(self._codes):
+                    embeddings = candidate  # pre-normalized, read-only memmap
+                    mmap_loaded = True
+                else:
+                    logger.warning(
+                        "Ignoring %s (dtype=%s, rows=%d, metadata rows=%d) — "
+                        "stale or invalid; falling back to npz. Re-run "
+                        "`python -m backend.services.embedding_retrieval` to rebuild it.",
+                        INDEX_NPY, candidate.dtype, candidate.shape[0], len(self._codes),
+                    )
+
+            if embeddings is None:
+                logger.warning(
+                    "Pre-normalized index %s not usable — loading %s fully into RAM "
+                    "(~2GB per process). Run "
+                    "`python -m backend.services.embedding_retrieval` once to enable "
+                    "the memory-mapped shared index.",
+                    INDEX_NPY.name, INDEX_FILE.name,
+                )
+                data = np.load(INDEX_FILE)
+                # Normalize for cosine similarity and keep as float32 in memory.
+                emb_f32 = data["embeddings"].astype(np.float32)
+                norms = np.linalg.norm(emb_f32, axis=1, keepdims=True)
+                norms[norms == 0] = 1
+                embeddings = emb_f32 / norms
+
+            self._embeddings = embeddings
             # Pre-compute per-provider masks for fast filtering
             self._provider_masks: dict[str, np.ndarray] = {}
             providers_upper = [p.upper() for p in self._providers]
@@ -94,11 +212,18 @@ class EmbeddingRetrieval:
                     [p == prov for p in providers_upper], dtype=bool
                 )
             self._loaded = True
-            logger.info(
-                "Loaded embedding index: %d indicators, dim=%d (float32, %.0fMB)",
-                len(self._codes), self._embeddings.shape[1],
-                self._embeddings.nbytes / (1024 * 1024),
-            )
+            if mmap_loaded:
+                logger.info(
+                    "Loaded embedding index: %d indicators, dim=%d "
+                    "(float32 mmap, shared page cache)",
+                    len(self._codes), self._embeddings.shape[1],
+                )
+            else:
+                logger.info(
+                    "Loaded embedding index: %d indicators, dim=%d (float32, %.0fMB RAM)",
+                    len(self._codes), self._embeddings.shape[1],
+                    self._embeddings.nbytes / (1024 * 1024),
+                )
             return True
         except Exception as e:
             logger.error("Failed to load embedding index: %s", e)
@@ -163,6 +288,15 @@ class EmbeddingRetrieval:
         self._providers = providers
         self._loaded = True
 
+        # Also persist the pre-normalized .npy so worker processes keep using
+        # the memory-mapped shared index after a rebuild (atomic replace —
+        # processes mmap'ing the old file are unaffected until they reload).
+        try:
+            _write_normalized_npy_atomic(self._embeddings)
+            logger.info("Wrote pre-normalized mmap index: %s", INDEX_NPY)
+        except Exception as e:
+            logger.error("Failed to write pre-normalized index %s: %s", INDEX_NPY, e)
+
     def search(
         self,
         query: str,
@@ -192,7 +326,8 @@ class EmbeddingRetrieval:
             logger.error("Query embedding failed: %s", e)
             return []
 
-        # Cosine similarity — embeddings are already float32 in memory
+        # Cosine similarity — embeddings are pre-normalized float32
+        # (read-only memmap on the fast path; matmul works directly on it)
         sims = query_emb @ self._embeddings.T
 
         # Filter by provider using pre-computed masks (3ms vs 65ms for list comp)
@@ -223,10 +358,22 @@ class EmbeddingRetrieval:
 
 # Singleton
 _instance: Optional[EmbeddingRetrieval] = None
+_instance_lock = threading.Lock()
 
 
 def get_embedding_retrieval() -> EmbeddingRetrieval:
     global _instance
     if _instance is None:
-        _instance = EmbeddingRetrieval()
+        with _instance_lock:
+            if _instance is None:  # double-checked: only build once under threads
+                _instance = EmbeddingRetrieval()
     return _instance
+
+
+if __name__ == "__main__":
+    # Explicit one-shot conversion: npz → pre-normalized mmap-able .npy.
+    # Usage: python -m backend.services.embedding_retrieval [--force]
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    sys.exit(0 if convert_index_to_mmap(force="--force" in sys.argv[1:]) else 1)

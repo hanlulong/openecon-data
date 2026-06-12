@@ -1,13 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, getOrCreateSessionId, clearSessionId } from '../lib/supabase';
+import { supabase, getExistingSessionId, clearSessionId } from '../lib/supabase';
 import { tokenManager } from '../services/api';
 
 export function AuthCallback() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
+  // Ensure the callback handler runs exactly once per mount. Without this the
+  // effect can fire twice under React StrictMode and race with the Supabase
+  // client's own detectSessionInUrl hash consumption.
+  const hasRun = useRef(false);
 
   useEffect(() => {
+    if (hasRun.current) {
+      return;
+    }
+    hasRun.current = true;
+
     const handleCallback = async () => {
       try {
         // First, check for errors in query parameters (Supabase returns errors here)
@@ -50,31 +59,35 @@ export function AuthCallback() {
         // Store the access token for backend API calls
         tokenManager.setToken(accessToken);
 
-        // Get the anonymous session ID if it exists
-        const anonymousSessionId = getOrCreateSessionId();
+        // Read the anonymous session ID if one exists. Never create one here:
+        // a freshly minted ID has no history to migrate and would only pollute
+        // storage after the user is already authenticated.
+        const anonymousSessionId = getExistingSessionId();
 
         // Convert anonymous session to authenticated user in backend
         // This will transfer all anonymous queries to the authenticated user
-        try {
-          const { error: convertError } = await supabase
-            .rpc('convert_session_to_user', {
-              p_session_id: anonymousSessionId,
-              p_user_id: sessionData.user.id,
-            });
+        if (anonymousSessionId) {
+          try {
+            const { error: convertError } = await supabase
+              .rpc('convert_session_to_user', {
+                p_session_id: anonymousSessionId,
+                p_user_id: sessionData.user.id,
+              });
 
-          if (convertError) {
-            console.warn('Failed to convert anonymous session:', convertError);
-            // Continue anyway - this is not critical
-          } else {
-            console.log('Successfully converted anonymous session to user');
+            if (convertError) {
+              console.warn('Failed to convert anonymous session:', convertError);
+              // Keep the session ID so the history can still be migrated later
+            } else {
+              console.log('Successfully converted anonymous session to user');
+              // Clear the anonymous session ID only after a successful
+              // migration — clearing on failure would orphan the history.
+              clearSessionId();
+            }
+          } catch (conversionError) {
+            console.warn('Error during session conversion:', conversionError);
+            // Keep the session ID so the history can still be migrated later
           }
-        } catch (conversionError) {
-          console.warn('Error during session conversion:', conversionError);
-          // Continue anyway - this is not critical
         }
-
-        // Clear the anonymous session ID since user is now authenticated
-        clearSessionId();
 
         // Redirect to chat page
         navigate('/chat');
@@ -113,7 +126,7 @@ export function AuthCallback() {
             <p className="mt-2 text-sm text-gray-500">{error}</p>
             <div className="mt-6">
               <button
-                onClick={() => navigate('/auth')}
+                onClick={() => navigate('/chat?auth=1')}
                 className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Try Again

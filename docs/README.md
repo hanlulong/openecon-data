@@ -79,14 +79,16 @@ Full endpoint documentation: **[API Reference](reference/api.md)** -- request/re
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/api/health` | GET | No | Health check with service status |
-| `/api/query` | POST | Optional | Process natural language query |
-| `/api/query/stream` | POST | Optional | Streaming query (SSE) with real-time progress |
-| `/api/query/pro` | POST | Optional | Pro Mode (AI-generated code execution) |
-| `/api/query/pro/stream` | POST | Optional | Pro Mode with streaming |
+| `/api/query` | POST | Optional* | Process natural language query |
+| `/api/query/stream` | POST | Optional* | Streaming query (SSE) with real-time progress |
+| `/api/query/pro` | POST | Yes | Pro Mode (AI-generated code execution; registered users only) |
+| `/api/query/pro/stream` | POST | Yes | Pro Mode with streaming (registered users only) |
 | `/api/export` | POST | No | Export data as CSV/JSON/Stata |
 | `/api/feedback` | POST | No | Submit user feedback |
-| `/api/auth/register` | POST | No | User registration |
-| `/api/auth/login` | POST | No | User login |
+| `/api/auth/register` | POST | No | User registration (email + password) |
+| `/api/auth/login` | POST | No | User login (email + password) |
+| `/api/auth/forgot-password` | POST | No | Email a password-reset link |
+| `/api/auth/reset-password` | POST | No | Set a new password using the reset token |
 | `/api/auth/me` | GET | Yes | Current user profile |
 | `/api/user/history` | GET | Yes | Query history |
 | `/api/user/history` | DELETE | Yes | Clear query history |
@@ -95,6 +97,10 @@ Full endpoint documentation: **[API Reference](reference/api.md)** -- request/re
 | `/api/cache/clear` | POST | Yes | Clear cache |
 | `/api/performance/metrics` | GET | No | Performance metrics |
 | `/api/performance/status` | GET | No | System status |
+
+\* Anonymous callers get a limited number of free queries (`ANON_QUERY_LIMIT`, default 20) before the response asks them to register (`registrationRequired: true`). Registered users are exempt. See the [API Reference](reference/api.md) for details.
+
+**Sign-in options:** Email + password (the `/api/auth/*` routes above) and Google OAuth. Google sign-in is handled in the browser directly against Supabase (`supabase.auth.signInWithOAuth`), so it does not have a dedicated backend route. Email verification and password reset are also driven through Supabase. Authentication requires Supabase to be configured; in development without Supabase credentials a mock-auth service is used (email/password only, no Google).
 
 ### MCP Server
 
@@ -249,12 +255,6 @@ tail -f /tmp/backend-dev.log
 # Check health endpoint
 curl http://localhost:3001/api/health
 ```
-
----
-
-## Archive
-
-Historical documentation and development logs are available in the [archive/](archive/) directory.
 
 ---
 

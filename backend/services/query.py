@@ -1780,6 +1780,14 @@ class QueryService:
 
             suggestions = self._get_no_data_suggestions(provider_name, intent)
 
+            # A failed turn must not become conversation truth: restore the
+            # last good intent/state so follow-ups build on what actually
+            # worked (mirrors the process_query no-data path).
+            if _prev_good_intent is not None:
+                conversation_manager.restore_last_intent(conv_id, _prev_good_intent)
+            if _prev_good_state is not None:
+                conversation_manager.restore_conversation_state(conv_id, _prev_good_state)
+
             return QueryResponse(
                 conversationId=conv_id,
                 intent=intent,
@@ -3694,7 +3702,7 @@ class QueryService:
         # Determine best provider for each country.
         # When the indicator is a provider-specific code (e.g. CPIAUCSL for FRED),
         # use the human-readable concept for cross-provider catalog lookups.
-        concept_query = self._select_indicator_query_for_resolution(intent)
+        concept_query = await asyncio.to_thread(self._select_indicator_query_for_resolution, intent)
         if not concept_query:
             concept_query = " ".join(str(ind) for ind in intent.indicators if ind)
 
@@ -4006,7 +4014,7 @@ class QueryService:
 
         # Use semantic indicator query (or original query) for smarter fallbacks.
         # This is the human-readable phrase, never a provider-specific code.
-        indicator = self._select_indicator_query_for_resolution(intent)
+        indicator = await asyncio.to_thread(self._select_indicator_query_for_resolution, intent)
         if not indicator:
             indicator = self._effective_original_query(intent) or (
                 intent.indicators[0] if intent.indicators else None
@@ -4069,7 +4077,7 @@ class QueryService:
         async def _try_single_fallback(fallback_provider: str) -> Optional[list]:
             """Try a single fallback provider, return data or None."""
             logger.warning(f"Attempting fallback from {primary_provider} to {fallback_provider}")
-            fb_intent = _build_fallback_intent(fallback_provider)
+            fb_intent = await asyncio.to_thread(_build_fallback_intent, fallback_provider)
             try:
                 result = await self._fetch_data(fb_intent)
                 if result and self._is_fallback_relevant(
@@ -4134,6 +4142,8 @@ class QueryService:
         auto_pro_mode: bool = False,
         use_orchestrator: bool = False,
         allow_orchestrator: bool = True,
+        owner_key: Optional[str] = None,
+        claimable_owner_keys: Optional[List[str]] = None,
     ) -> QueryResponse:
         # Check if there's already an active tracker (e.g., from streaming endpoint)
         existing_tracker = get_processing_tracker()
@@ -4146,7 +4156,11 @@ class QueryService:
             tracker = ProcessingTracker()
             tracker_token = activate_processing_tracker(tracker)
         try:
-            conv_id = conversation_manager.get_or_create(conversation_id)
+            conv_id = conversation_manager.get_or_create(
+                conversation_id,
+                owner_key=owner_key,
+                claimable_keys=claimable_owner_keys,
+            )
             conversation_manager.refresh_from_redis(conv_id)
             history = conversation_manager.get_history(conv_id)
 
@@ -4277,6 +4291,11 @@ class QueryService:
                             tracker=tracker,
                             skip_prefetch_clarification=True,
                         )
+                # Pending clarifications are single-turn: this reply did not
+                # resolve against the offered options, so the user has moved
+                # on. Drop the stale state so a later unrelated reply can't be
+                # substring-matched into executing the old pending intent.
+                conversation_manager.clear_pending_semantic_clarification(conv_id)
 
             # ── Combined Classification + Delta Extraction ──────────────
             # Single LLM call classifies AND extracts delta in one shot.
@@ -4548,6 +4567,23 @@ class QueryService:
                     _delta_intent.parameters["__delta_resolved"] = True
                     _delta_intent.parameters["__delta_indicator_changed"] = _indicator_changed
 
+                    if _provider_changed and _delta.changed_indicator is None:
+                        # The carried indicators may hold the PRIOR provider's
+                        # native code (e.g. FRED 'GDPA'). A different provider
+                        # must re-resolve from the SEMANTIC indicator phrase —
+                        # another provider's code namespace is meaningless here
+                        # and resolves by raw text similarity to arbitrary
+                        # series (the 'GDPA' → India 'GSDP' class of bug).
+                        _semantic_indicator = str(
+                            _merged_state.indicator
+                            or (_delta_intent.parameters or {}).get("__semantic_indicator_label")
+                            or ""
+                        ).strip()
+                        if _semantic_indicator:
+                            _delta_intent.indicators = [_semantic_indicator]
+                            _delta_intent.parameters.pop("indicator", None)
+                            _merged_state.last_indicators_resolved = _delta_intent.indicators
+
                     # Build a ParseRouteResult for _execute_resolved_intent
                     _delta_parse_result = ParseRouteResult(
                         intent=_delta_intent,
@@ -4663,7 +4699,7 @@ class QueryService:
             if auto_pro_mode and _query_type in (None, "new_query"):
                 early_explicit_code_intent = self._build_explicit_provider_code_intent(query)
                 early_exact_title_intent = (
-                    self._build_exact_indicator_title_intent(query)
+                    await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
                     if early_explicit_code_intent is None
                     else None
                 )
@@ -4782,8 +4818,10 @@ class QueryService:
             # --- Intent-level caching (Optimization 2) ---
             # Cache parsed intents for identical queries to skip LLM re-parsing
             # (saves 4-6s on repeated queries). Only cache when there is no
-            # conversation context — follow-ups need fresh parsing.
-            _use_intent_cache = conversation_context is None
+            # conversation context AND no message history — the parse below
+            # receives `history`, and a history-influenced parse stored under
+            # the global query-text key would leak across conversations.
+            _use_intent_cache = conversation_context is None and not history
             _query_hash = _intent_cache_key(query) if _use_intent_cache else None
             _cached = _get_cached_parse_result(_query_hash) if _query_hash else None
 
@@ -4798,7 +4836,7 @@ class QueryService:
                         else None
                     )
                     exact_title_intent = (
-                        self._build_exact_indicator_title_intent(query)
+                        await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
                         if conversation_context is None and exact_code_intent is None
                         else None
                     )
@@ -4833,7 +4871,7 @@ class QueryService:
                 else:
                     exact_code_intent = self._build_explicit_provider_code_intent(query) if conversation_context is None else None
                     exact_title_intent = (
-                        self._build_exact_indicator_title_intent(query)
+                        await asyncio.to_thread(self._build_exact_indicator_title_intent, query)
                         if conversation_context is None and exact_code_intent is None
                         else None
                     )

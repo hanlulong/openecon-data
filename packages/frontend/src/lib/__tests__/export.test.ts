@@ -53,8 +53,12 @@ describe('export utilities', () => {
     } as any));
 
     // Mock document.body
-    vi.spyOn(document.body, 'appendChild').mockImplementation(mockAppendChild);
-    vi.spyOn(document.body, 'removeChild').mockImplementation(mockRemoveChild);
+    vi.spyOn(document.body, 'appendChild').mockImplementation(
+      mockAppendChild as unknown as typeof document.body.appendChild
+    );
+    vi.spyOn(document.body, 'removeChild').mockImplementation(
+      mockRemoveChild as unknown as typeof document.body.removeChild
+    );
   });
 
   afterEach(() => {

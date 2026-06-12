@@ -564,7 +564,8 @@ export function LandingPage() {
     a.href = url
     a.download = `${example.title.toLowerCase().replace(/\s+/g, '_')}.csv`
     a.click()
-    URL.revokeObjectURL(url)
+    // Defer revocation so the click-initiated download can start first.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
   }, [currentIndex])
 
   // Export data as JSON
@@ -581,7 +582,8 @@ export function LandingPage() {
     a.href = url
     a.download = `${example.title.toLowerCase().replace(/\s+/g, '_')}.json`
     a.click()
-    URL.revokeObjectURL(url)
+    // Defer revocation so the click-initiated download can start first.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
   }, [currentIndex])
 
   // Auto-advance with progress tracking

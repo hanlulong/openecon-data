@@ -250,9 +250,12 @@ class User(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    name: str
+    email: str = Field(..., max_length=254)
+    # Server-side floor so empty/trivial passwords never reach Supabase. The
+    # frontend enforces a stronger policy (12+ chars, mixed case, digit); this
+    # is the backstop and matches ResetPasswordRequest.
+    password: str = Field(..., min_length=8, max_length=200)
+    name: str = Field(..., max_length=200)
     # Optional institution/company (powers future "trusted by" social proof).
     institution: Optional[str] = Field(None, max_length=200)
     # Anonymous session to migrate on signup, so the user keeps the history they
@@ -263,6 +266,17 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request a password-reset email."""
+    email: str = Field(..., max_length=254)
+
+
+class ResetPasswordRequest(BaseModel):
+    """Complete a password reset using the recovery token from the emailed link."""
+    accessToken: str = Field(..., min_length=10, max_length=8192)
+    password: str = Field(..., min_length=8, max_length=200)
 
 
 class AuthUser(BaseModel):
@@ -278,6 +292,10 @@ class AuthResponse(BaseModel):
     token: Optional[str] = None
     user: Optional[AuthUser] = None
     error: Optional[str] = None
+    # True when registration succeeded but the account must confirm their email
+    # before they can log in (Supabase "Confirm email" is on). The UI shows a
+    # "check your inbox" message instead of auto-logging the user in.
+    emailVerificationRequired: Optional[bool] = None
 
 
 class UserQueryHistory(BaseModel):

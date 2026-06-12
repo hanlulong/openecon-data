@@ -41,9 +41,12 @@ def test_env_example_has_no_rule_shortcut_rollback_flags():
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
 
-    assert values["USE_HYBRID_ROUTER"] == "false"
-    assert values["USE_SEMANTIC_PROVIDER_ROUTER"] == "false"
-    assert values["USE_LITELLM_ROUTER_FALLBACK"] == "false"
+    # These rollback flags belonged to the deleted rule-based routers; the
+    # cleanup removed both the routers and their flags. They must never
+    # reappear in the example env.
+    assert "USE_HYBRID_ROUTER" not in values
+    assert "USE_SEMANTIC_PROVIDER_ROUTER" not in values
+    assert "USE_LITELLM_ROUTER_FALLBACK" not in values
     assert "ALLOW_LEGACY_INDICATOR_RESOLVER_FINAL_AUTHORITY" not in values
     assert "ALLOW_LEGACY_PROVIDER_MAP_FINAL_AUTHORITY" not in values
     assert "ALLOW_LEGACY_CATALOG_FALLBACK_FINAL_AUTHORITY" not in values

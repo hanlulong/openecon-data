@@ -21,15 +21,25 @@ Create a new account.
 {
   "email": "user@example.com",
   "password": "securepassword",
-  "name": "Display Name"
+  "name": "Display Name",
+  "institution": "Example University",
+  "sessionId": "sess-456"
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `email` | string | Yes | Email address (max 254 chars) |
+| `password` | string | Yes | Server-side minimum 8 chars; the frontend enforces a stronger policy (12+ chars, mixed case, digit) |
+| `name` | string | Yes | Display name (max 200 chars) |
+| `institution` | string | No | Institution or company (max 200 chars) |
+| `sessionId` | string | No | Anonymous session ID. If provided, the query history built before registration is migrated to the new account. |
 
 **Response** `201`:
 ```json
 {
   "success": true,
-  "token": "eyJ...",
+  "token": null,
   "user": {
     "id": "uuid",
     "email": "user@example.com",
@@ -37,9 +47,12 @@ Create a new account.
     "createdAt": "2026-01-01T00:00:00Z",
     "lastLogin": null
   },
-  "error": null
+  "error": null,
+  "emailVerificationRequired": true
 }
 ```
+
+**Email verification:** when Supabase "Confirm email" is enabled (the production default), registration succeeds but returns `emailVerificationRequired: true` and a `null` token. The user must click the confirmation link emailed to them (Supabase redirects to `EMAIL_CONFIRM_REDIRECT_URL`) before they can log in. When email confirmation is off (or with the development mock-auth service), `token` is returned directly and `emailVerificationRequired` is `false`/absent.
 
 **Errors:** `400` if email already registered or validation fails.
 
@@ -55,9 +68,40 @@ Authenticate and receive a JWT.
 }
 ```
 
-**Response** `200`: Same shape as register response.
+**Response** `200`: Same shape as register response (with `token` set).
 
-**Errors:** `401` if credentials invalid.
+**Errors:** `401` if credentials invalid. If the account exists but the email has not been confirmed, the `401` body has `emailVerificationRequired: true` and an error message asking the user to confirm their email first.
+
+### POST /api/auth/forgot-password
+
+Email a password-reset link to the address. Always returns `200` with `{"success": true}` — even for unknown addresses — so the endpoint never discloses which emails have accounts.
+
+**Request:**
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+### POST /api/auth/reset-password
+
+Set a new password using the recovery token from the emailed reset link.
+
+**Request:**
+```json
+{
+  "accessToken": "recovery-token-from-email-link",
+  "password": "newsecurepassword"
+}
+```
+
+**Response** `200`: `{"success": true}`.
+
+**Errors:** `400` if the token is invalid/expired or password reset is unavailable (e.g. mock auth in development).
+
+### Google sign-in & email verification
+
+Google OAuth and email-confirmation links are handled in the browser directly against Supabase (`supabase.auth.signInWithOAuth({ provider: 'google' })`), so there is no dedicated backend route for them. After OAuth or email confirmation, Supabase redirects to the URLs configured by `EMAIL_CONFIRM_REDIRECT_URL` / `PASSWORD_RESET_REDIRECT_URL`. These flows require Supabase to be configured; the development mock-auth service supports email/password only.
 
 ### GET /api/auth/me
 
@@ -116,11 +160,16 @@ Process a natural language economic data query. This is the primary endpoint.
   "isProMode": null,
   "processingSteps": [ ... ],
   "alternativeSeries": [ ... ],
-  "processingTimeMs": 1234.5
+  "processingTimeMs": 1234.5,
+  "anonymousQueriesUsed": 3,
+  "anonymousQueryLimit": 20,
+  "registrationRequired": false
 }
 ```
 
 See [Response Schemas](#response-schemas) below for full field definitions.
+
+**Anonymous free-query limit:** unauthenticated callers (tracked by `sessionId`, falling back to `conversationId`) get a limited number of free queries — `ANON_QUERY_LIMIT`, default **20**. Each response reports `anonymousQueriesUsed` and `anonymousQueryLimit` so a UI can show "N free queries left". Once over the limit, the query is **not** processed and the response (still HTTP `200`) has `registrationRequired: true` with a message asking the user to create a free account. Authenticated users are exempt (these three fields are `null`/`false`). The gate fails open if tracking is unavailable.
 
 **Errors:** `400` if query is empty. `500` only for internal processing errors (data-not-available is returned as `200` with `error` field set).
 
@@ -156,11 +205,13 @@ event: done
 data: {}
 ```
 
+The anonymous free-query limit applies here too: once an unauthenticated session is over the limit, the stream emits a single `data` event with `registrationRequired: true` (and no query processing), followed by `done`.
+
 ### POST /api/query/pro
 
-**Pro Mode.** AI-generated Python code execution for advanced analysis. Requires Pro Mode to be enabled on the server (`PROMODE_ENABLED=true`).
+**Pro Mode.** AI-generated Python code execution for advanced analysis. Requires Pro Mode to be enabled on the server (`PROMODE_ENABLED=true`); otherwise the endpoint returns `403`.
 
-**Optional Auth.**
+**Registered users only.** Pro Mode executes generated code, so anonymous callers are not served: without a valid token the response is HTTP `200` with `registrationRequired: true`, `isProMode: true`, and a message asking the user to create a free account — the query is not executed.
 
 **Request:** Same as `/api/query`.
 
@@ -189,7 +240,7 @@ data: {}
 
 ### POST /api/query/pro/stream
 
-Streaming version of Pro Mode. Same SSE event format as `/api/query/stream`.
+Streaming version of Pro Mode. Same SSE event format as `/api/query/stream`, and the same rules as `/api/query/pro`: requires `PROMODE_ENABLED=true` (`403` otherwise), and anonymous callers receive a single `data` event with `registrationRequired: true` followed by `done`.
 
 ---
 
@@ -350,7 +401,9 @@ Retrieve query history for an anonymous session.
 
 ### GET /api/health
 
-No auth. Returns system health status.
+No auth. Returns system health status with deep dependency probes (Redis ping, Supabase client, indicator database), each timeboxed to 200ms so the endpoint stays fast.
+
+**Status values:** `"ok"` (all critical services up), `"degraded"` (Redis down, or Supabase down in production — both have fallbacks), `"error"` (indicator database unreachable — queries will not work).
 
 **Response** `200`:
 ```json
@@ -363,7 +416,10 @@ No auth. Returns system health status.
     "fred": true,
     "alphaVantage": false,
     "bls": false,
-    "comtrade": true
+    "comtrade": true,
+    "redis": true,
+    "supabase": true,
+    "indicators_db": true
   },
   "cache": {
     "keys": 42,
@@ -467,6 +523,9 @@ Top-level response for all query endpoints.
 | `processingSteps` | ProcessingStep[] or null | Steps taken to process the query (timing, status) |
 | `alternativeSeries` | AlternativeSeries[] or null | Related indicators the user might want to explore |
 | `processingTimeMs` | float or null | End-to-end processing time in milliseconds |
+| `anonymousQueriesUsed` | int or null | Free queries this anonymous session has used (null for registered users) |
+| `anonymousQueryLimit` | int or null | The anonymous free-query limit (`ANON_QUERY_LIMIT`, default 20) |
+| `registrationRequired` | bool or null | True when the free-query limit was reached (or Pro Mode was requested anonymously) and the query was **not** processed — the UI should prompt registration |
 
 ### ParsedIntent
 

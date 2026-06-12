@@ -15,7 +15,12 @@ from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
 from ..utils.geographies import canonicalize_canadian_region
 from ..utils.retry import DataNotAvailableError
-from ..services.rate_limiter import wait_for_provider, record_provider_request
+from ..services.rate_limiter import (
+    record_provider_rate_limit_error,
+    record_provider_request,
+    record_provider_success,
+    wait_for_provider,
+)
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
@@ -1182,13 +1187,13 @@ class StatsCanProvider(BaseProvider):
             # Use shared HTTP client pool for better performance
             client = get_statscan_http_client()
             logger.info(f"📊 Fetching metadata for product {normalized_product_id}")
-            response = await client.post(
+            response = await self._post_with_retry(
+                client,
                 f"{self.base_url}/getCubeMetadata",
                 json=[{"productId": normalized_product_id}],
                 headers={"Content-Type": "application/json"},
                 timeout=30.0
             )
-            response.raise_for_status()
             payload = response.json()
 
             # Response is an array with status and object
@@ -1369,7 +1374,8 @@ class StatsCanProvider(BaseProvider):
         # Fetch data using coordinate
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
                 "productId": int(product_id_str),  # Use normalized 8-digit product ID
@@ -1378,11 +1384,6 @@ class StatsCanProvider(BaseProvider):
             }],
             headers={"Content-Type": "application/json"},
             timeout=300.0,
-        )
-
-        self._raise_for_status_or_data_unavailable(
-            response,
-            f"fetching product {product_id} coordinate {coordinate}",
         )
         payload = response.json()
 
@@ -1460,7 +1461,7 @@ class StatsCanProvider(BaseProvider):
             Product ID string (e.g., "17100005")
 
         Raises:
-            ValueError: If product ID cannot be determined
+            DataNotAvailableError: If product ID cannot be determined
         """
         # Check cache first
         if vector_id in self.PRODUCT_ID_CACHE:
@@ -1473,13 +1474,13 @@ class StatsCanProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
         try:
-            response = await client.post(
+            response = await self._post_with_retry(
+                client,
                 f"{self.base_url}/getSeriesInfoFromVector",
                 json=[{"vectorId": vector_id}],
                 headers={"Content-Type": "application/json"},
                 timeout=30.0
             )
-            response.raise_for_status()
             data = response.json()
 
             if data and len(data) > 0:
@@ -1494,7 +1495,7 @@ class StatsCanProvider(BaseProvider):
 
         except Exception as e:
             logger.error(f"Failed to get product ID for vector {vector_id}: {e}")
-            raise ValueError(f"Could not determine product ID for vector {vector_id}: {e}")
+            raise DataNotAvailableError(f"Could not determine product ID for vector {vector_id}: {e}")
 
     async def fetch_by_coordinate(
         self, params: Dict[str, any]
@@ -1533,7 +1534,8 @@ class StatsCanProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
                 "productId": product_id,
@@ -1543,7 +1545,6 @@ class StatsCanProvider(BaseProvider):
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
-        response.raise_for_status()
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -1627,15 +1628,12 @@ class StatsCanProvider(BaseProvider):
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
         # Fetch data using the vector ID
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromVectorsAndLatestNPeriods",
             json=[{"vectorId": target_vector, "latestN": periods}],
             headers={"Content-Type": "application/json"},
             timeout=300.0,
-        )
-        self._raise_for_status_or_data_unavailable(
-            response,
-            f"fetching vector {target_vector}",
         )
         payload = response.json()
 
@@ -1840,11 +1838,11 @@ class StatsCanProvider(BaseProvider):
         try:
             client = get_statscan_http_client()
             logger.info(f"🔍 Searching StatsCan for: {keyword}")
-            response = await client.get(
+            response = await self._get_with_retry(
+                client,
                 f"{self.base_url}/getAllCubesListLite",
                 timeout=30.0
             )
-            response.raise_for_status()
             cubes = response.json()
 
             for cube in cubes:
@@ -2018,8 +2016,13 @@ class StatsCanProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
-        response = await client.post(
+        # raise_on_status=False: the 406 "invalid coordinate" branch below must
+        # inspect the response itself; 429/5xx retry and breaker protection
+        # still come from the base helper.
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            raise_on_status=False,
             json=[{
                 "productId": normalized_pid,
                 "coordinate": coordinate,
@@ -2272,8 +2275,26 @@ class StatsCanProvider(BaseProvider):
         url = f"https://www150.statcan.gc.ca/n1/tbl/csv/{normalized_product_id}-eng.zip"
         client = get_statscan_http_client()
         if hasattr(client, "stream"):
+            # This site cannot use the base _get_with_retry helper: the helper
+            # buffers the full response body, which would defeat the incremental
+            # FULL_TABLE_CSV_MAX_BYTES cap enforced chunk-by-chunk below for
+            # these potentially multi-hundred-MB table bundles.  Mirror the
+            # helper's rate-limiter integration (base.py) manually instead.
+            _provider_key = (self.provider_name or "").upper()
+            try:
+                await wait_for_provider(_provider_key)
+                record_provider_request(_provider_key)
+            except Exception as _wait_err:
+                logger.debug(
+                    "Rate limiter wait failed for %s: %s", _provider_key, _wait_err
+                )
             content = bytearray()
             async with client.stream("GET", url, timeout=30.0, follow_redirects=True) as response:
+                if response.status_code == 429:
+                    try:
+                        record_provider_rate_limit_error(_provider_key)
+                    except Exception:
+                        pass
                 self._raise_for_status_or_data_unavailable(
                     response,
                     f"downloading full-table CSV for product {normalized_product_id}",
@@ -2293,14 +2314,14 @@ class StatsCanProvider(BaseProvider):
                         raise DataNotAvailableError(
                             "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
                         )
+            try:
+                record_provider_success(_provider_key)
+            except Exception:
+                pass
             response_content = bytes(content)
         else:
             # Test doubles and older clients may only expose get().
-            response = await client.get(url, timeout=30.0, follow_redirects=True)
-            self._raise_for_status_or_data_unavailable(
-                response,
-                f"downloading full-table CSV for product {normalized_product_id}",
-            )
+            response = await self._get_with_retry(client, url, timeout=30.0, follow_redirects=True)
             response_content = response.content
             if len(response_content) > self.FULL_TABLE_CSV_MAX_BYTES:
                 raise DataNotAvailableError(
@@ -2824,7 +2845,8 @@ class StatsCanProvider(BaseProvider):
         # StatsCan API can be slow, especially for batch coordinate queries
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
                 "productId": product_id,
@@ -2833,11 +2855,6 @@ class StatsCanProvider(BaseProvider):
             }],
             headers={"Content-Type": "application/json"},
             timeout=300.0,
-        )
-
-        self._raise_for_status_or_data_unavailable(
-            response,
-            f"fetching product {product_id} coordinate {coordinate}",
         )
         payload = response.json()
 
@@ -2884,7 +2901,8 @@ class StatsCanProvider(BaseProvider):
                     product_id,
                     len(fallback_coordinates),
                 )
-                fallback_response = await client.post(
+                fallback_response = await self._post_with_retry(
+                    client,
                     f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
                     json=[
                         {
@@ -2896,10 +2914,6 @@ class StatsCanProvider(BaseProvider):
                     ],
                     headers={"Content-Type": "application/json"},
                     timeout=300.0,
-                )
-                self._raise_for_status_or_data_unavailable(
-                    fallback_response,
-                    f"probing fallback coordinates for product {product_id}",
                 )
                 fallback_payload = fallback_response.json()
                 data_object = successful_data_object(fallback_payload)
@@ -3109,7 +3123,8 @@ class StatsCanProvider(BaseProvider):
         end_date = f"{end_year}-12-31" if end_year else None
 
         client = get_statscan_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=[{
                 "productId": product_id,
@@ -3119,7 +3134,6 @@ class StatsCanProvider(BaseProvider):
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
-        response.raise_for_status()
         payload = response.json()
 
         if not payload or payload[0].get("status") != "SUCCESS":
@@ -3623,43 +3637,30 @@ class StatsCanProvider(BaseProvider):
         # Make single batch API call with all coordinates
         # Use extended timeout for multi-province queries (300s = 5 minutes)
         # This prevents timeouts when StatsCan API is slow
-        try:
-            # Wait for rate limiter before making request
-            wait_delay = await wait_for_provider("StatsCan")
-            if wait_delay > 0:
-                logger.info(f"⏳ StatsCan rate limiter applied {wait_delay:.1f}s delay")
+        # Use shared HTTP client pool for better performance
+        # raise_on_status=False: the 406 "invalid coordinate" branch below must
+        # inspect the response itself; rate-limiter gating, 429/5xx retry, and
+        # breaker protection all come from the base helper.
+        client = get_statscan_http_client()
+        response = await self._post_with_retry(
+            client,
+            f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
+            raise_on_status=False,
+            json=coordinate_requests,  # Send array of coordinate requests
+            headers={"Content-Type": "application/json"},
+            timeout=300.0,
+        )
 
-            # Use shared HTTP client pool for better performance
-            client = get_statscan_http_client()
-            response = await client.post(
-                f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
-                json=coordinate_requests,  # Send array of coordinate requests
-                headers={"Content-Type": "application/json"},
-                timeout=300.0,
-            )
-
-            if response.status_code == 406:
-                raise DataNotAvailableError(
-                    f"Invalid coordinate format for product {product_id}"
-                )
-
-            response.raise_for_status()
-            payload = response.json()
-
-            # Record this request for rate limiting
-            record_provider_request("StatsCan")
-
-        except httpx.TimeoutException:
+        if response.status_code == 406:
             raise DataNotAvailableError(
-                f"StatsCan API timeout after 300 seconds for {len(coordinate_requests)} provinces. "
-                f"The batch query took too long. Try reducing the time period or number of provinces."
+                f"Invalid coordinate format for product {product_id}"
             )
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                raise DataNotAvailableError(
-                    f"StatsCan API rate limit exceeded. Please try again in a few moments."
-                )
-            raise
+
+        self._raise_for_status_or_data_unavailable(
+            response,
+            f"fetching {len(coordinate_requests)} province coordinates for product {product_id}",
+        )
+        payload = response.json()
 
         # Parse results for each province
         results = []
@@ -3899,13 +3900,13 @@ class StatsCanProvider(BaseProvider):
             member_name_by_coordinate[coordinate] = str(member_name or "").strip()
 
         client = get_statscan_http_client()
-        response = await client.post(
+        response = await self._post_with_retry(
+            client,
             f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
             json=coordinate_requests,
             headers={"Content-Type": "application/json"},
             timeout=300.0,
         )
-        response.raise_for_status()
         payload = response.json()
 
         results: List[NormalizedData] = []

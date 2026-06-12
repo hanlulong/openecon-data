@@ -4,10 +4,9 @@
  * Tests the main chat interface including query submission,
  * message display, pro mode toggle, and history sidebar.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -31,7 +30,8 @@ const mocks = vi.hoisted(() => {
       },
     },
     mockUseAuth: vi.fn(() => ({
-      user: null,
+      // Widen so tests can mockReturnValue an authenticated user.
+      user: null as { name: string; email: string } | null,
       isAuthenticated: false,
       logout: vi.fn(),
     })),
@@ -281,7 +281,7 @@ describe('ChatPage', () => {
 
     it('renders clarification buttons without duplicating numbered options in the text bubble', async () => {
       const user = userEvent.setup();
-      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, _proMode, callbacks) => {
+      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, callbacks) => {
         callbacks.onData?.({
           conversationId: 'conv-clarification',
           clarificationNeeded: true,
@@ -316,7 +316,7 @@ describe('ChatPage', () => {
 
     it('shows assistant warning text even when chart data is returned', async () => {
       const user = userEvent.setup();
-      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, _proMode, callbacks) => {
+      mocks.mockApi.queryStream.mockImplementationOnce(async (_query, _conversationId, callbacks) => {
         callbacks.onData?.({
           conversationId: 'conv-data-warning',
           clarificationNeeded: false,
@@ -567,7 +567,6 @@ describe('ChatPage', () => {
         expect(mocks.mockApi.queryStream).toHaveBeenCalledWith(
           expect.stringContaining('US unemployment rate'),
           undefined,
-          false,
           expect.any(Object),
           expect.any(Object),
         );

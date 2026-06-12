@@ -702,7 +702,10 @@ async def test_fetch_series_wraps_statscan_503_as_data_not_available(monkeypatch
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
-    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
+    # 5xx now flows through BaseProvider._post_with_retry, which retries
+    # transient server errors and raises DataNotAvailableError terminally
+    # ("Failed after N retries: Server error (503)").
+    with pytest.raises(DataNotAvailableError, match="Server error"):
         await statscan_provider.fetch_series({"indicator": "32100095", "periods": 12})
 
 
@@ -724,7 +727,8 @@ async def test_fetch_from_product_with_discovery_wraps_statscan_503_as_data_not_
         lambda: _MockPostClient({"error": "temporary outage"}, status_code=503),
     )
 
-    with pytest.raises(DataNotAvailableError, match="temporarily unavailable"):
+    # 5xx now flows through BaseProvider._post_with_retry (see test above).
+    with pytest.raises(DataNotAvailableError, match="Server error"):
         await statscan_provider.fetch_from_product_with_discovery(
             product_id="11100024",
             indicator="Low income entry and exit rates of tax filers in Canada",

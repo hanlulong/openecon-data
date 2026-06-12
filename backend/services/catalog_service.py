@@ -50,11 +50,14 @@ def load_catalog() -> Dict[str, Any]:
         return _catalog_cache
 
     catalog_dir = Path(__file__).parent.parent / "catalog" / "concepts"
-    _catalog_cache = {}
+    # Build into a local dict and publish to the global only once fully
+    # built, so a concurrent reader never observes a partially loaded catalog.
+    catalog: Dict[str, Any] = {}
 
     if not catalog_dir.exists():
         logger.warning(f"Catalog directory not found: {catalog_dir}")
-        return _catalog_cache
+        _catalog_cache = catalog
+        return catalog
 
     for yaml_file in catalog_dir.glob("*.yaml"):
         try:
@@ -62,15 +65,16 @@ def load_catalog() -> Dict[str, Any]:
                 concept_data = yaml.safe_load(f)
                 if concept_data and "concept" in concept_data:
                     concept_name = concept_data["concept"]
-                    _catalog_cache[concept_name] = concept_data
+                    catalog[concept_name] = concept_data
                     logger.debug(f"Loaded concept '{concept_name}' from {yaml_file.name}")
         except yaml.YAMLError as e:
             logger.error(f"Error parsing {yaml_file}: {e}")
         except Exception as e:
             logger.error(f"Error loading {yaml_file}: {e}")
 
-    logger.info(f"Loaded {len(_catalog_cache)} concepts from catalog")
-    return _catalog_cache
+    logger.info(f"Loaded {len(catalog)} concepts from catalog")
+    _catalog_cache = catalog
+    return catalog
 
 
 def reload_catalog() -> None:

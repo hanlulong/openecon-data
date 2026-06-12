@@ -31,19 +31,19 @@ explicit_exclusions:
 providers:
   FRED:
     primary:
-      code: UMCSENT
-      name: "University of Michigan: Consumer Sentiment"
-      confidence: 0.60
+      code: BSCICP02USM460S
+      name: "Business Tendency Surveys (Manufacturing): Confidence Indicators: Composite Indicators: National Indicator for United States"
+      confidence: 0.90
       coverage: [US]
       frequency: monthly
-      note: "Closest US proxy; no direct business confidence series in FRED"
+      note: "OECD-sourced business tendency survey mirrored in FRED; per-country siblings exist (BSCICP02<cc>M460S)"
 
-  OECD:
+  Eurostat:
     primary:
-      code: BSCI
-      name: "Business Survey Confidence Indicator"
-      confidence: 0.95
-      coverage: global
+      code: EI_BSCI_M_R2
+      name: "Euro area business climate indicator - monthly data"
+      confidence: 0.85
+      coverage: euro_area
       frequency: monthly
 
 not_available:

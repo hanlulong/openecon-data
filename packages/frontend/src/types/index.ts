@@ -125,6 +125,10 @@ export interface AuthResponse {
   token?: string;
   user?: User;
   error?: string;
+  // Set when Supabase "Confirm email" is on: register succeeds but no token is
+  // issued until the user clicks the confirmation link. Login on an unconfirmed
+  // account returns HTTP 401 with this flag set.
+  emailVerificationRequired?: boolean;
 }
 
 export interface RegisterRequest {
@@ -134,6 +138,18 @@ export interface RegisterRequest {
   institution?: string;
   // Anonymous session id so the backend migrates pre-signup history
   sessionId?: string;
+}
+
+// Password reset (Supabase recovery flow)
+export interface ForgotPasswordResponse {
+  // Always true — the backend never reveals whether an account exists.
+  success: boolean;
+}
+
+export interface ResetPasswordResponse {
+  success: boolean;
+  // Present on failure (HTTP 400), e.g. expired link or weak password.
+  error?: string;
 }
 
 export interface LoginRequest {

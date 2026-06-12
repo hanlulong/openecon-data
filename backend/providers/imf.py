@@ -437,48 +437,6 @@ class IMFProvider(BaseProvider):
             end_year=int(end_year) if end_year else None,
         )
 
-    async def _retry_request(self, url: str, max_retries: int = 3, initial_delay: float = 1.0):
-        """Execute HTTP request with exponential backoff retry logic.
-
-        Args:
-            url: URL to request
-            max_retries: Maximum number of retry attempts
-            initial_delay: Initial delay in seconds (doubles on each retry)
-
-        Returns:
-            httpx.Response object
-
-        Raises:
-            httpx.HTTPError: If all retries fail
-        """
-        last_error = None
-
-        # Use shared HTTP client pool for better performance
-        client = get_http_client()
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"IMF API request (attempt {attempt + 1}/{max_retries}): {url}")
-                response = await client.get(url, timeout=effective_timeout(60.0))
-                response.raise_for_status()
-                return response
-
-            except (httpx.HTTPError, httpx.TimeoutException) as e:
-                last_error = e
-
-                # Log the error
-                if attempt < max_retries - 1:
-                    delay = initial_delay * (2 ** attempt)
-                    logger.warning(
-                        f"IMF API request failed (attempt {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {delay:.1f}s..."
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"IMF API request failed after {max_retries} attempts: {e}")
-
-        # All retries exhausted
-        raise last_error
-
     @staticmethod
     def _looks_like_imf_code(indicator: str) -> bool:
         """Heuristic check for IMF code-like indicator strings."""
@@ -684,23 +642,35 @@ class IMFProvider(BaseProvider):
         # Convert all country names to IMF codes
         country_codes = [self._country_code(country) for country in countries]
 
-        # Fetch data with retry logic
+        # Fetch data with retry logic. _get_with_retry already performs the
+        # transport-level retries (3 transient retries underneath) plus rate
+        # limiter + circuit breaker + 4xx->DataNotAvailableError conversion, and
+        # crucially does NOT retry 4xx. A malformed-JSON 200 is not a transient
+        # transport error, so the outer reparse loop only needs a couple of
+        # attempts (collapsed from 5) rather than multiplying 5 reparses by the
+        # helper's own retries into a request storm.
         url = f"{self.base_url}/{indicator_code}"
+        client = get_http_client()
 
         try:
             payload = None
             json_error = None
-            for parse_attempt in range(5):
-                response = await self._retry_request(url, max_retries=4, initial_delay=1.0)
+            for parse_attempt in range(2):
+                response = await self._get_with_retry(
+                    client,
+                    url,
+                    raise_on_status=True,
+                    timeout=effective_timeout(60.0),
+                )
                 try:
                     payload = response.json()
                     json_error = None
                     break
                 except (ValueError, json.JSONDecodeError) as exc:
                     json_error = exc
-                    if parse_attempt < 4:
+                    if parse_attempt < 1:
                         logger.warning(
-                            "IMF API returned invalid JSON for %s (attempt %s/5): %s. Retrying...",
+                            "IMF API returned invalid JSON for %s (attempt %s/2): %s. Retrying...",
                             indicator_code,
                             parse_attempt + 1,
                             exc,

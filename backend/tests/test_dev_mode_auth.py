@@ -332,7 +332,7 @@ async def test_mock_auth_concurrent_users():
     for i in range(3):
         request = RegisterRequest(
             email=f"user{i}@example.com",
-            password=f"pass{i}",
+            password=f"password{i}!Aa",  # >= 8 chars (RegisterRequest min_length)
             name=f"User {i}"
         )
         response = await service.register(request)

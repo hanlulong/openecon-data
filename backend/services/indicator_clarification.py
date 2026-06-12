@@ -18,6 +18,7 @@ This module provides:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from types import SimpleNamespace
@@ -445,8 +446,11 @@ async def try_resolve_pending_indicator_choice(
                 processingSteps=tracker.to_list() if tracker else None,
             )
 
-        if len(text.split()) >= 3:
-            conversation_manager.clear_pending_indicator_options(conversation_id)
+        # Pending clarifications are single-turn: a non-numeric reply that
+        # doesn't resolve against the offered options means the user moved on.
+        # Drop the stale state so a later unrelated reply can't be
+        # substring-matched into executing the old pending intent.
+        conversation_manager.clear_pending_indicator_options(conversation_id)
         return None
 
     parsed = parse_indicator_option(selected_option)
@@ -480,6 +484,11 @@ async def try_resolve_pending_indicator_choice(
     params.pop("series_id", None)
     params.pop("code", None)
     params["indicator"] = selected_code
+    # The user explicitly chose this series from the offered options — final
+    # semantic authority. Resolution must execute it as chosen, not
+    # re-adjudicate it into a different code.
+    params["__semantic_authority"] = "exact_user_input"
+    params["__decision_source"] = "user_choice"
     intent.parameters = params
 
     try:
@@ -600,7 +609,7 @@ async def maybe_recover_from_uncertain_match(
 
     target_countries = qs._collect_target_countries(params)
     target_country = target_countries[0] if target_countries else None
-    indicator_query = qs._select_indicator_query_for_resolution(intent) or query
+    indicator_query = await asyncio.to_thread(qs._select_indicator_query_for_resolution, intent) or query
     primary_provider = normalize_provider_name(intent.apiProvider or "")
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(intent.originalQuery or "") or "")
 
@@ -618,7 +627,7 @@ async def maybe_recover_from_uncertain_match(
         candidate_keys.add(key)
         candidate_ordered.append((provider_norm, code_norm))
 
-    for option in qs._collect_indicator_choice_options(query, intent, max_options=4):
+    for option in await asyncio.to_thread(qs._collect_indicator_choice_options, query, intent, max_options=4):
         parsed = parse_indicator_option(option)
         if parsed:
             _add_candidate(parsed[0], parsed[1])
@@ -806,6 +815,14 @@ def build_no_reliable_indicator_match_response(
 # Indicator option collection
 # ====================================================================
 
+_PROVIDER_OPTION_LABELS = {
+    "WORLDBANK": "WorldBank",
+    "EUROSTAT": "Eurostat",
+    "STATSCAN": "StatsCan",
+    "COMTRADE": "Comtrade",
+}
+
+
 def collect_indicator_choice_options(
     qs: Any,
     query: str,
@@ -881,12 +898,6 @@ def collect_indicator_choice_options(
     selector = IndicatorSelector()
     scored_options: List[tuple[float, str, str]] = []
     seen_codes: set[tuple[str, str]] = set()
-    provider_labels = {
-        "WORLDBANK": "WorldBank",
-        "EUROSTAT": "Eurostat",
-        "STATSCAN": "StatsCan",
-        "COMTRADE": "Comtrade",
-    }
 
     for provider_name in provider_candidates:
         if target_iso2 and not _provider_covers_country_list(provider_name, target_iso2):
@@ -994,7 +1005,7 @@ def collect_indicator_choice_options(
 
             retrieval_score = float(scores[idx]) if idx < len(scores) else 0.0
             combined_score = retrieval_score + (0.12 * relevance_score) - (0.005 * idx)
-            provider_label = provider_labels.get(provider_name, provider_name)
+            provider_label = _PROVIDER_OPTION_LABELS.get(provider_name, provider_name)
             option_name = format_indicator_option_name(
                 qs=qs,
                 provider=provider_name,
@@ -2312,7 +2323,7 @@ async def build_prefetch_indicator_choice_clarification(
 
     params = dict(intent.parameters or {})
     query_text = str(query or "").strip()
-    indicator_query = qs._select_indicator_query_for_resolution(intent)
+    indicator_query = await asyncio.to_thread(qs._select_indicator_query_for_resolution, intent)
     if not indicator_query:
         indicator_query = str(intent.indicators[0] if intent.indicators else "").strip()
     if not indicator_query:
@@ -2366,6 +2377,7 @@ async def build_prefetch_indicator_choice_clarification(
     resolved = None
     primary_accepted = False
     primary_relevance = -999.0
+    selector_options: List[str] = []
     current_label = f"{provider or 'Unknown provider'} routing guess"
     if not current_indicator:
         try:
@@ -2416,16 +2428,47 @@ async def build_prefetch_indicator_choice_clarification(
                 return None
 
         if selection is not None and getattr(selection, "needs_user_choice", False):
-            logger.debug(
-                "Prefetch selector requested clarification for '%s'; "
-                "continuing to candidate evidence path.",
+            # The selector LLM already adjudicated the candidate evidence and
+            # produced the shortlist the user should choose from. Present THOSE
+            # options (filtered to executable codes); the cross-provider rule
+            # collector below is only a fallback when the selector gave none.
+            provider_label = _PROVIDER_OPTION_LABELS.get(provider, provider)
+            for selector_opt in (getattr(selection, "options", None) or []):
+                opt_code = str((selector_opt or {}).get("code") or "").strip()
+                opt_name = str((selector_opt or {}).get("name") or "").strip()
+                if not opt_code or _is_placeholder_indicator_code(opt_code):
+                    continue
+                if not provider_can_execute_indicator_option(
+                    qs=qs,
+                    provider=provider,
+                    code=opt_code,
+                    option_name=opt_name,
+                ):
+                    continue
+                formatted_name = format_indicator_option_name(
+                    qs=qs,
+                    provider=provider,
+                    code=opt_code,
+                    name=opt_name,
+                    metadata=None,
+                )
+                selector_options.append(f"[{provider_label}] {formatted_name} ({opt_code})")
+            selector_options = dedupe_indicator_choice_options(qs, selector_options)[:option_budget]
+            logger.info(
+                "Prefetch selector requested clarification for '%s' with %d executable option(s)",
                 indicator_query,
+                len(selector_options),
             )
 
-    options = qs._collect_indicator_choice_options(
-        query_text or indicator_query,
-        intent,
-        max_options=option_budget,
+    options = (
+        list(selector_options)
+        if len(selector_options) >= 2
+        else await asyncio.to_thread(
+            qs._collect_indicator_choice_options,
+            query_text or indicator_query,
+            intent,
+            max_options=option_budget,
+        )
     )
     if not options:
         if not primary_accepted:
@@ -2435,7 +2478,8 @@ async def build_prefetch_indicator_choice_clarification(
                 fb_query = indicator_query or query_text or ""
                 fb_intent = intent.model_copy(deep=True)
                 fb_intent.apiProvider = fb_provider
-                fb_options = qs._collect_indicator_choice_options(
+                fb_options = await asyncio.to_thread(
+                    qs._collect_indicator_choice_options,
                     fb_query, fb_intent, max_options=4,
                 )
                 if fb_options:

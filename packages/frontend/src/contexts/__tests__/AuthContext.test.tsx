@@ -4,15 +4,15 @@
  * Tests authentication state management, login/logout flows,
  * and integration with Supabase and legacy backend auth.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 
 // Create hoisted mocks that can be referenced in vi.mock factories
 const mocks = vi.hoisted(() => {
   const mockUnsubscribe = vi.fn();
-  const mockGetSession = vi.fn(() => Promise.resolve(null));
+  // Widen the resolved type so tests can mockResolvedValue a session object.
+  const mockGetSession = vi.fn(() => Promise.resolve(null as unknown));
 
   return {
     mockUnsubscribe,

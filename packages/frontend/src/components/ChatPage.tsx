@@ -7,7 +7,7 @@ import { CodeExecutionDisplay } from './CodeExecutionDisplay'
 import { useAuth } from '../contexts/AuthContext'
 import { Auth } from './Auth'
 import { ProcessingSteps, ProcessingTimelineStep } from './ProcessingSteps'
-import { trackAnonymousSession, getOrCreateSessionId } from '../lib/supabase'
+import { getOrCreateSessionId } from '../lib/supabase'
 import { useMobile } from '../hooks/useMobile'
 import { logger } from '../utils/logger'
 import { downloadExport } from '../lib/export'
@@ -144,6 +144,9 @@ export function ChatPage() {
   const [activeProcessingSteps, setActiveProcessingSteps] = useState<ProcessingTimelineStep[]>([])
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login')
+  // Dismissible banner shown after the user clicks the email-confirmation link
+  // (Supabase redirects to /chat?confirmed=1).
+  const [emailConfirmedBanner, setEmailConfirmedBanner] = useState(false)
   // Freemium registration gate (anonymous users only).
   const [registrationWall, setRegistrationWall] = useState<{ open: boolean; limit?: number }>({ open: false })
   const [freeQueryUsage, setFreeQueryUsage] = useState<{ used: number; limit: number } | null>(null)
@@ -169,15 +172,41 @@ export function ChatPage() {
   const { isMobile } = useMobile()
   const processingQuery = useRef<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  // Handle for the post-query history reload timer so it can be cleared on
+  // unmount — otherwise it fires setState on an unmounted component.
+  const historyReloadTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     document.title = 'Chat | OpenEcon.ai'
   }, [])
 
-  // Abort any in-flight streaming request on unmount to prevent memory leaks
+  // Email-confirmation landing: Supabase redirects to /chat?confirmed=1 after
+  // the user clicks the link in their inbox. Show a one-time success banner,
+  // open the login modal, and strip the param so a refresh doesn't re-show it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('confirmed') !== '1') return
+
+    setEmailConfirmedBanner(true)
+    setAuthModalMode('login')
+    setShowAuthModal(true)
+
+    params.delete('confirmed')
+    const newSearch = params.toString()
+    const newUrl = `${window.location.pathname}${newSearch ? `?${newSearch}` : ''}${window.location.hash}`
+    window.history.replaceState({}, '', newUrl)
+  }, [])
+
+  // Abort any in-flight streaming request and clear pending timers on unmount
+  // to prevent memory leaks and setState-after-unmount warnings.
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort()
+      if (historyReloadTimerRef.current !== null) {
+        window.clearTimeout(historyReloadTimerRef.current)
+        historyReloadTimerRef.current = null
+      }
     }
   }, [])
 
@@ -189,29 +218,19 @@ export function ChatPage() {
     scrollToBottom()
   }, [messages])
 
-  // Track anonymous session on page load (only for non-authenticated users)
+  // Ensure an anonymous session ID exists on page load (only for
+  // non-authenticated users). The backend handles all anonymous-session
+  // tracking server-side; the browser only needs a local session ID.
   useEffect(() => {
-    const trackSession = async () => {
-      // Only track anonymous sessions if user is NOT authenticated
-      if (isAuthenticated) {
-        logger.log('User is authenticated, skipping anonymous session tracking')
-        return
-      }
-
-      try {
-        // Create session ID if it doesn't exist
-        const sessionId = getOrCreateSessionId()
-        logger.log('Session ID:', sessionId)
-
-        // Track the anonymous session in Supabase
-        await trackAnonymousSession()
-      } catch (error) {
-        logger.error('Failed to track anonymous session:', error)
-        // Non-critical error, continue anyway
-      }
+    // Only create anonymous sessions if user is NOT authenticated
+    if (isAuthenticated) {
+      logger.log('User is authenticated, skipping anonymous session creation')
+      return
     }
 
-    trackSession()
+    // Create session ID if it doesn't exist
+    const sessionId = getOrCreateSessionId()
+    logger.log('Session ID:', sessionId)
   }, [isAuthenticated]) // Re-run when auth status changes
 
   const loadHistory = useCallback(async () => {
@@ -322,7 +341,7 @@ export function ChatPage() {
 
     // Use streaming for both regular and Pro Mode
     try {
-      await api.queryStream(q, conversationId, false, {
+      await api.queryStream(q, conversationId, {
         onStep: (step: StreamProcessingStepEvent) => {
           // Update or add processing step in real-time
           // If step has a status field, use it; if it has duration_ms, it's completed
@@ -415,8 +434,13 @@ export function ChatPage() {
               processingTimeMs: response.processingTimeMs || elapsed,
             }])
 
-            // Reload history for both authenticated and anonymous users
-            setTimeout(() => {
+            // Reload history for both authenticated and anonymous users.
+            // Track the handle so unmount can cancel a pending reload.
+            if (historyReloadTimerRef.current !== null) {
+              window.clearTimeout(historyReloadTimerRef.current)
+            }
+            historyReloadTimerRef.current = window.setTimeout(() => {
+              historyReloadTimerRef.current = null
               if (isAuthenticated) {
                 loadHistory()
               } else {
@@ -520,6 +544,17 @@ export function ChatPage() {
 
     if (showAuth === '1') {
       setShowAuthModal(true)
+    }
+
+    // Strip the consumed params so a refresh/back-navigation doesn't re-run
+    // the query or re-open the auth modal — same pattern as ?confirmed=1.
+    if (initialQuery !== null || showAuth !== null) {
+      const currentParams = new URLSearchParams(window.location.search)
+      currentParams.delete('query')
+      currentParams.delete('auth')
+      const newSearch = currentParams.toString()
+      const newUrl = `${window.location.pathname}${newSearch ? `?${newSearch}` : ''}${window.location.hash}`
+      window.history.replaceState({}, '', newUrl)
     }
   }, [location.search])
 
@@ -628,6 +663,14 @@ export function ChatPage() {
   }
 
   const handlePythonExport = async (data: NormalizedData[]) => {
+    // Pro Mode (Python generation) is gated to registered users. Pre-empt the
+    // backend round-trip for anonymous users and show the registration wall
+    // immediately, mirroring the freemium-limit gate.
+    if (!isAuthenticated) {
+      setRegistrationWall({ open: true })
+      return
+    }
+
     setPythonCodeModal({ show: true, code: '', loading: true })
 
     try {
@@ -663,6 +706,15 @@ Requirements:
 Return ONLY the Python code, no explanations before or after.`
 
       const response = await api.queryPro(prompt)
+
+      // Pro Mode is registered-users-only. If the backend reports the caller is
+      // anonymous, close the code modal and surface the registration wall with
+      // the backend-provided message — same handling as the freemium gate.
+      if (response.registrationRequired) {
+        setPythonCodeModal({ show: false, code: '', loading: false })
+        setRegistrationWall({ open: true })
+        return
+      }
 
       if (response.error) {
         setPythonCodeModal({ show: true, code: '', loading: false, error: response.error })
@@ -1146,6 +1198,21 @@ print(f"\\nData source: ${sourceUrl}")
 
       <main className="chat-main">
         <div className="chat-container">
+          {emailConfirmedBanner && (
+            <div className="email-confirmed-banner" role="status">
+              <span className="email-confirmed-banner-text">
+                ✓ Email confirmed! Please log in to continue.
+              </span>
+              <button
+                type="button"
+                className="email-confirmed-banner-close"
+                onClick={() => setEmailConfirmedBanner(false)}
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
           <div className="messages-area">
             {messages.length === 0 && (
               <div className="welcome-screen">
@@ -1404,7 +1471,9 @@ print(f"\\nData source: ${sourceUrl}")
                     a.href = url
                     a.download = 'fetch_data.py'
                     a.click()
-                    URL.revokeObjectURL(url)
+                    // Defer revocation so the click-initiated download can
+                    // start before the blob URL is invalidated.
+                    setTimeout(() => URL.revokeObjectURL(url), 0)
                   }}
                 >
                   Download .py

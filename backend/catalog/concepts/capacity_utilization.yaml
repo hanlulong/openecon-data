@@ -39,8 +39,8 @@ providers:
 
   Eurostat:
     primary:
-      code: EI_BSIN_Q
-      name: "Industry survey - capacity utilization"
+      code: EI_BSIN_Q_R2
+      name: "Industry survey results - quarterly data"
       confidence: 0.85
       coverage: eu_members
       frequency: quarterly

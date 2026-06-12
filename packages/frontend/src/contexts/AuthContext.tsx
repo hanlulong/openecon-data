@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { api, tokenManager, setLogoutCallback } from '../services/api';
 import { User, ApiError } from '../types';
 import { supabase, getSession, setSessionId, signOut as supabaseSignOut } from '../lib/supabase';
@@ -11,8 +11,8 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  register: (name: string, email: string, password: string, institution?: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; emailVerificationRequired?: boolean }>;
+  register: (name: string, email: string, password: string, institution?: string) => Promise<{ success: boolean; error?: string; emailVerificationRequired?: boolean }>;
   logout: () => Promise<void>;
 }
 
@@ -29,6 +29,10 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Ensure the initial checkAuth() bootstrap runs once. Under React StrictMode
+  // the mount effect fires twice; onAuthStateChange also fires on subscribe, so
+  // without this guard the user/token would be set and written multiple times.
+  const hasBootstrapped = useRef(false);
 
   // Register logout callback for 401 interceptor
   useEffect(() => {
@@ -131,7 +135,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setIsLoading(false);
     };
 
-    checkAuth();
+    if (!hasBootstrapped.current) {
+      hasBootstrapped.current = true;
+      checkAuth();
+    }
 
     // Listen for Supabase auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: string, session: Session | null) => {
@@ -173,12 +180,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(response.user);
         return { success: true };
       }
-      return { success: false, error: response.error || 'Login failed' };
+      return {
+        success: false,
+        error: response.error || 'Login failed',
+        emailVerificationRequired: response.emailVerificationRequired,
+      };
     } catch (error: unknown) {
-      const axiosError = error as AxiosError<ApiError>;
+      // An unconfirmed account returns HTTP 401 with a body carrying
+      // emailVerificationRequired + a specific message. Surface both so the
+      // auth modal can show the "confirm your email first" guidance rather
+      // than the generic "invalid email or password" error.
+      const axiosError = error as AxiosError<ApiError & { emailVerificationRequired?: boolean }>;
       return {
         success: false,
         error: axiosError.response?.data?.error || axiosError.message || 'Login failed',
+        emailVerificationRequired: axiosError.response?.data?.emailVerificationRequired,
       };
     }
   };
@@ -186,6 +202,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const register = async (name: string, email: string, password: string, institution?: string) => {
     try {
       const response = await api.register({ name, email, password, institution });
+
+      // Email-confirmation flow (Supabase "Confirm email" on): register succeeds
+      // but no token is issued. Do NOT auto-login — the user must click the link
+      // emailed to them first. Signal the caller to show a confirmation screen.
+      if (response.success && (response.emailVerificationRequired || !response.token)) {
+        return { success: true, emailVerificationRequired: true };
+      }
+
+      // Dev/mock-auth flow: a real token came back, so auto-login as before.
       if (response.success && response.user) {
         setUser(response.user);
         return { success: true };

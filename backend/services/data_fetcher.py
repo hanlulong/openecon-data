@@ -22,6 +22,8 @@ import re
 import time
 from typing import Any, List, Optional, TYPE_CHECKING
 
+import httpx
+
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
@@ -2915,6 +2917,15 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
             lambda i=single_intent: fetch_data(svc, i),
             max_attempts=2,
             initial_delay=0.5,
+            # Do NOT retry DataNotAvailableError here: providers already run
+            # transient transport retries (3 attempts via the BaseProvider
+            # helpers) before raising it terminally, so re-entering the
+            # provider doubles every HTTP attempt and burns API quota, while
+            # deterministic "no data" never heals on retry. It propagates
+            # immediately (retry_async only catches `exceptions`). The outer
+            # retry remains for orchestration-level timeouts and raw httpx
+            # errors that escape provider wrapping.
+            exceptions=(httpx.HTTPError, asyncio.TimeoutError),
         )
         fetch_tasks.append(task)
 
@@ -2928,17 +2939,41 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         len(fetch_tasks), total_timeout, num_countries,
     )
 
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*fetch_tasks, return_exceptions=True),
-            timeout=total_timeout,
-        )
-    except asyncio.TimeoutError:
+    # Create explicit tasks so that, on a total-timeout, indicators that have
+    # ALREADY completed are preserved instead of being discarded. asyncio.wait
+    # returns (done, pending) when the timeout elapses; we harvest results from
+    # the done tasks and cancel the pending ones. This keeps every successful
+    # indicator even if one slow indicator blows the overall budget.
+    tasks = [asyncio.ensure_future(t) for t in fetch_tasks]
+    done, pending = await asyncio.wait(
+        tasks,
+        timeout=total_timeout,
+        return_when=asyncio.ALL_COMPLETED,
+    )
+
+    if pending:
         logger.warning(
-            "Multi-indicator fetch timed out after %ds -- returning partial results",
-            total_timeout,
+            "Multi-indicator fetch timed out after %ds -- returning %d/%d "
+            "completed indicators and cancelling %d pending",
+            total_timeout, len(done), len(tasks), len(pending),
         )
-        results = []
+        for task in pending:
+            task.cancel()
+
+    # Harvest results in original task-creation order so the enumerate() loop
+    # below stays index-aligned with intent.indicators for logging. Completed
+    # tasks contribute their result (or their exception); still-pending tasks
+    # contribute a TimeoutError sentinel that the loop already tolerates.
+    results: list = []
+    for task in tasks:
+        if task in done:
+            exc = task.exception()
+            if exc is not None:
+                results.append(exc)
+            else:
+                results.append(task.result())
+        else:
+            results.append(asyncio.TimeoutError("indicator fetch timed out"))
 
     # Collect successful results
     for i, result in enumerate(results):

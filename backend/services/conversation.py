@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -17,21 +18,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _sync_redis_client = None
-_sync_redis_init_attempted = False
+# Monotonic timestamp of the last connect attempt (0.0 = never attempted).
+# A failed attempt is retried at most every _SYNC_REDIS_RETRY_INTERVAL seconds
+# so a Redis outage at startup does not permanently disable cross-worker
+# conversation sharing (the old one-shot flag left the client None forever).
+_sync_redis_last_attempt = 0.0
+_SYNC_REDIS_RETRY_INTERVAL = 30.0
 _sync_redis_lock = threading.Lock()
 
 
 def _get_sync_redis():
     """Return a synchronous redis.Redis client, or None if unavailable."""
-    global _sync_redis_client, _sync_redis_init_attempted
+    global _sync_redis_client, _sync_redis_last_attempt
 
-    if _sync_redis_init_attempted:
+    if _sync_redis_client is not None:
         return _sync_redis_client
 
+    if (
+        _sync_redis_last_attempt > 0.0
+        and time.monotonic() - _sync_redis_last_attempt < _SYNC_REDIS_RETRY_INTERVAL
+    ):
+        return None
+
     with _sync_redis_lock:
-        if _sync_redis_init_attempted:
+        if _sync_redis_client is not None:
             return _sync_redis_client
-        _sync_redis_init_attempted = True
+        if (
+            _sync_redis_last_attempt > 0.0
+            and time.monotonic() - _sync_redis_last_attempt < _SYNC_REDIS_RETRY_INTERVAL
+        ):
+            return None
+        _sync_redis_last_attempt = time.monotonic()
         try:
             import redis as _redis
 
@@ -89,6 +106,12 @@ class ConversationContext:
     pending_semantic_clarification: Optional[Dict[str, Any]] = None
     # Phase 1 dual-write: ConversationState stored alongside last_intent
     conversation_state: Optional[Any] = None  # ConversationState (avoid circular import at class level)
+    # Ownership binding: "user:<id>" for authenticated callers,
+    # "anon:<session_id>" for anonymous ones. A conversation with an owner can
+    # only be continued by the same identity (or claimed by an authed user who
+    # still holds the anon session it was created under). None = unbound
+    # (legacy conversations and internal callers).
+    owner_key: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +171,7 @@ def _serialize_context(ctx: ConversationContext) -> str:
         "pending_indicator_options": ctx.pending_indicator_options,
         "pending_semantic_clarification": ctx.pending_semantic_clarification,
         "conversation_state": conv_state_data,
+        "owner_key": ctx.owner_key,
     }
     return json.dumps(data)
 
@@ -189,6 +213,7 @@ def _deserialize_context(raw: str) -> ConversationContext:
         pending_indicator_options=data.get("pending_indicator_options"),
         pending_semantic_clarification=data.get("pending_semantic_clarification"),
         conversation_state=conversation_state,
+        owner_key=data.get("owner_key"),
     )
 
 
@@ -353,10 +378,10 @@ class ConversationManager:
             return None
         return conversation
 
-    def create_conversation(self) -> str:
+    def create_conversation(self, owner_key: Optional[str] = None) -> str:
         conversation_id = str(uuid.uuid4())
         with self._lock:
-            ctx = ConversationContext(id=conversation_id)
+            ctx = ConversationContext(id=conversation_id, owner_key=owner_key)
             self._conversations[conversation_id] = ctx
             self._redis_save(ctx)
         return conversation_id
@@ -630,7 +655,12 @@ class ConversationManager:
             lambda ctx: setattr(ctx, "pending_semantic_clarification", None),
         )
 
-    def get_or_create(self, conversation_id: Optional[str]) -> str:
+    def get_or_create(
+        self,
+        conversation_id: Optional[str],
+        owner_key: Optional[str] = None,
+        claimable_keys: Optional[List[str]] = None,
+    ) -> str:
         """
         Get existing conversation or create new one.
 
@@ -641,27 +671,65 @@ class ConversationManager:
         On server restart, conversations are recovered from Redis transparently
         via _get_locked().
 
+        Ownership: when ``owner_key`` is provided (request-edge callers), a
+        conversation that is bound to a DIFFERENT owner is never served —
+        a fresh conversation is minted instead, so a leaked/guessed id can't
+        read or pollute someone else's context. ``claimable_keys`` lets an
+        authenticated caller adopt a conversation it started anonymously
+        (proof = it still holds that anon session id). Internal callers that
+        pass no owner_key get the legacy unenforced behavior.
+
         Args:
             conversation_id: Optional conversation ID
+            owner_key: Identity of the caller ("user:<id>" / "anon:<session>")
+            claimable_keys: Prior identities the caller can prove it held
 
         Returns:
-            Conversation ID (existing or new)
+            Conversation ID (existing, newly created, or freshly minted on
+            ownership mismatch)
         """
         if conversation_id:
             # Check if conversation exists (in-memory or Redis)
-            if self._get(conversation_id):
-                return conversation_id
+            existing = self._get(conversation_id)
+            if existing:
+                stored_owner = getattr(existing, "owner_key", None)
+                if owner_key is None or not stored_owner or stored_owner == owner_key:
+                    if owner_key is not None and not stored_owner:
+                        # Bind legacy/unowned conversations on first touch.
+                        self._locked_redis_update(
+                            conversation_id,
+                            lambda ctx: setattr(ctx, "owner_key", owner_key),
+                        )
+                    return conversation_id
+                if stored_owner in set(claimable_keys or []):
+                    # Ownership transfer: e.g. anon conversation claimed after
+                    # the same browser session logs in.
+                    self._locked_redis_update(
+                        conversation_id,
+                        lambda ctx: setattr(ctx, "owner_key", owner_key),
+                    )
+                    return conversation_id
+                logger.warning(
+                    "Conversation %s owner mismatch (bound to another identity); "
+                    "minting a fresh conversation",
+                    conversation_id[:13],
+                )
+                return self.create_conversation(owner_key=owner_key)
             # Create conversation with the provided ID (don't generate new UUID).
             # Go through the locked update with require_existing=False: it
             # re-reads Redis first, so if the OTHER worker already created (and
             # populated) this id in the race window, that context is preserved
             # instead of being clobbered by a fresh empty blob.
+            def _stamp_owner(ctx: ConversationContext) -> None:
+                if owner_key is not None and not getattr(ctx, "owner_key", None):
+                    ctx.owner_key = owner_key
+
             self._locked_redis_update(
-                conversation_id, lambda ctx: None, require_existing=False
+                conversation_id, _stamp_owner, require_existing=False
             )
             return conversation_id
         # No ID provided - generate new one
-        return self.create_conversation()
+        return self.create_conversation(owner_key=owner_key)
 
     def cleanup(self) -> None:
         with self._lock:

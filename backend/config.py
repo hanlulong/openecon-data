@@ -171,6 +171,18 @@ class Settings(BaseSettings):
         description="Number of free queries for anonymous users before registration is required (0 = unlimited)."
     )
 
+    email_confirm_redirect_url: str = Field(
+        default="https://data.openecon.ai/chat?confirmed=1",
+        alias="EMAIL_CONFIRM_REDIRECT_URL",
+        description="Where Supabase redirects after a new user clicks the email-confirmation link. Must be in the Supabase Auth redirect allow list."
+    )
+
+    password_reset_redirect_url: str = Field(
+        default="https://data.openecon.ai/reset-password",
+        alias="PASSWORD_RESET_REDIRECT_URL",
+        description="Where Supabase redirects after a user clicks the password-reset link. Must be in the Supabase Auth redirect allow list."
+    )
+
     # Sync /api/query and /api/query/pro request-level deadline
     query_timeout_seconds: int = Field(
         default=120,

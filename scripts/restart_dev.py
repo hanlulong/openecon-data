@@ -417,6 +417,34 @@ After restart:
     restart_backend = args.backend or not args.frontend
     restart_frontend = args.frontend or not args.backend
 
+    # PRODUCTION GUARD: this host also runs the systemd-managed production
+    # backend on port 3001. cleanup_backend() kills everything on that port,
+    # which takes production down and leaves systemd crash-looping against a
+    # dev uvicorn (with ALLOW_TEST_USER) serving real traffic. Refuse unless
+    # the operator explicitly stops the service first.
+    if restart_backend:
+        try:
+            unit_state = subprocess.run(
+                ["systemctl", "is-active", "openecon-backend.service"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+        except Exception:
+            unit_state = "unknown"
+        if unit_state == "active":
+            print_error(
+                "openecon-backend.service is ACTIVE — this script would kill the "
+                "PRODUCTION backend on port 3001."
+            )
+            print_error(
+                "For production restarts use: sudo systemctl restart openecon-backend.service "
+                "(or scripts/deploy_production.sh)."
+            )
+            print_error(
+                "For local dev on this host, stop the service first: "
+                "sudo systemctl stop openecon-backend.service"
+            )
+            return 1
+
     print_header("econ-data-mcp Development Server Restart")
 
     success = True

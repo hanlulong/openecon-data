@@ -12,16 +12,24 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Critical Rules
 
-### 1. Always Use Restart Script
+### 1. Service Management — Production vs Dev
+
+**This host runs PRODUCTION via systemd.** The production backend (2 uvicorn workers, port 3001) and MCP service (port 3002) are systemd units:
 
 ```bash
-python3 scripts/restart_dev.py           # Both backend + frontend
-python3 scripts/restart_dev.py --backend  # Backend only
-python3 scripts/restart_dev.py --frontend # Frontend only
-python3 scripts/restart_dev.py --status   # Check running services
+sudo systemctl restart openecon-backend.service openecon-mcp.service  # Restart prod backend
+systemctl status openecon-backend.service                             # Check status
+sudo journalctl -u openecon-backend.service -f                        # Tail prod logs
 ```
 
-**NEVER** manually run `uvicorn`, `nohup`, or start services directly. The script handles cleanup, process management, and health checks. Manual process management leads to port conflicts and zombie processes.
+`scripts/restart_dev.py` is for DEV ONLY and refuses to run while `openecon-backend.service` is active (it would kill production on port 3001). For dev on another machine:
+
+```bash
+python3 scripts/restart_dev.py           # Both backend + frontend (dev)
+python3 scripts/restart_dev.py --status  # Check running services
+```
+
+**NEVER** manually run `uvicorn`, `nohup`, or start services directly. Manual process management leads to port conflicts and zombie processes.
 
 ### 2. OECD Provider - Low Priority
 
@@ -128,15 +136,16 @@ econ-data-mcp is an AI-powered economic data aggregation service with a natural 
 ### Development
 
 ```bash
-# Start services (ALWAYS use this)
+# Start DEV services (refuses to run while production systemd unit is active)
 python3 scripts/restart_dev.py
 
 # Check status
 python3 scripts/restart_dev.py --status
 
-# Monitor logs
-tail -f /tmp/backend-dev.log
-tail -f /tmp/frontend-dev.log
+# Monitor logs (dev logs live under .omx/logs/; prod logs via journalctl)
+tail -f .omx/logs/backend-dev.log
+tail -f .omx/logs/frontend-dev.log
+sudo journalctl -u openecon-backend.service -f   # production
 
 # Health check
 curl http://localhost:3001/api/health
@@ -167,17 +176,22 @@ npm run lint --workspace=packages/frontend  # Lint frontend
 
 ### Production Deployment
 
+**The only deploy entrypoint is `scripts/deploy_production.sh`** (refuses dirty trees, builds frontend, rsyncs `dist/` → `dist-data/`, restarts systemd services, health-gates with rollback):
+
 ```bash
-# 1. Build frontend (required for frontend changes)
+./scripts/deploy_production.sh
+```
+
+For a working-tree deploy without git (rare, deliberate):
+
+```bash
 npm run build:frontend
-
-# 2. Backend auto-reloads on file changes (no action needed)
-
-# 3. Verify
+rsync -a --delete packages/frontend/dist/ packages/frontend/dist-data/
+sudo systemctl restart openecon-backend.service openecon-mcp.service
 curl https://data.openecon.ai/api/health
 ```
 
-Apache2 serves frontend from `packages/frontend/dist` and proxies `/api/*` to backend on port 3001.
+Apache2 serves the frontend from `packages/frontend/dist-data` (NOT `dist` — the build output must be rsynced) and proxies `/api/*` to the backend on port 3001. The backend does NOT auto-reload in production; a systemd restart is required after backend changes.
 
 ---
 
@@ -246,14 +260,18 @@ COINGECKO_API_KEY=...
 # Supabase (for auth + query history)
 SUPABASE_URL=...
 SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_SERVICE_KEY=...         # config.py reads SUPABASE_SERVICE_KEY (not _SERVICE_ROLE_KEY)
 
 # LLM configuration
 LLM_PROVIDER=openrouter          # openrouter, ollama, or lm-studio
 LLM_MODEL=openai/gpt-4o-mini
 
-# Pro Mode
-GROK_API_KEY=...
+# Pro Mode (default false; ENABLED in production with the Layer-2 sandbox —
+# promode uid + mount isolation + iptables egress allowlist, provisioned by
+# scripts/setup_promode_sandbox.sh and verified by a fail-closed canary).
+# Code generation uses the local vLLM model (gpt-oss-120b) when LLM_PROVIDER=vllm,
+# otherwise falls back to OpenRouter (OPENROUTER_API_KEY). No GROK_API_KEY/X.AI key.
+PROMODE_ENABLED=false
 PROMODE_PUBLIC_DIR=/path/to/public_media/promode
 PROMODE_SESSION_DIR=/tmp/promode_sessions
 
@@ -294,9 +312,9 @@ ALLOWED_ORIGINS=https://data.openecon.ai,https://www.data.openecon.ai
 
 ### Pro Mode
 
-AI-generated Python code execution for complex queries. Components:
+AI-generated Python code execution for complex queries. Disabled by default (`PROMODE_ENABLED=false`); enable only with proper sandboxing. Components:
 - `QueryComplexityAnalyzer` - Detects Pro Mode queries
-- `GrokService` - Generates Python via X.AI Grok
+- `GrokService` (`backend/services/grok.py`) - Generates Python using the local vLLM model (gpt-oss-120b) when `LLM_PROVIDER=vllm`, falling back to OpenRouter otherwise. Despite the legacy class/file name, it no longer calls X.AI/Grok and there is no `GROK_API_KEY`.
 - `CodeExecutor` - Sandboxed execution with security restrictions
 
 Security: Import blacklist, 30s timeout, 100K char limit, regex validation, JSON session storage.

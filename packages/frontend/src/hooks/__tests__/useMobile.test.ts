@@ -4,7 +4,7 @@
  * Tests viewport breakpoint detection for mobile, tablet, and desktop.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { useMobile } from '../useMobile';
 
 // Store original matchMedia
@@ -34,7 +34,7 @@ describe('useMobile', () => {
         onchange: null,
         addListener: vi.fn(),
         removeListener: vi.fn(),
-        addEventListener: vi.fn((event: string, callback: () => void) => {
+        addEventListener: vi.fn((_event: string, callback: () => void) => {
           if (!listeners.has(query)) {
             listeners.set(query, []);
           }

@@ -6,7 +6,9 @@ This guide walks through the minimum steps to run openecon-data locally with the
 
 - Python 3.10+ (virtualenv recommended)
 - Node.js 18+ and npm 9+
-- An OpenRouter API key (required)
+- **Required for the backend to start:**
+  - `OPENROUTER_API_KEY` — required when `LLM_PROVIDER=openrouter` (the default). Get one at https://openrouter.ai/keys. To skip it, point `LLM_PROVIDER` at a local model server (`vllm`, `ollama`, or `lm-studio`).
+  - `JWT_SECRET` — required, no default. Generate with `openssl rand -hex 32`.
 - Optional: an OpenAI API key if you want OpenAI embedding models
 - Optional data keys: `FRED_API_KEY`, `COMTRADE_API_KEY`
 
@@ -31,23 +33,27 @@ Create a `.env` file in the repository root:
 ```
 LLM_PROVIDER=openrouter
 LLM_MODEL=openai/gpt-4o-mini
-OPENROUTER_API_KEY=pk-...
+OPENROUTER_API_KEY=sk-or-...                  # required (see prerequisites)
+JWT_SECRET=generate_a_random_string           # required — openssl rand -hex 32
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 # Optional OpenAI embedding setup:
 # OPENAI_API_KEY=sk-...
 # EMBEDDING_MODEL=text-embedding-3-small
 # EMBEDDING_DIMENSIONS=1536
-FRED_API_KEY=optional
-COMTRADE_API_KEY=optional
-JWT_SECRET=generate_a_random_string
+# Optional data-provider keys (leave commented out to run without them):
+# FRED_API_KEY=your_fred_api_key
+# COMTRADE_API_KEY=your_comtrade_api_key
 ```
+
+Tip: instead of writing `.env` by hand, run `./scripts/setup.sh` (or `cp .env.example .env`) and edit the generated file.
 
 Restart the backend after editing secrets (use `python3 scripts/restart_dev.py --backend`).
 
 No manual database/index bootstrap is required for local setup:
 - `backend/data/indicators.db` is created if missing
 - `backend/data/faiss_index` is created/rebuilt on demand when vector search is enabled
-- Supabase is optional in development (mock auth is used when Supabase is not configured)
+- Supabase is optional in development (mock auth is used when Supabase is not configured). With mock auth, a dev test user is available by default: `test@example.com` / `testpass123` (disable with `ALLOW_TEST_USER=false`). Google sign-in, email verification, and password reset require Supabase.
+- Redis is optional — the backend tries `redis://localhost:6379/0` and falls back to in-memory caching if Redis is not running
 
 ## 4. Run the stack
 

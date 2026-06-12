@@ -908,7 +908,6 @@ class ProviderTests(unittest.TestCase):
             return indicator
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
              patch.object(provider, "_resolve_indicator_code", new=AsyncMock(side_effect=resolve_indicator)), \
              patch.object(provider, "_get_alternative_indicators", new=AsyncMock(return_value=["NY.GDP.MKTP.KD.ZG"])):
             results = run(
@@ -971,7 +970,6 @@ class ProviderTests(unittest.TestCase):
         client = RecordingClient([primary_empty, alternative_data])
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=client), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
              patch.object(provider, "_get_alternative_indicators", new=AsyncMock(return_value=["NY.GDP.MKTP.KD.ZG"])):
             results = run(
                 provider.fetch_indicator(
@@ -1053,10 +1051,7 @@ class ProviderTests(unittest.TestCase):
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([missing_response, source_response])), \
              patch.object(provider, "_get_alternative_indicators", new=AsyncMock(side_effect=AssertionError("no alternatives for exact codes"))), \
-             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
-             patch("backend.providers.worldbank._wb_record_failure"), \
-             patch("backend.providers.worldbank._wb_record_success"):
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
             results = run(provider.fetch_indicator("w_F_skl", country="Brazil", start_date="2014", end_date="2014"))
 
         self.assertEqual(len(calls), 2)
@@ -1238,13 +1233,9 @@ class ProviderTests(unittest.TestCase):
         }
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_empty, source_response])), \
-             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
-             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
-             patch("backend.providers.worldbank._wb_record_success"):
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
             results = run(provider.fetch_indicator("TOT"))
 
-        record_failure.assert_not_called()
         self.assertEqual(len(calls), 2)
         self.assertIn("/country/all/indicator/TOT", calls[0]["url"])
         self.assertIn("/sources/15/country/all/series/TOT", calls[1]["url"])
@@ -1347,13 +1338,9 @@ class ProviderTests(unittest.TestCase):
         }
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_missing, source_response])), \
-             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
-             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
-             patch("backend.providers.worldbank._wb_record_success"):
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
             results = run(provider.fetch_indicator("DT.INT.DLXF.CD"))
 
-        record_failure.assert_not_called()
         self.assertEqual(len(calls), 2)
         self.assertIn("/sources/81/country/all/series/DT.INT.DLXF.CD", calls[1]["url"])
         self.assertEqual(calls[1]["params"].get("MRNEV"), 5)
@@ -1436,13 +1423,9 @@ class ProviderTests(unittest.TestCase):
         }
 
         with patch("backend.providers.worldbank.get_http1_client", return_value=RecordingClient([generic_missing, source_response])), \
-             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup), \
-             patch("backend.providers.worldbank._wb_is_available", return_value=True), \
-             patch("backend.providers.worldbank._wb_record_failure") as record_failure, \
-             patch("backend.providers.worldbank._wb_record_success"):
+             patch("backend.services.indicator_database.get_indicator_lookup", return_value=lookup):
             results = run(provider.fetch_indicator("CoHD_v_ss", country="US"))
 
-        record_failure.assert_not_called()
         self.assertEqual(len(calls), 2)
         self.assertIn("/sources/88/country/USA/series/CoHD_v_ss", calls[1]["url"])
         self.assertEqual(len(results), 1)
@@ -1856,7 +1839,15 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result[0].metadata.country, "Germany")
         self.assertEqual(result[0].data[0].value, 300)
         self.assertEqual(len(client._responses), 0)  # pylint: disable=protected-access
-        sleep_mock.assert_awaited_once()
+        # Exactly one empty-TOTAL backoff sleep (RETRY_DELAY_BASE * 2**0).
+        # Requests now flow through BaseProvider._get_with_retry, whose
+        # rate-limiter pacing may add its own (differently sized) sleeps.
+        backoff_delays = [
+            call.args[0]
+            for call in sleep_mock.await_args_list
+            if call.args and call.args[0] == comtrade_module.RETRY_DELAY_BASE
+        ]
+        self.assertEqual(len(backoff_delays), 1)
 
     def test_comtrade_fetch_single_reporter_does_not_retry_empty_hs_subheading(self) -> None:
         provider = ComtradeProvider(api_key="demo")
@@ -2017,17 +2008,21 @@ class ProviderTests(unittest.TestCase):
             captured_partner_codes.append(partner_code)
             return []
 
+        # Every per-reporter fetch returns empty, so the public fetch boundary
+        # now raises DataNotAvailableError instead of returning [] as success.
         with patch.object(provider, "_fetch_single_reporter_data", new=AsyncMock(side_effect=_fake_fetch)):
-            run(
-                provider.fetch_trade_data(
-                    reporter="UK",
-                    partner="Germany, Netherlands",
-                    flow="EXPORT",
-                    start_year=2021,
-                    end_year=2021,
+            with self.assertRaises(DataNotAvailableError) as raised:
+                run(
+                    provider.fetch_trade_data(
+                        reporter="UK",
+                        partner="Germany, Netherlands",
+                        flow="EXPORT",
+                        start_year=2021,
+                        end_year=2021,
+                    )
                 )
-            )
 
+        self.assertIn("no records", str(raised.exception))
         self.assertIn("276", captured_partner_codes)  # Germany
         self.assertIn("528", captured_partner_codes)  # Netherlands
 
@@ -3469,8 +3464,13 @@ class ProviderTests(unittest.TestCase):
                 self.calls = []
 
             async def get(self, url, *, params=None, **_kwargs):
-                self.calls.append((str(url), dict(params or {})))
-                response = empty_response if len(self.calls) == 1 else latest_response
+                call_params = dict(params or {})
+                self.calls.append((str(url), call_params))
+                # Cube only answers the provider-native latest-period query —
+                # both the inferred-freq window and the no-freq window are empty.
+                response = (
+                    latest_response if "lastTimePeriod" in call_params else empty_response
+                )
                 response.request = MockAsyncResponse([], request_url=str(url)).request
                 return response
 
@@ -3480,13 +3480,19 @@ class ProviderTests(unittest.TestCase):
 
         self.assertEqual(len(series.data), 1)
         self.assertEqual(series.metadata.apiUrl and "lastTimePeriod=1" in series.metadata.apiUrl, True)
+        self.assertEqual(len(client.calls), 3)
         _, first_params = client.calls[0]
-        _, retry_params = client.calls[1]
+        _, freq_retry_params = client.calls[1]
+        _, latest_params = client.calls[2]
         self.assertEqual(first_params.get("freq"), "A")
         self.assertIn("sinceTimePeriod", first_params)
-        self.assertNotIn("freq", retry_params)
-        self.assertNotIn("sinceTimePeriod", retry_params)
-        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+        # Recovery 1: drop only the inferred frequency, keep the window.
+        self.assertNotIn("freq", freq_retry_params)
+        self.assertIn("sinceTimePeriod", freq_retry_params)
+        # Recovery 2: provider-native latest-period fallback.
+        self.assertNotIn("freq", latest_params)
+        self.assertNotIn("sinceTimePeriod", latest_params)
+        self.assertEqual(latest_params.get("lastTimePeriod"), "1")
 
     def test_eurostat_all_available_404_retries_latest_without_inferred_freq(self) -> None:
         provider = EurostatProvider(metadata_search_service=None)
@@ -3595,7 +3601,13 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("eurostat_dataset_not_disseminated", message)
         self.assertIn("dataset=lfso_19fxwt05", message)
         self.assertIn("country=ALL_AVAILABLE", message)
-        self.assertEqual(len(client.calls), 2)
+        # First call (404) drives the latest-period narrowing; the narrowed query
+        # then returns 500, which the shared base helper (_get_with_retry) now
+        # transiently retries up to MAX_RETRIES (3) before surfacing it as a
+        # DataNotAvailableError. So the narrowed query is attempted 3 times:
+        # 1 (404) + 3 (500 retried) = 4 total HTTP calls. Classification is still
+        # "dataset not disseminated", matching the prior behavior.
+        self.assertEqual(len(client.calls), 4)
         _, retry_params = client.calls[1]
         self.assertEqual(retry_params.get("lastTimePeriod"), "1")
 
@@ -3634,8 +3646,13 @@ class ProviderTests(unittest.TestCase):
                 self.calls = []
 
             async def get(self, url, *, params=None, **_kwargs):
-                self.calls.append((str(url), dict(params or {})))
-                response = empty_response if len(self.calls) == 1 else latest_response
+                call_params = dict(params or {})
+                self.calls.append((str(url), call_params))
+                # Empty for any windowed query (with or without the inferred
+                # freq); only the latest-period fallback finds data.
+                response = (
+                    latest_response if "lastTimePeriod" in call_params else empty_response
+                )
                 response.request = MockAsyncResponse([], request_url=str(url)).request
                 return response
 
@@ -3647,16 +3664,22 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(series.data[0].date, "2016-01-01")
         self.assertEqual(series.metadata.country, "ES")
         self.assertEqual(series.metadata.apiUrl and "lastTimePeriod=1" in series.metadata.apiUrl, True)
-        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(len(client.calls), 3)
         _, first_params = client.calls[0]
-        _, retry_params = client.calls[1]
+        _, freq_retry_params = client.calls[1]
+        _, latest_params = client.calls[2]
         self.assertEqual(first_params.get("geo"), "ES")
         self.assertEqual(first_params.get("freq"), "A")
         self.assertIn("sinceTimePeriod", first_params)
-        self.assertEqual(retry_params.get("geo"), "ES")
-        self.assertEqual(retry_params.get("freq"), "A")
-        self.assertNotIn("sinceTimePeriod", retry_params)
-        self.assertEqual(retry_params.get("lastTimePeriod"), "1")
+        # Recovery 1: same window, inferred freq dropped.
+        self.assertEqual(freq_retry_params.get("geo"), "ES")
+        self.assertNotIn("freq", freq_retry_params)
+        self.assertIn("sinceTimePeriod", freq_retry_params)
+        # Recovery 2: latest-period fallback (geo present keeps the freq).
+        self.assertEqual(latest_params.get("geo"), "ES")
+        self.assertEqual(latest_params.get("freq"), "A")
+        self.assertNotIn("sinceTimePeriod", latest_params)
+        self.assertEqual(latest_params.get("lastTimePeriod"), "1")
 
     def test_eurostat_dispatch_exact_title_without_country_uses_all_available(self) -> None:
         from backend.services.data_fetcher import _fetch_from_eurostat

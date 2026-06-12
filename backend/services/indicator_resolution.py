@@ -2687,14 +2687,17 @@ async def resolve_indicator_for_fetch(
     existing_semantic_authority = str(params.get("__semantic_authority") or "")
     if (
         has_explicit_code
-        and existing_semantic_authority in {"llm_adjudication", "post_fetch_semantic_judge"}
+        and existing_semantic_authority
+        in {"llm_adjudication", "post_fetch_semantic_judge", "exact_user_input"}
         and not is_placeholder_indicator_code(existing_indicator)
     ):
         # Do not let deterministic semantic plausibility rules overrule or
         # supply final semantic authority.  A selector/post-fetch-adjudicated
-        # code has already passed an evidence gate; downstream fetch/verification
-        # may still fail closed, but rule code must not make the semantic
-        # accept/reject decision here or remap the selected product.
+        # code has already passed an evidence gate — and a code the USER
+        # explicitly chose from clarification options is final by definition.
+        # Downstream fetch/verification may still fail closed, but rule code
+        # must not make the semantic accept/reject decision here or remap the
+        # selected product.
         params = _apply_indicator_with_semantic_label(
             existing_indicator,
             __semantic_authority=existing_semantic_authority,
@@ -2703,8 +2706,8 @@ async def resolve_indicator_for_fetch(
                 or ("llm_pick" if existing_semantic_authority == "llm_adjudication" else "post_fetch_semantic_judge")
             ),
             **(
-                _statscan_selected_product_extra(existing_indicator, "llm_adjudication")
-                if existing_semantic_authority == "llm_adjudication"
+                _statscan_selected_product_extra(existing_indicator, existing_semantic_authority)
+                if existing_semantic_authority in {"llm_adjudication", "exact_user_input"}
                 else {}
             ),
         )
@@ -2754,6 +2757,16 @@ async def resolve_indicator_for_fetch(
 
     country_context = params.get("country")
     countries_context = params.get("countries") if isinstance(params.get("countries"), list) else None
+    # Single, unambiguous country to constrain indicator selection by (so a
+    # country-suffixed series can't be picked for the wrong country). For
+    # multi-country comparisons we leave it unconstrained — each country is
+    # applied as a fetch parameter downstream, not baked into the series choice.
+    if countries_context and len(countries_context) == 1:
+        selector_country = countries_context[0]
+    elif countries_context and len(countries_context) > 1:
+        selector_country = None
+    else:
+        selector_country = country_context
     selected_query_override = (
         bool(intent.indicators)
         and indicator_query != str(intent.indicators[0] or "").strip()
@@ -2835,9 +2848,9 @@ async def resolve_indicator_for_fetch(
         ):
             metadata_query = original_selector_query
         if metadata_query:
-            selection = await selector.select(selector_query, provider, metadata_query=metadata_query)
+            selection = await selector.select(selector_query, provider, country=selector_country, metadata_query=metadata_query)
         else:
-            selection = await selector.select(selector_query, provider)
+            selection = await selector.select(selector_query, provider, country=selector_country)
         selector_source = str(getattr(selection, "source", "") or "")
         selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
         selector_retry_query = str(getattr(selection, "retry_query", "") or "")

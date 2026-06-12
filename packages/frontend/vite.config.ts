@@ -7,8 +7,13 @@ import autoprefixer from 'autoprefixer'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  // Load env file from the frontend directory
-  const env = loadEnv(mode, __dirname, '')
+  // Env lives in the monorepo ROOT .env, not this package dir. Loading from
+  // __dirname left VITE_SUPABASE_URL/ANON_KEY undefined at build time, which
+  // made isSupabaseAvailable=false and silently disabled the frontend Supabase
+  // client — breaking Google OAuth (signInWithOAuth threw "not available").
+  // Only VITE_-prefixed vars are ever inlined (via `define` below), so reading
+  // the root .env never exposes backend secrets.
+  const env = loadEnv(mode, path.resolve(__dirname, '..', '..'), '')
 
   return {
   plugins: [react()],

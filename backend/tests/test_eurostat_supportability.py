@@ -75,7 +75,11 @@ async def test_eurostat_country_miss_is_supportability_blocked_when_only_aggrega
     assert "available_geo=EU_V" in message
     assert client.calls == [
         {"freq": "A", "geo": "DE", "sinceTimePeriod": default_start},
+        # Empty-cube recovery 1: drop only the inferred frequency.
+        {"geo": "DE", "sinceTimePeriod": default_start},
+        # Empty-cube recovery 2: provider-native latest-period window.
         {"freq": "A", "geo": "DE", "lastTimePeriod": "1"},
+        # Supportability probe: which geographies exist at all.
         {"freq": "A", "lastTimePeriod": "1"},
     ]
 

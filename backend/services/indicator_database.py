@@ -71,21 +71,34 @@ class IndicatorDatabase:
         self._conn: Optional[sqlite3.Connection] = None
         self._initialized = False
         self._write_lock = threading.Lock()  # Thread safety for write operations
+        self._conn_lock = threading.Lock()  # Thread safety for lazy connection init
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create database connection."""
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            # Enable FTS5 if not initialized
-            if not self._initialized:
-                self._initialize_db()
-                self._initialized = True
-        return self._conn
+        """Get or create database connection (thread-safe lazy init).
 
-    def _initialize_db(self) -> None:
-        """Initialize database schema with FTS5 for full-text search."""
+        Double-checked locking: this is reached from worker threads
+        (IndicatorSelector offloads via asyncio.to_thread), so unlocked
+        check-then-act could create duplicate connections or expose a
+        connection before the schema exists.
+        """
         conn = self._conn
+        if conn is not None:
+            return conn
+        with self._conn_lock:
+            if self._conn is None:
+                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                # Enable FTS5 if not initialized
+                if not self._initialized:
+                    self._initialize_db(conn)
+                    self._initialized = True
+                # Publish only after schema init so lock-free fast-path
+                # readers never see a connection with missing tables.
+                self._conn = conn
+            return self._conn
+
+    def _initialize_db(self, conn: sqlite3.Connection) -> None:
+        """Initialize database schema with FTS5 for full-text search."""
         cursor = conn.cursor()
 
         # Main indicators table
@@ -534,20 +547,24 @@ class IndicatorDatabase:
 
     def close(self) -> None:
         """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._conn_lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
 
 # Global instance
 _indicator_db: Optional[IndicatorDatabase] = None
+_indicator_db_lock = threading.Lock()
 
 
 def get_indicator_database() -> IndicatorDatabase:
     """Get or create the global indicator database instance."""
     global _indicator_db
     if _indicator_db is None:
-        _indicator_db = IndicatorDatabase()
+        with _indicator_db_lock:
+            if _indicator_db is None:  # double-checked under concurrent threads
+                _indicator_db = IndicatorDatabase()
     return _indicator_db
 
 
@@ -1229,11 +1246,14 @@ class IndicatorLookup:
 
 # Global IndicatorLookup instance
 _indicator_lookup: Optional[IndicatorLookup] = None
+_indicator_lookup_lock = threading.Lock()
 
 
 def get_indicator_lookup() -> IndicatorLookup:
-    """Get or create the global indicator lookup instance."""
+    """Get or create the global indicator lookup instance (thread-safe)."""
     global _indicator_lookup
     if _indicator_lookup is None:
-        _indicator_lookup = IndicatorLookup()
+        with _indicator_lookup_lock:
+            if _indicator_lookup is None:  # double-checked under concurrent threads
+                _indicator_lookup = IndicatorLookup()
     return _indicator_lookup

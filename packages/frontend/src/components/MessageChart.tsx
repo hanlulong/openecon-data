@@ -345,7 +345,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             paddingBottom: '8px',
             borderBottom: `1px solid ${CHART_STYLE.grid}`,
           }}>
-            {xAxisFormatter(label)}
+            {xAxisFormatter(label ?? '')}
           </p>
           {payload.map((entry, index: number) => (
             <div

@@ -119,28 +119,76 @@ You: "show only 2020-2023"           → narrows time range
 
 ### Use the web app (no setup)
 
-**[data.openecon.ai/chat](https://data.openecon.ai/chat)** — no signup, no install.
+**[data.openecon.ai/chat](https://data.openecon.ai/chat)** — try instantly in your browser, no install. Your first 20 queries need no signup. Create a free account (email or Google) to keep going, save your history, and unlock Pro Mode.
 
 ### Self-host
 
 ```bash
 git clone https://github.com/hanlulong/openecon-data.git
 cd openecon-data
-cp .env.example .env          # Add your OPENROUTER_API_KEY
-pip install -r requirements.txt
-npm install
+./scripts/setup.sh            # Installs npm + Python deps, creates backend/.venv, copies .env.example → .env
+```
+
+Then edit `.env` and set the two values the backend needs to start:
+
+```bash
+OPENROUTER_API_KEY=sk-or-...                  # required (LLM parsing) — https://openrouter.ai/keys
+JWT_SECRET=...                                # required — generate with: openssl rand -hex 32
+```
+
+Start both servers:
+
+```bash
 python3 scripts/restart_dev.py
 # Backend: http://localhost:3001  |  Frontend: http://localhost:5173
 ```
+
+Then ask your first question — plain English in, sourced data out:
+
+```bash
+curl -X POST http://localhost:3001/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "US unemployment rate since 2023"}'
+```
+
+```jsonc
+{
+  "data": [{
+    "metadata": {
+      "source": "FRED",
+      "indicator": "Unemployment Rate",
+      "unit": "Percent",
+      "sourceUrl": "https://fred.stlouisfed.org/series/UNRATE"  // every result links to its source
+    },
+    "data": [{ "date": "2023-01", "value": 3.4 }, /* ... */]
+  }]
+}
+```
+
+<details>
+<summary><b>Manual setup (if you prefer not to use setup.sh)</b></summary>
+
+```bash
+npm install
+python3 -m venv backend/.venv
+source backend/.venv/bin/activate            # Windows: backend\.venv\Scripts\activate
+pip install --upgrade pip
+pip install -r backend/requirements.txt
+cp .env.example .env                         # then set OPENROUTER_API_KEY and JWT_SECRET
+python3 scripts/restart_dev.py
+```
+</details>
 
 <details>
 <summary><b>Requirements</b></summary>
 
 - Python 3.10+
 - Node.js 18+
-- An [OpenRouter API key](https://openrouter.ai/keys) (required for LLM parsing)
+- **Required to start the backend:**
+  - `OPENROUTER_API_KEY` — [OpenRouter API key](https://openrouter.ai/keys) for LLM parsing (required unless you set `LLM_PROVIDER` to a local model like `vllm`/`ollama`/`lm-studio`)
+  - `JWT_SECRET` — any random secret; generate with `openssl rand -hex 32`
 - Optional: FRED API key, Comtrade API key, CoinGecko API key
-- Optional: Supabase credentials (for auth + persistent history)
+- Optional: Supabase credentials (enables real auth, Google sign-in, and persistent history; mock auth is used in development when omitted)
 
 See [Getting Started Guide](docs/guides/getting-started.md) for full setup instructions.
 </details>
@@ -190,7 +238,11 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Multi-Format Export** — CSV, JSON, DTA (Stata), and Python code. Every export includes source attribution.
 
+**Pro Mode** — AI-generated Python for advanced analysis: custom transformations, derived indicators, bespoke charts. Available to registered users on the hosted app. Disabled by default when self-hosting (`PROMODE_ENABLED=true` — enable only with proper sandboxing, since it executes generated code).
+
 **Streaming** — Real-time progress via Server-Sent Events.
+
+**Accounts & Auth** — Try the first 20 queries with no signup. Sign in with email + password or Google to save history and unlock Pro Mode. Includes email verification, password reset, and JWT-based sessions. Authentication is backed by Supabase (with a local mock-auth fallback for development).
 
 **Self-Hostable** — AGPL-3.0 licensed. Add new providers by implementing a single base class.
 

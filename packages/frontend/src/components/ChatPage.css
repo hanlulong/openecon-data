@@ -2316,3 +2316,39 @@
     justify-content: center;
   }
 }
+
+/* Email-confirmed banner (shown after /chat?confirmed=1 redirect) */
+.email-confirmed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem auto 0;
+  max-width: 760px;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  color: #15803d;
+  font-size: 0.9rem;
+}
+
+.email-confirmed-banner-text {
+  flex: 1;
+}
+
+.email-confirmed-banner-close {
+  background: none;
+  border: none;
+  color: #15803d;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  flex-shrink: 0;
+}
+
+.email-confirmed-banner-close:hover {
+  color: #166534;
+}

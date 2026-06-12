@@ -35,6 +35,22 @@ _auth_executor = ThreadPoolExecutor(max_workers=2)
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _token_amr_methods(token: str) -> set:
+    """Return the set of auth methods (``amr``) carried by a Supabase access
+    token, e.g. {"otp"} for a recovery/email-link token vs {"password"} or
+    {"oauth"} for a regular interactive session.
+
+    Claims are read WITHOUT signature verification — callers MUST have already
+    authenticated the token via Supabase (``auth.get_user``) before trusting it.
+    This is only used to distinguish *which flow* minted an already-valid token.
+    """
+    try:
+        claims = jwt.get_unverified_claims(token)
+        return {m.get("method") for m in (claims.get("amr") or []) if isinstance(m, dict)}
+    except Exception:
+        return set()
+
+
 # ============================================================================
 # Supabase Client Functions
 # ============================================================================
@@ -84,60 +100,49 @@ class SupabaseAuthService:
             partial(func, *args, **kwargs)
         )
 
-    def _decode_supabase_token(self, token: str) -> Optional[dict]:
-        """Decode Supabase JWT token for extracting claims.
-
-        IMPORTANT: This method is for extracting token claims only.
-        For authentication, ALWAYS use get_user_from_token() which validates
-        the token through Supabase's auth.get_user() API.
-
-        Note: Supabase JWTs are signed with the project's JWT secret, not the
-        service key. For proper validation, use auth.get_user() which handles
-        signature verification server-side.
-        """
-        try:
-            # Decode without verification - only for extracting claims
-            # Actual authentication must use get_user_from_token() -> auth.get_user()
-            payload = jwt.decode(
-                token,
-                options={"verify_signature": False}  # Claims extraction only
-            )
-            logger.warning(
-                "⚠️ _decode_supabase_token used for claims extraction. "
-                "For authentication, use get_user_from_token() instead."
-            )
-            return payload
-        except JWTError as e:
-            logger.debug(f"JWT decode error: {e}")
-            return None
-
     async def get_user_from_token(self, token: str) -> Optional[User]:
-        """Get user from Supabase auth token asynchronously."""
+        """Validate a Supabase access token and return the user.
+
+        STATELESS on purpose: validated against the GoTrue REST `/user` endpoint
+        carrying the token's own credentials, instead of
+        ``self.client.auth.get_user(token)`` which mutates the SHARED service-role
+        client's session — leaking identity across requests and racing the
+        2-thread auth executor (the same hazard reset_password was rewritten to
+        avoid). This runs on every authenticated request, so it must be safe under
+        concurrency and must never pollute shared state.
+        """
+        import httpx
         try:
-            logger.debug(f"Validating token: {token[:50]}...")
+            base = self.settings.supabase_url.rstrip("/")
 
-            def get_user_sync():
-                return self.client.auth.get_user(token)
+            def validate_sync():
+                return httpx.get(
+                    f"{base}/auth/v1/user",
+                    headers={
+                        "apikey": self.settings.supabase_anon_key,
+                        "Authorization": f"Bearer {token}",
+                    },
+                    timeout=10,
+                )
 
-            response = await self._run_sync(get_user_sync)
-
-            if not response or not response.user:
-                logger.warning("Token validation failed: No user in response")
+            resp = await self._run_sync(validate_sync)
+            if resp.status_code != 200:
                 return None
-
-            supabase_user = response.user
-            logger.info(f"Token validated for user: {supabase_user.email} (id={supabase_user.id})")
-
+            u = resp.json() or {}
+            uid = u.get("id")
+            if not uid:
+                return None
+            meta = u.get("user_metadata") or {}
             return User(
-                id=supabase_user.id,
-                email=supabase_user.email or "",
+                id=uid,
+                email=u.get("email") or "",
                 passwordHash="",
-                name=supabase_user.user_metadata.get("name", supabase_user.email or "User"),
-                createdAt=supabase_user.created_at,
-                lastLogin=supabase_user.last_sign_in_at,
+                name=meta.get("name") or u.get("email") or "User",
+                createdAt=u.get("created_at"),
+                lastLogin=u.get("last_sign_in_at"),
             )
         except Exception as e:
-            logger.error(f"Error getting user from token: {e}")
+            logger.warning("Token validation error: %s", str(e)[:160])
             return None
 
     async def register(self, request: RegisterRequest) -> AuthResponse:
@@ -148,6 +153,7 @@ class SupabaseAuthService:
                     "email": request.email,
                     "password": request.password,
                     "options": {
+                        "email_redirect_to": self.settings.email_confirm_redirect_url,
                         "data": {
                             "name": request.name,
                         }
@@ -162,9 +168,15 @@ class SupabaseAuthService:
                     error_message = str(response.error)
                 return AuthResponse(success=False, error=error_message)
 
+            # When Supabase "Confirm email" is enabled, sign_up returns a user
+            # but NO session — the account is unconfirmed and cannot log in until
+            # they click the link we just emailed. Signal that to the UI so it
+            # shows "check your inbox" rather than trying to auto-log-in.
+            session = response.session
             return AuthResponse(
                 success=True,
-                token=response.session.access_token if response.session else None,
+                token=session.access_token if session else None,
+                emailVerificationRequired=session is None,
                 user=AuthUser(
                     id=response.user.id,
                     email=response.user.email or "",
@@ -173,7 +185,9 @@ class SupabaseAuthService:
                 ),
             )
         except Exception as e:
-            logger.exception("Registration error")
+            # Most "registration errors" are expected client outcomes (duplicate
+            # email, weak password rejected by Supabase) — log without a traceback.
+            logger.warning("Registration failed: %s", str(e)[:200])
             return AuthResponse(success=False, error=str(e))
 
     async def login(self, request: LoginRequest) -> AuthResponse:
@@ -203,7 +217,18 @@ class SupabaseAuthService:
                 ),
             )
         except Exception as e:
-            logger.exception("Login error")
+            # Distinguish "email not confirmed" from bad credentials so the user
+            # knows to check their inbox rather than thinking the password is wrong.
+            msg = str(getattr(e, "message", "") or e).lower()
+            if "not confirmed" in msg or "email_not_confirmed" in msg:
+                return AuthResponse(
+                    success=False,
+                    emailVerificationRequired=True,
+                    error="Please confirm your email first — check your inbox for the confirmation link.",
+                )
+            # Invalid credentials are the common case here — log without a
+            # traceback (reserve exception() for genuine infra failures).
+            logger.warning("Login failed: %s", msg[:200])
             return AuthResponse(success=False, error="Invalid email or password")
 
     async def login_with_google(self, id_token: str) -> AuthResponse:
@@ -235,6 +260,116 @@ class SupabaseAuthService:
         except Exception as e:
             logger.exception("Google login error")
             return AuthResponse(success=False, error=str(e))
+
+    async def send_password_reset(self, email: str) -> bool:
+        """Email a password-reset link via Supabase (routed through our SMTP).
+
+        Always reports success to the caller regardless of whether the address
+        is registered, so the endpoint never leaks which emails have accounts.
+        """
+        try:
+            def reset_sync():
+                return self.client.auth.reset_password_for_email(
+                    email,
+                    {"redirect_to": self.settings.password_reset_redirect_url},
+                )
+
+            await self._run_sync(reset_sync)
+        except Exception as e:
+            # Unknown address / rate-limit are expected here; never raise or dump
+            # a traceback (and we still return success to avoid email enumeration).
+            logger.warning("Password reset email not sent: %s", str(e)[:200])
+        return True
+
+    async def reset_password(self, access_token: str, new_password: str) -> AuthResponse:
+        """Set a new password using the recovery token from the emailed link.
+
+        Implemented STATELESSLY against the GoTrue REST API on purpose. Calling
+        ``self.client.auth.get_user(token)`` leaks the passed token's session
+        onto the shared service-role client, so a following admin call runs as
+        that user ("user not allowed" / "Session ... does not exist") and it
+        races every other request that also touches the shared client. Here we
+        validate the token and set the password with plain HTTP calls that carry
+        their own credentials, mutating nothing shared.
+        """
+        import httpx
+        invalid = AuthResponse(
+            success=False,
+            error="This reset link is invalid or has expired. Request a new one.",
+        )
+        try:
+            # SECURITY: only tokens minted by the email-recovery flow may set a
+            # password here. Recovery/email-link tokens carry an amr method of
+            # 'otp'/'recovery'/'magiclink'/'email'; a normal session token carries
+            # 'password' or 'oauth'. Without this, a leaked/stolen *regular*
+            # session token could be POSTed here to take over the account with no
+            # current-password challenge (the admin API sets the password
+            # unconditionally). Reject anything that isn't a recovery-class token.
+            methods = _token_amr_methods(access_token)
+            if not methods & {"otp", "recovery", "magiclink", "email"}:
+                logger.warning("reset_password rejected a non-recovery token (amr=%s)", methods or "<none>")
+                return invalid
+
+            base = self.settings.supabase_url.rstrip("/")
+
+            # 1) Validate the token server-side (signature + expiry) and resolve
+            #    the user id — stateless GET, no client session mutation.
+            def validate_sync():
+                return httpx.get(
+                    f"{base}/auth/v1/user",
+                    headers={
+                        "apikey": self.settings.supabase_anon_key,
+                        "Authorization": f"Bearer {access_token}",
+                    },
+                    timeout=10,
+                )
+
+            vresp = await self._run_sync(validate_sync)
+            if vresp.status_code != 200:
+                return invalid
+            uid = (vresp.json() or {}).get("id")
+            if not uid:
+                return invalid
+
+            # 2) Set the new password via the GoTrue admin REST endpoint using the
+            #    service-role key directly (no shared admin client).
+            def update_sync():
+                return httpx.put(
+                    f"{base}/auth/v1/admin/users/{uid}",
+                    headers={
+                        "apikey": self.settings.supabase_service_key,
+                        "Authorization": f"Bearer {self.settings.supabase_service_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"password": new_password},
+                    timeout=10,
+                )
+
+            uresp = await self._run_sync(update_sync)
+            if uresp.status_code not in (200, 201):
+                detail = ""
+                try:
+                    body = uresp.json() or {}
+                    detail = str(body.get("msg") or body.get("error_description") or body.get("error") or "")
+                except Exception:
+                    pass
+                low = detail.lower()
+                if "password" in low and any(k in low for k in ("short", "least", "weak", "length", "6 char")):
+                    return AuthResponse(success=False, error="Password is too weak. Use at least 8 characters.")
+                logger.warning("reset_password admin update failed: %s %s", uresp.status_code, detail[:160])
+                return AuthResponse(
+                    success=False,
+                    error="Could not reset password. The link may have expired — request a new one.",
+                )
+
+            logger.info("Password reset completed for user %s", uid)
+            return AuthResponse(success=True)
+        except Exception as e:
+            logger.warning("Password reset failed: %s", str(getattr(e, "message", "") or e)[:200])
+            return AuthResponse(
+                success=False,
+                error="Could not reset password. The link may have expired — request a new one.",
+            )
 
     async def require_user(self, credentials: Optional[HTTPAuthorizationCredentials]) -> User:
         """Requires authenticated user from credentials."""
@@ -734,21 +869,9 @@ def get_supabase_service() -> SupabaseService:
     return get_supabase_db_service()
 
 
-# ============================================================================
-# FastAPI Dependency Functions
-# ============================================================================
-
-async def get_required_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
-) -> User:
-    """FastAPI dependency that requires an authenticated user."""
-    service = get_supabase_auth_service()
-    return await service.require_user(credentials)
-
-
-async def get_optional_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
-) -> Optional[User]:
-    """FastAPI dependency that optionally returns user if authenticated."""
-    service = get_supabase_auth_service()
-    return await service.optional_user(credentials)
+# NOTE: the FastAPI auth dependencies live in main.py (get_required_user /
+# get_optional_user), which route through the auth-service FACTORY so they pick
+# Supabase vs Mock correctly. An earlier duplicate pair lived here and hard-wired
+# the Supabase auth service, bypassing the factory — removed to keep a single
+# source of truth and avoid a foot-gun where importing from here installs a
+# second, factory-ignoring auth gate.

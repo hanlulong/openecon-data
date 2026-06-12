@@ -1,17 +1,26 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from collections import deque
+from typing import Deque, Dict, List, Optional
 
 from ..models import User, UserQueryHistory
 
 
 class UserStore:
-    """In-memory store for users and their query history."""
+    """In-memory store for users and their query history.
+
+    Supabase is the source of truth for query history; this store is only a
+    fallback when Supabase is unavailable, so it keeps a bounded, lightweight
+    record per user instead of full response payloads.
+    """
+
+    # Cap per-user fallback history to avoid unbounded memory growth.
+    MAX_HISTORY_PER_USER = 50
 
     def __init__(self) -> None:
         self._users: Dict[str, User] = {}
         self._users_by_email: Dict[str, User] = {}
-        self._history: Dict[str, List[UserQueryHistory]] = {}
+        self._history: Dict[str, Deque[UserQueryHistory]] = {}
 
     def create_user(self, user: User) -> None:
         self._users[user.id] = user
@@ -38,7 +47,13 @@ class UserStore:
         return updated_user
 
     def add_query_to_history(self, history_item: UserQueryHistory) -> None:
-        history = self._history.setdefault(history_item.userId, [])
+        history = self._history.setdefault(
+            history_item.userId, deque(maxlen=self.MAX_HISTORY_PER_USER)
+        )
+        # Drop the heavy response payload — Supabase is the source of truth;
+        # this fallback only needs query/intent metadata for history listings.
+        if history_item.data is not None:
+            history_item = history_item.model_copy(update={"data": None})
         history.append(history_item)
 
     def get_user_history(self, user_id: str, limit: Optional[int] = None) -> List[UserQueryHistory]:

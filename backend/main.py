@@ -27,8 +27,10 @@ from .models import (
     ExportRequest,
     FeedbackRequest,
     FeedbackResponse,
+    ForgotPasswordRequest,
     HealthResponse,
     LoginRequest,
+    ResetPasswordRequest,
     ParsedIntent,
     QueryRequest,
     QueryResponse,
@@ -215,8 +217,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenEcon Data API", version="1.0.0", lifespan=lifespan)
 
 # Rate limiting configuration using custom middleware approach
-# This avoids Pydantic/FastAPI compatibility issues with slowapi decorators
-limiter = Limiter(key_func=get_remote_address)
+# This avoids Pydantic/FastAPI compatibility issues with slowapi decorators.
+#
+# Storage is Redis-backed so limits are SHARED across the 2 uvicorn workers —
+# the previous default in-memory storage gave each worker its own counter, so an
+# IP's real ceiling was ~2x the configured limit, nondeterministically. Short
+# socket timeouts stop a Redis hiccup from adding latency to every request; the
+# middleware fails OPEN when Redis is unreachable (a brief unthrottled window is
+# far better than a site-wide 503). Falls back to in-memory if Redis storage
+# can't be built at boot.
+_rl_redis_uri = getattr(settings, "redis_url", None) or "redis://localhost:6379/0"
+try:
+    limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri=_rl_redis_uri,
+        storage_options={"socket_connect_timeout": 1, "socket_timeout": 1},
+    )
+    logger.info("Rate limiter using shared Redis storage")
+except Exception as _rl_exc:  # pragma: no cover - boot-time fallback
+    logger.warning("Rate limiter Redis storage unavailable (%s); using per-worker in-memory", _rl_exc)
+    limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -341,10 +361,22 @@ class RateLimitASGIMiddleware:
             # Untrusted source — use direct connection IP, ignore XFF
             client_ip = direct_ip
             if forwarded_for_header:
-                logger.warning(
-                    "Ignoring X-Forwarded-For from untrusted source %s (set TRUSTED_PROXIES to allow)",
-                    direct_ip,
+                # uvicorn runs with proxy_headers enabled (its default,
+                # trusting the loopback proxy), so by the time we see the
+                # scope, scope["client"] has often ALREADY been rewritten to
+                # the real client resolved from this same XFF chain. If our
+                # own rightmost-untrusted resolution agrees with the direct
+                # IP, this is that benign double-resolution, not an untrusted
+                # proxy injecting headers — don't warn.
+                chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
+                resolved = next(
+                    (h for h in reversed(chain) if h not in trusted_proxies), None
                 )
+                if resolved != direct_ip:
+                    logger.warning(
+                        "Ignoring X-Forwarded-For from untrusted source %s (set TRUSTED_PROXIES to allow)",
+                        direct_ip,
+                    )
 
         # Skip rate limiting for direct localhost connections (no XFF present)
         if not forwarded_for_header and client_ip in ("127.0.0.1", "::1", "localhost"):
@@ -353,31 +385,35 @@ class RateLimitASGIMiddleware:
 
         rate_limit_str = get_rate_limit_for_path(path)
 
+        # Only the rate-limit DECISION is wrapped in try/except, so we can tell
+        # "limit exceeded" (a real 429) apart from "limiter backend unavailable"
+        # (e.g. a Redis blip). The latter must FAIL OPEN — a brief window of
+        # unthrottled traffic is far better than 503-ing the whole site because
+        # the limiter is unreachable. The downstream app call is OUTSIDE this
+        # block so genuine handler errors are never masked as rate-limit 503s.
         try:
             limit_key = f"{client_ip}:{path}"
             rate_limit = parse_rate_limit(rate_limit_str)
-
-            if not self.limiter._limiter.hit(rate_limit, limit_key):
-                response = JSONResponse(
-                    status_code=429,
-                    content={"detail": f"Rate limit exceeded. Limit: {rate_limit_str}"},
-                    headers={"Retry-After": "60"},
-                )
-                await response(scope, receive, send)
-                return
-
+            allowed = self.limiter._limiter.hit(rate_limit, limit_key)
+        except Exception as e:
+            logger.warning(
+                "Rate limiter backend unavailable; allowing request to %s from %s: %s",
+                path, client_ip, e,
+            )
             await self.app(scope, receive, send)
             return
-        except Exception as e:
-            # SECURITY: Fail closed - deny request if rate limiter fails
-            logger.error(f"Rate limit check failed for {path} from {client_ip}: {e}")
+
+        if not allowed:
             response = JSONResponse(
-                status_code=503,
-                content={"detail": "Service temporarily unavailable. Please try again."},
-                headers={"Retry-After": "5"},
+                status_code=429,
+                content={"detail": f"Rate limit exceeded. Limit: {rate_limit_str}"},
+                headers={"Retry-After": "60"},
             )
             await response(scope, receive, send)
             return
+
+        await self.app(scope, receive, send)
+        return
 
 
 class SecureLoggingASGIMiddleware:
@@ -548,6 +584,24 @@ async def check_anon_gate(req, user, body_session_id, conversation_id, pro_mode:
     return _AnonGate(count > limit, count, limit, ip, ua, session_id)
 
 
+_PRO_REGISTRATION_MESSAGE = (
+    "Pro Mode runs custom analysis code and is available to registered users. "
+    "Create a free account to use it — your history is saved."
+)
+
+
+def _pro_registration_required(conversation_id) -> QueryResponse:
+    """Pro Mode is gated to registered users because it executes generated
+    Python. Anonymous callers get a registration prompt instead of execution."""
+    return QueryResponse(
+        conversationId=conversation_id or str(uuid.uuid4()),
+        clarificationNeeded=False,
+        registrationRequired=True,
+        isProMode=True,
+        message=_PRO_REGISTRATION_MESSAGE,
+    )
+
+
 def schedule_query_log_to_supabase(**kwargs) -> None:
     """Run Supabase query logging in the background so it never blocks responses."""
     task = asyncio.create_task(log_query_to_supabase(**kwargs))
@@ -568,6 +622,26 @@ def get_request_conversation_id(request: QueryRequest, user: Optional[User]) -> 
     if not user and request.sessionId:
         return request.sessionId
     return None
+
+
+def get_conversation_owner(
+    request: QueryRequest, user: Optional[User]
+) -> tuple[str, list[str]]:
+    """Identity a conversation is bound to, plus prior identities the caller
+    can prove (so an authed user can claim a conversation they started while
+    anonymous in the same browser session). Prevents a leaked/guessed
+    conversationId from reading or polluting another user's context.
+    """
+    session_id = str(getattr(request, "sessionId", "") or "").strip()
+    if user is not None:
+        claimable = [f"anon:{session_id}"] if session_id else []
+        return f"user:{user.id}", claimable
+    if session_id:
+        return f"anon:{session_id}", []
+    # Sessionless anonymous callers (curl/MCP) share one bucket — same
+    # entropy-gated exposure as before, but they can no longer continue a
+    # conversation bound to a real user or session.
+    return "anon:", []
 
 
 def save_to_user_history(
@@ -756,6 +830,33 @@ async def login(request: LoginRequest):
     return response
 
 
+@app.post("/api/auth/forgot-password", response_model=AuthResponse)
+async def forgot_password(request: ForgotPasswordRequest):
+    """Email a password-reset link. Always returns success (even for unknown
+    addresses) so we never disclose which emails have accounts."""
+    auth = get_auth_service_singleton()
+    sender = getattr(auth, "send_password_reset", None)
+    if sender is not None:
+        await sender(request.email)
+    return AuthResponse(success=True)
+
+
+@app.post("/api/auth/reset-password", response_model=AuthResponse)
+async def reset_password(request: ResetPasswordRequest):
+    """Set a new password using the recovery token from the emailed link."""
+    auth = get_auth_service_singleton()
+    resetter = getattr(auth, "reset_password", None)
+    if resetter is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=AuthResponse(success=False, error="Password reset is not available.").model_dump(),
+        )
+    response = await resetter(request.accessToken, request.password)
+    if not response.success:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=response.model_dump())
+    return response
+
+
 @app.get("/api/auth/me", response_model=AuthUser)
 async def me(user: User = Depends(get_current_user)) -> AuthUser:
     return AuthUser(
@@ -830,8 +931,17 @@ async def clear_history(user: User = Depends(get_current_user)):
 
 
 @app.get("/api/session/history")
-async def session_history(session_id: str = Query(..., description="Session ID", max_length=100), limit: Optional[int] = Query(default=None, ge=1, le=500)):
-    """Get anonymous session query history from Supabase."""
+async def session_history(request: Request, limit: Optional[int] = Query(default=None, ge=1, le=500)):
+    """Get anonymous session query history from Supabase.
+
+    The session id is read from the X-Session-ID header (or session cookie),
+    never from the URL: a query-string identifier ends up in proxy logs,
+    browser history, and referers, which would let anyone holding it read the
+    session's full query history (IDOR).
+    """
+    session_id = (request.headers.get("X-Session-ID") or request.cookies.get("session_id") or "").strip()
+    if not session_id or len(session_id) > 100:
+        return {"history": [], "total": 0}
     try:
         supabase_service = get_supabase_service()
         queries = await supabase_service.get_user_queries(
@@ -903,15 +1013,23 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, user: Opti
 
     logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
-    # Auto-detect complex queries and route to Pro Mode (code execution)
-    # when needed. Available for all users (no auth required).
-    auto_pro = settings.promode_enabled
+    # Auto-detect complex queries and route to Pro Mode (code execution) when
+    # needed. Pro Mode runs generated code, so it is gated to registered users —
+    # anonymous queries never auto-escalate (they get standard processing).
+    auto_pro = settings.promode_enabled and user is not None
     # Request-level deadline. Without this the sync endpoint can hang
     # indefinitely on slow provider responses, blocking the event loop and
     # exposing the service to resource exhaustion.
+    owner_key, claimable_keys = get_conversation_owner(request, user)
     try:
         result = await asyncio.wait_for(
-            query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro),
+            query_service.process_query(
+                request.query,
+                conversation_id,
+                auto_pro_mode=auto_pro,
+                owner_key=owner_key,
+                claimable_owner_keys=claimable_keys,
+            ),
             timeout=float(settings.query_timeout_seconds),
         )
     except asyncio.TimeoutError:
@@ -1086,10 +1204,20 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             tracker = ProcessingTracker(stream_callback=stream_callback)
             tracker_token = activate_processing_tracker(tracker)
 
-            # Start processing query in background (don't await yet)
-            # Auto-detect complex queries for Pro Mode (all users)
-            auto_pro = settings.promode_enabled
-            query_task = asyncio.create_task(query_service.process_query(request.query, conversation_id, auto_pro_mode=auto_pro))
+            # Start processing query in background (don't await yet).
+            # Pro Mode auto-escalation is gated to registered users (it runs
+            # generated code); anonymous queries get standard processing.
+            auto_pro = settings.promode_enabled and user is not None
+            owner_key, claimable_keys = get_conversation_owner(request, user)
+            query_task = asyncio.create_task(
+                query_service.process_query(
+                    request.query,
+                    conversation_id,
+                    auto_pro_mode=auto_pro,
+                    owner_key=owner_key,
+                    claimable_owner_keys=claimable_keys,
+                )
+            )
 
             # Stream events as they come
             processing_complete = False
@@ -1259,6 +1387,10 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
+    # Pro Mode executes generated code — registered users only.
+    if user is None:
+        return _pro_registration_required(request.conversationId)
+
     logger.info("⚡ Pro Mode Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id if user else "anonymous")
 
     _pro_start = time.perf_counter()
@@ -1298,16 +1430,22 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
         grok_service = get_grok_service()
         code_executor = get_code_executor()
 
-        # Get or create conversation
-        conversation_id = conversation_manager.get_or_create(request.conversationId)
+        # Get or create conversation (owner-bound: a leaked conversationId
+        # can't read another user's context or Pro session data)
+        owner_key, claimable_keys = get_conversation_owner(request, user)
+        conversation_id = conversation_manager.get_or_create(
+            request.conversationId, owner_key=owner_key, claimable_keys=claimable_keys
+        )
 
         # Get conversation history for context
         conversation_history = conversation_manager.get_messages(conversation_id)
 
-        # Check for available session data
+        # Check for available session data. Key Pro session storage by the
+        # FULL conversation id — an 8-hex prefix is a 32-bit space where
+        # collisions would leak one conversation's session data into another.
         from backend.services.session_storage import get_session_storage
         session_storage = get_session_storage()
-        session_id = conversation_id[:8]
+        session_id = conversation_id
         available_keys = session_storage.list_keys(session_id)
 
         # Build available data context
@@ -1412,7 +1550,7 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
         logger.info("Executing generated code with session: %s...", conversation_id[:8])
         execution_result = await code_executor.execute_code(
             generated_code,
-            session_id=conversation_id[:8]  # Use short session ID
+            session_id=conversation_id,  # full id — short prefixes collide
         )
 
         # Build response message
@@ -1484,6 +1622,22 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
+    # Pro Mode executes generated code — registered users only.
+    if user is None:
+        _pro_cid = request.conversationId or str(uuid.uuid4())
+
+        async def _pro_blocked_stream():
+            payload = {
+                "conversationId": _pro_cid,
+                "registrationRequired": True,
+                "isProMode": True,
+                "message": _PRO_REGISTRATION_MESSAGE,
+            }
+            yield f"event: data\ndata: {json.dumps(payload)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'done': True, 'conversationId': _pro_cid})}\n\n"
+
+        return StreamingResponse(_pro_blocked_stream(), media_type="text/event-stream")
+
     logger.info("⚡ Pro Mode Stream Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id)
 
     # Queue for streaming events
@@ -1523,12 +1677,17 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
             code_executor = get_code_executor()
             session_storage = get_session_storage()
 
-            # Get or create conversation
-            conversation_id = conversation_manager.get_or_create(request.conversationId)
+            # Get or create conversation (owner-bound: a leaked conversationId
+            # can't read another user's context or Pro session data)
+            owner_key, claimable_keys = get_conversation_owner(request, user)
+            conversation_id = conversation_manager.get_or_create(
+                request.conversationId, owner_key=owner_key, claimable_keys=claimable_keys
+            )
             conversation_history = conversation_manager.get_messages(conversation_id)
 
-            # Check for available session data
-            session_id = conversation_id[:8]
+            # Check for available session data (full conversation id — short
+            # prefixes collide across conversations)
+            session_id = conversation_id
             available_keys = session_storage.list_keys(session_id)
 
             available_data = {}
@@ -2025,8 +2184,10 @@ async def cache_clear(user: User = Depends(get_required_user)):
 
 
 @app.get("/api/performance/metrics")
-async def performance_metrics():
-    """Get detailed performance metrics for all components."""
+async def performance_metrics(user: User = Depends(get_required_user)):
+    """Get detailed performance metrics for all components. Requires auth —
+    diagnostics endpoints expose internal infra state (breaker states,
+    pool sizing) that shouldn't be public reconnaissance material."""
     from .services.http_pool import HTTPClientPool
     from .services.circuit_breaker import CircuitBreakerRegistry
 
@@ -2049,8 +2210,8 @@ async def performance_metrics():
 
 
 @app.get("/api/performance/status")
-async def performance_status():
-    """Get current system status and bottleneck indicators."""
+async def performance_status(user: User = Depends(get_required_user)):
+    """Get current system status and bottleneck indicators. Requires auth."""
     cache_stats = cache_service.get_stats()
 
     return {

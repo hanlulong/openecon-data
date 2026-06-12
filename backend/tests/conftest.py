@@ -35,6 +35,20 @@ def test_environment():
     os.environ.update(old_env)
 
 
+@pytest.fixture(autouse=True)
+def reset_provider_circuit_breakers():
+    """Keep provider tests hermetic: the per-provider circuit breakers in
+    providers/base.py are module-level, so one test simulating 5 failures
+    trips the breaker and every later test against that provider fails with
+    'circuit breaker OPEN'. Drop all breaker state before each test."""
+    try:
+        from backend.providers import base as _provider_base
+        _provider_base._provider_breakers.clear()
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def no_supabase_env():
     """Fixture to temporarily disable Supabase environment variables."""

@@ -47,11 +47,40 @@ echo "== deploy_production.sh =="
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "TARGET_BRANCH=main"
 
+# Refuse to deploy over uncommitted local changes: pulling onto a dirty tree
+# either aborts mid-deploy or silently ships an untested blend of local edits
+# and upstream commits. Production sometimes runs ahead of git from the
+# working tree — those changes must be committed (or stashed) first.
+# Override consciously with DEPLOY_ALLOW_DIRTY=1.
+DIRTY="$(git status --porcelain)"
+if [ -n "$DIRTY" ] && [ "${DEPLOY_ALLOW_DIRTY:-0}" != "1" ]; then
+  echo "ERROR: working tree has uncommitted changes — commit/stash first or set DEPLOY_ALLOW_DIRTY=1:" >&2
+  echo "$DIRTY" >&2
+  exit 1
+fi
+
+PRE_DEPLOY_SHA="$(git rev-parse HEAD)"
+echo "PRE_DEPLOY_SHA=$PRE_DEPLOY_SHA"
+
 git checkout main
 git pull --ff-only origin main
 
 DEPLOY_COMMIT_SHA="$(git rev-parse HEAD)"
 echo "DEPLOY_COMMIT_SHA=$DEPLOY_COMMIT_SHA"
+
+rollback_to_pre_deploy() {
+  echo "DEPLOY FAILED — rolling back to ${PRE_DEPLOY_SHA}" >&2
+  git checkout "$PRE_DEPLOY_SHA" -- . || git reset --hard "$PRE_DEPLOY_SHA"
+  npm run build:frontend || true
+  rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/" || true
+  if service_exists openecon-backend.service; then
+    sudo -n systemctl restart openecon-backend.service || true
+    if service_exists openecon-mcp.service; then
+      sudo -n systemctl restart openecon-mcp.service || true
+    fi
+  fi
+  echo "ROLLBACK_COMPLETE_SHA=$(git rev-parse HEAD)" >&2
+}
 
 npm run build:frontend
 mkdir -p "${PROJECT_ROOT}/packages/frontend/dist-data"
@@ -81,9 +110,17 @@ else
   "$SCRIPT_DIR/start_backend.sh" production
 fi
 
-wait_for_url "local backend health" "http://127.0.0.1:3001/api/health"
+# Health gate with rollback: if the new code never becomes healthy, restore
+# the pre-deploy tree instead of leaving production broken.
+if ! wait_for_url "local backend health" "http://127.0.0.1:3001/api/health"; then
+  rollback_to_pre_deploy
+  exit 1
+fi
 if service_exists openecon-mcp.service; then
-  wait_for_url "local MCP service health" "http://127.0.0.1:3002/api/health"
+  if ! wait_for_url "local MCP service health" "http://127.0.0.1:3002/api/health"; then
+    rollback_to_pre_deploy
+    exit 1
+  fi
 fi
 wait_for_url "public backend health" "https://data.openecon.ai/api/health"
 

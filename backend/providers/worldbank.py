@@ -19,39 +19,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── WorldBank API health status cache ──────────────────────────────
-# Tracks recent 502/timeout failures. When the API is down, skip it
-# and go straight to fallback providers (IMF, Eurostat, OECD).
-import time as _time_mod
-
-_WB_HEALTH: dict = {"failures": 0, "last_failure": 0.0, "circuit_open": False}
-_WB_CIRCUIT_THRESHOLD = 3      # consecutive failures to open circuit
-_WB_CIRCUIT_COOLDOWN_S = 300   # 5 minutes before retrying
+# NOTE: The hand-rolled module-global WorldBank circuit breaker that used to
+# live here (_WB_HEALTH / _wb_record_failure / _wb_record_success /
+# _wb_is_available) has been removed. It duplicated — and raced with — the
+# per-provider pybreaker circuit breaker that BaseProvider._get_with_retry
+# already applies. Now that the primary batch path also routes through the base
+# helper, WorldBank failures are tracked once, in the shared breaker.
 
 
-def _wb_record_failure():
-    _WB_HEALTH["failures"] += 1
-    _WB_HEALTH["last_failure"] = _time_mod.time()
-    if _WB_HEALTH["failures"] >= _WB_CIRCUIT_THRESHOLD:
-        _WB_HEALTH["circuit_open"] = True
-        logger.warning("⚡ WorldBank circuit breaker OPEN — skipping WB for %ds", _WB_CIRCUIT_COOLDOWN_S)
-
-
-def _wb_record_success():
-    _WB_HEALTH["failures"] = 0
-    _WB_HEALTH["circuit_open"] = False
-
-
-def _wb_is_available() -> bool:
-    if not _WB_HEALTH["circuit_open"]:
-        return True
-    elapsed = _time_mod.time() - _WB_HEALTH["last_failure"]
-    if elapsed >= _WB_CIRCUIT_COOLDOWN_S:
-        logger.info("⚡ WorldBank circuit breaker HALF-OPEN — retrying after %ds cooldown", int(elapsed))
-        _WB_HEALTH["circuit_open"] = False
-        _WB_HEALTH["failures"] = 0
-        return True
-    return False
+class _WBBatchUnavailable(Exception):
+    """Internal control-flow signal: the primary batch request returned a non-2xx
+    status (after _get_with_retry exhausted its transient retries). Used to break
+    out of the batch try-block into the existing fallback ladder without losing
+    the status-branching behaviour the old raise_for_status() flow provided."""
 
 
 class WorldBankProvider(BaseProvider):
@@ -1077,12 +1057,8 @@ class WorldBankProvider(BaseProvider):
         _allow_semantic_alternatives: bool = False,
         _defaulted_all_country: bool = False,
     ) -> List[NormalizedData]:
-        # Circuit breaker: skip WB entirely when API is confirmed down
-        if not _wb_is_available():
-            raise DataNotAvailableError(
-                f"WorldBank API is temporarily unavailable (circuit breaker open). "
-                f"Try again in {_WB_CIRCUIT_COOLDOWN_S // 60} minutes."
-            )
+        # Circuit breaking is now handled inside BaseProvider._get_with_retry
+        # (shared per-provider pybreaker) — no separate WB gate needed here.
         catalog_source_id = self._indicator_source_id(indicator)
         resolved_from_semantic_adjudication = bool(_allow_semantic_alternatives)
         exact_indicator_request = bool(
@@ -1218,15 +1194,32 @@ class WorldBankProvider(BaseProvider):
             )
         else:
             try:
-                for _attempt in range(3):
-                    batch_response = await client.get(url, params=params, headers=headers, timeout=effective_timeout(25.0))
-                    logger.info(f"WorldBank API response: status={batch_response.status_code} (attempt {_attempt+1})")
-                    if batch_response.status_code != 502:
-                        break
+                # _get_with_retry already retries transient 5xx (incl. WB's
+                # intermittent 502) and 429 underneath, applies the rate limiter
+                # and the shared circuit breaker, and — with raise_on_status=False
+                # — RETURNS the final non-2xx response instead of raising, so the
+                # status-branching fallback ladder below keeps working.
+                batch_response = await self._get_with_retry(
+                    client,
+                    url,
+                    params=params,
+                    headers=headers,
+                    raise_on_status=False,
+                    timeout=effective_timeout(25.0),
+                )
+                logger.info(f"WorldBank API response: status={batch_response.status_code}")
+                if batch_response.status_code >= 400:
+                    # Non-2xx after the helper exhausted its transient retries —
+                    # treat as a transport failure so the per-country / cross-
+                    # provider fallbacks run (matching the old raise_for_status
+                    # branch that funnelled into the httpx.HTTPError handler).
                     transport_failure_seen = True
-                    logger.warning(f"WorldBank 502 Bad Gateway (attempt {_attempt+1}/3), retrying...")
-                    await asyncio.sleep(1.0)
-                batch_response.raise_for_status()
+                    logger.warning(
+                        "WorldBank API returned status %s for %s; falling back",
+                        batch_response.status_code, batch_codes,
+                    )
+                    payload = None
+                    raise _WBBatchUnavailable(batch_response.status_code)
                 payload = batch_response.json()
 
                 if isinstance(payload, list) and len(payload) > 0:
@@ -1291,6 +1284,17 @@ class WorldBankProvider(BaseProvider):
                                 f"(page 1/{total_pages}). Falling back to sequential fetch."
                             )
                             payload = None  # Force fallback to per-country sequential fetch
+            except _WBBatchUnavailable:
+                # Non-2xx status already logged and flagged above; state is set,
+                # just fall through to the fallback ladder.
+                pass
+            except DataNotAvailableError as e:
+                # Raised by _get_with_retry when the circuit breaker is open or a
+                # connection failed after all retries — treat as transport failure
+                # so per-country / cross-provider fallbacks run.
+                logger.warning(f"WorldBank batch request unavailable for {batch_codes}: {e}")
+                transport_failure_seen = True
+                payload = None
             except httpx.HTTPError as e:
                 logger.warning(f"HTTP error fetching batched data for {batch_codes}: {e}")
                 transport_failure_seen = True
@@ -1312,7 +1316,6 @@ class WorldBankProvider(BaseProvider):
                     client=client,
                 )
                 if source_results:
-                    _wb_record_success()
                     return source_results
             raise DataNotAvailableError(
                 f"WorldBank exact indicator code '{indic}' is not available from the public data endpoint: "
@@ -1538,9 +1541,9 @@ class WorldBankProvider(BaseProvider):
             )
             results.append(normalized)
 
-        # If we got results, record success and return.
+        # If we got results, return them. Success/failure tracking now lives in
+        # the shared circuit breaker inside _get_with_retry.
         if results:
-            _wb_record_success()
             return results
 
         # No results — try fallbacks in order of priority.
@@ -1574,7 +1577,6 @@ class WorldBankProvider(BaseProvider):
                     )
                     source_results = []
                 if source_results:
-                    _wb_record_success()
                     return source_results
 
         # 1. Income aggregate fallback (only if time budget allows)
@@ -1640,8 +1642,8 @@ class WorldBankProvider(BaseProvider):
         # list which the query service treated as "no data" rather than an error,
         # silently skipping the WB provider without triggering fallback chains.
         _total_elapsed = _time.perf_counter() - _fetch_start
-        if transport_failure_seen:
-            _wb_record_failure()
+        # Failure tracking is handled by the shared circuit breaker inside
+        # _get_with_retry; transport_failure_seen still drives local logging.
         logger.warning(
             "WorldBank fetch failed for indicator %s after %.1fs (budget=%.0fs)",
             indic, _total_elapsed, _FETCH_BUDGET_S,

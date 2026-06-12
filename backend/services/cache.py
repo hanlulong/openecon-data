@@ -76,6 +76,12 @@ class CacheService:
         return self.DEFAULT_TTL
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        # Copy-on-write: callers may mutate the payload after caching it
+        # (sorting series, filtering members, merging results), which would
+        # otherwise corrupt the stored entry for every later hit. CacheService
+        # owns the write-side copy for all callers, including
+        # RedisCacheService's in-memory fallback.
+        value = self._copy_data(value)
         expiry = time.time() + (ttl or self.DEFAULT_TTL)
         with self._lock:
             self._cache[key] = CacheEntry(value=value, expires_at=expiry)
@@ -165,14 +171,18 @@ class CacheService:
     def _copy_data(
         value: NormalizedData | list[NormalizedData] | None,
     ) -> NormalizedData | list[NormalizedData] | None:
-        """Deep-copy cached NormalizedData on read.
+        """Deep-copy cached NormalizedData at cache boundaries.
 
-        get()/get_stale() return the stored object itself, so a downstream
-        in-place mutation (sorting series, filtering members, merging
-        decomposition results) would corrupt the cached entry for every later
-        hit on the hottest cache. The Redis path re-validates into fresh models
-        and the intent cache already model_copy(deep=True)s — this brings the
-        in-memory data cache to the same copy-on-read invariant.
+        Used on BOTH sides of the cache boundary:
+        - write (set): so post-cache mutations by the caller cannot corrupt
+          the stored entry;
+        - read (get_data/get_data_stale): so downstream in-place mutation
+          (sorting series, filtering members, merging decomposition results)
+          cannot corrupt the cached entry for every later hit.
+
+        The Redis path re-validates into fresh models and the intent cache
+        already model_copy(deep=True)s — this keeps the in-memory data cache
+        on the same isolation invariant.
         """
         if isinstance(value, list):
             return [v.model_copy(deep=True) if isinstance(v, NormalizedData) else v for v in value]

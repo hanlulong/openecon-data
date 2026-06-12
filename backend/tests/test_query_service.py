@@ -9640,7 +9640,7 @@ class QueryServiceTests(unittest.TestCase):
         )
 
         class _FakeSelector:
-            async def select(self, query: str, provider: str):
+            async def select(self, query: str, provider: str, country=None, metadata_query=None):
                 assert query == "employment"
                 assert provider == "STATSCAN"
                 return SelectionResult(

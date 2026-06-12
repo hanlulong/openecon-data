@@ -13,17 +13,6 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 // Check if Supabase is available
 export const isSupabaseAvailable = !!(supabaseUrl && supabaseAnonKey)
 
-type QueryLogPayload = {
-  query: string
-  conversationId?: string
-  proMode?: boolean
-  intent?: unknown
-  responseData?: unknown
-  codeExecution?: unknown
-  errorMessage?: string
-  processingTimeMs?: number
-}
-
 const createMockSupabaseClient = () => ({
   auth: {
     signInWithOAuth: async () => ({
@@ -43,6 +32,10 @@ const createMockSupabaseClient = () => ({
     }),
     getSession: async () => ({
       data: { session: null as Session | null }
+    }),
+    setSession: async () => ({
+      data: { session: null as Session | null, user: null as SupabaseUser | null },
+      error: new Error('Supabase not configured')
     }),
     getUser: async () => ({
       data: { user: null as SupabaseUser | null }
@@ -98,7 +91,8 @@ const createMockSupabaseClient = () => ({
       data: null,
       error: null
     })
-  })
+  }),
+  rpc: async () => ({ data: null, error: null })
 })
 
 type MockSupabaseClient = ReturnType<typeof createMockSupabaseClient>
@@ -240,6 +234,21 @@ export function getOrCreateSessionId(): string {
 }
 
 /**
+ * Read the existing anonymous session ID without creating one.
+ *
+ * Unlike getOrCreateSessionId(), this never mints a new ID — callers that
+ * only want to migrate pre-existing history (e.g. the OAuth callback) must
+ * not create a fresh, empty session as a side effect.
+ */
+export function getExistingSessionId(): string | null {
+  const localId = localStorage.getItem(SESSION_ID_KEY)
+  if (localId) {
+    return localId
+  }
+  return getCookie(SESSION_ID_KEY)
+}
+
+/**
  * Set anonymous session ID explicitly (used by cross-domain bridge migration).
  */
 export function setSessionId(sessionId: string) {
@@ -262,109 +271,4 @@ export function onAuthStateChange(callback: (event: string, session: Session | n
   return supabase.auth.onAuthStateChange((event: string, session: Session | null) => {
     callback(event, session)
   })
-}
-
-/**
- * Log query to Supabase (handles both authenticated and anonymous users)
- */
-export async function logQuery(data: QueryLogPayload) {
-  // Skip logging if Supabase is not available (development mode)
-  if (!isSupabaseAvailable) {
-    console.debug('ℹ️ Query logging skipped (Supabase not configured)')
-    return
-  }
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  const queryData = {
-    ...data,
-    user_id: user?.id || null,
-    session_id: user ? null : getOrCreateSessionId(),
-    pro_mode: data.proMode || false,
-    conversation_id: data.conversationId,
-    intent: data.intent,
-    response_data: data.responseData,
-    code_execution: data.codeExecution,
-    error_message: data.errorMessage,
-    processing_time_ms: data.processingTimeMs,
-  }
-
-  const { error } = await supabase.from('user_queries').insert([queryData])
-
-  if (error) {
-    console.error('Failed to log query:', error)
-  }
-}
-
-/**
- * Get user's query history
- */
-export async function getUserHistory(limit: number = 50) {
-  // Return empty history if Supabase is not available (development mode)
-  if (!isSupabaseAvailable) {
-    console.debug('ℹ️ History not available (Supabase not configured)')
-    return []
-  }
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    // For anonymous users, get by session_id
-    const sessionId = getOrCreateSessionId()
-    const { data, error } = await supabase
-      .from('user_queries')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: false })
-      .limit(limit)
-
-    if (error) {
-      console.error('Failed to get history:', error)
-      return []
-    }
-
-    return data || []
-  }
-
-  // For authenticated users, get by user_id
-  const { data, error } = await supabase
-    .from('user_queries')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) {
-    console.error('Failed to get history:', error)
-    return []
-  }
-
-  return data || []
-}
-
-/**
- * Track anonymous session
- */
-export async function trackAnonymousSession() {
-  // Skip tracking if Supabase is not available (development mode)
-  if (!isSupabaseAvailable) {
-    console.debug('ℹ️ Session tracking skipped (Supabase not configured)')
-    return
-  }
-
-  const sessionId = getOrCreateSessionId()
-
-  const { error } = await supabase
-    .from('anonymous_sessions')
-    .upsert({
-      session_id: sessionId,
-      user_agent: navigator.userAgent,
-      last_seen: new Date().toISOString(),
-    }, {
-      onConflict: 'session_id'
-    })
-
-  if (error) {
-    console.error('Failed to track session:', error)
-  }
 }

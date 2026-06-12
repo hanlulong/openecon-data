@@ -4,7 +4,17 @@ import asyncio
 import json
 import os
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _mock_request(headers: dict | None = None, host: str = "127.0.0.1"):
+    """Minimal stand-in for a Starlette Request for direct endpoint calls.
+    Provides the .headers.get and .client.host the gate/IP helpers read."""
+    req = MagicMock()
+    req.headers = headers or {}
+    req.client = MagicMock()
+    req.client.host = host
+    return req
 
 # Disable side services during tests so import-time setup stays lightweight
 os.environ["NODE_ENV"] = "test"
@@ -60,10 +70,14 @@ class ApiTests(unittest.TestCase):
             ],
         )
 
-        with patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query:
+        with (
+            patch("backend.main.settings.anon_query_limit", 0),
+            patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query,
+        ):
             result = asyncio.run(
                 query_endpoint(
                     QueryRequest(query="GDP", conversationId=None),
+                    _mock_request(),
                     user=None,
                 )
             )
@@ -71,33 +85,46 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(result, QueryResponse)
         self.assertEqual(result.conversationId, "123")
         self.assertFalse(result.clarificationNeeded)
-        process_query.assert_awaited_once_with("GDP", None, auto_pro_mode=True)
+        # Anonymous users no longer auto-escalate to Pro Mode (code execution).
+        process_query.assert_awaited_once_with(
+            "GDP", None, auto_pro_mode=False,
+            owner_key="anon:", claimable_owner_keys=[],
+        )
 
     def test_query_endpoint_uses_anonymous_session_id_as_conversation(self) -> None:
         mock_response = QueryResponse(conversationId="session-123", clarificationNeeded=True)
 
-        with patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query:
+        with (
+            patch("backend.main.settings.anon_query_limit", 0),
+            patch("backend.main.query_service.process_query", AsyncMock(return_value=mock_response)) as process_query,
+        ):
             result = asyncio.run(
                 query_endpoint(
                     QueryRequest(query="1", conversationId=None, sessionId="session-123"),
+                    _mock_request(),
                     user=None,
                 )
             )
 
         self.assertEqual(result.conversationId, "session-123")
-        process_query.assert_awaited_once_with("1", "session-123", auto_pro_mode=True)
+        process_query.assert_awaited_once_with(
+            "1", "session-123", auto_pro_mode=False,
+            owner_key="anon:session-123", claimable_owner_keys=[],
+        )
 
     def test_query_endpoint_timeout_without_session_returns_json_504(self) -> None:
         async def slow_process_query(*_args, **_kwargs):
             await asyncio.sleep(0.05)
 
         with (
+            patch("backend.main.settings.anon_query_limit", 0),
             patch("backend.main.settings.query_timeout_seconds", 0.001),
             patch("backend.main.query_service.process_query", AsyncMock(side_effect=slow_process_query)) as process_query,
         ):
             result = asyncio.run(
                 query_endpoint(
                     QueryRequest(query="Canada GDP", conversationId=None, sessionId=None),
+                    _mock_request(),
                     user=None,
                 )
             )
@@ -108,7 +135,10 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(body["clarificationNeeded"])
         self.assertIsInstance(body["conversationId"], str)
         self.assertTrue(body["conversationId"])
-        process_query.assert_awaited_once_with("Canada GDP", None, auto_pro_mode=True)
+        process_query.assert_awaited_once_with(
+            "Canada GDP", None, auto_pro_mode=False,
+            owner_key="anon:", claimable_owner_keys=[],
+        )
 
     def test_get_request_conversation_id_prefers_explicit_conversation(self) -> None:
         request = QueryRequest(query="GDP", conversationId="conv-1", sessionId="session-1")

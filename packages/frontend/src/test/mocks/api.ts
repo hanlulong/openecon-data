@@ -5,8 +5,8 @@
  * that depend on API calls.
  */
 import { vi } from 'vitest';
-import { mockQueryResponse, mockUser, mockNormalizedData } from '../test-utils';
-import type { AuthResponse, QueryResponse, User, UserQueryHistory } from '../../types';
+import { mockQueryResponse, mockUser } from '../test-utils';
+import type { AuthResponse, QueryResponse, UserQueryHistory } from '../../types';
 
 // ============================================================================
 // Mock Token Manager
@@ -32,15 +32,19 @@ export const mockHistoryResponse = {
   history: [
     {
       id: 'query-1',
+      userId: 'user-1',
       query: 'Show me US GDP',
+      conversationId: 'conv-1',
       timestamp: '2024-01-01T00:00:00.000Z',
-      response: mockQueryResponse,
+      data: mockQueryResponse.data,
     },
     {
       id: 'query-2',
+      userId: 'user-1',
       query: 'What is the unemployment rate?',
+      conversationId: 'conv-2',
       timestamp: '2024-01-02T00:00:00.000Z',
-      response: mockQueryResponse,
+      data: mockQueryResponse.data,
     },
   ] as UserQueryHistory[],
   total: 2,
@@ -95,9 +99,8 @@ export const createMockApi = () => ({
   }),
   queryStream: vi.fn().mockImplementation(
     async (
-      query: string,
-      conversationId: string | undefined,
-      proMode: boolean,
+      _query: string,
+      _conversationId: string | undefined,
       callbacks: {
         onStep?: (step: any) => void;
         onData?: (data: QueryResponse) => void;

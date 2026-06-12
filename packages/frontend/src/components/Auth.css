@@ -104,6 +104,16 @@
   font-size: 14px;
 }
 
+.auth-success {
+  padding: 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  color: #15803d;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 .auth-field {
   display: flex;
   flex-direction: column;
@@ -190,6 +200,13 @@
 
 .auth-toggle-btn:hover {
   color: #357abd;
+}
+
+/* "Forgot password?" link under the login password field */
+.auth-forgot-password {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
 }
 
 /* Password Requirements */

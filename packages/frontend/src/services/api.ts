@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios';
-import { QueryResponse, NormalizedData, AuthResponse, RegisterRequest, LoginRequest, User, UserQueryHistory, HealthResponse, CacheStatsResponse, ApiError, FeedbackRequest, FeedbackResponse, StreamProcessingStepEvent } from '../types';
+import { QueryResponse, NormalizedData, AuthResponse, RegisterRequest, LoginRequest, User, UserQueryHistory, HealthResponse, CacheStatsResponse, ApiError, FeedbackRequest, FeedbackResponse, StreamProcessingStepEvent, ForgotPasswordResponse, ResetPasswordResponse } from '../types';
 import { getOrCreateSessionId } from '../lib/supabase';
 import { getCookie, removeSharedCookie, setSharedCookie } from '../lib/sharedStorage';
 
@@ -75,7 +75,12 @@ axios.interceptors.response.use(
   (error: AxiosError<ApiError>) => {
     // Handle 401 Unauthorized - token expired or invalid
     // Use isLoggingOut flag to prevent multiple logout calls from parallel requests
-    if (error.response?.status === 401 && !isLoggingOut) {
+    // Skip login/register endpoints: a failed login attempt returns 401 but must
+    // not clear the tokens of an already-authenticated session.
+    const requestUrl = error.config?.url ?? '';
+    const isAuthAttempt =
+      requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register');
+    if (error.response?.status === 401 && !isLoggingOut && !isAuthAttempt) {
       isLoggingOut = true;
       console.warn('401 Unauthorized - clearing auth state');
       tokenManager.removeToken();
@@ -119,6 +124,32 @@ export const api = {
     return response.data;
   },
 
+  /**
+   * Request a password reset link. The backend always responds with
+   * { success: true } — even for unknown emails — so the caller must never
+   * reveal whether an account exists.
+   */
+  async forgotPassword(email: string): Promise<ForgotPasswordResponse> {
+    const response = await axios.post<ForgotPasswordResponse>(
+      `${API_BASE_URL}/auth/forgot-password`,
+      { email }
+    );
+    return response.data;
+  },
+
+  /**
+   * Complete a password reset using the recovery token from the email link.
+   * On success returns { success: true }; on failure the backend returns
+   * HTTP 400 with { success: false, error } (e.g. expired link, weak password).
+   */
+  async resetPassword(accessToken: string, password: string): Promise<ResetPasswordResponse> {
+    const response = await axios.post<ResetPasswordResponse>(
+      `${API_BASE_URL}/auth/reset-password`,
+      { accessToken, password }
+    );
+    return response.data;
+  },
+
   logout(): void {
     tokenManager.removeToken();
   },
@@ -135,8 +166,13 @@ export const api = {
   },
 
   async getSessionHistory(sessionId: string, limit?: number): Promise<{ history: UserQueryHistory[]; total: number }> {
-    const params = { session_id: sessionId, ...(limit ? { limit } : {}) };
-    const response = await axios.get(`${API_BASE_URL}/session/history`, { params });
+    // Session id travels in a header (not a query param) so it never lands in
+    // server access logs or browser history — IDOR hardening on the backend.
+    const params = limit ? { limit } : {};
+    const response = await axios.get(`${API_BASE_URL}/session/history`, {
+      params,
+      headers: { 'X-Session-ID': sessionId },
+    });
     return response.data;
   },
 
@@ -161,17 +197,16 @@ export const api = {
   },
 
   /**
-   * Stream query with real-time progress updates
+   * Stream query with real-time progress updates.
+   * Pro Mode is auto-detected by the backend, so there is no proMode flag.
    * @param query The query string
    * @param conversationId Optional conversation ID
-   * @param proMode Whether to use Pro Mode
    * @param callbacks Callbacks for different event types
    * @param abortSignal Optional AbortSignal for request cancellation
    */
   async queryStream(
     query: string,
     conversationId: string | undefined,
-    proMode: boolean,
     callbacks: {
       onStep?: (step: StreamProcessingStepEvent) => void;
       onData?: (data: QueryResponse) => void;
@@ -232,16 +267,20 @@ export const api = {
 
       const lines = eventText.split('\n');
       let eventType = 'message';
-      let eventData = '';
+      // Per the SSE spec, multiple "data:" lines in one event concatenate with
+      // "\n". Accumulate instead of overwriting; single-line events behave
+      // exactly as before.
+      const dataLines: string[] = [];
 
       for (const line of lines) {
         if (line.startsWith('event:')) {
           eventType = line.substring(6).trim();
         } else if (line.startsWith('data:')) {
-          eventData = line.substring(5).trim();
+          dataLines.push(line.substring(5).trim());
         }
       }
 
+      const eventData = dataLines.join('\n');
       if (!eventData) return;
 
       try {

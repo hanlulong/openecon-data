@@ -289,7 +289,31 @@ class EurostatProvider(BaseProvider):
         effective_query_params = dict(query_params)
 
         async def fetch_payload(params: Dict[str, str]) -> Dict[str, Any]:
-            response = await client.get(data_url, params=params, timeout=effective_timeout(30.0))
+            # Route through the shared base helper so the primary Eurostat path
+            # gets rate-limit gating, 429/Retry-After handling, transient 5xx
+            # retry, and the per-provider circuit breaker — the fallback/probe
+            # paths used to be the only beneficiaries.
+            #
+            # raise_on_status=False makes the helper RETURN the non-2xx response
+            # (for 4xx like 404/413) instead of raising, so we can inspect the
+            # status and re-raise the SAME httpx.HTTPStatusError the callers
+            # already branch on. This keeps every 404/413 recovery ladder and the
+            # _requested_geo_unavailable_supportability_reason callback contract
+            # byte-for-byte intact. (5xx is retried then surfaced by the helper
+            # as DataNotAvailableError, since a persistent server error is not a
+            # recoverable status the ladder can narrow around.)
+            response = await self._get_with_retry(
+                client,
+                data_url,
+                params=params,
+                raise_on_status=False,
+                timeout=effective_timeout(30.0),
+            )
+            # The helper has already retried/handled 429 and transient 5xx, so a
+            # non-2xx here is a terminal client error (404/413/...). Surface it as
+            # the same httpx.HTTPStatusError the recovery ladders below branch on
+            # — raise_for_status() carries the real response (status_code + text),
+            # exactly as the previous direct client.get() path did.
             response.raise_for_status()
             return response.json()
 
@@ -308,6 +332,17 @@ class EurostatProvider(BaseProvider):
                             dataset_code,
                             country_code,
                             retry_error.response.text,
+                        )
+                    ) from retry_error
+                except DataNotAvailableError as retry_error:
+                    # The narrowed query persistently 5xx'd (the base helper
+                    # already exhausted its transient retries). Same conclusion
+                    # the old 500 branch reached: the dataset is not disseminated.
+                    raise DataNotAvailableError(
+                        _eurostat_dataset_unavailable_message(
+                            dataset_code,
+                            country_code,
+                            str(retry_error),
                         )
                     ) from retry_error
             elif e.response.status_code == 413 and no_geo_filter and used_default_time_range:
@@ -338,6 +373,38 @@ class EurostatProvider(BaseProvider):
                 raise
 
         data_points, frequency = self._parse_dataset(payload, dataset_code)
+        if not data_points and "freq" in effective_query_params:
+            # The freq filter above is inferred from the dataset-code suffix,
+            # which is only a naming convention — e.g. prc_hicp_manr is a
+            # monthly dataset despite no "_m" suffix, so an imposed freq=A
+            # returns an empty cube for EVERY country. Retry once without a
+            # frequency filter and accept the dataset's native frequency
+            # (dataset-agnostic: the provider tells us what exists, no
+            # per-dataset mapping).
+            no_freq_params = {
+                k: v for k, v in effective_query_params.items() if k != "freq"
+            }
+            try:
+                retry_payload = await fetch_payload(no_freq_params)
+                retry_points, retry_frequency = self._parse_dataset(retry_payload, dataset_code)
+                if retry_points:
+                    logger.info(
+                        "Eurostat %s: inferred freq=%s returned no data; "
+                        "native-frequency retry succeeded (%s points)",
+                        dataset_code,
+                        effective_query_params.get("freq"),
+                        len(retry_points),
+                    )
+                    payload = retry_payload
+                    data_points = retry_points
+                    frequency = retry_frequency
+                    effective_query_params = no_freq_params
+            except (httpx.HTTPStatusError, DataNotAvailableError) as freq_retry_error:
+                logger.debug(
+                    "Eurostat no-freq retry failed for %s: %s",
+                    dataset_code,
+                    freq_retry_error,
+                )
         if not data_points and used_default_time_range:
             retry_params = latest_default_time_params()
             if retry_params != effective_query_params:

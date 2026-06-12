@@ -26,7 +26,10 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-# Retry configuration for rate limiting.
+# Retry configuration.  Transport-level retry (429/5xx/timeouts) is handled by
+# BaseProvider._get_with_retry (tenacity, 3 attempts, exponential backoff);
+# MAX_RETRIES/RETRY_DELAY_BASE here govern the application-level retry for
+# empty TOTAL payloads and keep the wall-clock budget math below conservative.
 # Worst-case latency = MAX_RETRIES * REQUEST_TIMEOUT + sum(backoff delays).
 # With MAX_RETRIES=3, TIMEOUT=30s, BASE=1.5:  3*30 + (1.5+3) = ~94.5s upper bound
 # for a single reporter (vs. old 5*60 + 30 = 330s).  The fetch-level wall-clock
@@ -36,10 +39,8 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 1.5
 REQUEST_TIMEOUT = 30.0  # Per-request timeout in seconds (Comtrade responds in 1-10s when healthy)
-RATE_LIMIT_STATUS = 429
 GLOBAL_REQUEST_CONCURRENCY = 1
 GLOBAL_REQUEST_MIN_INTERVAL_SECONDS = 1.25
-TRANSIENT_HTTP_STATUSES = {RATE_LIMIT_STATUS, 500, 502, 503, 504}
 RETRY_BACKOFF_BUDGET = sum(RETRY_DELAY_BASE * (2 ** attempt) for attempt in range(MAX_RETRIES - 1))
 SINGLE_REPORTER_RETRY_TIME_BUDGET = (
     (MAX_RETRIES * REQUEST_TIMEOUT)
@@ -693,11 +694,12 @@ class ComtradeProvider(BaseProvider):
 
         records: list[dict[str, Any]] = []
 
-        # Implement exponential backoff retry for rate limiting and transient
-        # upstream outages. UN Comtrade occasionally returns HTTP 500 during
-        # otherwise valid bilateral lookups under load; treat that like a
-        # retryable provider transient rather than immediately falling into
-        # cross-provider fallback for a locked Comtrade conversation.
+        # Transport-level retry (429/5xx, timeouts, connection errors) with
+        # exponential backoff, rate-limiter pacing, and the per-provider
+        # circuit breaker are delegated to BaseProvider._get_with_retry.
+        # raise_on_status=False so remaining non-2xx responses come back for
+        # inspection here: Comtrade signals subscription-quota exhaustion as
+        # an HTTP 403 whose body mentions "quota" (or carries Retry-After).
         #
         # The same endpoint can also transiently return an empty successful
         # payload for broad TOTAL bilateral flows that normally have data.  Do
@@ -706,101 +708,52 @@ class ComtradeProvider(BaseProvider):
         # commodity/data-availability gaps and must remain claim blockers.
         for attempt in range(MAX_RETRIES):
             try:
-                response = await client.get(url_path, params=params, timeout=REQUEST_TIMEOUT)
-                response.raise_for_status()
-                payload = response.json()
-                records = payload.get("data") or []
-                if (
-                    records
-                    or commodity_code != "TOTAL"
-                    or attempt >= MAX_RETRIES - 1
-                ):
-                    break
-                delay = RETRY_DELAY_BASE * (2 ** attempt)
-                logger.warning(
-                    "Empty Comtrade TOTAL response for %s/%s, attempt %d/%d. "
-                    "Retrying in %ss...",
-                    reporter_raw,
-                    partner_code,
-                    attempt + 1,
-                    MAX_RETRIES,
-                    delay,
+                response = await self._get_with_retry(
+                    client,
+                    url_path,
+                    raise_on_status=False,
+                    params=params,
+                    timeout=REQUEST_TIMEOUT,
                 )
-                await asyncio.sleep(delay)
-                continue
-            except (httpx.ReadTimeout, httpx.TimeoutException, httpx.RequestError) as e:
-                if attempt < MAX_RETRIES - 1:
-                    delay = RETRY_DELAY_BASE * (2 ** attempt)
-                    logger.warning(
-                        "Transient Comtrade error for %s (%s), attempt %d/%d. Retrying in %ss...",
-                        reporter_raw,
-                        type(e).__name__,
-                        attempt + 1,
-                        MAX_RETRIES,
-                        delay,
+            except DataNotAvailableError as e:
+                logger.error(f"Comtrade API error for reporter {reporter_raw}: {e}")
+                raise DataNotAvailableError(
+                    f"Comtrade API error for reporter {reporter_raw}: {e}"
+                ) from e
+
+            status_code = response.status_code
+            if status_code >= 400:
+                # Non-2xx returned for inspection (429/5xx were already
+                # retried and raised terminally inside _get_with_retry).
+                response_text = (response.text or "").strip()[:300]
+                retry_after = response.headers.get("Retry-After")
+                quota_exhausted = (
+                    status_code == 403
+                    and (
+                        "quota" in response_text.lower()
+                        or retry_after is not None
                     )
-                    await asyncio.sleep(delay)
-                    continue
+                )
+                if quota_exhausted:
+                    detail = f"Comtrade API quota exhausted for reporter {reporter_raw}: HTTP 403"
+                    if retry_after:
+                        detail += f"; retry_after_seconds={retry_after}"
+                    if response_text:
+                        detail += f"; provider_message={response_text}"
+                    logger.warning(detail)
+                    raise DataNotAvailableError(detail)
                 logger.error(
-                    f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
+                    f"Comtrade API error for reporter {reporter_raw}: "
+                    f"HTTP {status_code}"
                 )
                 raise DataNotAvailableError(
-                    f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
-                ) from e
-            except httpx.HTTPStatusError as e:
-                status_code = e.response.status_code
-                if status_code in TRANSIENT_HTTP_STATUSES and attempt < MAX_RETRIES - 1:
-                    # Rate-limited or transient upstream error: wait and retry
-                    # with exponential backoff.
-                    delay = RETRY_DELAY_BASE * (2 ** attempt)
-                    if status_code == RATE_LIMIT_STATUS:
-                        logger.warning(
-                            f"Rate limited (429) for {reporter_raw}, attempt {attempt + 1}/{MAX_RETRIES}. "
-                            f"Waiting {delay}s before retry..."
-                        )
-                    else:
-                        logger.warning(
-                            "Transient Comtrade HTTP %s for %s, attempt %d/%d. "
-                            "Waiting %ss before retry...",
-                            status_code,
-                            reporter_raw,
-                            attempt + 1,
-                            MAX_RETRIES,
-                            delay,
-                        )
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    # Not a rate limit error, or final retry exhausted
-                    response_text = (e.response.text or "").strip()[:300]
-                    retry_after = e.response.headers.get("Retry-After")
-                    quota_exhausted = (
-                        status_code == 403
-                        and (
-                            "quota" in response_text.lower()
-                            or retry_after is not None
-                        )
-                    )
-                    if quota_exhausted:
-                        detail = f"Comtrade API quota exhausted for reporter {reporter_raw}: HTTP 403"
-                        if retry_after:
-                            detail += f"; retry_after_seconds={retry_after}"
-                        if response_text:
-                            detail += f"; provider_message={response_text}"
-                        logger.warning(detail)
-                        raise DataNotAvailableError(detail) from e
-                    logger.error(
-                        f"Comtrade API error for reporter {reporter_raw}: "
-                        f"HTTP {status_code}: {str(e)}"
-                    )
-                    raise DataNotAvailableError(
-                        f"Comtrade API error for reporter {reporter_raw}: "
-                        f"HTTP {status_code}"
-                    ) from e
-            except DataNotAvailableError:
-                raise  # Let DataNotAvailableError propagate directly
+                    f"Comtrade API error for reporter {reporter_raw}: "
+                    f"HTTP {status_code}"
+                )
+
+            try:
+                payload = response.json()
             except Exception as e:
-                # Other errors (network, JSON parsing, etc.)
                 logger.error(
                     f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
                 )
@@ -808,8 +761,30 @@ class ComtradeProvider(BaseProvider):
                     f"Comtrade API error for reporter {reporter_raw}: {type(e).__name__}: {str(e)}"
                 ) from e
 
+            records = payload.get("data") or []
+            if (
+                records
+                or commodity_code != "TOTAL"
+                or attempt >= MAX_RETRIES - 1
+            ):
+                break
+            delay = RETRY_DELAY_BASE * (2 ** attempt)
+            logger.warning(
+                "Empty Comtrade TOTAL response for %s/%s, attempt %d/%d. "
+                "Retrying in %ss...",
+                reporter_raw,
+                partner_code,
+                attempt + 1,
+                MAX_RETRIES,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
         if not records:
-            return []  # Return empty if no data
+            # Tolerated at this per-reporter level: multi-reporter/partner/period
+            # merge loops aggregate these, and fetch_trade_data raises
+            # DataNotAvailableError when the FINAL merged result is empty.
+            return []
 
         # IMPROVED DEDUPLICATION: Include cmdCode in key to prevent non-total values
         # from overwriting total values when querying for TOTAL trade
@@ -1174,7 +1149,9 @@ class ComtradeProvider(BaseProvider):
         # Preserve order while removing duplicates.
         partner_codes = list(dict.fromkeys(partner_codes))
 
-        commodity_code = self._commodity_code(commodity)
+        # _commodity_code can reach the lru-cached Comtrade HS reference fetch
+        # (blocking urllib); run the whole sync chain off the event loop.
+        commodity_code = await asyncio.to_thread(self._commodity_code, commodity)
         flow_code = self._flow_code(flow)
 
         now = datetime.now(timezone.utc)
@@ -1362,10 +1339,22 @@ class ComtradeProvider(BaseProvider):
         # When ALL sub-tasks failed, propagate the most informative error
         # so the caller gets a specific message (e.g. "Taiwan does not report")
         # instead of the generic "No data available" from the fallback layer.
-        if not all_results and last_error is not None:
-            if isinstance(last_error, DataNotAvailableError):
-                raise last_error
-            raise DataNotAvailableError(str(last_error)) from last_error
+        if not all_results:
+            if last_error is not None:
+                if isinstance(last_error, DataNotAvailableError):
+                    raise last_error
+                raise DataNotAvailableError(str(last_error)) from last_error
+            # Every sub-task succeeded but Comtrade had zero rows.  Raise at
+            # this outermost fetch boundary (rather than per reporter) so one
+            # empty reporter never aborts a multi-reporter merge, while a
+            # final empty result is never returned as silent success.
+            raise DataNotAvailableError(
+                "UN Comtrade returned no records for "
+                f"reporter(s) {', '.join(str(r) for r in reporter_list)}, "
+                f"partner(s) {', '.join(str(p) for p in partner_codes)}, "
+                f"commodity {commodity_code}, flow {flow_code}, "
+                f"period {start}-{end}."
+            )
 
         return self._merge_series_segments(all_results)
 

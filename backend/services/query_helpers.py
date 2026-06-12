@@ -789,6 +789,20 @@ def build_intent_from_semantic_clarification(
     expanded_region_countries = CountryResolver.expand_regions_in_query(query_text)
     params: dict = {}
 
+    # The clarification refines the ORIGINAL request — its scope constraints
+    # (time range, frequency, geography) must survive the round-trip instead
+    # of being rebuilt from the (usually scope-free) option text.
+    pending_intent_data = pending.get("intent") if isinstance(pending.get("intent"), dict) else {}
+    pending_params = (
+        pending_intent_data.get("parameters")
+        if isinstance(pending_intent_data.get("parameters"), dict)
+        else {}
+    ) or {}
+    for carry_key in ("startDate", "endDate", "frequency"):
+        carry_value = pending_params.get(carry_key)
+        if carry_value:
+            params[carry_key] = carry_value
+
     if expanded_region_countries and (
         "member countries" in query_text.lower()
         or svc._is_comparison_query(query_text)
@@ -798,6 +812,10 @@ def build_intent_from_semantic_clarification(
         params["country"] = extracted_countries[0]
     elif len(extracted_countries) > 1:
         params["countries"] = extracted_countries
+    elif pending_params.get("country"):
+        params["country"] = pending_params["country"]
+    elif isinstance(pending_params.get("countries"), list) and pending_params.get("countries"):
+        params["countries"] = list(pending_params["countries"])
 
     indicator_text = (
         option_label
@@ -821,6 +839,13 @@ def build_intent_from_semantic_clarification(
     api_provider = normalize_provider_name(selected_option.provider or routing_decision.provider)
     if selected_option.code:
         params["indicator"] = str(selected_option.code)
+        # The user explicitly chose this series from the offered options —
+        # that is final semantic authority. Downstream resolution must execute
+        # it as chosen, not re-adjudicate or remap it.
+        params["__semantic_authority"] = "exact_user_input"
+        params["__decision_source"] = "user_choice"
+        if selected_option.label:
+            params["__semantic_indicator_label"] = str(selected_option.label)
     if selected_option.provider:
         params["__semantic_provider_locked"] = True
     if (
