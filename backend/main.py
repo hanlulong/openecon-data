@@ -464,6 +464,8 @@ async def log_query_to_supabase(
     response_data: Optional[list] = None,
     code_execution: Optional[dict] = None,
     error_message: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
 ) -> None:
     """
     Log query to Supabase for both authenticated and anonymous users.
@@ -481,9 +483,69 @@ async def log_query_to_supabase(
             response_data=response_data,
             code_execution=code_execution,
             error_message=error_message,
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
     except Exception as e:
         logger.error(f"Failed to log {'Pro Mode ' if pro_mode else ''}query to Supabase: {e}")
+
+
+def _client_ip(req) -> Optional[str]:
+    """Best-effort real client IP for analytics, honoring the trusted-proxy
+    X-Forwarded-For chain (rightmost-untrusted), mirroring the rate-limit
+    middleware so we don't record Apache's loopback for every request."""
+    try:
+        direct = req.client.host if req.client else None
+        xff = req.headers.get("X-Forwarded-For")
+        trusted = set(settings.trusted_proxies or [])
+        if xff and direct in trusted:
+            chain = [h.strip() for h in xff.split(",") if h.strip()]
+            for hop in reversed(chain):
+                if hop not in trusted:
+                    return hop
+        return direct
+    except Exception:
+        return None
+
+
+class _AnonGate:
+    """Result of the anonymous free-query gate check for one request."""
+    __slots__ = ("blocked", "used", "limit", "ip", "user_agent", "session_id")
+
+    def __init__(self, blocked, used, limit, ip, user_agent, session_id):
+        self.blocked = blocked
+        self.used = used
+        self.limit = limit
+        self.ip = ip
+        self.user_agent = user_agent
+        self.session_id = session_id
+
+
+async def check_anon_gate(req, user, body_session_id, conversation_id, pro_mode: bool = False) -> _AnonGate:
+    """Increment the anonymous prompt counter and decide whether to gate.
+
+    Registered users are exempt (no counting, never blocked). Anonymous users
+    are tracked by their stable frontend session id (falling back to the
+    conversation id), and once they exceed ANON_QUERY_LIMIT the request is
+    blocked with a registration prompt. FAILS OPEN — if Supabase or the counter
+    is unavailable we never wrongly block a real user. Also returns the client
+    IP + user-agent so the caller can record them on the query log.
+    """
+    ip = _client_ip(req)
+    ua = req.headers.get("user-agent") if req is not None else None
+    limit = settings.anon_query_limit
+    if user is not None or limit <= 0:
+        return _AnonGate(False, 0, limit, ip, ua, None)
+    session_id = body_session_id or (f"anon_{conversation_id}" if conversation_id else None)
+    if not session_id:
+        return _AnonGate(False, 0, limit, ip, ua, None)
+    try:
+        count = await get_supabase_service().record_anonymous_query(session_id, ua, ip, pro_mode)
+    except Exception:
+        count = None
+    if count is None:  # tracking unavailable → fail open
+        return _AnonGate(False, 0, limit, ip, ua, session_id)
+    return _AnonGate(count > limit, count, limit, ip, ua, session_id)
 
 
 def schedule_query_log_to_supabase(**kwargs) -> None:
@@ -661,6 +723,26 @@ async def register(request: RegisterRequest):
     response = await auth.register(request)
     if not response.success:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=response.model_dump())
+
+    # Post-signup: keep the user's pre-registration history (attach the
+    # anonymous session they built before the wall) and store their
+    # institution (for future "trusted by" social proof). Best-effort.
+    new_user_id = getattr(getattr(response, "user", None), "id", None)
+    if new_user_id:
+        sb = get_supabase_service()
+        if request.sessionId:
+            try:
+                migrated = await sb.convert_anonymous_session(request.sessionId, new_user_id)
+                if migrated:
+                    logger.info("Migrated %d anonymous queries to new user %s", migrated, new_user_id)
+            except Exception as exc:
+                logger.debug("Anonymous session migration failed: %s", exc)
+        if request.institution:
+            try:
+                await sb.set_user_institution(new_user_id, request.institution)
+            except Exception as exc:
+                logger.debug("Storing institution failed: %s", exc)
+
     return response
 
 
@@ -795,12 +877,30 @@ async def session_history(session_id: str = Query(..., description="Session ID",
     ),
     tags=["Economic Data"],
 )
-async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
+async def query_endpoint(request: QueryRequest, raw_request: Request, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
     query_start = time.perf_counter()
     conversation_id = get_request_conversation_id(request, user)
+
+    # Anonymous free-query gate: count this prompt and, once over the limit,
+    # ask the user to register instead of processing (registered users exempt).
+    gate = await check_anon_gate(raw_request, user, request.sessionId, conversation_id, pro_mode=False)
+    if gate.blocked:
+        return QueryResponse(
+            conversationId=conversation_id or str(uuid.uuid4()),
+            clarificationNeeded=False,
+            registrationRequired=True,
+            anonymousQueriesUsed=gate.limit,
+            anonymousQueryLimit=gate.limit,
+            message=(
+                f"You've used your {gate.limit} free queries. Create a free account "
+                "to keep going — your history is saved."
+            ),
+            processingTimeMs=round((time.perf_counter() - query_start) * 1000, 1),
+        )
+
     logger.info("📝 Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
     # Auto-detect complex queries and route to Pro Mode (code execution)
@@ -890,6 +990,11 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     if user and result.data:
         save_to_user_history(user, request.query, result.conversationId, result.intent, result.data)
 
+    # Surface the anonymous free-query counter so the UI can show "N / limit".
+    if user is None and gate.limit > 0:
+        result.anonymousQueriesUsed = gate.used
+        result.anonymousQueryLimit = gate.limit
+
     # Log query to Supabase (for both authenticated and anonymous users)
     schedule_query_log_to_supabase(
         query=request.query,
@@ -900,6 +1005,8 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
         intent=result.intent.model_dump() if result.intent else None,
         response_data=[d.model_dump() for d in result.data] if result.data else None,
         error_message=result.error,
+        ip_address=gate.ip,
+        user_agent=gate.user_agent,
     )
 
     return result
@@ -912,7 +1019,7 @@ async def query_endpoint(request: QueryRequest, user: Optional[User] = Depends(g
     description="Same as /api/query but streams progress updates in real-time using Server-Sent Events. Each event shows processing steps as they complete.",
     tags=["Economic Data"],
 )
-async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)):
+async def query_stream_endpoint(request: QueryRequest, raw_request: Request, user: Optional[User] = Depends(get_optional_user)):
     """Streaming version of query endpoint using Server-Sent Events"""
     import json
     import asyncio
@@ -921,6 +1028,29 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
     conversation_id = get_request_conversation_id(request, user)
+
+    # Anonymous free-query gate: once over the limit, emit a registrationRequired
+    # data event instead of processing the query (registered users exempt).
+    gate = await check_anon_gate(raw_request, user, request.sessionId, conversation_id, pro_mode=False)
+    if gate.blocked:
+        _blocked_cid = conversation_id or str(uuid.uuid4())
+
+        async def _blocked_stream():
+            payload = {
+                "conversationId": _blocked_cid,
+                "registrationRequired": True,
+                "anonymousQueriesUsed": gate.limit,
+                "anonymousQueryLimit": gate.limit,
+                "message": (
+                    f"You've used your {gate.limit} free queries. Create a free account "
+                    "to keep going — your history is saved."
+                ),
+            }
+            yield f"event: data\ndata: {json.dumps(payload)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'done': True, 'conversationId': _blocked_cid})}\n\n"
+
+        return StreamingResponse(_blocked_stream(), media_type="text/event-stream")
+
     logger.info("📝 Stream Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
     # Queue for streaming events
@@ -1041,6 +1171,11 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
             if user and result.data:
                 save_to_user_history(user, request.query, result.conversationId, result.intent, result.data)
 
+            # Surface the anonymous free-query counter so the UI can show "N / limit".
+            if user is None and gate.limit > 0:
+                result.anonymousQueriesUsed = gate.used
+                result.anonymousQueryLimit = gate.limit
+
             # Log query to Supabase (for both authenticated and anonymous users)
             # Use request.sessionId for consistency with non-streaming path, fallback to conversationId
             schedule_query_log_to_supabase(
@@ -1052,6 +1187,8 @@ async def query_stream_endpoint(request: QueryRequest, user: Optional[User] = De
                 intent=result.intent.model_dump() if result.intent else None,
                 response_data=[d.model_dump() for d in result.data] if result.data else None,
                 error_message=result.error,
+                ip_address=gate.ip,
+                user_agent=gate.user_agent,
             )
 
             # Send final result

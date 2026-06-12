@@ -363,6 +363,89 @@ class SupabaseService:
         )
         return result if result else {}
 
+    async def record_anonymous_query(
+        self,
+        session_id: str,
+        user_agent: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        pro_mode: bool = False,
+    ) -> Optional[int]:
+        """Atomically increment an anonymous session's prompt counter.
+
+        Drives the registration gate AND keeps the anonymous_sessions analytics
+        table current. Returns the NEW query_count, or None when the count can't
+        be determined (no client / RPC failure) so the caller can FAIL OPEN and
+        never wrongly block a user.
+        """
+        if not self.client or not session_id:
+            return None
+        try:
+            result = await self.client.rpc(
+                "record_anonymous_query",
+                {
+                    "p_session_id": str(session_id),
+                    "p_user_agent": user_agent,
+                    "p_ip": ip_address,
+                    "p_pro_mode": bool(pro_mode),
+                },
+                timeout=3.0,
+            )
+        except Exception as exc:
+            logger.debug("record_anonymous_query RPC failed: %s", exc)
+            return None
+        if isinstance(result, bool):
+            return None
+        if isinstance(result, int):
+            return result
+        if isinstance(result, list) and result:
+            v = result[0]
+            if isinstance(v, int):
+                return v
+            if isinstance(v, dict):
+                inner = next(iter(v.values()), None)
+                return inner if isinstance(inner, int) else None
+        return None
+
+    async def convert_anonymous_session(self, session_id: str, user_id: str) -> int:
+        """Attach an anonymous session's query history to a newly-registered
+        user (so nothing is lost at the registration wall). Returns the number
+        of migrated queries (0 on failure)."""
+        if not self.client or not session_id or not user_id:
+            return 0
+        try:
+            result = await self.client.rpc(
+                "convert_anonymous_session",
+                {"p_session_id": str(session_id), "p_user_id": str(user_id)},
+                timeout=5.0,
+            )
+        except Exception as exc:
+            logger.debug("convert_anonymous_session RPC failed: %s", exc)
+            return 0
+        if isinstance(result, int):
+            return result
+        if isinstance(result, list) and result:
+            v = result[0]
+            if isinstance(v, int):
+                return v
+            if isinstance(v, dict):
+                inner = next(iter(v.values()), 0)
+                return inner if isinstance(inner, int) else 0
+        return 0
+
+    async def set_user_institution(self, user_id: str, institution: str) -> None:
+        """Store the institution/company a user entered at registration (powers
+        future 'trusted by' social proof). Best-effort; never raises."""
+        if not self.client or not user_id or not institution:
+            return
+        try:
+            await self.client.rpc(
+                "set_user_institution",
+                {"p_user_id": str(user_id), "p_institution": str(institution)},
+                timeout=3.0,
+            )
+        except Exception as exc:
+            logger.debug("set_user_institution RPC failed: %s", exc)
+
     async def get_user_queries(
         self,
         user_id: Optional[str] = None,

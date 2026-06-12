@@ -163,6 +163,14 @@ class Settings(BaseSettings):
         description="Conversation expiration time in hours (Redis TTL and in-memory max age)"
     )
 
+    # Free prompts an anonymous (unregistered) visitor may run before the
+    # registration wall. Registered users are exempt. 0 disables the gate.
+    anon_query_limit: int = Field(
+        default=20,
+        alias="ANON_QUERY_LIMIT",
+        description="Number of free queries for anonymous users before registration is required (0 = unlimited)."
+    )
+
     # Sync /api/query and /api/query/pro request-level deadline
     query_timeout_seconds: int = Field(
         default=120,

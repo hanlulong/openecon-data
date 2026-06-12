@@ -1,0 +1,9 @@
+-- Applied to Supabase 2026-06-12. User analytics + freemium registration gate.
+-- 1. record_anonymous_query(session_id, user_agent, ip, pro_mode) -> int
+--    Atomic per-session counter for the gate + revives anonymous_sessions.
+-- 2. convert_anonymous_session(session_id, user_id) -> int
+--    Attaches an anonymous session's history to a new user at signup.
+-- 3. set_user_institution(user_id, institution)  (upsert user_profiles.institution)
+-- 4. user_profiles.institution column; indexes on user_queries(session_id, created_at).
+-- See the supabase migration history for the exact DDL (record_anonymous_query,
+-- convert_anonymous_session, set_user_institution, add_institution_to_user_profiles).

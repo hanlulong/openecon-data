@@ -215,6 +215,14 @@ class QueryResponse(BaseModel):
     processingSteps: Optional[List[ProcessingStep]] = None
     alternativeSeries: Optional[List[AlternativeSeries]] = None  # Related indicators user might want
     processingTimeMs: Optional[float] = None  # End-to-end query processing time in milliseconds
+    # Anonymous free-query gate: how many of the free prompts this anonymous
+    # session has used and the limit, so the UI can show "N free queries left".
+    # registrationRequired=true means the limit was reached and the query was
+    # NOT processed — the UI shows the registration wall. (All None/false for
+    # registered users, who are exempt.)
+    anonymousQueriesUsed: Optional[int] = None
+    anonymousQueryLimit: Optional[int] = None
+    registrationRequired: Optional[bool] = None
     # Internal flag: delta path already saved conversation state — skip
     # the guaranteed save in main.py to avoid overwriting the merged state.
     delta_state_saved: bool = Field(default=False, exclude=True)
@@ -245,6 +253,11 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: str
+    # Optional institution/company (powers future "trusted by" social proof).
+    institution: Optional[str] = Field(None, max_length=200)
+    # Anonymous session to migrate on signup, so the user keeps the history they
+    # built before hitting the registration wall.
+    sessionId: Optional[str] = Field(None, max_length=100)
 
 
 class LoginRequest(BaseModel):
