@@ -93,7 +93,13 @@ axios.interceptors.response.use(
 export const api = {
   // Auth methods
   async register(data: RegisterRequest): Promise<AuthResponse> {
-    const response = await axios.post<AuthResponse>(`${API_BASE_URL}/auth/register`, data);
+    // Always include the anonymous session id so the backend can migrate the
+    // user's pre-signup history into their new account. Callers may override it.
+    const payload: RegisterRequest = {
+      ...data,
+      sessionId: data.sessionId ?? getOrCreateSessionId(),
+    };
+    const response = await axios.post<AuthResponse>(`${API_BASE_URL}/auth/register`, payload);
     if (response.data.token) {
       tokenManager.setToken(response.data.token);
     }

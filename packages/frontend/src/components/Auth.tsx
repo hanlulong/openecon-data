@@ -6,11 +6,13 @@ import './Auth.css';
 
 interface AuthProps {
   onClose?: () => void;
+  initialMode?: 'login' | 'register';
 }
 
-export const Auth = ({ onClose }: AuthProps) => {
-  const [isLogin, setIsLogin] = useState(true);
+export const Auth = ({ onClose, initialMode = 'login' }: AuthProps) => {
+  const [isLogin, setIsLogin] = useState(initialMode === 'login');
   const [name, setName] = useState('');
+  const [institution, setInstitution] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -39,7 +41,7 @@ export const Auth = ({ onClose }: AuthProps) => {
     try {
       const result = isLogin
         ? await login(email, password)
-        : await register(name, email, password);
+        : await register(name, email, password, institution.trim() || undefined);
 
       if (result.success) {
         onClose?.();
@@ -57,6 +59,7 @@ export const Auth = ({ onClose }: AuthProps) => {
     setIsLogin(!isLogin);
     setError('');
     setName('');
+    setInstitution('');
     setEmail('');
     setPassword('');
   };
@@ -87,6 +90,20 @@ export const Auth = ({ onClose }: AuthProps) => {
                 required
                 placeholder="Your name"
                 autoComplete="name"
+              />
+            </div>
+          )}
+
+          {!isLogin && (
+            <div className="auth-field">
+              <label htmlFor="institution">Institution / Company (optional)</label>
+              <input
+                id="institution"
+                type="text"
+                value={institution}
+                onChange={(e) => setInstitution(e.target.value)}
+                placeholder="e.g. University of Toronto"
+                autoComplete="organization"
               />
             </div>
           )}

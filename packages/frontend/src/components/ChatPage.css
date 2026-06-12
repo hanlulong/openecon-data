@@ -821,6 +821,14 @@
   padding-top: 4rem;
 }
 
+.free-queries-counter {
+  text-align: center;
+  font-size: 0.75rem;
+  color: #9ca3af;
+  margin-bottom: 0.5rem;
+  user-select: none;
+}
+
 .input-form {
   display: flex;
   align-items: center;

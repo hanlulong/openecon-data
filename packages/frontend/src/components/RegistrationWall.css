@@ -1,0 +1,145 @@
+.registration-wall-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: regWallFadeIn 0.2s ease-out;
+}
+
+@keyframes regWallFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.registration-wall {
+  position: relative;
+  background: var(--bg-primary, #ffffff);
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  width: 90%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 32px 28px 24px;
+  text-align: center;
+  animation: regWallSlideUp 0.3s ease-out;
+}
+
+@keyframes regWallSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.registration-wall-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.registration-wall-close:hover {
+  background: var(--bg-hover, #f3f4f6);
+  color: var(--text-primary, #1f2937);
+}
+
+.registration-wall-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  border-radius: 16px;
+  background: rgba(74, 144, 226, 0.12);
+  color: #4a90e2;
+}
+
+.registration-wall-title {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.registration-wall-message {
+  margin: 0 0 24px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary, #6b7280);
+}
+
+.registration-wall-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.registration-wall-primary,
+.registration-wall-secondary {
+  padding: 14px 16px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  min-height: 48px;
+}
+
+.registration-wall-primary {
+  background: #4a90e2;
+  color: #ffffff;
+  border: 1px solid #4a90e2;
+}
+
+.registration-wall-primary:hover {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+.registration-wall-secondary {
+  background: transparent;
+  color: #4a90e2;
+  border: 1px solid var(--border-light, #d1d5db);
+}
+
+.registration-wall-secondary:hover {
+  background: var(--bg-hover, #f3f4f6);
+  border-color: #4a90e2;
+}
+
+.registration-wall-footnote {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+@media (max-width: 480px) {
+  .registration-wall {
+    width: 95%;
+    padding: 28px 20px 20px;
+    border-radius: 12px;
+  }
+}

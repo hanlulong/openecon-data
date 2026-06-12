@@ -14,6 +14,7 @@ import { downloadExport } from '../lib/export'
 import { extractApiErrorMessage } from '../lib/errors'
 import { ShareModal } from './ShareModal'
 import { FeedbackModal } from './FeedbackModal'
+import { RegistrationWall } from './RegistrationWall'
 import './ChatPage.css'
 
 // Pure functions moved outside component for performance
@@ -142,6 +143,10 @@ export function ChatPage() {
   const [loadingStatus, setLoadingStatus] = useState<string>('')
   const [activeProcessingSteps, setActiveProcessingSteps] = useState<ProcessingTimelineStep[]>([])
   const [showAuthModal, setShowAuthModal] = useState(false)
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login')
+  // Freemium registration gate (anonymous users only).
+  const [registrationWall, setRegistrationWall] = useState<{ open: boolean; limit?: number }>({ open: false })
+  const [freeQueryUsage, setFreeQueryUsage] = useState<{ used: number; limit: number } | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   // Pro Mode auto-detected by backend (no UI toggle)
@@ -342,6 +347,24 @@ export function ChatPage() {
 
           if (response.conversationId) {
             setConversationId(response.conversationId)
+          }
+
+          // Track anonymous free-query usage from every response (logged-in
+          // users get null/absent values and the counter stays hidden).
+          if (!isAuthenticated && typeof response.anonymousQueryLimit === 'number') {
+            setFreeQueryUsage({
+              used: response.anonymousQueriesUsed ?? 0,
+              limit: response.anonymousQueryLimit,
+            })
+          }
+
+          // Registration gate: the query was NOT processed because this
+          // anonymous user hit the free limit. Show the wall instead of an
+          // (empty) answer bubble and stop here.
+          if (response.registrationRequired) {
+            setActiveProcessingSteps([])
+            setRegistrationWall({ open: true, limit: response.anonymousQueryLimit })
+            return
           }
 
           if (response.error) {
@@ -1104,7 +1127,13 @@ print(f"\\nData source: ${sourceUrl}")
               </button>
             </div>
           ) : (
-            <button className="login-footer-btn" onClick={() => setShowAuthModal(true)}>
+            <button
+              className="login-footer-btn"
+              onClick={() => {
+                setAuthModalMode('login')
+                setShowAuthModal(true)
+              }}
+            >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <path d="M20 21V19C20 17.9391 19.5786 16.9217 18.8284 16.1716C18.0783 15.4214 17.0609 15 16 15H8C6.93913 15 5.92172 15.4214 5.17157 16.1716C4.42143 16.9217 4 17.9391 4 19V21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 <circle cx="12" cy="7" r="4" stroke="currentColor" strokeWidth="2"/>
@@ -1243,6 +1272,11 @@ print(f"\\nData source: ${sourceUrl}")
           </div>
 
           <div className="input-area">
+            {!isAuthenticated && freeQueryUsage && (
+              <div className="free-queries-counter" title="Free queries used this session">
+                {Math.min(freeQueryUsage.used, freeQueryUsage.limit)} / {freeQueryUsage.limit} free queries
+              </div>
+            )}
             <form onSubmit={handleSubmit} className="input-form">
               <input
                 id="chat-query-input"
@@ -1270,7 +1304,29 @@ print(f"\\nData source: ${sourceUrl}")
         </div>
       </main>
 
-      {showAuthModal && <Auth onClose={() => setShowAuthModal(false)} />}
+      {showAuthModal && (
+        <Auth
+          initialMode={authModalMode}
+          onClose={() => setShowAuthModal(false)}
+        />
+      )}
+
+      {/* Registration wall — anonymous users who hit the free-query limit */}
+      <RegistrationWall
+        isOpen={registrationWall.open}
+        limit={registrationWall.limit}
+        onClose={() => setRegistrationWall({ open: false })}
+        onSignUp={() => {
+          setRegistrationWall({ open: false })
+          setAuthModalMode('register')
+          setShowAuthModal(true)
+        }}
+        onLogIn={() => {
+          setRegistrationWall({ open: false })
+          setAuthModalMode('login')
+          setShowAuthModal(true)
+        }}
+      />
 
       {/* Share Modal */}
       <ShareModal

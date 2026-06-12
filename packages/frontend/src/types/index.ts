@@ -66,6 +66,10 @@ export interface QueryResponse {
   isProMode?: boolean;
   processingSteps?: ProcessingStep[];
   processingTimeMs?: number;
+  // Freemium registration gate (anonymous users only; absent for logged-in users)
+  anonymousQueriesUsed?: number;
+  anonymousQueryLimit?: number;
+  registrationRequired?: boolean;
 }
 
 export interface GeneratedFile {
@@ -127,6 +131,9 @@ export interface RegisterRequest {
   email: string;
   password: string;
   name: string;
+  institution?: string;
+  // Anonymous session id so the backend migrates pre-signup history
+  sessionId?: string;
 }
 
 export interface LoginRequest {
