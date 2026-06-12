@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=120, alias="LLM_TIMEOUT")  # Higher default for local models
     # vLLM-specific settings (for SSH-tunneled or local vLLM servers)
     vllm_api_key: str | None = Field(default=None, alias="VLLM_API_KEY")
+    # Dedicated indicator-selector LLM (optional). When BOTH are set, the
+    # IndicatorSelector adjudicates candidates against this endpoint FIRST
+    # (e.g. an SSH-tunneled local vLLM serving a stronger model) and falls
+    # back to the main LLM provider automatically if the endpoint is down.
+    # Selection quality directly drives indicator accuracy across all 330K
+    # indicators, so it is worth a stronger model than the parse path needs.
+    selector_llm_model: str | None = Field(default=None, alias="SELECTOR_LLM_MODEL")
+    selector_llm_base_url: str | None = Field(default=None, alias="SELECTOR_LLM_BASE_URL")
     # Model-specific prompt configuration
     llm_strip_thinking: bool = Field(
         default=True,

@@ -30,6 +30,10 @@ def test_environment():
     os.environ["ENVIRONMENT"] = "test"
     os.environ["DISABLE_MCP"] = "1"
     os.environ["DISABLE_BACKGROUND_JOBS"] = "1"
+    # Tests must not depend on the optional local selector endpoint (an SSH
+    # tunnel that may or may not be up); empty overrides beat .env values.
+    os.environ["SELECTOR_LLM_MODEL"] = ""
+    os.environ["SELECTOR_LLM_BASE_URL"] = ""
     yield
     os.environ.clear()
     os.environ.update(old_env)

@@ -444,17 +444,12 @@ class IndicatorSelector:
                     if retry_conflict:
                         return SelectionResult(code=None, source="country_mismatch")
                 if retry_candidates:
-                    # The first adjudication already concluded NOTHING in the
-                    # primary candidate set measures the request. The retry
-                    # must therefore be conservative: a confident single PICK
-                    # against a fresh-but-similar pool is exactly how a near
-                    # miss (index level for a rate query) slips through. ASK
-                    # unless one candidate is clearly the requested measure.
+                    retry_ambiguous = self._scores_are_ambiguous(retry_scores)
                     retry_result = await self._llm_pick(
                         retry_query,
                         retry_candidates[:20],
                         provider,
-                        prefer_ask=True,
+                        prefer_ask=retry_ambiguous,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
                         return await self._retry_if_metadata_conflict(
@@ -1154,42 +1149,96 @@ class IndicatorSelector:
 
         settings = self._settings
         if settings.llm_provider == "openrouter":
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
+            main_url = "https://openrouter.ai/api/v1/chat/completions"
+            main_headers = {
                 "Authorization": f"Bearer {settings.openrouter_api_key}",
                 "Content-Type": "application/json",
             }
         else:
-            url = (settings.llm_base_url or "http://localhost:8000").rstrip("/") + "/v1/chat/completions"
-            headers = {"Content-Type": "application/json"}
+            main_url = (settings.llm_base_url or "http://localhost:8000").rstrip("/") + "/v1/chat/completions"
+            main_headers = {"Content-Type": "application/json"}
 
-        payload = {
-            "model": settings.llm_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 500,
-            "temperature": 0,
-        }
-        try:
-            from .http_pool import get_http_client
+        # Attempt chain: a dedicated selector endpoint (when configured) is
+        # tried FIRST — selection quality drives indicator accuracy, so a
+        # stronger local model is worth it — with the main LLM provider as an
+        # automatic fallback so a dropped SSH tunnel degrades quality, never
+        # availability. Reasoning models need extra token headroom because
+        # vLLM streams their thinking before the final control line.
+        attempts: List[tuple[str, str, Dict[str, str], Optional[str], int]] = []
+        selector_base = (getattr(settings, "selector_llm_base_url", None) or "").strip()
+        selector_model = (getattr(settings, "selector_llm_model", None) or "").strip()
+        if selector_base and selector_model:
+            attempts.append(
+                (
+                    "selector-endpoint",
+                    selector_base.rstrip("/") + "/v1/chat/completions",
+                    {"Content-Type": "application/json"},
+                    selector_model,
+                    1500,
+                )
+            )
+        if not attempts or attempts[0][1] != main_url or attempts[0][3] != settings.llm_model:
+            # Skip the main-LLM attempt when it IS the selector endpoint
+            # (same URL + model) — retrying the same dead tunnel wastes 30s.
+            attempts.append(("main-llm", main_url, main_headers, settings.llm_model, 500))
+        if (
+            settings.llm_provider != "openrouter"
+            and getattr(settings, "openrouter_api_key", None)
+            and all("openrouter.ai" not in a[1] for a in attempts)
+        ):
+            # When the main provider is itself a local endpoint (possibly the
+            # same tunnel as the selector endpoint), keep a hosted last resort
+            # so a dropped tunnel degrades cost, not availability or quality:
+            # the hosted twin of the local model scored 10/12 on the selector
+            # eval at $0.18/1k selections (gpt-4o-mini: 6/12 with 5 wrong).
+            attempts.append(
+                (
+                    "openrouter-fallback",
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    {
+                        "Authorization": f"Bearer {settings.openrouter_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    "openai/gpt-oss-120b",
+                    1500,
+                )
+            )
 
-            client = get_http_client()
-            resp = await client.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 429 or resp.status_code >= 500:
-                # One bounded retry for transient LLM-gateway errors so an
-                # infra blip doesn't silently become a "no decision" refusal.
-                await asyncio.sleep(1.0)
+        from .http_pool import get_http_client
+
+        client = get_http_client()
+        for attempt_label, url, headers, model, max_tokens in attempts:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0,
+            }
+            try:
                 resp = await client.post(url, headers=headers, json=payload, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            content = (data["choices"][0]["message"].get("content") or "").strip()
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    # One bounded retry for transient LLM-gateway errors so an
+                    # infra blip doesn't silently become a "no decision" refusal.
+                    await asyncio.sleep(1.0)
+                    resp = await client.post(url, headers=headers, json=payload, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                content = (data["choices"][0]["message"].get("content") or "").strip()
 
-            if not content:
-                return None
+                if not content:
+                    logger.warning(
+                        "LLM selection via %s returned empty content (%s/%s); trying next endpoint",
+                        attempt_label, provider, query[:40],
+                    )
+                    continue
 
-            return self._parse_llm_response(content, candidates, provider, query)
+                return self._parse_llm_response(content, candidates, provider, query)
 
-        except Exception as e:
-            logger.warning("LLM selection failed (%s/%s): %s", provider, query[:40], e)
+            except Exception as e:
+                logger.warning(
+                    "LLM selection via %s failed (%s/%s): %s",
+                    attempt_label, provider, query[:40], e,
+                )
 
         return None
 
