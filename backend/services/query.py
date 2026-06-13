@@ -1494,70 +1494,9 @@ class QueryService:
 
     # Max distinct same-provider codes to re-adjudicate past before giving up
     # to cross-provider fallback. Bounded so a provider with many dead-looking
-    # codes can't stall a request.
+    # codes can't stall a request. Enforced inside _fetch_data (the single
+    # chokepoint), so every fetch call site inherits the behaviour.
     _MAX_ALTERNATE_CODE_RETRIES = 2
-
-    async def _fetch_data_with_alternate_codes(
-        self,
-        intent: ParsedIntent,
-        execution_plan: Optional[ExecutionPlan],
-    ) -> List[NormalizedData]:
-        """Fetch single-indicator data, re-adjudicating the indicator when an
-        LLM-picked code returns no data, before surrendering to cross-provider
-        fallback.
-
-        General across every provider and indicator: the catalog contains
-        plausible-looking codes that the provider API does not actually serve
-        (e.g. World Bank NY.GDP.MKTP.ZG) and which carry no coverage metadata to
-        filter on pre-pick. When such a code returns nothing, we re-run the
-        SELECTOR with that code excluded so the LLM chooses the next-best
-        EXECUTABLE candidate while keeping its semantic judgement (not a blind
-        next-in-rank pick that could be a wrong variant). The existing
-        post-fetch verification gate still scrutinises whatever comes back.
-
-        Scoped to fresh selector picks (__decision_source == "llm_pick"): a
-        user-exact target or a verified carried-over code must fail honestly
-        rather than silently swap to a different series.
-        """
-        excluded: List[str] = []
-        plan = execution_plan
-        while True:
-            current_plan = plan
-            try:
-                return await retry_async(
-                    lambda: self._fetch_data(intent, execution_plan=current_plan),
-                    max_attempts=3,
-                    initial_delay=1.0,
-                )
-            except DataNotAvailableError:
-                params = intent.parameters or {}
-                failed_code = str(params.get("indicator") or "").strip()
-                decision_source = str(params.get("__decision_source") or "")
-                already = {c.upper() for c in excluded}
-                if (
-                    len(excluded) >= self._MAX_ALTERNATE_CODE_RETRIES
-                    or decision_source != "llm_pick"
-                    or not failed_code
-                    or failed_code.upper() in already
-                ):
-                    raise
-                excluded.append(failed_code)
-                logger.info(
-                    "🔁 Same-provider alternate retry: %s '%s' returned no data; "
-                    "re-adjudicating with it excluded (attempt %d/%d)",
-                    intent.apiProvider, failed_code, len(excluded),
-                    self._MAX_ALTERNATE_CODE_RETRIES,
-                )
-                params["__exclude_indicator_codes"] = list(excluded)
-                # Force a fresh resolution + execution plan for the new code.
-                for key in (
-                    "indicator", "seriesId", "series_id", "code",
-                    "__semantic_authority", "__decision_source",
-                    "__indicator_selection_source", "__execution_plan_identity",
-                ):
-                    params.pop(key, None)
-                intent.parameters = params
-                plan = None
 
     async def _execute_resolved_intent(
         self,
@@ -1723,7 +1662,11 @@ class QueryService:
                 logger.info("📊 Multi-indicator query detected: %s indicators", len(intent.indicators))
                 data = await self._fetch_multi_indicator_data(intent)
             else:
-                data = await self._fetch_data_with_alternate_codes(intent, execution_plan)
+                data = await retry_async(
+                    lambda: self._fetch_data(intent, execution_plan=execution_plan),
+                    max_attempts=3,
+                    initial_delay=1.0,
+                )
         except DataNotAvailableError as fetch_exc:
             logger.warning("Data not available in _execute_resolved_intent: %s", fetch_exc)
             data = []  # Treat as empty data — let fallback logic below handle it
@@ -5685,8 +5628,58 @@ class QueryService:
         intent: ParsedIntent,
         execution_plan: Optional[ExecutionPlan] = None,
     ) -> List[NormalizedData]:
-        """Delegates to :func:`data_fetcher.fetch_data`."""
-        return await _df_fetch_data(self, intent, execution_plan=execution_plan)
+        """Delegates to :func:`data_fetcher.fetch_data`, re-adjudicating the
+        indicator when a freshly LLM-picked code returns no data.
+
+        This is the single chokepoint every fetch call site routes through, so
+        the same-provider alternate-code retry lives here and is therefore
+        general across every provider and indicator. Rationale: the catalog
+        contains plausible-looking codes the provider API does not actually
+        serve (e.g. World Bank NY.GDP.MKTP.ZG) which carry no coverage metadata
+        to filter on pre-pick — the only reliable signal is an empty fetch. On
+        no-data from a fresh selector pick we re-run the SELECTOR with that code
+        excluded so the LLM chooses the next-best EXECUTABLE candidate (keeping
+        its semantic judgement, not a blind next-in-rank pick), before the
+        caller surrenders to cross-provider fallback. The post-fetch
+        verification gate still scrutinises whatever comes back.
+
+        Scoped to __decision_source == "llm_pick": user-exact and verified
+        carried-over codes fail honestly rather than silently swap series.
+        """
+        excluded: List[str] = []
+        plan = execution_plan
+        while True:
+            current_plan = plan
+            try:
+                return await _df_fetch_data(self, intent, execution_plan=current_plan)
+            except DataNotAvailableError:
+                params = intent.parameters or {}
+                failed_code = str(params.get("indicator") or "").strip()
+                decision_source = str(params.get("__decision_source") or "")
+                already = {c.upper() for c in excluded}
+                if (
+                    len(excluded) >= self._MAX_ALTERNATE_CODE_RETRIES
+                    or decision_source != "llm_pick"
+                    or not failed_code
+                    or failed_code.upper() in already
+                ):
+                    raise
+                excluded.append(failed_code)
+                logger.info(
+                    "🔁 Same-provider alternate retry: %s '%s' returned no data; "
+                    "re-adjudicating with it excluded (attempt %d/%d)",
+                    intent.apiProvider, failed_code, len(excluded),
+                    self._MAX_ALTERNATE_CODE_RETRIES,
+                )
+                params["__exclude_indicator_codes"] = list(excluded)
+                for key in (
+                    "indicator", "seriesId", "series_id", "code",
+                    "__semantic_authority", "__decision_source",
+                    "__indicator_selection_source", "__execution_plan_identity",
+                ):
+                    params.pop(key, None)
+                intent.parameters = params
+                plan = None
 
     async def _execute_with_orchestrator(
         self,

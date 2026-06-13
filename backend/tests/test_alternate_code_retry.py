@@ -45,26 +45,25 @@ def _intent(code: str):
 
 @pytest.mark.asyncio
 async def test_retries_past_dead_code_to_executable_one():
-    """First (dead) code returns no data; the loop excludes it, the mocked
-    re-resolution yields an executable code, and data is returned."""
+    """First (dead) code returns no data; _fetch_data excludes it, the mocked
+    re-resolution yields an executable code, and data is returned. The retry
+    lives in _fetch_data (the single chokepoint), so it mocks the delegate
+    backend.services.query._df_fetch_data."""
     svc = _make_service()
     intent = _intent("NY.GDP.MKTP.ZG")  # the dead WB code
     calls = {"n": 0}
 
-    async def fake_fetch(it, execution_plan=None):
+    async def fake_fetch(_svc, it, execution_plan=None):
         calls["n"] += 1
         if calls["n"] == 1:
-            # First pick is the dead code already in params → no data.
             raise DataNotAvailableError("no data for NY.GDP.MKTP.ZG")
-        # The loop cleared 'indicator' and set the exclude set; simulate the
-        # selector re-resolving to the executable code.
         assert "NY.GDP.MKTP.ZG" in (it.parameters.get("__exclude_indicator_codes") or [])
         it.parameters["indicator"] = "NY.GDP.MKTP.KD.ZG"
         it.parameters["__decision_source"] = "llm_pick"
         return [_ok_series("NY.GDP.MKTP.KD.ZG")]
 
-    with patch.object(svc, "_fetch_data", side_effect=fake_fetch):
-        data = await svc._fetch_data_with_alternate_codes(intent, None)
+    with patch("backend.services.query._df_fetch_data", side_effect=fake_fetch):
+        data = await svc._fetch_data(intent, None)
 
     assert calls["n"] == 2
     assert data and data[0].metadata.indicator == "NY.GDP.MKTP.KD.ZG"
@@ -78,18 +77,16 @@ async def test_retry_is_bounded_and_then_raises():
     intent = _intent("DEAD0")
     seen = []
 
-    async def always_dead(it, execution_plan=None):
-        # Each retry must present a DISTINCT failed code (loop clears indicator;
-        # simulate the selector picking a new-but-also-dead code each time).
+    async def always_dead(_svc, it, execution_plan=None):
         code = it.parameters.get("indicator") or f"DEAD{len(seen)+1}"
         seen.append(code)
         it.parameters["indicator"] = f"DEAD{len(seen)}"
         it.parameters["__decision_source"] = "llm_pick"
         raise DataNotAvailableError(f"no data for {code}")
 
-    with patch.object(svc, "_fetch_data", side_effect=always_dead):
+    with patch("backend.services.query._df_fetch_data", side_effect=always_dead):
         with pytest.raises(DataNotAvailableError):
-            await svc._fetch_data_with_alternate_codes(intent, None)
+            await svc._fetch_data(intent, None)
 
     # original attempt + _MAX_ALTERNATE_CODE_RETRIES re-adjudications
     assert len(seen) == svc._MAX_ALTERNATE_CODE_RETRIES + 1
@@ -108,13 +105,13 @@ async def test_no_retry_for_non_selector_picks():
     )
     calls = {"n": 0}
 
-    async def fail_once(it, execution_plan=None):
+    async def fail_once(_svc, it, execution_plan=None):
         calls["n"] += 1
         raise DataNotAvailableError("no data")
 
-    with patch.object(svc, "_fetch_data", side_effect=fail_once):
+    with patch("backend.services.query._df_fetch_data", side_effect=fail_once):
         with pytest.raises(DataNotAvailableError):
-            await svc._fetch_data_with_alternate_codes(intent, None)
+            await svc._fetch_data(intent, None)
 
     assert calls["n"] == 1  # no alternate retry attempted
 
