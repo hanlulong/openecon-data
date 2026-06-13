@@ -3746,6 +3746,13 @@ class StatsCanProvider(BaseProvider):
             else:
                 data_type = "Level"
 
+            # Rate-by-province series carry scalar factor 0, which SCALAR_FACTOR_MAP
+            # renders as the "units" placeholder; the single-series path already
+            # rewrites that to "percent" (see _unit_with_rate_awareness). Apply the
+            # same here so by-province unemployment/participation rates show percent.
+            if data_type == "Rate" and unit in ("", "units"):
+                unit = "percent"
+
             metadata = Metadata(
                 source="Statistics Canada",
                 indicator=indicator_name,
