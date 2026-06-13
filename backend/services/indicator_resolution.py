@@ -2685,10 +2685,24 @@ async def resolve_indicator_for_fetch(
         return params
 
     existing_semantic_authority = str(params.get("__semantic_authority") or "")
+    # A code carried from verified conversation state keeps final authority on
+    # a country/time-only follow-up (same delta guard as the dispatch gate in
+    # data_fetcher._has_provider_map_authority): it was already adjudicated and
+    # verified on the turn that resolved it, so re-resolving it against the
+    # bare follow-up text ("what about France") needlessly discards the
+    # established Eurostat/StatsCan/IMF code.
+    _verified_state_authority = (
+        existing_semantic_authority == "verified_conversation_state"
+        and bool(params.get("__delta_resolved"))
+        and not bool(params.get("__delta_indicator_changed"))
+    )
     if (
         has_explicit_code
-        and existing_semantic_authority
-        in {"llm_adjudication", "post_fetch_semantic_judge", "exact_user_input"}
+        and (
+            existing_semantic_authority
+            in {"llm_adjudication", "post_fetch_semantic_judge", "exact_user_input"}
+            or _verified_state_authority
+        )
         and not is_placeholder_indicator_code(existing_indicator)
     ):
         # Do not let deterministic semantic plausibility rules overrule or

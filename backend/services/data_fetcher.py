@@ -182,21 +182,20 @@ def _has_provider_map_authority(params: dict) -> bool:
     if is_exact_match_locked(params):
         return True
     authority = str(params.get("__semantic_authority") or "")
-    if authority in {
+    # verified_conversation_state is included unconditionally and on purpose:
+    # the stamp is ONLY ever written when the indicator is unchanged from the
+    # turn that verified it — both at the data_fetcher delta branch (guarded by
+    # `not __delta_indicator_changed`) and in materialize_intent (state only
+    # carries resolved_indicator_code forward when neither the indicator nor
+    # the provider changed). The stamp's presence is therefore sufficient
+    # proof; re-checking the __delta_* flags here is wrong because they are
+    # stripped from params before the dispatch-level assert runs.
+    return authority in {
         "exact_user_input",
         "llm_adjudication",
         "post_fetch_semantic_judge",
-    }:
-        return True
-    if authority == "verified_conversation_state":
-        # A code carried over from verified conversation state keeps its
-        # authority ONLY while the indicator is unchanged from the turn that
-        # verified it (same conditions as the StatsCan product predicate).
-        # An indicator change must go back through resolution/adjudication.
-        return bool(params.get("__delta_resolved")) and not bool(
-            params.get("__delta_indicator_changed")
-        )
-    return False
+        "verified_conversation_state",
+    }
 
 
 def _assert_provider_map_authority(
@@ -281,6 +280,24 @@ def _years_from_params(params: dict) -> tuple[Optional[int], Optional[int]]:
     if end_year is None and params.get("endDate"):
         end_year = int(str(params["endDate"])[:4])
     return start_year, end_year
+
+
+def _user_set_time_scope(params: dict, original_query: str) -> bool:
+    """Whether the active time window was set by the USER (vs framework default).
+
+    Prefers the recorded provenance stamp (__time_scope_authority, written by
+    apply_default_time_periods and carried through conversation state) over
+    re-inferring from the current turn's text — text inference breaks on
+    follow-ups whose raw text ("compare with France") carries no time words
+    even though the dates in params were user-set turns ago. Falls back to
+    the text heuristic when no stamp is present (legacy intents, caches).
+    """
+    authority = str((params or {}).get("__time_scope_authority") or "")
+    if authority == "user":
+        return True
+    if authority == "default":
+        return False
+    return _query_has_explicit_time_scope(original_query or "")
 
 
 def _query_has_explicit_time_scope(query: str) -> bool:
@@ -2160,7 +2177,7 @@ async def _fetch_from_eurostat(
         and re.search(rf"(?<![A-Z0-9_]){re.escape(indicator)}(?![A-Z0-9_])", original_query, flags=re.IGNORECASE)
     )
     exact_provider_surface_requested = exact_dataset_code_requested or is_exact_match_locked(params)
-    explicit_time_scope = _query_has_explicit_time_scope(original_query)
+    explicit_time_scope = _user_set_time_scope(params, original_query)
     current_year = datetime.utcnow().year
     default_recent_start_year = current_year - 5
     should_retry_sparse_history = (
@@ -2472,9 +2489,19 @@ async def fetch_data(
         _indicator_name = intent.indicators[0] if intent.indicators else ""
         _indicator_changed = bool(params.get("__delta_indicator_changed"))
         if not _indicator_changed:
-            # Indicator preserved from prior turn — use as-is, no resolution
+            # Indicator preserved from prior turn — use as-is, no resolution.
             params["indicator"] = _indicator_name
             intent.parameters = params
+            # The carried code reached conversation state via a verified fetch
+            # on a prior turn; a country/time-only follow-up must keep its
+            # dispatch authority so the no-shortcut gate does not block
+            # provider-internal codes (Eurostat/StatsCan/IMF) on a new country
+            # ("Germany inflation" -> "what about France" reuses TEC00118).
+            # The authority predicate already scopes this to __delta_resolved
+            # with the indicator unchanged; only fill when nothing stronger
+            # (exact_user_input / llm_adjudication) is already present.
+            if not str(params.get("__semantic_authority") or ""):
+                params["__semantic_authority"] = "verified_conversation_state"
             logger.info(
                 "Delta-resolved: indicator unchanged, using '%s' directly",
                 _indicator_name,
@@ -2620,7 +2647,7 @@ async def fetch_data(
     if (
         provider in {"FRED", "WORLDBANK", "WORLD BANK", "STATSCAN", "STATISTICS CANADA", "IMF"}
         and is_exact_match_locked(params)
-        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+        and not _user_set_time_scope(params, intent.originalQuery or "")
         and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
     ):
         params = dict(params)
@@ -2635,7 +2662,7 @@ async def fetch_data(
     if (
         provider == "COMTRADE"
         and is_exact_match_locked(params)
-        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+        and not _user_set_time_scope(params, intent.originalQuery or "")
         and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
     ):
         params = dict(params)
@@ -2702,7 +2729,7 @@ async def fetch_data(
 
     exact_query_without_time_scope = bool(
         is_exact_match_locked(params)
-        and not _query_has_explicit_time_scope(intent.originalQuery or "")
+        and not _user_set_time_scope(params, intent.originalQuery or "")
     )
 
     async def _dispatch_with_exact_window_retry() -> List[NormalizedData]:

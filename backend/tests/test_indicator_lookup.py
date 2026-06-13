@@ -44,8 +44,12 @@ class IndicatorLookupTests(unittest.TestCase):
         db = _FakeDB()
         lookup = IndicatorLookup(db=db)
 
+        # Machine-style separators normalize to plain tokens and noise words
+        # ("to") are dropped. Semantic synonym EXPANSION was removed (it made
+        # FTS AND-matches strictly narrower and is now handled by the data's
+        # `synonyms` column), so the query stays lexical.
         lookup.search("EXPORT_TO_GDP_RATIO", provider="WORLDBANK")
-        self.assertEqual(db.last_search_query, "export gdp gross domestic product ratio")
+        self.assertEqual(db.last_search_query, "export gdp ratio")
 
     @staticmethod
     def _lookup_with_sqlite_rows(rows):

@@ -998,65 +998,16 @@ class IndicatorLookup:
         words = query.split()
         words = [w for w in words if w not in noise]
 
-        # Handle common variations and synonyms
-        # These expansions help FTS5 find related terms that users might not type exactly
-        replacements = {
-            "gdp": "gdp gross domestic product",
-            "growth": "growth annual percent change rate",
-            "ppp": "ppp purchasing power parity international",
-            "cpi": "cpi consumer price index",
-            "ppi": "ppi producer price index",
-            "unemployment": "unemployment rate total jobless labor force",
-            "inflation": "inflation cpi price consumer",
-            "interest": "interest rate",
-            "real": "real adjusted inflation",
-            "forex": "foreign exchange currency",
-            "fx": "foreign exchange currency",
-            # Lending synonyms
-            "lending": "lending loan prime",
-            "lend": "lending loan prime",
-            # Treasury synonyms
-            "treasury": "treasury yield bond",
-            "yield": "yield treasury bond",
-            # Trade synonyms
-            "exports": "exports trade",
-            "imports": "imports trade",
-            # Money supply synonyms
-            "m2": "m2 money supply monetary",
-            "m1": "m1 money supply monetary",
-            "m3": "m3 money supply monetary",
-            # Commodity price synonyms — expand to match FRED series names
-            "gold": "gold fixing price bullion",
-            "silver": "silver fixing price",
-            "oil": "oil crude petroleum wti brent",
-            "wti": "wti west texas intermediate crude oil",
-            "brent": "brent crude oil price",
-            "copper": "copper price global",
-            "natural": "natural gas henry hub",
-            # Labor market synonyms — expand to match FRED series names
-            "nonfarm": "nonfarm payrolls employment total private",
-            "payrolls": "nonfarm payrolls employment",
-            "claims": "claims initial unemployment insurance",
-            "jobless": "jobless claims initial unemployment",
-            "wages": "wages earnings average hourly",
-            "earnings": "earnings average hourly wages",
-            # Housing synonyms
-            "housing": "housing starts units residential",
-            "mortgage": "mortgage rate fixed 30 year",
-            # Central bank rate synonyms
-            "selic": "selic rate brazil central bank",
-            "ecb": "ecb european central bank rate",
-            "repo": "repo rate central bank policy",
-        }
+        # NOTE: a hardcoded synonym-EXPANSION table used to live here. It was
+        # both a semantic-rules violation and mathematically self-defeating:
+        # db.search AND-joins all words, so every injected synonym made the
+        # match STRICTLY narrower ("oil" became a five-word AND requirement
+        # and matched almost nothing; "m2 money supply" stopped matching M2SL
+        # the moment "monetary" was injected). Synonymy belongs in the data —
+        # the indicators.db `synonyms` column (LLM-enriched offline, FTS
+        # weight 2.0) and the embedding retrieval handle it.
 
-        expanded = []
-        for word in words:
-            if word in replacements:
-                expanded.append(replacements[word])
-            else:
-                expanded.append(word)
-
-        return " ".join(expanded)
+        return " ".join(words)
 
     def _rank_results(
         self,

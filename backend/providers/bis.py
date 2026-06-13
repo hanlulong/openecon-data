@@ -691,17 +691,31 @@ class BISProvider(BaseProvider):
         exact_provider_dataflow_request = self._is_exact_dataflow_request(indicator)
         indicator_code, indicator_label = await self._resolve_indicator_code(indicator)
 
-        # Expand regions to country lists
+        # Expand regions to country lists, de-duplicating by normalized code.
+        # Overlapping group expansions (e.g. several "Eurozone" members each
+        # falling back to XM for policy rates) otherwise produced many
+        # identical series in a single response.
+        def _dedup_by_code(items: list) -> list:
+            out: list = []
+            seen_codes: set[str] = set()
+            for member in items:
+                code = self._country_code(member)
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                out.append(member)
+            return out
+
         if countries:
             # Expand each item in countries list (could be regions or countries)
             expanded_countries = []
             for c in countries:
                 expanded_countries.extend(self._expand_region(c))
-            country_list = expanded_countries
+            country_list = _dedup_by_code(expanded_countries)
             logger.info(f"🌍 BIS: Expanded {countries} to {len(country_list)} countries")
         elif country:
             # Expand single country parameter (could be a region)
-            country_list = self._expand_region(country)
+            country_list = _dedup_by_code(self._expand_region(country))
             if len(country_list) > 1:
                 logger.info(f"🌍 BIS: Expanded '{country}' to {len(country_list)} countries: {country_list[:5]}...")
         else:
@@ -1015,7 +1029,23 @@ class BISProvider(BaseProvider):
                 f"Try World Bank or IMF for broader country coverage."
             )
 
-        return results
+        # Dedup by resolved series identity (country + seriesId): distinct
+        # Eurozone members all fall back to the same XM aggregate for policy
+        # rates / long CPI, which would otherwise return ~18 identical series.
+        deduped: List[NormalizedData] = []
+        seen_identity: set[tuple] = set()
+        for series in results:
+            meta = getattr(series, "metadata", None)
+            identity = (
+                str(getattr(meta, "country", "") or "").upper(),
+                str(getattr(meta, "seriesId", "") or ""),
+            )
+            if identity in seen_identity:
+                continue
+            seen_identity.add(identity)
+            deduped.append(series)
+
+        return deduped
 
     async def _fetch_gli_data(
         self,

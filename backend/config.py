@@ -139,13 +139,16 @@ class Settings(BaseSettings):
     )
     # Phase 2.2: switch between the legacy magic-constant fusion in
     # IndicatorSelector._effective_rank and canonical parameterless RRF
-    # (k = INDICATOR_RRF_K = 60). Default remains "legacy" until shadow-mode
-    # telemetry shows RRF parity per docs/DEEP_REVIEW_2026-05-30.md §6
-    # invariant #8 (≥7d, ≥10k queries, no per-provider regression).
+    # (k = INDICATOR_RRF_K = 60). Default flipped to "rrf" 2026-06-12 after
+    # the legacy merge was shown to be broken by construction: its FTS-only
+    # synthetic score (0.55) sits BELOW the embedding-score floor on real
+    # queries, so the [:top_k] cut discarded 100% of lexical-only recall —
+    # canonical series (M2SL, DGS10, UNRATE) never reached the LLM. RRF
+    # interleaves both evidence sources rank-wise with one constant.
     indicator_fusion: str = Field(
-        default="legacy",
+        default="rrf",
         alias="INDICATOR_FUSION",
-        description="Indicator-retrieval fusion strategy. 'legacy' = current score-aware merge; 'rrf' = canonical Reciprocal Rank Fusion."
+        description="Indicator-retrieval fusion strategy. 'rrf' = canonical Reciprocal Rank Fusion; 'legacy' = retired score-aware merge (rollback only)."
     )
     # Phase 2.1: per-stage telemetry baseline for IndicatorSelector. Default
     # disabled to avoid log volume on dev. Enable for shadow validation runs.

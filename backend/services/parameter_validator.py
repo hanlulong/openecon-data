@@ -51,6 +51,14 @@ class ParameterValidator:
         if not intent.parameters:
             intent.parameters = {}
 
+        # Time-scope PROVENANCE: downstream gates (exact-match date stripping,
+        # broadened no-data retries) must know whether the window was user-set
+        # or framework-filled. Re-inferring that later from the current turn's
+        # text breaks on follow-ups ("compare with France" carries dates the
+        # user set two turns ago). Stamp once, here, where it is unambiguous.
+        if intent.parameters.get("startDate") or intent.parameters.get("endDate"):
+            intent.parameters.setdefault("__time_scope_authority", "user")
+
         # Only apply defaults if neither startDate nor endDate is specified
         if not intent.parameters.get("startDate") and not intent.parameters.get("endDate"):
             provider = intent.apiProvider.upper()
@@ -92,6 +100,7 @@ class ParameterValidator:
             # Set default time period
             intent.parameters["startDate"] = start_date.isoformat()
             intent.parameters["endDate"] = today.isoformat()
+            intent.parameters["__time_scope_authority"] = "default"
 
             logger.debug(
                 "Applied default time period (%d years) to %s query: %s to %s",

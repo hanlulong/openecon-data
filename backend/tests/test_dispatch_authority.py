@@ -9,18 +9,18 @@ from __future__ import annotations
 from backend.services.data_fetcher import _has_provider_map_authority
 
 
-def test_verified_state_authority_requires_delta_and_unchanged_indicator():
+def test_verified_state_authority_is_self_sufficient():
+    # The verified_conversation_state stamp is only ever written when the
+    # indicator is unchanged (the delta branch guards it; materialize only
+    # carries resolved_indicator_code forward when neither indicator nor
+    # provider changed). The stamp's PRESENCE is therefore sufficient — the
+    # __delta_* flags are stripped from params before the dispatch assert, so
+    # re-checking them here would (and did) wrongly block valid follow-ups.
     base = {"__semantic_authority": "verified_conversation_state"}
-
+    assert _has_provider_map_authority(base)
     assert _has_provider_map_authority(
         {**base, "__delta_resolved": True, "__delta_indicator_changed": False}
     )
-    # Indicator changed → must re-resolve, no carried authority.
-    assert not _has_provider_map_authority(
-        {**base, "__delta_resolved": True, "__delta_indicator_changed": True}
-    )
-    # Not a delta turn → the stamp alone grants nothing.
-    assert not _has_provider_map_authority(base)
 
 
 def test_strong_authorities_unchanged():

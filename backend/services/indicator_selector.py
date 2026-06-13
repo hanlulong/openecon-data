@@ -996,20 +996,37 @@ class IndicatorSelector:
             safe_query = query
             for char in ['"', "'", '(', ')', '*', '-', ':', '^', ',']:
                 safe_query = safe_query.replace(char, ' ')
-            words = [w.strip() for w in safe_query.split() if w.strip() and len(w.strip()) > 2]
+            # Keep 2-char tokens: monetary aggregates (M1/M2/M3), country
+            # codes (US/EU), and tenors (2y/5y) are short AND load-bearing.
+            words = [w.strip() for w in safe_query.split() if len(w.strip()) >= 2]
             if not words:
                 return []
 
-            fts_query = " OR ".join([f'"{w}"*' for w in words])
-            cur.execute(
-                """SELECT i.code, i.name FROM indicators_fts f
-                JOIN indicators i ON f.rowid = i.id
-                WHERE indicators_fts MATCH ? AND i.provider = ?
-                ORDER BY bm25(indicators_fts, 0, 3.0, 10.0, 1.0, 3.0, 2.0, 2.0)
-                LIMIT ?""",
-                (fts_query, provider, top_k),
-            )
-            return cur.fetchall()
+            def _run(fts_query: str) -> list:
+                cur.execute(
+                    """SELECT i.code, i.name FROM indicators_fts f
+                    JOIN indicators i ON f.rowid = i.id
+                    WHERE indicators_fts MATCH ? AND i.provider = ?
+                    ORDER BY bm25(indicators_fts, 0, 3.0, 10.0, 1.0, 3.0, 2.0, 2.0)
+                    LIMIT ?""",
+                    (fts_query, provider, top_k),
+                )
+                return cur.fetchall()
+
+            # Precision first: rows matching ALL query words (name/keywords/
+            # synonyms) are near-certain lexical hits and must not be diluted
+            # by the thousands of single-word matches an OR query returns.
+            # Fall back to OR for recall when the AND set is too small.
+            rows: list = []
+            if len(words) > 1:
+                rows = _run(" AND ".join(f'"{w}"*' for w in words))
+            if len(rows) < top_k:
+                seen = {r[0] for r in rows}
+                rows += [
+                    r for r in _run(" OR ".join(f'"{w}"*' for w in words))
+                    if r[0] not in seen
+                ][: top_k - len(rows)]
+            return rows
         except Exception as e:
             logger.warning("FTS5 fallback failed: %s", e)
             return []

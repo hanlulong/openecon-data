@@ -3015,6 +3015,19 @@ def build_uncertain_result_clarification(
     """Return a clarification response with options when series selection is uncertain."""
     if intent and _is_exact_match_locked(intent.parameters):
         return None
+    if (
+        intent
+        and str((intent.parameters or {}).get("__semantic_authority") or "")
+        == "exact_user_input"
+    ):
+        # The user already answered a clarification by explicitly choosing
+        # this series; re-running the uncertainty gate re-issues the SAME
+        # question forever (the M2 dead-end loop). Strictly scoped to
+        # exact_user_input: 'verified_conversation_state' is stamped on every
+        # follow-up turn and must NOT silence legitimate uncertainty checks.
+        # Deliberately NOT via __exact_provider_code_match — that flag is
+        # overloaded (it also arms date-window stripping in data_fetcher).
+        return None
     if intent and intent.indicators and len(intent.indicators) > 1:
         return None
     if not intent or not qs._needs_indicator_clarification(query, data, intent):

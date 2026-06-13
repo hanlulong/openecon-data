@@ -3156,6 +3156,9 @@ class QueryService:
             "__indicator_retry_query",
             "__exact_provider_code_match",
             "__semantic_provider_locked",
+            # Provenance only — the DATES are identity-bearing, their source
+            # is not (same window must hit the same cache entry).
+            "__time_scope_authority",
         ):
             cache_params.pop(internal_key, None)
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION

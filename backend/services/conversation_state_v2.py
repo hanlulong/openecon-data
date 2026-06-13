@@ -468,6 +468,10 @@ class ConversationState(BaseModel):
     provider_locked: bool = False
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    # Provenance of the time window ("user" | "default" | None) — carried so
+    # follow-up turns keep knowing whether dates were user-set; downstream
+    # date-strip gates must not re-infer this from follow-up text.
+    time_scope_source: Optional[str] = None
     frequency: Optional[str] = None
 
     # --- Dimension modifiers (StatsCan, Eurostat sub-categories) ---
@@ -769,6 +773,9 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.start_date = delta.changed_start_date
     if delta.changed_end_date:
         merged.end_date = delta.changed_end_date
+    if delta.changed_start_date or delta.changed_end_date:
+        # A date change extracted from the follow-up is user language.
+        merged.time_scope_source = "user"
     if delta.changed_frequency:
         merged.frequency = delta.changed_frequency
 
@@ -845,6 +852,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["startDate"] = state.start_date
     if state.end_date:
         parameters["endDate"] = state.end_date
+    if (state.start_date or state.end_date) and state.time_scope_source:
+        parameters["__time_scope_authority"] = state.time_scope_source
     if state.frequency:
         parameters["frequency"] = state.frequency
 
@@ -1001,6 +1010,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
     # Time
     start_date = params.get("startDate")
     end_date = params.get("endDate")
+    time_scope_source = params.get("__time_scope_authority")
     frequency = params.get("frequency")
 
     original_query = str(intent.originalQuery or "").strip()
@@ -1203,6 +1213,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         routed_provider=provider_name,
         start_date=start_date,
         end_date=end_date,
+        time_scope_source=time_scope_source,
         frequency=frequency,
         original_query=intent.originalQuery,
         last_indicators_resolved=list(intent.indicators) if intent.indicators else None,

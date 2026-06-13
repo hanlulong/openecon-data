@@ -121,20 +121,32 @@ def apply_country_overrides(
             for country in current_geo
             if country
         ]
+        # UNION explicitly named countries with the group members — replacing
+        # the whole geography with only the group silently dropped the other
+        # comparators ("inflation US vs Eurozone" lost the US entirely).
+        # Explicit countries lead; members follow; dedup by normalized ISO2.
+        combined_target: list[str] = []
+        seen_norm: set[str] = set()
+        for country in list(extracted_countries) + list(expanded_region_countries):
+            norm = svc._normalize_country_to_iso2(country) or str(country).upper()
+            if norm in seen_norm:
+                continue
+            seen_norm.add(norm)
+            combined_target.append(country)
         normalized_target = [
             svc._normalize_country_to_iso2(country) or str(country).upper()
-            for country in expanded_region_countries
+            for country in combined_target
         ]
         if normalized_current != normalized_target:
             previous = current_country or (
                 ",".join(current_countries) if current_countries else ""
             )
             intent.parameters.pop("country", None)
-            intent.parameters["countries"] = expanded_region_countries
+            intent.parameters["countries"] = combined_target
             logger.info(
                 "🌍 Region Override: '%s' -> %s (query specifies a country group)",
                 previous,
-                expanded_region_countries,
+                combined_target,
             )
             return
 

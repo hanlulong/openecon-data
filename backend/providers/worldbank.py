@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import logging
 import re
@@ -811,9 +812,13 @@ class WorldBankProvider(BaseProvider):
         )
         url = f"{self.base_url}/sources/{source_id}/country/{batch_codes}/series/{indicator_code}"
         params = {"format": "json", "per_page": 1000}
-        if start_date and end_date:
-            params["date"] = f"{start_date[:4]}:{end_date[:4]}"
-        elif not start_date and not end_date:
+        if start_date or end_date:
+            # Either bound is enough — requiring both returned full history
+            # for "since YYYY"-style requests.
+            params["date"] = (
+                f"{(start_date or '1960')[:4]}:{(end_date or str(datetime.now().year))[:4]}"
+            )
+        else:
             # Source-specific endpoints often sort all-country records by
             # far-future placeholder years with null values.  WorldBank's
             # documented MRNEV parameter returns the most recent non-empty
@@ -1151,9 +1156,14 @@ class WorldBankProvider(BaseProvider):
         url = f"{self.base_url}/country/{batch_codes}/indicator/{indic}"
         prefer_parallel_small_group = 1 < len(country_list) <= 3
 
+        # Build the date filter when EITHER bound exists — requiring both
+        # silently returned full history (1960→) for "since 2015"-style
+        # queries that set only startDate.
         date_param = None
-        if start_date and end_date:
-            date_param = f"{start_date[:4]}:{end_date[:4]}"
+        if start_date or end_date:
+            start_year = (start_date or "1960")[:4]
+            end_year = (end_date or str(datetime.now().year))[:4]
+            date_param = f"{start_year}:{end_year}"
 
         # Scale per_page based on number of countries to avoid pagination
         # cutting off countries (e.g., G20 × 65 years = 1,235 records > 1,000).
