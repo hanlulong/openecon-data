@@ -60,15 +60,33 @@ Respond with ONLY a JSON object mapping code to a list of phrases:
 {{"CODE1": ["phrase a", "phrase b"], "CODE2": [...]}}"""
 
 
-def fetch_rows(conn, provider: str, min_popularity: int, limit: int, force: bool):
-    where = "provider = ? AND popularity >= ?"
+def fetch_rows(conn, provider: str, min_popularity: int, limit: int, force: bool,
+               category: str = None):
+    """Select rows to enrich.
+
+    Providers with `popularity` (FRED) rank by it. Providers without it
+    (WorldBank/IMF/Eurostat/StatsCan have NULL popularity) must scope by a
+    structural signal instead — pass `category` (e.g. WorldBank's
+    'World Development Indicators' core database = ~1500 commonly-queried rows)
+    so enrichment stays bounded to series users actually query and does not add
+    synonym noise to tens of thousands of niche rows.
+    """
+    where = "provider = ?"
+    params = [provider]
+    if category:
+        where += " AND category = ?"
+        params.append(category)
+    else:
+        where += " AND popularity >= ?"
+        params.append(min_popularity)
     if not force:
         where += " AND (synonyms IS NULL OR synonyms = '')"
+    params.append(limit)
     cur = conn.execute(
         f"""SELECT code, name, description, unit, frequency, popularity
             FROM indicators WHERE {where}
             ORDER BY popularity DESC, code LIMIT ?""",
-        (provider, min_popularity, limit),
+        params,
     )
     return cur.fetchall()
 
@@ -141,12 +159,19 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=5000)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--category", default=None,
+        help="Scope by indicators.category instead of popularity (for providers "
+             "with no popularity signal, e.g. WorldBank 'World Development Indicators').",
+    )
     args = ap.parse_args()
 
     conn = sqlite3.connect(str(DB_PATH))
-    rows = fetch_rows(conn, args.provider, args.min_popularity, args.limit, args.force)
-    print(f"{len(rows)} rows to enrich for {args.provider} "
-          f"(popularity >= {args.min_popularity})")
+    rows = fetch_rows(conn, args.provider, args.min_popularity, args.limit, args.force,
+                      category=args.category)
+    _scope = (f"category={args.category!r}" if args.category
+              else f"popularity >= {args.min_popularity}")
+    print(f"{len(rows)} rows to enrich for {args.provider} ({_scope})")
     if not rows:
         return 0
 
