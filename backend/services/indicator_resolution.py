@@ -69,24 +69,34 @@ def _build_country_alias_regex_rows() -> tuple[_CountryAliasRegex, ...]:
     )
     for alias_text in aliases:
         escaped = re.escape(alias_text)
+        # Two-letter aliases are ISO2 codes, many of which are also ordinary
+        # English words ("in"->IN, "is"->IS, "no"->NO, "to"->TO, "me"->ME,
+        # "it"->IT, "do"->DO, "at"->AT, "de"->DE ...).  Matching them
+        # case-insensitively turned every preposition in a query/title into a
+        # phantom country signal (~half of all catalog titles).  Require an
+        # explicit UPPERCASE token for <=2-char aliases via a scoped
+        # case-sensitive group; full names (>=3 chars) stay case-insensitive so
+        # "germany"/"united states" still resolve in any casing.  Same structural
+        # casing rule as the FRED ISO3 fix, applied to the resolution ranker.
+        country = f"(?-i:{re.escape(alias_text.upper())})" if len(alias_text) <= 2 else escaped
         rows.append(
             _CountryAliasRegex(
                 alias=alias_text,
                 code=CountryResolver.normalize(alias_text) or "",
                 boundary=re.compile(
-                    rf"(?<![a-z0-9]){escaped}(?![a-z0-9])",
+                    rf"(?<![A-Za-z0-9]){country}(?![A-Za-z0-9])",
                     flags=re.IGNORECASE,
                 ),
                 leading_space=re.compile(
-                    rf"^(?:{escaped})\s+",
+                    rf"^(?:{country})\s+",
                     flags=re.IGNORECASE,
                 ),
                 for_suffix=re.compile(
-                    rf"^(?P<head>.+?)\s+for\s+(?P<country>{escaped})$",
+                    rf"^(?P<head>.+?)\s+for\s+(?P<country>{country})$",
                     flags=re.IGNORECASE,
                 ),
                 punct_prefix=re.compile(
-                    rf"^(?P<country>{escaped})\s*[-,:]\s*(?P<head>.+)$",
+                    rf"^(?P<country>{country})\s*[-,:]\s*(?P<head>.+)$",
                     flags=re.IGNORECASE,
                 ),
             )
@@ -1756,7 +1766,10 @@ def _leading_acronym_comma_tail_exact_title_variants(
 
 def _extract_country_codes_from_text(text: str) -> set[str]:
     """Extract ISO country codes from free text using alias matching."""
-    query_text = str(text or "").strip().lower()
+    # Keep ORIGINAL case: <=2-char ISO2 aliases match case-sensitively (uppercase
+    # only, so "US" resolves but "us"/"in"/"is"/"no" do not), while >=3-char full
+    # names match case-insensitively via the IGNORECASE-compiled boundary regex.
+    query_text = str(text or "").strip()
     if not query_text:
         return set()
 
