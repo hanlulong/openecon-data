@@ -20,6 +20,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _bis_year_from_iso(date_str: Optional[str]) -> Optional[int]:
+    """Year from an already-parsed ISO date, or None.
+
+    The raw SDMX period can be a dashless quarter/month token ("2016Q1",
+    "2016M03"); int(token.split("-")[0]) crashed on those (ValueError) and either
+    silently dropped a whole country or failed a Global-Liquidity fetch. The ISO
+    date computed one line above (e.g. "2016-01-01") yields the year safely.
+    """
+    if date_str and str(date_str)[:4].isdigit():
+        return int(str(date_str)[:4])
+    return None
+
+
+
 class BISProvider(BaseProvider):
     """Bank for International Settlements (BIS) Statistics API provider.
 
@@ -426,10 +440,10 @@ class BISProvider(BaseProvider):
                     except (ValueError, TypeError, IndexError):
                         value = None
                 date_str = _period_to_iso_date(time_period)
-                year_int = int(str(time_period).split("-")[0])
-                if start_year and year_int < start_year:
+                year_int = _bis_year_from_iso(date_str)
+                if year_int is not None and start_year and year_int < start_year:
                     continue
-                if end_year and year_int > end_year:
+                if year_int is not None and end_year and year_int > end_year:
                     continue
                 data_points.append({"date": date_str, "value": value})
 
@@ -872,11 +886,11 @@ class BISProvider(BaseProvider):
                                         value = None
 
                                 date_str = _period_to_iso_date(time_period)
-                                year_int = int(str(time_period).split("-")[0])
+                                year_int = _bis_year_from_iso(date_str)
 
-                                if start_year and year_int < start_year:
+                                if year_int is not None and start_year and year_int < start_year:
                                     continue
-                                if end_year and year_int > end_year:
+                                if year_int is not None and end_year and year_int > end_year:
                                     continue
 
                                 data_points.append({
@@ -1136,11 +1150,11 @@ class BISProvider(BaseProvider):
 
                     # Convert time period (shared SDMX parser, Phase 3.2)
                     date_str = _period_to_iso_date(time_period)
-                    year_int = int(str(time_period).split("-")[0])
+                    year_int = _bis_year_from_iso(date_str)
 
-                    if start_year and year_int < start_year:
+                    if year_int is not None and start_year and year_int < start_year:
                         continue
-                    if end_year and year_int > end_year:
+                    if year_int is not None and end_year and year_int > end_year:
                         continue
 
                     data_points.append({
