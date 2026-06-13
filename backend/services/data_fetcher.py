@@ -1302,11 +1302,30 @@ def extract_exchange_rate_params(params: dict, intent: ParsedIntent) -> dict:
             target_currency = found_codes[1]
             logger.info(f"Extracted from code search: {base_currency} -> {target_currency}")
         elif len(found_codes) == 1:
-            # Single currency found - treat as "X to USD" or "USD to X"
+            # Single 3-letter code found. Before defaulting the other operand,
+            # check for a DIFFERENT currency referenced by NAME (e.g. "euro to USD",
+            # "canadian dollar to USD") and pair them in query order — otherwise the
+            # named counterpart is silently dropped in favour of the EUR/USD default.
             code = found_codes[0]
-            if code == "USD":
-                # Query is about USD, but we need a target
-                # Default to EUR as most common pair
+            name_lower = (intent.originalQuery or query_text or "").lower()
+            named_code = None
+            named_pos = None
+            for nm, ncode in currency_name_map.items():
+                if ncode == code:
+                    continue
+                pos = name_lower.find(nm)
+                if pos != -1 and (named_pos is None or pos < named_pos):
+                    named_code, named_pos = ncode, pos
+            if named_code:
+                code_pos = name_lower.find(code.lower())
+                if code_pos == -1:
+                    code_pos = len(name_lower) + 1
+                if named_pos < code_pos:
+                    base_currency, target_currency = named_code, code
+                else:
+                    base_currency, target_currency = code, named_code
+            elif code == "USD":
+                # Query is about USD, but we need a target; default to EUR.
                 base_currency = "USD"
                 target_currency = params.get("targetCurrency") or "EUR"
             else:
