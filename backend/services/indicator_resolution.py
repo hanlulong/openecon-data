@@ -2161,6 +2161,8 @@ def is_placeholder_indicator_code(code: Optional[str]) -> bool:
         "NONE",
         "NULL",
         "UNKNOWN",
+        "UNSPECIFIED",
+        "INFORMATIONAL",
         "DYNAMIC",
         "AUTO",
         "-",

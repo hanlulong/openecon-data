@@ -1566,10 +1566,11 @@ def handle_informational_intent(
     # Try extracting search terms from the parsed intent indicators first.
     # If the intent has only placeholder values (e.g., from pre-LLM dispatch),
     # fall back to extracting search terms from the raw query text.
-    _placeholder_indicators = {"INFORMATIONAL", "NONE", "UNKNOWN", ""}
+    # Use the shared placeholder helper (was a divergent literal set that drifted
+    # from the canonical one and omitted "unspecified" etc.).
     raw_indicators = [
         str(ind) for ind in (intent.indicators or [])
-        if str(ind).upper() not in _placeholder_indicators
+        if not _is_placeholder_indicator_code(str(ind))
     ]
     search_terms = " ".join(raw_indicators)
     search_terms = re.sub(

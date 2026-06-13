@@ -121,6 +121,16 @@ class ParameterValidator:
         provider = intent.apiProvider.upper()
         params = intent.parameters or {}
 
+        # A placeholder-only indicator list (the LLM sometimes emits "unspecified"/
+        # "none"/"unknown" for vague inputs) is not actionable. Treat it like an
+        # empty list and ask for an indicator, rather than letting the literal
+        # placeholder slip through as a real metric and silently return no data.
+        from .indicator_resolution import is_placeholder_indicator_code as _is_placeholder
+        if intent.indicators and all(_is_placeholder(ind) for ind in intent.indicators):
+            return False, "Please specify an economic indicator (GDP, inflation, unemployment, etc.)", {
+                'suggestion': 'Try: "US inflation", "GDP for Canada", "unemployment in Germany"'
+            }
+
         # Validate based on provider
         if provider == "FRED":
             return ParameterValidator._validate_fred(intent, params)
