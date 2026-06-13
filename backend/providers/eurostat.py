@@ -40,6 +40,18 @@ def _eurostat_dataset_unavailable_message(
     )
 
 
+# Genuine growth/change-RATE intent. A bare "change" substring also matches
+# "exCHANGE rate" and "CHANGES in inventories" (real LEVEL series), so requiring
+# word-boundaried, qualified phrasing prevents silently replacing their published
+# values with a year-over-year % transform.
+_EUROSTAT_RATE_INTENT_RE = re.compile(
+    r"\b(?:growth|yoy|year[-\s]over[-\s]year)\b"
+    r"|(?:\b(?:percent|percentage)|%|\brate\s+of)\s+changes?\b"
+    r"|\bgrowth\s+rate\b",
+    re.IGNORECASE,
+)
+
+
 class EurostatProvider(BaseProvider):
     """Eurostat Statistics API provider for EU economic data using SDMX 3.0 endpoints."""
 
@@ -1221,9 +1233,14 @@ class EurostatProvider(BaseProvider):
             if rate_indicator in indicator_lower or rate_indicator in query_lower:
                 return False
 
-        # Only apply to growth/change queries for INDEX data
-        growth_keywords = ["growth", "change", "yoy", "year-over-year"]
-        return any(keyword in indicator_lower or keyword in query_lower for keyword in growth_keywords)
+        # Only apply to genuine growth/change-RATE requests for INDEX data.  A bare
+        # "change" substring matched "exchange rate" and "changes in inventories"
+        # (real level series), silently corrupting their published values into a
+        # YoY % transform; require word-boundaried, qualified phrasing instead.
+        return bool(
+            _EUROSTAT_RATE_INTENT_RE.search(indicator_lower)
+            or _EUROSTAT_RATE_INTENT_RE.search(query_lower)
+        )
 
     def _calculate_year_over_year_change(self, data: list[dict]) -> list[dict]:
         """Calculate year-over-year percentage change from index values."""
