@@ -620,9 +620,13 @@ class FREDProvider(BaseProvider):
             # Word-boundary match so "exCHANGE rate" and "unCHANGEd" do not get
             # mislabeled as a change series (FRED has 400+ FX-rate series).
             data_type = "Change"
-        elif "index" in title_lower or "index" in unit_lower:
+        elif re.search(r"\bindex(es)?\b", title_lower) or "index" in unit_lower:
+            # Word-boundary so "inflation-INDEXed" Treasury yields are not tagged
+            # as an Index; genuine indices still match via the unit ("Index 2017=100").
             data_type = "Index"
-        elif "rate" in title_lower and "percent" in unit_lower:
+        elif ("rate" in title_lower or "yield" in title_lower) and "percent" in unit_lower:
+            # Treasury / government-bond YIELDS (DGS10, DFII10, GS10, ...) are rates
+            # even though their titles say "Yield" rather than "Rate".
             data_type = "Rate"
         else:
             data_type = "Level"
