@@ -40,6 +40,32 @@ logger = logging.getLogger(__name__)
 # "HS8703", etc.  Used to route queries with explicit HS codes to Comtrade.
 _HS_CODE_RE = re.compile(r'\bHS\s*[-]?\s*\d{4,6}\b', re.IGNORECASE)
 
+# A genuine FX request names a currency PAIR — both sides ISO-4217 — e.g.
+# "USD to EUR", "eur/usd", "gbp vs usd". This replaces the old bare single-currency
+# substrings ("usd to", "to eur", ...) that matched inside macro phrasing
+# ("remittances in usd to gdp ratio", "exported to eurozone", "exports to usd")
+# and, as a structural final-authority route, overrode the correct provider.
+_CURRENCY_TOKEN = (
+    # multi-word currency NAMES (longest-first so they match as a unit)
+    "canadian dollars?|australian dollars?|new zealand dollars?|hong kong dollars?|"
+    "singapore dollars?|us dollars?|swiss francs?|japanese yen|chinese yuan|"
+    "british pounds?|indian rupees?|south korean won|south african rand|"
+    # ISO-4217 codes
+    "usd|eur|gbp|jpy|cad|aud|chf|cny|inr|krw|brl|mxn|zar|try|sgd|hkd|nzd|sek|nok|"
+    "dkk|thb|myr|twd|rub|pln|huf|czk|ils|clp|php|idr|aed|sar|"
+    # single-word currency NAMES
+    "dollars?|euros?|pounds?|yen|yuan|renminbi|rmb|francs?|rupees?|won|reais|"
+    "rubles?|rouble|pesos?|rand|lira|sterling|krona|kroner|ringgit|baht|shekel|"
+    "riyal|dirham"
+)
+# Both sides must be a currency token directly adjacent to the separator, so
+# "remittances in usd to gdp ratio" / "exported to eurozone" no longer match.
+_CURRENCY_PAIR_RE = re.compile(
+    rf"\b(?:{_CURRENCY_TOKEN})\b\s*(?:to|/|-|vs\.?|versus|into)\s*"
+    rf"\b(?:{_CURRENCY_TOKEN})\b",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Inline helpers (lightweight, structural checks only)
@@ -489,12 +515,13 @@ class UnifiedRouter:
 
         exchange_patterns = [
             "exchange rate", "forex", "currency exchange", "fx rate",
-            "usd to", "eur to", "gbp to", "jpy to", "cad to", "aud to",
-            "to usd", "to eur", "to gbp", "to jpy", "to cad", "to aud",
-            "usd/", "eur/", "gbp/", "/usd", "/eur", "/gbp",
             "dollar to euro", "euro to dollar", "pound to dollar",
         ]
-        return any(pattern in combined for pattern in exchange_patterns)
+        if any(pattern in combined for pattern in exchange_patterns):
+            return True
+        # Require an explicit currency PAIR (both sides ISO-4217), so a bare
+        # currency word inside a macro phrase no longer misroutes to FX.
+        return bool(_CURRENCY_PAIR_RE.search(combined))
 
     @staticmethod
     def _is_aggregate_trade_indicator(query_lower: str) -> bool:
