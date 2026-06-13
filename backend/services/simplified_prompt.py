@@ -147,6 +147,7 @@ Date handling:
 - If user gives explicit years, convert to full dates:
   - "2019-2023" -> startDate "2019-01-01", endDate "2023-12-31"
   - "since 2020" -> startDate "2020-01-01", endDate null
+  - BUT a year that directly qualifies "dollars"/"prices"/"$"/"constant"/"chained" (e.g. "in 2017 dollars", "constant 2015 prices", "2012 USD") is a constant-price BASE YEAR (a unit on the indicator), NOT a time range -> leave BOTH startDate and endDate null.
 - For relative periods, compute the start date from today ({today}):
   - "last N months" (e.g. "last 12 months") -> startDate = the first day of the month N months before {today}, endDate null
   - "last N weeks" / "last N days" -> startDate = {today} minus that span, endDate null
