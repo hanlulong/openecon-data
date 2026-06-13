@@ -45,7 +45,7 @@ Add to your `.env` file:
 
 ```bash
 # LLM Provider Configuration
-LLM_PROVIDER=openrouter  # Options: openrouter, ollama, lm-studio
+LLM_PROVIDER=openrouter  # Options: openrouter, vllm, ollama, lm-studio
 LLM_MODEL=openai/gpt-4o-mini
 # LLM_BASE_URL=http://localhost:11434  # For local providers
 # LLM_TIMEOUT=30
@@ -58,7 +58,13 @@ LLM_MODEL=openai/gpt-4o-mini
 LLM_PROVIDER=openrouter
 LLM_MODEL=openai/gpt-4o-mini
 OPENROUTER_API_KEY=sk-or-...
+# Hosted last-resort used when a local provider fails at runtime:
+# LLM_FALLBACK_MODEL=openai/gpt-oss-120b
 ```
+
+> Production note: the hosted app runs `LLM_PROVIDER=vllm` with a local
+> gpt-oss-120b (SSH-tunneled vLLM at `localhost:8000`) and falls back to
+> `LLM_FALLBACK_MODEL` on OpenRouter when the tunnel is down.
 
 **Available Models**: GPT-4, Claude, Llama, Mistral, and 100+ others via OpenRouter
 

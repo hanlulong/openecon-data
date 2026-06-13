@@ -185,14 +185,37 @@ class OpenRouterService:
             try:
                 intent = await self._parse_with_instructor(query, conversation_history, conversation_context)
             except Exception as e:
-                logger.warning(f"Instructor parsing failed, falling back to manual: {e}")
+                # InstructorRetryException embeds every failed generation —
+                # including full model reasoning — in str(e); dumping that to
+                # the journal is thousands of lines per failure. Log a bounded
+                # excerpt; full payloads belong in DEBUG-level tooling.
+                err_text = " ".join(str(e).split())
+                logger.warning(
+                    "Instructor parsing failed, falling back to manual: %s",
+                    err_text[:300] + ("…" if len(err_text) > 300 else ""),
+                )
 
-        # Fallback: manual JSON parsing
-        if intent is None:
-            if self.llm_provider:
+        # Fallback: manual JSON parsing against the configured provider
+        if intent is None and self.llm_provider:
+            try:
                 intent = await self._parse_with_provider(query, conversation_history, conversation_context)
-            else:
-                intent = await self._parse_direct(query, conversation_history, conversation_context)
+            except Exception as e:
+                # Runtime failure of a non-OpenRouter provider (e.g. the local
+                # vLLM tunnel dropped mid-flight) must degrade COST, not
+                # availability: fall through to the hosted last resort. When
+                # the configured provider IS OpenRouter there is nothing
+                # different to try, so propagate.
+                if (self.settings.llm_provider or "openrouter").lower() == "openrouter":
+                    raise
+                logger.error(
+                    f"Configured LLM provider '{self.settings.llm_provider}' failed at "
+                    f"runtime ({e}); falling back to hosted "
+                    f"{self.settings.llm_fallback_model} via OpenRouter"
+                )
+
+        # Last resort: direct OpenRouter call with the hosted fallback model
+        if intent is None:
+            intent = await self._parse_direct(query, conversation_history, conversation_context)
 
         return intent
 
@@ -219,10 +242,16 @@ class OpenRouterService:
                 messages.append({"role": role, "content": msg})
         messages.append({"role": "user", "content": query})
 
-        # Reasoning models spend tokens on internal reasoning before producing
-        # JSON output. 600 is enough for actual output of 500-650 tokens.
-        # Previous 1000 was wasteful — saves ~0.5s per query.
-        max_tok = 600 if self.settings.llm_provider in ("vllm",) else 500
+        # Reasoning models spend completion tokens on reasoning BEFORE the
+        # JSON answer. Two controls keep that bounded, mirroring what
+        # VLLMProvider.generate already does on the manual-fallback path:
+        # reasoning_effort=low (vLLM) caps the ramble at the source, and a
+        # generous max_tokens stops residual long-reasoning cases from
+        # truncating mid-JSON — truncation fails Pydantic validation and
+        # burns a full instructor retry (8-20s each) per attempt.
+        is_vllm = self.settings.llm_provider in ("vllm",)
+        max_tok = 1500 if is_vllm else 500
+        extra_body = {"reasoning_effort": "low"} if is_vllm else {}
 
         llm_start = time.perf_counter()
         intent: ParsedIntent = await self.instructor_client.chat.completions.create(
@@ -232,6 +261,7 @@ class OpenRouterService:
             max_retries=3,
             temperature=0.0,
             max_tokens=max_tok,
+            extra_body=extra_body,
         )
         llm_elapsed = time.perf_counter() - llm_start
         intent.originalQuery = query
@@ -335,7 +365,9 @@ class OpenRouterService:
         conversation_history: Optional[List[str]] = None,
         conversation_context: Optional[dict] = None,
     ) -> ParsedIntent:
-        """Fallback: Parse query using direct OpenRouter API calls"""
+        """Last-resort parse via direct OpenRouter call with the hosted
+        fallback model (settings.llm_fallback_model). Reached when the
+        configured provider failed at init OR at runtime (tunnel outage)."""
 
         messages: List[dict[str, Any]] = [{"role": "system", "content": self._system_prompt(conversation_context=conversation_context)}]
         if conversation_history:
@@ -344,12 +376,24 @@ class OpenRouterService:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": query})
 
+        fallback_model = self.settings.llm_fallback_model or self.MODEL
         max_retries = 2
         last_error = None
+        # Reasoning models (gpt-oss-120b) spend completion tokens on reasoning
+        # before emitting the JSON answer; a 300-token cap starves them.
+        use_response_format = True
 
         for attempt in range(max_retries):
             llm_start = time.perf_counter()
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            request_body: dict[str, Any] = {
+                "model": fallback_model,
+                "messages": messages,
+                "temperature": 0,
+                "max_tokens": 2000,
+            }
+            if use_response_format:
+                request_body["response_format"] = {"type": "json_object"}
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self.BASE_URL}/chat/completions",
                     headers={
@@ -358,16 +402,31 @@ class OpenRouterService:
                         "HTTP-Referer": "https://openecon.ai",
                         "X-Title": "OpenEcon Data",
                     },
-                    json={
-                        "model": self.MODEL,
-                        "messages": messages,
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0,
-                        "max_tokens": 300,
-                    },
+                    json=request_body,
                 )
+            if (
+                response.status_code == 400
+                and use_response_format
+                and "response_format" in response.text
+            ):
+                # Some upstream hosts for a model don't support structured
+                # output; retry without it — parse_json_response handles
+                # JSON embedded in prose.
+                use_response_format = False
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    request_body.pop("response_format", None)
+                    response = await client.post(
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://openecon.ai",
+                            "X-Title": "OpenEcon Data",
+                        },
+                        json=request_body,
+                    )
             llm_elapsed = time.perf_counter() - llm_start
-            logger.info(f"LLM parse (direct, attempt {attempt + 1}): {llm_elapsed:.2f}s")
+            logger.info(f"LLM parse (direct, {fallback_model}, attempt {attempt + 1}): {llm_elapsed:.2f}s")
 
             if response.status_code >= 400:
                 content_type = response.headers.get("content-type", "")

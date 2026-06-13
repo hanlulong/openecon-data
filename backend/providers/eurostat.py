@@ -449,9 +449,9 @@ class EurostatProvider(BaseProvider):
             # Extract unit from API response (preferred) or fallback to hardcoded mapping
             unit = self._extract_unit_from_payload(payload, dataset_code)
 
-        # Normalize percentage values (Eurostat sometimes stores as decimals)
-        if unit == "percent" or "percent" in unit.lower():
-            data_points = self._normalize_percentage_values(data_points, dataset_code)
+        # NOTE: values are returned exactly as Eurostat publishes them — see
+        # the FRED provider note on the removed value-sniffing percent
+        # normalizer (it corrupted legitimately small series).
 
         api_url = self._compose_url(data_url, effective_query_params)
 
@@ -935,6 +935,84 @@ class EurostatProvider(BaseProvider):
         frequency = self._infer_frequency(time_dim, dataset_code)
         return data_points, frequency
 
+    _UNIT_AFFINITY_STOPWORDS = frozenset(
+        {"of", "the", "in", "and", "to", "a", "an", "by", "for", "from", "with", "at", "t"}
+    )
+
+    @classmethod
+    def _label_affinity_tokens(cls, text: str) -> set:
+        """Tokenize a metadata label for unit-affinity comparison.
+
+        Purely lexical: lowercases, expands the '%' glyph so it can match
+        'percentage', strips numbers/punctuation and stopwords. Used to align
+        Eurostat's own dataset label with its own unit labels — no
+        domain-specific vocabulary is encoded here.
+        """
+        text = str(text or "").lower().replace("%", " percentage ")
+        return {
+            token
+            for token in re.findall(r"[a-z]+", text)
+            if token not in cls._UNIT_AFFINITY_STOPWORDS
+        }
+
+    def _select_unit_choice(
+        self, payload: Dict[str, Any], dataset_code: str
+    ) -> tuple[int, Optional[str]]:
+        """Pick which category of a multi-unit JSON-stat 'unit' dimension is
+        the dataset's headline measure. Returns (unit_index, unit_label).
+
+        Many Eurostat datasets publish several units in one cube (e.g.
+        tipslm80 carries both 'Percentage point change (t-(t-3))' and
+        'Percentage of population in the labour force'). Blindly taking
+        index 0 returns derived/change series under a level-style name —
+        wrong data with plausible metadata. The dataset label is authored by
+        Eurostat to describe the headline series, so when no unit was pinned
+        by query params we pick the unit whose label shares the most tokens
+        with the dataset label, falling back to the first unit when there is
+        no lexical signal at all.
+        """
+        dimensions = payload.get("dimension", {})
+        unit_dim = dimensions.get("unit") or {}
+        category = unit_dim.get("category") or {}
+        unit_indexes = category.get("index") or {}
+        unit_labels = category.get("label") or {}
+
+        if not unit_indexes:
+            return 0, None
+        if len(unit_indexes) == 1:
+            only_code = next(iter(unit_indexes))
+            return unit_indexes[only_code], unit_labels.get(only_code)
+
+        # Legacy special case predating the affinity rule; une_rt_a's dataset
+        # label carries no unit hint, so the lexical rule cannot decide it.
+        if dataset_code == "une_rt_a":
+            for code in ("PC_ACT", "PC"):
+                if code in unit_indexes:
+                    return unit_indexes[code], unit_labels.get(code)
+
+        dataset_tokens = self._label_affinity_tokens(payload.get("label", ""))
+        best_code = None
+        best_score = 0
+        if dataset_tokens:
+            for code, _idx in sorted(unit_indexes.items(), key=lambda kv: kv[1]):
+                score = len(
+                    dataset_tokens & self._label_affinity_tokens(unit_labels.get(code, ""))
+                )
+                if score > best_score:
+                    best_code, best_score = code, score
+
+        if best_code is None:
+            # No affinity signal: preserve the long-standing first-unit
+            # behavior rather than guessing.
+            best_code = min(unit_indexes, key=unit_indexes.get)
+        else:
+            logger.info(
+                "Eurostat %s: multi-unit dataset, selected unit %s (%s) by "
+                "dataset-label affinity",
+                dataset_code, best_code, unit_labels.get(best_code),
+            )
+        return unit_indexes[best_code], unit_labels.get(best_code)
+
     def _parse_json_stat(self, payload: Dict[str, Any], dataset_code: str) -> list[Dict[str, Any]]:
         """Parse JSON-stat 2.0 format from Eurostat API with proper unit selection."""
         values = payload.get("value", {})
@@ -949,17 +1027,7 @@ class EurostatProvider(BaseProvider):
         sizes = payload.get("size", [])
         id_list = payload.get("id", [])
 
-        # For unemployment rate (une_rt_a), we need PC_ACT (percentage of active population)
-        # For other datasets, take the first/default unit
-        unit_index = 0
-        if dataset_code == "une_rt_a" and "unit" in dimensions:
-            unit_dim = dimensions.get("unit", {})
-            unit_indexes = unit_dim.get("category", {}).get("index", {})
-            # Prefer PC_ACT for unemployment rate
-            if "PC_ACT" in unit_indexes:
-                unit_index = unit_indexes["PC_ACT"]
-            elif "PC" in unit_indexes:
-                unit_index = unit_indexes["PC"]
+        unit_index, _unit_label = self._select_unit_choice(payload, dataset_code)
 
         data_points: list[Dict[str, Any]] = []
 
@@ -1216,21 +1284,13 @@ class EurostatProvider(BaseProvider):
             if unit_dim:
                 category = unit_dim.get("category", {})
                 labels = category.get("label", {})
-                indexes = category.get("index", {})
 
-                # Get the first (or default) unit label
                 if labels:
-                    # If there's only one unit, use it
-                    if len(labels) == 1:
-                        return next(iter(labels.values()))
-
-                    # For unemployment rate, prefer PC_ACT
-                    if dataset_code == "une_rt_a":
-                        for code, label in labels.items():
-                            if code in ["PC_ACT", "PC"]:
-                                return label
-
-                    # Return the first label
+                    # Use the SAME unit choice the value parser used so the
+                    # reported unit always describes the returned numbers.
+                    _idx, selected_label = self._select_unit_choice(payload, dataset_code)
+                    if selected_label:
+                        return selected_label
                     return next(iter(labels.values()))
 
             currency_dim = dimensions.get("currency", {})
@@ -1297,7 +1357,3 @@ class EurostatProvider(BaseProvider):
         """Legacy method for backward compatibility."""
         return self._infer_unit_fallback(dataset_code)
 
-    def _normalize_percentage_values(self, data: list[dict], dataset_code: str) -> list[dict]:
-        """Delegate to the shared SDMX percentage-normalizer (Phase 3.1)."""
-        from ._sdmx import normalize_percentage_values as _shared
-        return _shared(data, label=dataset_code)

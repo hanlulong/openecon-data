@@ -409,6 +409,26 @@ class SecureCodeExecutor:
         Returns:
             Dictionary with execution result
         """
+        # FAIL-CLOSED sandbox health gate for EVERY caller. The explicit
+        # /api/query/pro endpoints check the canary in require_promode, but the
+        # auto-Pro path entered from plain /api/query reaches execute_code
+        # directly — gating here makes the guarantee structural instead of
+        # per-endpoint. The canary itself executes through this method under a
+        # reserved session id, which bypasses the gate (recursion guard); the
+        # result is cached per-process so this costs one dict lookup.
+        if session_id != "__canary__":
+            if not await self.canary_self_test():
+                logger.error(
+                    "⛔ Refusing code execution: sandbox canary failed (fail-closed)"
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        "The code-execution sandbox failed its health self-test; "
+                        "code execution is unavailable (fail-closed)."
+                    ),
+                }
+
         # Validate session_id first
         try:
             sanitized_session_id = self._validate_session_id(session_id)
@@ -550,7 +570,11 @@ class SecureCodeExecutor:
         # Collect any promode_* artifact written inside the isolated output dir.
         # The dir is already per-execution, so we do not need to match session_id
         # in the glob; we only accept the known publishable extensions.
-        allowed_suffixes = {".png", ".csv", ".html", ".json"}
+        # SECURITY: no .html — generated code is user-steerable, and a published
+        # .html served same-origin from data.openecon.ai would be stored XSS
+        # (session/JWT theft via a shareable link). PNG/CSV/JSON cover every
+        # real artifact ever produced in production.
+        allowed_suffixes = {".png", ".csv", ".json"}
 
         for out_file in sorted(tmp_out_dir.glob("promode_*")):
             try:
@@ -578,7 +602,6 @@ class SecureCodeExecutor:
                 file_type = {
                     ".png": "image",
                     ".csv": "data",
-                    ".html": "html",
                     ".json": "data",
                 }.get(suffix, "file")
 

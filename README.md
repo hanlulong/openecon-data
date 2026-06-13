@@ -238,7 +238,7 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Multi-Format Export** — CSV, JSON, DTA (Stata), and Python code. Every export includes source attribution.
 
-**Pro Mode** — AI-generated Python for advanced analysis: custom transformations, derived indicators, bespoke charts. Available to registered users on the hosted app. Disabled by default when self-hosting (`PROMODE_ENABLED=true` — enable only with proper sandboxing, since it executes generated code).
+**Pro Mode** — AI-generated Python for advanced analysis: custom transformations, derived indicators, bespoke charts. Available to registered users on the hosted app. Disabled by default when self-hosting; set `PROMODE_ENABLED=true` only with proper sandboxing, since it executes generated code.
 
 **Streaming** — Real-time progress via Server-Sent Events.
 

@@ -263,8 +263,13 @@ SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_KEY=...         # config.py reads SUPABASE_SERVICE_KEY (not _SERVICE_ROLE_KEY)
 
 # LLM configuration
-LLM_PROVIDER=openrouter          # openrouter, ollama, or lm-studio
-LLM_MODEL=openai/gpt-4o-mini
+# PRODUCTION runs the LOCAL gpt-oss-120b via a reverse SSH tunnel:
+#   LLM_PROVIDER=vllm, LLM_MODEL=gpt-oss-120b, LLM_BASE_URL=http://localhost:8000
+#   plus SELECTOR_LLM_MODEL/SELECTOR_LLM_BASE_URL for the indicator selector.
+# When the tunnel is down, parse + selector fall back to the hosted
+# LLM_FALLBACK_MODEL on OpenRouter (default openai/gpt-oss-120b).
+LLM_PROVIDER=openrouter          # openrouter, vllm, ollama, or lm-studio
+LLM_MODEL=openai/gpt-4o-mini     # stock-setup default; prod uses local gpt-oss-120b
 
 # Pro Mode (default false; ENABLED in production with the Layer-2 sandbox —
 # promode uid + mount isolation + iptables egress allowlist, provisioned by

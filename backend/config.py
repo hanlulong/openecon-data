@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     # indicators, so it is worth a stronger model than the parse path needs.
     selector_llm_model: str | None = Field(default=None, alias="SELECTOR_LLM_MODEL")
     selector_llm_base_url: str | None = Field(default=None, alias="SELECTOR_LLM_BASE_URL")
+    # Hosted last-resort model (OpenRouter) used by BOTH the parse path and the
+    # indicator selector when the configured provider fails at runtime (e.g.
+    # the local-LLM tunnel drops). One knob so the whole fallback chain stays
+    # coherent. Default per the 2026-06 selector bake-off: hosted gpt-oss-120b
+    # beat gpt-4o-mini 10/12 vs 6/12 and costs ~3x less. It is a reasoning
+    # model — callers must budget max_tokens for reasoning before the answer.
+    llm_fallback_model: str = Field(
+        default="openai/gpt-oss-120b", alias="LLM_FALLBACK_MODEL"
+    )
     # Model-specific prompt configuration
     llm_strip_thinking: bool = Field(
         default=True,

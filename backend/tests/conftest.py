@@ -17,6 +17,11 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DISABLE_MCP", "1")
 os.environ.setdefault("DISABLE_BACKGROUND_JOBS", "1")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-for-testing")
+# Collection must be hermetic: Settings() validates that OPENROUTER_API_KEY
+# exists when LLM_PROVIDER=openrouter (the default), and pytest runs from
+# backend/ where the repo-root .env is not picked up. Without this, the
+# suite only collects when the shell happens to export a real key.
+os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-key-not-real")
 
 
 # ============================================================================

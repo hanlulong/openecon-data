@@ -388,6 +388,7 @@ def match_indicator_choice_option(user_query: str, options: List[str]) -> Option
         return None
 
     normalized = re.sub(r"\s+", " ", text.lower()).strip()
+    substring_matches: list[str] = []
     for option in options:
         option_text = str(option or "").strip()
         if not option_text:
@@ -405,7 +406,15 @@ def match_indicator_choice_option(user_query: str, options: List[str]) -> Option
             return option_text
 
         if len(normalized) >= 6 and normalized in option_body_lower:
-            return option_text
+            substring_matches.append(option_text)
+
+    # A substring reply is only an answer when it identifies ONE option.
+    # "interest rate" against ["Real interest rate", "Deposit interest rate"]
+    # is exactly the ambiguity the clarification exists to resolve — matching
+    # the first option would silently execute an arbitrary choice. Ambiguous
+    # replies fall through (None) so the caller re-prompts.
+    if len(substring_matches) == 1:
+        return substring_matches[0]
 
     return None
 

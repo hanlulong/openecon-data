@@ -181,11 +181,22 @@ def _has_provider_map_authority(params: dict) -> bool:
     """
     if is_exact_match_locked(params):
         return True
-    return str(params.get("__semantic_authority") or "") in {
+    authority = str(params.get("__semantic_authority") or "")
+    if authority in {
         "exact_user_input",
         "llm_adjudication",
         "post_fetch_semantic_judge",
-    }
+    }:
+        return True
+    if authority == "verified_conversation_state":
+        # A code carried over from verified conversation state keeps its
+        # authority ONLY while the indicator is unchanged from the turn that
+        # verified it (same conditions as the StatsCan product predicate).
+        # An indicator change must go back through resolution/adjudication.
+        return bool(params.get("__delta_resolved")) and not bool(
+            params.get("__delta_indicator_changed")
+        )
+    return False
 
 
 def _assert_provider_map_authority(

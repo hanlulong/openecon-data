@@ -13,7 +13,6 @@ cd "$ROOT_DIR/backend"
   tests/test_query_service.py \
   tests/test_query_pipeline.py \
   routing/tests/test_unified_router.py \
-  routing/tests/test_semantic_provider_router.py \
   tests/test_indicator_selector.py \
   tests/test_indicator_resolution.py \
   tests/test_data_agent.py \

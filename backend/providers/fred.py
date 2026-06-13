@@ -484,18 +484,6 @@ class FREDProvider(BaseProvider):
     def _map_frequency(self, fred_frequency: str) -> str:
         return self.FREQUENCY_MAP.get(fred_frequency, fred_frequency.lower())
 
-    def _normalize_percentage_values(self, data: list[dict], series_id: str, unit: str) -> list[dict]:
-        """Delegate to the shared SDMX percentage-normalizer.
-
-        Phase 3.1 extraction: the previous in-place implementation was
-        byte-identical to the IMF and Eurostat copies. The `unit` argument
-        is preserved in the signature for caller compatibility but is
-        unused — the normalizer is driven purely by the value distribution.
-        """
-        from ._sdmx import normalize_percentage_values as _shared
-        del unit  # unused — kept for caller signature stability
-        return _shared(data, label=series_id)
-
     async def fetch_series(
         self, params: Dict[str, Any]
     ) -> NormalizedData:
@@ -680,8 +668,11 @@ class FREDProvider(BaseProvider):
             if obs.get("date")  # Skip observations without dates
         ]
 
-        # Normalize percentage values (FRED sometimes stores as decimals)
-        if "percent" in unit.lower() or "rate" in unit.lower():
-            data_points = self._normalize_percentage_values(data_points, target_series, unit)
+        # NOTE: values are returned exactly as FRED publishes them. A legacy
+        # value-sniffing heuristic here multiplied any all-|v|<1.5 "percent"/
+        # "rate" series by 100 — corrupting legitimately small series (yield
+        # spreads like T10Y2Y at 0.39, near-zero policy rates, FX rates).
+        # Provider unit metadata is authoritative; never rescale on value
+        # distribution.
 
         return NormalizedData(metadata=metadata, data=data_points)

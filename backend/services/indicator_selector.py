@@ -44,10 +44,15 @@ def _iso3_suffix_family_exists(code: str) -> bool:
     try:
         conn = sqlite3.connect(str(_INDICATORS_DB))
         try:
+            # substr/length equality instead of LIKE: codes routinely contain
+            # '_' (IMF GGXWDG_NGDP, Eurostat NAMA_10_GDP), which LIKE treats
+            # as a single-char wildcard — false sibling families would make
+            # the country constraint drop correct candidates.
             rows = conn.execute(
                 "SELECT DISTINCT substr(code, -3) FROM indicators "
-                "WHERE code LIKE ? || '___' AND code != ? LIMIT 200",
-                (prefix, code),
+                "WHERE length(code) = ? AND substr(code, 1, ?) = ? "
+                "AND code != ? LIMIT 200",
+                (len(prefix) + 3, len(prefix), prefix, code),
             ).fetchall()
         finally:
             conn.close()
@@ -1191,6 +1196,7 @@ class IndicatorSelector:
             # so a dropped tunnel degrades cost, not availability or quality:
             # the hosted twin of the local model scored 10/12 on the selector
             # eval at $0.18/1k selections (gpt-4o-mini: 6/12 with 5 wrong).
+            # LLM_FALLBACK_MODEL is the shared knob with the parse path.
             attempts.append(
                 (
                     "openrouter-fallback",
@@ -1199,7 +1205,7 @@ class IndicatorSelector:
                         "Authorization": f"Bearer {settings.openrouter_api_key}",
                         "Content-Type": "application/json",
                     },
-                    "openai/gpt-oss-120b",
+                    getattr(settings, "llm_fallback_model", None) or "openai/gpt-oss-120b",
                     1500,
                 )
             )
@@ -1232,7 +1238,17 @@ class IndicatorSelector:
                     )
                     continue
 
-                return self._parse_llm_response(content, candidates, provider, query)
+                parsed = self._parse_llm_response(content, candidates, provider, query)
+                if parsed is not None:
+                    return parsed
+                # Non-empty but unparseable (no control line — e.g. truncated
+                # reasoning prose). A quality failure on one endpoint must not
+                # short-circuit the remaining healthy endpoints: that is the
+                # "tunnel degrades cost, never availability" contract.
+                logger.warning(
+                    "LLM selection via %s returned no control line (%s/%s); trying next endpoint",
+                    attempt_label, provider, query[:40],
+                )
 
             except Exception as e:
                 logger.warning(
@@ -1259,9 +1275,20 @@ class IndicatorSelector:
         if not lines:
             return None
 
-        # Parse REJECT before PICK/ASK so rejection reasons containing "pick" do
-        # not get misinterpreted as a selection.
-        reject_line = next((line for line in lines if re.match(r"^REJECT\b", line, re.IGNORECASE)), "")
+        # Control lines must be ANCHORED at line start: reasoning prose like
+        # "I should not PICK 2 — it is a level, not a rate." must never be
+        # read as a decision. When several control lines appear (a model
+        # thinking out loud before committing), the LAST one is the decision —
+        # reasoning models emit their conclusion at the end.
+        control_kind = ""
+        control_index = -1
+        for idx, line in enumerate(lines):
+            ctl = re.match(r"^(PICK|ASK|REJECT)\b", line, re.IGNORECASE)
+            if ctl:
+                control_kind = ctl.group(1).upper()
+                control_index = idx
+
+        reject_line = lines[control_index] if control_kind == "REJECT" else ""
         if reject_line:
             search_line = next((line for line in lines if re.match(r"^SEARCH\b", line, re.IGNORECASE)), "")
             if not search_line:
@@ -1291,9 +1318,9 @@ class IndicatorSelector:
                 retry_query=retry_query,
             )
 
-        pick_line = next((line for line in lines if re.search(r"\bPICK\b", line, re.IGNORECASE)), "")
+        pick_line = lines[control_index] if control_kind == "PICK" else ""
         if pick_line:
-            match = re.search(r"\bPICK\b\s*[:#\-]?\s*(\d{1,3})\b", pick_line, re.IGNORECASE)
+            match = re.match(r"^PICK\b\s*[:#\-]?\s*(\d{1,3})\b", pick_line, re.IGNORECASE)
             if match:
                 num = int(match.group(1)) - 1
                 if 0 <= num < len(candidates):
@@ -1302,9 +1329,9 @@ class IndicatorSelector:
                     logger.info("🎯 LLM picked: '%s' → %s (%s)", query[:40], code, name[:40])
                     return SelectionResult(code=code, name=name, source="llm_pick")
 
-        ask_line = next((line for line in lines if re.search(r"\bASK\b", line, re.IGNORECASE)), "")
+        ask_line = lines[control_index] if control_kind == "ASK" else ""
         if ask_line:
-            match = re.search(r"\bASK\b\s*[:#\-]?\s*([0-9,\s]+)", ask_line, re.IGNORECASE)
+            match = re.match(r"^ASK\b\s*[:#\-]?\s*([0-9,\s]+)", ask_line, re.IGNORECASE)
             number_text = match.group(1) if match else ""
             options_list = []
             for digits in re.findall(r"\d{1,3}", number_text):

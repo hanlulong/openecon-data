@@ -930,6 +930,16 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
     # normal follow-ups and forcing an unnecessary re-resolution cycle.
     if state.resolved_indicator_code and "indicator" not in parameters:
         parameters["indicator"] = state.resolved_indicator_code
+    if state.resolved_indicator_code:
+        # The code reached state ONLY via _persist_verified_conversation_state
+        # after a successful verified fetch, i.e. its semantic authority was
+        # established on the turn that resolved it. Carry that authority so
+        # the no-shortcut dispatch guard does not block indicator-unchanged
+        # follow-ups (e.g. "what about Italy" re-using a selector-picked
+        # Eurostat code). data_fetcher honors this value only when
+        # __delta_resolved is set and the indicator did NOT change —
+        # mirroring the StatsCan product-authority predicate.
+        parameters.setdefault("__semantic_authority", "verified_conversation_state")
     if state.indicator:
         parameters["__semantic_indicator_label"] = state.indicator
 
@@ -1287,7 +1297,15 @@ def merge_new_state_with_previous(
         and previous.resolved_indicator_code
     ):
         new_state.resolved_indicator_code = previous.resolved_indicator_code
-    if not indicator_changed and not new_state.base_indicator and previous.base_indicator:
+    if (
+        not indicator_changed
+        and not provider_changed
+        and not new_state.base_indicator
+        and previous.base_indicator
+    ):
+        # base_indicator is a provider-namespaced key (e.g. a StatsCan vector
+        # alias); like resolved_indicator_code above, a provider switch
+        # invalidates it even when the human-readable name is unchanged.
         new_state.base_indicator = previous.base_indicator
     if (
         not indicator_changed

@@ -53,7 +53,7 @@ scripts\setup.bat
 Create `.env` in repo root and set:
 
 ```bash
-# Required
+# Required (LLM_PROVIDER options: openrouter, vllm, ollama, lm-studio)
 LLM_PROVIDER=openrouter
 LLM_MODEL=openai/gpt-4o-mini
 OPENROUTER_API_KEY=sk-or-...

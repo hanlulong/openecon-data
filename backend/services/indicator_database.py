@@ -461,8 +461,14 @@ class IndicatorDatabase:
             for row in cursor.fetchall():
                 results.append(dict(row))
             return self._apply_antonym_filter(results, words, limit)
-        except Exception as e:
-            logger.error(f"Search error: {e}")
+        except Exception:
+            # Swallowing the error keeps retrieval degradation graceful
+            # (embedding retrieval still runs), but it MUST be diagnosable:
+            # log the inputs and full traceback, not just str(e).
+            logger.exception(
+                "Search error for query=%r provider=%r category=%r fts_query=%r",
+                query, provider, category, fts_query,
+            )
             return []
 
     def get_by_code(self, provider: str, code: str) -> Optional[Dict[str, Any]]:

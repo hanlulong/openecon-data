@@ -654,3 +654,54 @@ async def test_select_single_candidate_still_requires_llm_authority(monkeypatch)
 
     assert result.code is None
     assert result.source == "no_decision"
+
+
+def test_parse_llm_pick_in_reasoning_prose_is_not_a_decision() -> None:
+    """Anchoring regression: 'PICK' mentioned mid-sentence in reasoning must
+    not select a candidate — only a line STARTING with PICK is a control line,
+    and the LAST control line wins (reasoning models conclude at the end)."""
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    result = selector._parse_llm_response(  # pylint: disable=protected-access
+        "I should not PICK 1 because it is an index level, not a rate.\n"
+        "PICK: 2",
+        [("CODE1", "Index level"), ("CODE2", "YoY rate")],
+        "FRED",
+        "inflation rate",
+    )
+
+    assert result is not None
+    assert result.code == "CODE2"
+
+
+def test_parse_llm_last_control_line_wins() -> None:
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    result = selector._parse_llm_response(  # pylint: disable=protected-access
+        "REJECT: none of these look right at first glance\n"
+        "Actually option 2 matches the requested measure exactly.\n"
+        "PICK: 2",
+        [("CODE1", "Wrong"), ("CODE2", "Right")],
+        "FRED",
+        "some measure",
+    )
+
+    assert result is not None
+    assert result.code == "CODE2"
+    assert result.source == "llm_pick"
+
+
+def test_parse_llm_pure_prose_returns_none() -> None:
+    """Truncated/reasoning-only content (no anchored control line) must parse
+    to None so the attempt chain can try the next endpoint."""
+    selector = IndicatorSelector(settings=SimpleNamespace())
+
+    result = selector._parse_llm_response(  # pylint: disable=protected-access
+        "The user is asking for a yield spread. Candidate 3 might work but I "
+        "need to consider whether they want percent or basis points and",
+        [("CODE1", "A"), ("CODE2", "B"), ("CODE3", "C")],
+        "FRED",
+        "yield spread",
+    )
+
+    assert result is None

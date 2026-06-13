@@ -4583,6 +4583,24 @@ class QueryService:
                             _delta_intent.indicators = [_semantic_indicator]
                             _delta_intent.parameters.pop("indicator", None)
                             _merged_state.last_indicators_resolved = _delta_intent.indicators
+                        else:
+                            # No clean semantic label survived the merge. The
+                            # carried indicators would be the PRIOR provider's
+                            # resolved code, which the new provider would
+                            # text-match to arbitrary series. Force a full
+                            # re-resolution from the user's own words instead
+                            # of silently dispatching a foreign code.
+                            _fallback_phrase = str(
+                                _delta_intent.resolvedQuery
+                                or _delta_intent.originalQuery
+                                or ""
+                            ).strip()
+                            if _fallback_phrase:
+                                _delta_intent.indicators = [_fallback_phrase]
+                            _delta_intent.parameters.pop("indicator", None)
+                            _merged_state.last_indicators_resolved = list(
+                                _delta_intent.indicators or []
+                            )
 
                     # Build a ParseRouteResult for _execute_resolved_intent
                     _delta_parse_result = ParseRouteResult(
@@ -7093,7 +7111,11 @@ class QueryService:
 
                 conversation_history = conversation_manager.get_messages(conversation_id)
 
-                session_id = conversation_id[:8]
+                # Full conversation id: truncating to 8 hex chars created a
+                # 32-bit collision space where one conversation could read
+                # another's stored session data (the explicit Pro endpoints
+                # were already fixed to use the full id — keep paths aligned).
+                session_id = conversation_id
                 available_keys = session_storage.list_keys(session_id)
 
                 available_data = {}

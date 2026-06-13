@@ -752,9 +752,9 @@ class IMFProvider(BaseProvider):
                 for year, value in sorted(filtered_data.items(), key=lambda x: int(x[0]))
             ]
 
-            # Normalize percentage values (IMF sometimes stores as decimals)
-            if unit == "percent":
-                data_points = self._normalize_percentage_values(data_points, indicator_name)
+            # NOTE: values are returned exactly as the IMF publishes them —
+            # see the FRED provider note on the removed value-sniffing
+            # percent normalizer (it corrupted legitimately small series).
 
             # Human-readable URL for data verification on IMF DataMapper website
             # Format: https://www.imf.org/external/datamapper/{INDICATOR_CODE}@WEO/{COUNTRY}
@@ -834,10 +834,6 @@ class IMFProvider(BaseProvider):
             raise DataNotAvailableError(" ".join(error_parts))
 
         return results
-    def _normalize_percentage_values(self, data: list[dict], indicator_name: str) -> list[dict]:
-        """Delegate to the shared SDMX percentage-normalizer (Phase 3.1)."""
-        from ._sdmx import normalize_percentage_values as _shared
-        return _shared(data, label=indicator_name)
 
     @staticmethod
     def _indicator_catalog_lookup_keys(indicator_code: str) -> List[str]:

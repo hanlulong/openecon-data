@@ -11,7 +11,6 @@ See docs/DEEP_REVIEW_2026-05-30.md Phase 3.1 for the migration plan
 and §6 invariant on no mandatory SDMXBaseProvider — composition only.
 """
 
-from .normalizers import normalize_percentage_values
 from .periods import (
     frequency_from_period,
     frequency_label,
@@ -19,7 +18,6 @@ from .periods import (
 )
 
 __all__ = [
-    "normalize_percentage_values",
     "period_to_iso_date",
     "frequency_label",
     "frequency_from_period",
