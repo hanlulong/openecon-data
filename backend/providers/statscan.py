@@ -1165,7 +1165,7 @@ class StatsCanProvider(BaseProvider):
             title_upper = extracted.get("description", "").upper()
             if "PERCENT CHANGE" in title_upper or "% CHANGE" in title_upper:
                 extracted["dataType"] = "Percent change"
-            elif "CHANGE" in title_upper:
+            elif re.search(r"\bCHANGES?\b", title_upper):
                 extracted["dataType"] = "Change"
             elif "INDEX" in title_upper:
                 extracted["dataType"] = "Index"
@@ -2124,7 +2124,7 @@ class StatsCanProvider(BaseProvider):
             data_type = "Rate"
         elif "INDEX" in indicator_upper:
             data_type = "Index"
-        elif "CHANGE" in indicator_upper:
+        elif re.search(r"\bCHANGES?\b", indicator_upper):
             data_type = "Percent Change"
         else:
             data_type = "Level"
@@ -2991,7 +2991,7 @@ class StatsCanProvider(BaseProvider):
             data_type = "Rate"
         elif "INDEX" in indicator_upper:
             data_type = "Index"
-        elif "CHANGE" in indicator_upper:
+        elif re.search(r"\bCHANGES?\b", indicator_upper):
             data_type = "Percent Change"
         else:
             data_type = "Level"
@@ -3741,7 +3741,7 @@ class StatsCanProvider(BaseProvider):
                 data_type = "Rate"
             elif "INDEX" in indicator_upper:
                 data_type = "Index"
-            elif "CHANGE" in indicator_upper:
+            elif re.search(r"\bCHANGES?\b", indicator_upper):
                 data_type = "Percent Change"
             else:
                 data_type = "Level"

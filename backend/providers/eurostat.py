@@ -472,7 +472,7 @@ class EurostatProvider(BaseProvider):
             data_type = "Rate"
         elif "index" in indicator_lower or dataset_code.startswith("prc_"):
             data_type = "Index"
-        elif "change" in indicator_lower or "growth" in indicator_lower:
+        elif re.search(r"\bchanges?\b", indicator_lower) or "growth" in indicator_lower:
             data_type = "Percent Change"
         else:
             data_type = "Level"
