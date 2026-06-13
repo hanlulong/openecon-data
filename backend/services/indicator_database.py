@@ -37,6 +37,18 @@ logger = logging.getLogger(__name__)
 DB_PATH = Path(__file__).parent.parent / "data" / "indicators.db"
 
 
+def _word_in(word: str, text: str) -> bool:
+    """Whole-word containment, so short query tokens don't substring-match.
+
+    "us" must not score "AustraliA"/"bUSiness"/"censUS", and the wrong-country
+    code "uk" must not penalize "Milwaukee"/"Kilowatt".  re caches the compiled
+    pattern, so this stays cheap on the ranking hot path.
+    """
+    if not word:
+        return False
+    return re.search(r"\b" + re.escape(word) + r"\b", text) is not None
+
+
 @dataclass
 class Indicator:
     """Represents a single indicator from any provider."""
@@ -1048,7 +1060,7 @@ class IndicatorLookup:
             provider = (r.get("provider") or "").upper()
 
             for word in query_words:
-                if word in name_lower:
+                if _word_in(word, name_lower):
                     score += 2
 
                     # INFRASTRUCTURE FIX: Distinguish SUBJECT vs REFERENCE in indicator names
@@ -1088,7 +1100,7 @@ class IndicatorLookup:
                     "colombia", "poland", "portugal", "greece", "ireland"
                 ]
                 for country in country_names_in_title:
-                    if country in name_lower:
+                    if _word_in(country, name_lower):
                         score -= 15  # Strong penalty for wrong country
                         break
 
