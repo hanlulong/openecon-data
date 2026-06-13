@@ -525,7 +525,9 @@ def _fred_exact_title_targets_country(
     aliases = [
         alias
         for alias, code in CountryResolver.COUNTRY_ALIASES.items()
-        if code == iso2 and len(alias) > 2
+        # Only full names (>= 4 chars); 3-letter ISO3 codes ("per", "are", "can")
+        # collide with English words and falsely match prose titles.
+        if code == iso2 and len(alias) > 3
     ]
     return any(
         re.search(rf"\b{re.escape(alias.lower())}\b", title_text)
@@ -540,7 +542,9 @@ def _country_aliases_for_iso2(iso2: str) -> list[str]:
     aliases = [
         alias
         for alias, code in CountryResolver.COUNTRY_ALIASES.items()
-        if code == normalized and len(alias) > 2
+        # Only full names (>= 4 chars); 3-letter ISO3 codes collide with English
+        # words ("per"->PE, "are"->AE, ...) and falsely match prose titles.
+        if code == normalized and len(alias) > 3
     ]
     return sorted(set(aliases), key=len, reverse=True)
 
