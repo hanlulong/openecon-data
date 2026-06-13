@@ -1849,13 +1849,25 @@ def _is_close_exact_title_match(normalized_query: str, normalized_name: str) -> 
     token_delta = abs(len(query_tokens) - len(name_tokens))
     shared_tokens = len(set(query_tokens) & set(name_tokens))
     overlap_ratio = shared_tokens / max(1, min(len(query_tokens), len(name_tokens)))
+    # Symmetric (union-style) overlap penalizes unmatched tokens on EITHER side,
+    # unlike overlap_ratio which divides by the shorter side and so scores 1.0
+    # for any fully-contained short query.
+    symmetric_overlap = shared_tokens / max(1, len(query_tokens), len(name_tokens))
 
     if normalized_query.endswith(normalized_name) or normalized_name.endswith(normalized_query):
         return len(query_tokens) >= 3 and token_delta <= 1 and overlap_ratio >= 0.8
 
     # Country/state wrappers and light metadata tokens ("US", "VA", "national currency")
-    # should not block near-exact pasted titles when almost all tokens align.
-    if max(len(query_tokens), len(name_tokens)) >= 5 and token_delta <= 2 and overlap_ratio >= 0.85:
+    # should not block near-exact pasted titles when almost all tokens align.  The
+    # symmetric-overlap floor additionally rejects a short query that is fully
+    # contained in a longer title whose extra tokens carry meaning -- e.g. "real
+    # GDP growth" must NOT shortcut to "real AGRICULTURAL GDP growth rates".
+    if (
+        max(len(query_tokens), len(name_tokens)) >= 5
+        and token_delta <= 2
+        and overlap_ratio >= 0.85
+        and symmetric_overlap >= 0.7
+    ):
         return True
 
     return False
