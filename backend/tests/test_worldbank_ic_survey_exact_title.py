@@ -28,6 +28,17 @@ def test_ic_survey_titles_do_not_exact_lock(query):
     )
 
 
+@pytest.mark.parametrize("query", ["population", "world population", "china population"])
+def test_imf_lp_does_not_exact_lock_bare_population(query):
+    # IMF LP ("Population") is a short WEO title with no World aggregate and WEO
+    # data through 2031; a bare "population" phrase must route normally (-> WB
+    # SP.POP.TOTL) rather than hard-lock IMF LP.
+    result = match(query, "IMF")
+    assert result is None or str(result.get("code", "")).upper() != "LP", (
+        f"{query!r} -> {result.get('code') if result else None}"
+    )
+
+
 @pytest.mark.parametrize("query,code", [
     ("GDP (current US$)", "NY.GDP.MKTP.CD"),
     ("Population, total", "SP.POP.TOTL"),

@@ -1275,6 +1275,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             # IC.FRM.INNOV.T3 -> No Data); let it route normally (-> FRED TCU).
             if provider_key == "WORLDBANK" and code.upper().startswith("IC."):
                 continue
+            # IMF DataMapper LP ("Population") is a short WEO title with no World
+            # aggregate and WEO data through 2031, so a bare "population" phrase
+            # locking it hard-fails "world population" and shows 2031 forecasts as
+            # actuals.  Let it route normally (-> WorldBank SP.POP.TOTL).
+            if provider_key == "IMF" and code.upper() == "LP":
+                continue
             candidate_name = str(candidate.get("name") or "").strip().lower()
             normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
             if not normalized_name or len(normalized_name) < min_name_len:
@@ -1336,6 +1342,9 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         seen_codes.add(code)
         # See above: WorldBank IC.* survey indicators do not exact-title-lock.
         if provider_key == "WORLDBANK" and code.upper().startswith("IC."):
+            continue
+        # See above: IMF LP ("Population") does not exact-title-lock a bare phrase.
+        if provider_key == "IMF" and code.upper() == "LP":
             continue
         candidate_name = str(candidate.get("name") or "").strip().lower()
         normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
