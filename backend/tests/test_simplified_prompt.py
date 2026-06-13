@@ -38,8 +38,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
 
     # Guardrail: even with context, prompt should remain under limit
     # (Expanded from 300 to 320 after enriching provider selection rules
-    # in the system prompt for LLM-driven routing — cycle 36)
-    assert len(prompt.splitlines()) < 320
+    # in the system prompt for LLM-driven routing — cycle 36; to 330 after
+    # adding relative-period date examples "last N months"/YTD)
+    assert len(prompt.splitlines()) < 330
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:
