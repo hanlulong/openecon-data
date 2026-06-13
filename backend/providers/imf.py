@@ -700,6 +700,21 @@ class IMFProvider(BaseProvider):
         # Determine indicator name
         indicator_name = indicator_label or indicator_code
 
+        # Authoritative unit from the IMF catalog metadata. The DataMapper
+        # publishes real units ("Billions of U.S. dollars", "Percent of GDP",
+        # ...) which the catalog stores; the per-code percent-or-empty
+        # heuristic below left every non-percent series (NGDPD, BCA, ...) with
+        # an EMPTY unit. Use the catalog unit when present; fall back to the
+        # heuristic only when it is missing. Graceful on any lookup failure.
+        catalog_unit = ""
+        try:
+            from ..services.indicator_database import get_indicator_lookup
+            _imf_meta = get_indicator_lookup().get("IMF", indicator_code)
+            if _imf_meta:
+                catalog_unit = str(_imf_meta.get("unit") or "").strip()
+        except Exception:
+            catalog_unit = ""
+
         # Process each requested country
         results = []
         missing_countries = []  # Track countries with no data
@@ -741,7 +756,7 @@ class IMFProvider(BaseProvider):
                 "NGDP_RPCH", "LUR", "PCPIPCH", "BCA_NGDPD", "GGXWDG_NGDP",
                 "GGXCNL_NGDP", "rev", "exp", "prim_exp", "pb"
             ]
-            unit = "percent" if indicator_code in percent_indicators else ""
+            unit = catalog_unit or ("percent" if indicator_code in percent_indicators else "")
 
             # Convert to data points (IMF uses year strings, convert to ISO date format)
             data_points = [
