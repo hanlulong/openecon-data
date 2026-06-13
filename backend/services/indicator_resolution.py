@@ -1269,6 +1269,12 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
             code = str(candidate.get("code") or "").strip()
             if not code:
                 continue
+            # WorldBank Enterprise-Survey / Doing-Business indicators (IC.*) hold
+            # sparse, cross-country survey data.  A bare macro phrase must not
+            # single-handedly exact-lock one of them ("capacity utilization" ->
+            # IC.FRM.INNOV.T3 -> No Data); let it route normally (-> FRED TCU).
+            if provider_key == "WORLDBANK" and code.upper().startswith("IC."):
+                continue
             candidate_name = str(candidate.get("name") or "").strip().lower()
             normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
             if not normalized_name or len(normalized_name) < min_name_len:
@@ -1328,6 +1334,9 @@ def find_exact_provider_title_match(text: str, provider_name: str) -> Optional[D
         if code in seen_codes:
             continue
         seen_codes.add(code)
+        # See above: WorldBank IC.* survey indicators do not exact-title-lock.
+        if provider_key == "WORLDBANK" and code.upper().startswith("IC."):
+            continue
         candidate_name = str(candidate.get("name") or "").strip().lower()
         normalized_name = re.sub(r"[^a-z0-9]+", " ", candidate_name).strip()
         if not normalized_name or len(normalized_name) < min_name_len:
