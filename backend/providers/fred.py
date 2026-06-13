@@ -627,7 +627,16 @@ class FREDProvider(BaseProvider):
 
         # Determine price type (real vs nominal)
         price_type = None
-        if "real" in title_lower or "chained" in title_lower or "constant" in title_lower:
+        if (
+            "real" in title_lower
+            or "chained" in title_lower
+            or "inflation-indexed" in title_lower
+            or "inflation indexed" in title_lower
+            # "Constant <year> prices / national prices / dollars" denotes a real
+            # (deflated) series, but "Constant Maturity" is a Treasury yield-curve
+            # method -- those series (DGS10, GS10, T10Y2Y, ...) are NOMINAL yields.
+            or ("constant" in title_lower and "constant maturity" not in title_lower)
+        ):
             price_type = "Real (inflation-adjusted)"
         elif "nominal" in title_lower or "current" in title_lower:
             price_type = "Nominal (current prices)"
