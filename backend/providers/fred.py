@@ -100,6 +100,12 @@ def _infer_country_from_fred_info(info: Dict[str, Any]) -> str:
     """
     title = str(info.get("title") or "")
     for iso2 in sorted(set(CountryResolver.COUNTRY_ALIASES.values())):
+        # The US is the default below; scanning the title for it only serves to
+        # relabel US series as the long ".title()" form "United States Of America",
+        # leaving the country field inconsistent (some US series "US", others
+        # "United States Of America"). Skip it so every US series stays "US".
+        if iso2 == "US":
+            continue
         if _text_targets_country(title, iso2):
             return _country_label_for_iso2(iso2)
     return "US"

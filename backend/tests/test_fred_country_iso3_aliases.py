@@ -46,6 +46,18 @@ def test_genuine_country_names_still_detected(title, country):
     assert _infer(title) == country, f"{title!r} -> {_infer(title)!r}"
 
 
+@pytest.mark.parametrize("title", [
+    "Real Gross Domestic Product",
+    "Gross Domestic Product for the United States",
+    "U.S. National Income",
+    "Federal Debt: Total Public Debt for the United States of America",
+])
+def test_us_series_use_one_consistent_label(title):
+    # All US series must report "US" -- not the long ".title()" form
+    # "United States Of America" that the in-loop scan used to produce.
+    assert _infer(title) == "US", f"{title!r} -> {_infer(title)!r}"
+
+
 def test_no_three_letter_aliases_returned():
     # The scan-alias list must contain only full names (>= 4 chars) now.
     for iso2 in ("PE", "AE", "CA", "NO", "PA"):
