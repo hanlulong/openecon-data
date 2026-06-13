@@ -58,10 +58,16 @@ def _country_aliases_for_iso2(iso2: str) -> list[str]:
     normalized = str(iso2 or "").strip().upper()
     if not normalized:
         return []
+    # Only aliases of length >= 4 are safe to scan for inside free-text provider
+    # titles. The 3-letter aliases are ISO3 codes ("per"->PE, "are"->AE, "can"->CA,
+    # "nor"->NO, "pan"->PA, ...) that collide with ordinary English words and would
+    # mislabel ~9% of FRED series (e.g. "GDP per capita" -> Peru). FRED titles name
+    # countries by their full name (all >= 4 chars), so dropping ISO3 codes loses no
+    # genuine match. Every country retains at least one >= 4-char alias.
     aliases = [
         alias
         for alias, code in CountryResolver.COUNTRY_ALIASES.items()
-        if code == normalized and len(alias) > 2
+        if code == normalized and len(alias) > 3
     ]
     return sorted(set(aliases), key=len, reverse=True)
 
