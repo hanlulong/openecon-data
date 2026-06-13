@@ -358,7 +358,7 @@ async def test_select_retries_when_llm_pick_conflicts_with_requested_frequency(m
 
     seen_candidate_sets: list[list[str]] = []
 
-    async def fake_llm_pick(query, candidates, provider, prefer_ask=False):  # noqa: ANN001, ARG001
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False, country=None):  # noqa: ANN001, ARG001
         seen_candidate_sets.append([code for code, _name in candidates])
         if seen_candidate_sets[-1] == ["TOTBKCR", "LOANINV"]:
             return SelectionResult(code="TOTBKCR", name="Bank Credit, All Commercial Banks", source="llm_pick")
@@ -409,7 +409,7 @@ async def test_select_uses_metadata_query_for_lost_frequency_constraints(monkeyp
 
     seen_candidate_sets: list[list[str]] = []
 
-    async def fake_llm_pick(query, candidates, provider, prefer_ask=False):  # noqa: ANN001, ARG001
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False, country=None):  # noqa: ANN001, ARG001
         seen_candidate_sets.append([code for code, _name in candidates])
         if seen_candidate_sets[-1] == ["BOGZ1FL155035066A", "HOEREPHRE"]:
             return SelectionResult(
@@ -545,7 +545,7 @@ async def test_selector_semantic_confusion_oracles_choose_correct_candidate_with
             (correct_code, correct_title),
         ], [0.93, 0.79]
 
-    async def fake_llm_pick(candidate_query, candidates, candidate_provider, prefer_ask=False):  # noqa: ANN001, ARG001
+    async def fake_llm_pick(candidate_query, candidates, candidate_provider, prefer_ask=False, country=None):  # noqa: ANN001, ARG001
         titles = {title: code for code, title in candidates}
         assert wrong_title in titles
         assert correct_title in titles
@@ -594,7 +594,7 @@ async def test_select_researches_with_llm_retry_query_when_candidates_are_reject
         retry_query="number of private households total households household size",
     )
 
-    async def fake_llm_pick(query, candidates, provider, prefer_ask=False):  # noqa: ANN001
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False, country=None):  # noqa: ANN001
         if query == "number of households":
             return rejected
         return SelectionResult(

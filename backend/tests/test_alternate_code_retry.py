@@ -132,7 +132,7 @@ async def test_selector_excludes_codes_from_candidates():
 
     seen_candidates = {}
 
-    async def fake_pick(query, candidates, provider, prefer_ask=False):
+    async def fake_pick(query, candidates, provider, prefer_ask=False, country=None):
         seen_candidates["codes"] = [c[0] for c in candidates]
         return SelectionResult(code=candidates[0][0], name=candidates[0][1], source="llm_pick")
 

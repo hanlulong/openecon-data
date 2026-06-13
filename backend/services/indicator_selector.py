@@ -423,8 +423,19 @@ class IndicatorSelector:
         # variant FPCPITOTLZGIND). Data-driven; a strict no-op for country-agnostic
         # queries/providers. If only cross-country candidates exist, refuse so the
         # resolver can fall back to a country-agnostic provider or clarify.
+        #
+        # has_country_match is True when the constraint found at least one
+        # candidate whose series is specifically about the requested country
+        # (e.g. "Constant GDP per capita for Canada"). In that case we surface
+        # the country to the LLM picker so it prefers the country-matching
+        # series over a neutral US-domestic-without-marker series that text
+        # similarity alone would otherwise win. The reranking is not enough on
+        # its own: the LLM ignores candidate order and picks by title, so a
+        # country-only follow-up ("US GDP per capita" -> "for Canada") would
+        # otherwise re-pick the generic US series.
+        has_country_match = False
         if country:
-            candidates, scores, all_conflict = self._apply_country_constraint(country, candidates, scores)
+            candidates, scores, all_conflict, has_country_match = self._apply_country_constraint(country, candidates, scores)
             if all_conflict:
                 logger.info(
                     "🌍 No %s candidate for '%s' among country-tagged options — refusing wrong-country pick",
@@ -447,7 +458,12 @@ class IndicatorSelector:
         # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
         llm_candidates = candidates[:20]
         metadata_constraint_query = metadata_query or query
-        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous)
+        # Only surface the country to the picker when a country-specific series
+        # actually exists in the candidate set. For country-agnostic concepts
+        # (single neutral series fetched per-country downstream) the country is
+        # irrelevant to series choice and must not bias the LLM.
+        llm_country = country if has_country_match else None
+        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country)
         result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
@@ -464,8 +480,9 @@ class IndicatorSelector:
                     self._get_candidates_with_scores, retry_query, provider
                 )
                 retry_candidates, retry_scores = _drop_excluded(retry_candidates, retry_scores)
+                retry_has_country_match = False
                 if retry_candidates and country:
-                    retry_candidates, retry_scores, retry_conflict = self._apply_country_constraint(
+                    retry_candidates, retry_scores, retry_conflict, retry_has_country_match = self._apply_country_constraint(
                         country, retry_candidates, retry_scores
                     )
                     if retry_conflict:
@@ -477,6 +494,7 @@ class IndicatorSelector:
                         retry_candidates[:20],
                         provider,
                         prefer_ask=retry_ambiguous,
+                        country=country if retry_has_country_match else None,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
                         return await self._retry_if_metadata_conflict(
@@ -492,7 +510,7 @@ class IndicatorSelector:
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
-            result = await self._llm_pick(query, candidates[:5], provider)
+            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country)
             result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider)
 
         if self._is_llm_rejection(result):
@@ -557,21 +575,24 @@ class IndicatorSelector:
         country: str,
         candidates: List[tuple],
         scores: List[float],
-    ) -> tuple[List[tuple], List[float], bool]:
+    ) -> tuple[List[tuple], List[float], bool, bool]:
         """Drop candidates whose series is explicitly about a DIFFERENT country
         than requested, and rank country-matching candidates ahead of neutral
         (country-agnostic) ones. Data-driven via :func:`_derive_candidate_country`
         — no hardcoded indicator→code mappings.
 
-        Returns ``(candidates, scores, all_conflict)``. ``all_conflict`` is True
-        only when EVERY candidate names a different country (nothing matching and
-        nothing neutral) — the caller should then refuse rather than return a
-        wrong-country series. A no-op when ``country`` doesn't resolve or no
+        Returns ``(candidates, scores, all_conflict, has_match)``.
+        ``all_conflict`` is True only when EVERY candidate names a different
+        country (nothing matching and nothing neutral) — the caller should then
+        refuse rather than return a wrong-country series. ``has_match`` is True
+        when at least one kept candidate's series is specifically about the
+        requested country, so the caller can tell the LLM picker to prefer it
+        over a neutral series. A no-op when ``country`` doesn't resolve or no
         candidate carries a derivable country (e.g. crypto/FX/index queries).
         """
         target = CountryResolver.normalize(country) if country else None
         if not target:
-            return candidates, scores, False
+            return candidates, scores, False, False
 
         matching: List[tuple] = []
         matching_scores: List[float] = []
@@ -593,13 +614,13 @@ class IndicatorSelector:
         kept_scores = matching_scores + neutral_scores
         if not kept:
             # Every candidate is tagged for some other country and none matches.
-            return candidates, scores, True
+            return candidates, scores, True, False
         if conflicting:
             logger.info(
                 "🌍 Country constraint (%s): kept %d matching + %d neutral, dropped %d cross-country candidate(s)",
                 target, len(matching), len(neutral), conflicting,
             )
-        return kept, kept_scores, False
+        return kept, kept_scores, False, bool(matching)
 
     @staticmethod
     def _scores_are_ambiguous(scores: List[float]) -> bool:
@@ -1141,8 +1162,15 @@ class IndicatorSelector:
         candidates: List[tuple[str, str]],
         provider: str,
         prefer_ask: bool = False,
+        country: Optional[str] = None,
     ) -> Optional[SelectionResult]:
-        """Step 2: LLM picks the best indicator from candidates."""
+        """Step 2: LLM picks the best indicator from candidates.
+
+        ``country`` is supplied only when the candidate set contains a series
+        specifically about that country (see ``_apply_country_constraint``);
+        surfacing it steers the LLM toward the country-matching series instead
+        of a generic / different-country series that text similarity would win.
+        """
         # Enrich candidates with metadata so the LLM can see frequency,
         # unit, and whether a series is discontinued/obsolete. The sqlite
         # lookup is blocking — keep it off the event loop.
@@ -1178,6 +1206,26 @@ class IndicatorSelector:
         prompt = LLM_SELECTION_PROMPT.format(
             query=query, provider=provider, options=options,
         )
+
+        # Country steering: when a country-specific series exists among the
+        # candidates, name the target country so the LLM prefers it over a
+        # generic / US-domestic series that title similarity alone would pick
+        # (e.g. "GDP per capita" for Canada must resolve to the "for Canada"
+        # series, not the generic US BEA series). Gated upstream on an actual
+        # country-matching candidate, so country-agnostic concepts are unaffected.
+        country_label = str(country or "").strip()
+        if country_label:
+            country_iso2 = CountryResolver.normalize(country_label) or ""
+            country_hint = country_label
+            if country_iso2 and country_iso2.upper() != country_label.upper():
+                country_hint = f"{country_label} ({country_iso2})"
+            prompt += (
+                f"\n\nThe user is asking specifically about this country: {country_hint}. "
+                "When a candidate's series is specifically about that country, "
+                "STRONGLY prefer it over a generic, global, or different-country "
+                "series — even if the generic series has a shorter or more standard "
+                "code. Do not pick a series that names a DIFFERENT country."
+            )
 
         # When candidates are very similar (embedding scores within 0.03),
         # tell the LLM to prefer ASK over PICK to avoid overconfident wrong picks.
