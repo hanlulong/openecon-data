@@ -210,7 +210,7 @@ def build_alternative_series(intent: ParsedIntent, data: Any) -> Optional[list]:
     Performance optimization: uses FTS5 full-text search instead of
     LIKE '%...%' scan.
     """
-    from .indicator_database import IndicatorDatabase
+    from .indicator_database import get_indicator_database
     from ..models import AlternativeSeries
 
     try:
@@ -241,7 +241,10 @@ def build_alternative_series(intent: ParsedIntent, data: Any) -> Optional[list]:
         normalized_provider = normalize_provider_name(provider)
 
         # Use FTS5 search (indexed, <50ms vs 2-6s for LIKE on 330K rows).
-        db = IndicatorDatabase()
+        # Reuse the thread-safe singleton (same pattern as IndicatorSelector):
+        # constructing a fresh IndicatorDatabase() per response leaked a SQLite
+        # connection and re-ran schema DDL on every successful query.
+        db = get_indicator_database()
         conn = db._get_connection()
         cur = conn.cursor()
 
