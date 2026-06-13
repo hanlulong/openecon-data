@@ -1020,6 +1020,25 @@ class StatsCanProvider(BaseProvider):
             # For monetary/aggregate values, use scalar description
             return scalar_unit or "units"
 
+    def _unit_with_rate_awareness(self, scalar_code: int, indicator_name: Optional[str]) -> str:
+        """Resolve the display unit, rewriting ONLY the 'units' placeholder to
+        'percent' for rate series.
+
+        StatsCan rate tables (unemployment rate, participation rate, etc.) carry
+        scalar factor 0, which ``_map_scalar_factor`` renders as the meaningless
+        placeholder 'units' even though the series is a percentage. This
+        rewrites only that placeholder for rate-named indicators — a real unit
+        derived from the scalar factor is never overridden, and non-rate series
+        are untouched.
+        """
+        unit = self._map_scalar_factor(scalar_code) or "units"
+        if unit == "units" and indicator_name and any(
+            kw in str(indicator_name).upper()
+            for kw in ("UNEMPLOYMENT", "RATE", "PERCENT")
+        ):
+            return "percent"
+        return unit
+
     def _normalize_units(self, value: float | None, from_scalar_code: int, to_unit: str = "billions", indicator_name: Optional[str] = None) -> tuple[float | None, str]:
         """Convert values from StatsCan's scalar factor to a target unit.
 
@@ -1405,7 +1424,7 @@ class StatsCanProvider(BaseProvider):
         freq_code = vector_data[0].get("frequencyCode", 6)
         scalar_code = vector_data[0].get("scalarFactorCode", 0)
         frequency = self._map_frequency(freq_code)
-        unit = self._map_scalar_factor(scalar_code) or "units"
+        unit = self._unit_with_rate_awareness(scalar_code, indicator)
 
         data_points = [
             {
@@ -2942,7 +2961,7 @@ class StatsCanProvider(BaseProvider):
         scalar_code = vector_data[0].get("scalarFactorCode", 0)
 
         frequency = self._map_frequency(freq_code)
-        unit = self._map_scalar_factor(scalar_code) or "units"
+        unit = self._unit_with_rate_awareness(scalar_code, indicator)
 
         # Build data points
         data_points = [
