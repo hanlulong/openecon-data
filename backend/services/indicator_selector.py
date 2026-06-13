@@ -364,6 +364,7 @@ class IndicatorSelector:
         provider: str,
         country: Optional[str] = None,
         metadata_query: Optional[str] = None,
+        exclude_codes: Optional[set] = None,
     ) -> SelectionResult:
         """
         Select the best indicator for a query.
@@ -377,10 +378,29 @@ class IndicatorSelector:
             country: Optional country context
             metadata_query: Optional fuller query text used only for explicit
                 frequency/unit/measurement metadata constraints.
+            exclude_codes: Provider codes to drop from the candidate set before
+                adjudication. Used by the same-provider alternate-retry path:
+                when an LLM-picked code returns no data, re-adjudicating with it
+                excluded lets the LLM choose the next-best EXECUTABLE code while
+                preserving its semantic judgement (no blind next-in-rank pick).
 
         Returns:
             SelectionResult with selected code or options for user choice
         """
+        _excluded_upper = {
+            str(code).strip().upper() for code in (exclude_codes or set()) if str(code).strip()
+        }
+
+        def _drop_excluded(
+            cands: List[tuple[str, str]], scs: List[float]
+        ) -> tuple[List[tuple[str, str]], List[float]]:
+            if not _excluded_upper:
+                return cands, scs
+            kept = [
+                (c, s) for c, s in zip(cands, scs)
+                if str(c[0]).strip().upper() not in _excluded_upper
+            ]
+            return [c for c, _s in kept], [s for _c, s in kept]
         telemetry_enabled = bool(getattr(self._settings, "indicator_telemetry_enabled", False))
         fusion_mode = str(getattr(self._settings, "indicator_fusion", "legacy") or "legacy").lower()
 
@@ -392,6 +412,7 @@ class IndicatorSelector:
         # lazy-init in embedding_retrieval/indicator_database and the per-call
         # sqlite connection in _get_candidates_fts5.)
         candidates, scores = await asyncio.to_thread(self._get_candidates_with_scores, query, provider)
+        candidates, scores = _drop_excluded(candidates, scores)
 
         if not candidates:
             return SelectionResult(code=None, source="no_candidates")
@@ -442,6 +463,7 @@ class IndicatorSelector:
                 retry_candidates, retry_scores = await asyncio.to_thread(
                     self._get_candidates_with_scores, retry_query, provider
                 )
+                retry_candidates, retry_scores = _drop_excluded(retry_candidates, retry_scores)
                 if retry_candidates and country:
                     retry_candidates, retry_scores, retry_conflict = self._apply_country_constraint(
                         country, retry_candidates, retry_scores

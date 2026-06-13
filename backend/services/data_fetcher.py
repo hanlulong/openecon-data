@@ -2593,6 +2593,9 @@ async def fetch_data(
         "__statscan_product_authority",
         "__semantic_provider_locked",
         "__indicator_options",
+        # Read by resolve_indicator_for_fetch (above) to exclude dead codes;
+        # must not reach the provider dispatch or cache identity.
+        "__exclude_indicator_codes",
     }
     if _has_statscan_mechanical_dimension_dispatch_authority(params):
         # These flags are still needed by the dispatch-level no-shortcut gate.

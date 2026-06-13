@@ -2861,10 +2861,21 @@ async def resolve_indicator_for_fetch(
             and _lost_explicit_frequency_tokens(original_selector_query, indicator_query)
         ):
             metadata_query = original_selector_query
+        # Same-provider alternate retry: codes already shown to return no data
+        # this turn are excluded so the selector re-adjudicates to the next-best
+        # EXECUTABLE candidate instead of re-picking the dead code.
+        _raw_exclude = params.get("__exclude_indicator_codes") or []
+        exclude_codes = {str(c).strip() for c in _raw_exclude if str(c).strip()} or None
         if metadata_query:
-            selection = await selector.select(selector_query, provider, country=selector_country, metadata_query=metadata_query)
+            selection = await selector.select(
+                selector_query, provider, country=selector_country,
+                metadata_query=metadata_query, exclude_codes=exclude_codes,
+            )
         else:
-            selection = await selector.select(selector_query, provider, country=selector_country)
+            selection = await selector.select(
+                selector_query, provider, country=selector_country,
+                exclude_codes=exclude_codes,
+            )
         selector_source = str(getattr(selection, "source", "") or "")
         selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
         selector_retry_query = str(getattr(selection, "retry_query", "") or "")
