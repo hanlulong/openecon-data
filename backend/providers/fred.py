@@ -616,7 +616,9 @@ class FREDProvider(BaseProvider):
         unit_lower = unit.lower()
         if "percent change" in title_lower or "growth rate" in title_lower:
             data_type = "Percent Change"
-        elif "change" in title_lower:
+        elif re.search(r"\bchanges?\b", title_lower):
+            # Word-boundary match so "exCHANGE rate" and "unCHANGEd" do not get
+            # mislabeled as a change series (FRED has 400+ FX-rate series).
             data_type = "Change"
         elif "index" in title_lower or "index" in unit_lower:
             data_type = "Index"
