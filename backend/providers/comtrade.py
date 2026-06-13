@@ -17,6 +17,7 @@ from .comtrade_metadata import (
     COUNTRY_CODE_MAPPINGS,
     HSReferenceAmbiguityError,
     HS_CODE_MAPPINGS,
+    hs_reference_title_for_code,
     resolve_hs_reference_code,
 )
 # Country/region group definitions consolidated in CountryResolver (single source of truth).
@@ -25,6 +26,21 @@ from .comtrade_metadata import (
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+# Reverse of COUNTRY_CODE_MAPPINGS (name -> Comtrade numeric code) so a partner
+# code can be rendered as a readable name when the /data record omits partnerDesc.
+# Prefer a spaced multi-word alias ("UNITED STATES" over "US"/"USA"/"UNITED_STATES").
+_COMTRADE_CODE_TO_COUNTRY: Dict[str, str] = {}
+for _alias, _ccode in COUNTRY_CODE_MAPPINGS.items():
+    _existing = _COMTRADE_CODE_TO_COUNTRY.get(_ccode)
+    # Prefer the longest (most descriptive) alias; on a tie prefer spaces over
+    # underscores ("UNITED STATES" over "UNITED_STATES", "CHINA" over "CN").
+    if (
+        _existing is None
+        or len(_alias) > len(_existing)
+        or (len(_alias) == len(_existing) and " " in _alias and " " not in _existing)
+    ):
+        _COMTRADE_CODE_TO_COUNTRY[_ccode] = _alias
 
 # Retry configuration.  Transport-level retry (429/5xx/timeouts) is handled by
 # BaseProvider._get_with_retry (tenacity, 3 attempts, exponential backoff);
@@ -842,8 +858,31 @@ class ComtradeProvider(BaseProvider):
             first = flow_records[0]
 
             flow_name = flow_desc or ("Exports" if "X" in flow_code else "Imports")
-            commodity_name = first.get("cmdDesc") or ("Total Trade" if commodity_code == "TOTAL" else commodity_code)
+            # The live /data endpoint frequently omits cmdDesc for HS-coded flows,
+            # which dropped the label to the bare code ("Exports - 8703").  Consult
+            # the provider-native HS reference (HS.json) before falling to the code.
+            commodity_name = (
+                first.get("cmdDesc")
+                or ("Total Trade" if commodity_code == "TOTAL"
+                    else (self._strip_hs_code_prefix(hs_reference_title_for_code(commodity_code) or "")
+                          or commodity_code))
+            )
             reporter_name = first.get("reporterDesc") or reporter_raw
+            # Annotate the partner for bilateral flows so "X exports to Y" is not
+            # labelled "Total Trade" (indistinguishable from the world total).
+            partner_desc = str(first.get("partnerDesc") or "").strip()
+            if not partner_desc and partner_code not in (None, "0", 0):
+                partner_desc = _COMTRADE_CODE_TO_COUNTRY.get(str(partner_code), "").replace("_", " ").title()
+            if (
+                partner_code not in (None, "0", 0)
+                and partner_desc
+                and partner_desc.lower() not in ("world", "all", "total")
+            ):
+                partner_suffix = (
+                    f" to {partner_desc}" if "X" in flow_code else f" from {partner_desc}"
+                )
+            else:
+                partner_suffix = ""
 
             # Create data points and deduplicate by date
             # When multiple records exist for same period, keep the maximum value (assumes it's the total)
@@ -906,7 +945,7 @@ class ComtradeProvider(BaseProvider):
                 NormalizedData(
                     metadata=Metadata(
                         source="UN Comtrade",
-                        indicator=f"{flow_name} - {commodity_name}",
+                        indicator=f"{flow_name}{partner_suffix} - {commodity_name}",
                         country=reporter_name,
                         frequency=freq_name,
                         unit="US Dollars",
@@ -916,7 +955,7 @@ class ComtradeProvider(BaseProvider):
                         seasonalAdjustment=None,
                         dataType="Level",
                         priceType="Nominal (current prices)",
-                        description=f"{flow_name} - {commodity_name}",
+                        description=f"{flow_name}{partner_suffix} - {commodity_name}",
                         notes=None,
                         startDate=start_date,
                         endDate=end_date,
