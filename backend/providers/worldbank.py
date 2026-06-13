@@ -783,6 +783,29 @@ class WorldBankProvider(BaseProvider):
             return "annual"
         return "annual"
 
+    @staticmethod
+    def _format_wb_date(raw: Any) -> str:
+        """Format a World Bank observation date token into an ISO date.
+
+        WB returns annual ("2016"), quarterly ("2016Q1") and monthly ("2016M03")
+        tokens.  Naively appending "-01-01" produced invalid strings like
+        "2016Q1-01-01" for every non-annual series; map them to the period-start
+        date instead.
+        """
+        s = str(raw or "").strip()
+        m = re.match(r"^(19\d{2}|20\d{2})M(\d{1,2})$", s, re.IGNORECASE)
+        if m:
+            return f"{int(m.group(1)):04d}-{max(1, min(12, int(m.group(2)))):02d}-01"
+        m = re.match(r"^(19\d{2}|20\d{2})Q([1-4])$", s, re.IGNORECASE)
+        if m:
+            return f"{int(m.group(1)):04d}-{(int(m.group(2)) - 1) * 3 + 1:02d}-01"
+        if re.match(r"^(19\d{2}|20\d{2})$", s):
+            return f"{int(s):04d}-01-01"
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+            return s
+        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", s)
+        return f"{int(year_match.group(1)):04d}-01-01" if year_match else s
+
     async def _fetch_source_series_endpoint(
         self,
         *,
@@ -1513,7 +1536,7 @@ class WorldBankProvider(BaseProvider):
 
             # Extract data range from records (safe access pattern)
             data_list = [
-                {"date": f"{entry.get('date', 'unknown')}-01-01", "value": entry.get("value")}
+                {"date": self._format_wb_date(entry.get("date")), "value": entry.get("value")}
                 for entry in reversed(records)
                 if isinstance(entry, dict) and entry.get("value") is not None and entry.get("date")
             ]
@@ -1526,13 +1549,20 @@ class WorldBankProvider(BaseProvider):
             # These are safe now due to the guard clause above
             start_date_val = data_list[0]["date"]
             end_date_val = data_list[-1]["date"]
+            # Derive frequency from the raw WB date token (quarterly/monthly/annual)
+            # instead of hardcoding "annual".
+            _wb_sample_raw = next(
+                (str(e.get("date")) for e in records if isinstance(e, dict) and e.get("date")),
+                "",
+            )
+            wb_frequency = self._source_frequency(_wb_sample_raw, start_date_val)
 
             normalized = NormalizedData(
                 metadata=Metadata(
                     source="World Bank",
                     indicator=indicator_name,
                     country=country_name,
-                    frequency="annual",
+                    frequency=wb_frequency,
                     unit=unit,
                     lastUpdated=batch_response.headers.get("Date", "") if batch_response else "",
                     seriesId=indic,  # Add seriesId with indicator code
