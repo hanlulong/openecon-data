@@ -19,7 +19,7 @@ All platforms require:
 
 - **Node.js** >= 18.0.0
 - **npm** >= 9.0.0
-- **Python** >= 3.8
+- **Python** >= 3.10 (the backend uses `X | None` union syntax that fails to import on 3.8/3.9)
 - **Git** (for cloning the repository)
 
 ## Quick Setup

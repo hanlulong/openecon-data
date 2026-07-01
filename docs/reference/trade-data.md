@@ -377,7 +377,7 @@ Official Comtrade API docs: https://comtradedeveloper.un.org/
 ## Your Servers
 
 - **Backend**: http://localhost:3001
-- **Frontend**: http://localhost:5175
+- **Frontend**: http://localhost:5173
 
 Both servers are running and ready to use!
 

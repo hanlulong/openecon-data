@@ -13,23 +13,24 @@ OpenEcon is currently in active development. Security updates are provided for t
 
 ### Authentication & Authorization
 
-- **Strong Password Requirements**: Minimum 12 characters with uppercase, lowercase, and digits
-- **JWT Token Authentication**: Secure token-based authentication with configurable expiration
-- **Password Hashing**: bcrypt with automatic salt generation
-- **Protected Endpoints**: User history and profile endpoints require valid JWT tokens
+- **Password Requirements**: The web UI requires at least 12 characters with mixed case and digits; the API enforces an 8-character server-side floor and delegates credential storage/verification to Supabase Auth (GoTrue)
+- **JWT Token Authentication**: Every request is validated against Supabase Auth (real signature + expiry, fails closed); configurable expiration
+- **Password Hashing**: Handled by Supabase Auth (bcrypt with per-user salt)
+- **Protected Endpoints**: User history and profile endpoints require valid JWT tokens; query history is isolated per user id
 
 ### CORS Configuration
 
-- **Explicit Origin Whitelist**: CORS must be explicitly configured via `ALLOWED_ORIGINS` environment variable
-- **Default Development Mode**: Defaults to localhost origins in development (`http://localhost:5173`, `http://localhost:3000`)
+- **Explicit Origin Whitelist**: CORS is configured via the `ALLOWED_ORIGINS` environment variable
+- **Environment-Aware Fallback**: with no `ALLOWED_ORIGINS` set, development trusts localhost origins (`http://localhost:5173`, `http://localhost:3000`) but **production falls back to the public app URL and its `www` host only** — never localhost, since credentialed CORS is enabled
 - **Production Security**: No wildcard (`*`) origins in production
 
 ### Code Execution Sandbox (Pro Mode)
 
-Pro Mode allows users to execute Python code for advanced data analysis. Security measures include:
+Pro Mode allows users to execute Python code for advanced data analysis. Security is layered — an OS-level sandbox is the containment boundary, with Python-level checks as defense-in-depth:
 
-- **Import Restrictions**: Blacklist of dangerous imports (`subprocess`, `eval`, `exec`, `__import__`, etc.)
-- **Operation Restrictions**: File system operations (`os.remove`, `os.chmod`, etc.) are blocked
+- **OS-Level Sandbox (production)**: dedicated `promode` uid, mount/pid namespace isolation, and an iptables egress allowlist, provisioned by `scripts/setup_promode_sandbox.sh` and gated by a fail-closed startup canary
+- **Import Restrictions**: AST-based blocklist of dangerous imports (`subprocess`, `eval`, `exec`, `__import__`, etc.)
+- **Operation Restrictions**: dangerous `os.*` operations (`os.remove`, `os.chmod`, `os.posix_spawn`, `os.open`/`read`/`write`, …) and `__builtins__`/`__loader__` access are blocked
 - **Execution Timeout**: 30-second timeout prevents infinite loops
 - **Output Size Limit**: 100,000 character limit on output
 - **Safe Session Storage**: JSON-based serialization (not pickle) prevents code injection
@@ -105,30 +106,39 @@ When using Pro Mode code execution:
 3. **Monitor resource usage**: Code execution has timeouts but can still consume resources
 4. **Clear old sessions**: Use the automatic cleanup or manual deletion
 
-## Known Limitations
+## Production Posture
 
-### Development-Only Features
+The hosted deployment (data.openecon.ai) runs the following; the in-memory
+fallbacks below activate only when a self-hoster omits the matching service:
 
-The following features are **NOT production-ready** and should be replaced:
-
-1. **In-Memory User Store**: Replace with PostgreSQL, MongoDB, or similar
-2. **In-Memory Cache**: Replace with Redis or Memcached for multi-instance deployments
-3. **File-Based Sessions**: Use Redis or database-backed sessions
-4. **No Rate Limiting**: Implement rate limiting before production deployment
+1. **Authentication & history**: Supabase (Postgres + GoTrue). The auth factory
+   **fails closed** if Supabase is not configured in production — the in-memory
+   user store is a development-only fallback.
+2. **Cache, rate-limiter, and conversation state**: Redis (with in-memory
+   fallback for single-instance dev).
+3. **Rate limiting**: enabled via slowapi with per-endpoint limits (register
+   5/min, login 10/min, `/api/query` 30/min, `/api/query/pro` 10/min, default
+   200/min) returning `429` + `Retry-After`. Bypassed for loopback/dev only.
 
 ### Code Execution Sandbox
 
-The Pro Mode code execution sandbox has limitations:
+Production Pro Mode runs behind a **Layer-2 OS sandbox** (a dedicated `promode`
+uid, mount/pid namespace isolation, and an iptables egress allowlist,
+provisioned by `scripts/setup_promode_sandbox.sh` and gated by a fail-closed
+startup canary). The Python-level AST validator is defense-in-depth on top of
+that, not the sole barrier.
 
-- **Not 100% secure**: Blacklist-based security can potentially be bypassed
-- **Resource consumption**: Malicious code could consume CPU/memory within timeout
-- **Shared environment**: All code runs in the same Python environment
-- **File system access**: Limited but not completely isolated
+Known limitations of the Python-level validator:
 
-**Recommendation**: For production, consider:
-- Using a containerized execution environment (Docker, Kubernetes)
-- Implementing per-user resource quotas
-- Using a dedicated code execution service (e.g., AWS Lambda, Google Cloud Functions)
+- **Blacklist-based**: an AST allowlist is the intended structural replacement
+  (a blacklist over CPython's object graph cannot be exhaustive); the OS
+  sandbox is the real containment boundary.
+- **Resource consumption**: code may consume CPU/memory within the 30s timeout.
+
+**Recommendation for self-hosters** who cannot run the OS sandbox: disable Pro
+Mode (`PROMODE_ENABLED=false`, the default), or run it inside a container /
+dedicated execution service (Docker, gVisor, Firecracker, cloud functions)
+with per-user resource quotas.
 
 ## Reporting a Vulnerability
 
@@ -146,27 +156,32 @@ We aim to respond to security reports within 48 hours.
 
 ## Security Changelog
 
-### 2025-01-XX (Current)
+### 2026-07
 
 #### Added
-- Required JWT_SECRET configuration (no insecure default)
-- Strong password requirements (12 characters, complexity rules)
-- Explicit CORS origin configuration
-- JSON-based session storage (replaced pickle)
-- Enhanced code execution sandbox with regex-based pattern matching
-- Additional dangerous operation checks
+- Layer-2 OS sandbox for Pro Mode (dedicated uid, mount/pid namespaces,
+  iptables egress allowlist, fail-closed startup canary)
+- Rate limiting via slowapi (per-endpoint limits + `429`/`Retry-After`)
+- Redis-backed cache, rate-limiter storage, and conversation persistence
+- Supabase auth + history (auth factory fails closed in production)
+- Email verification and a Pro-Mode registration gate
+- Environment-aware CORS fallback (production never trusts localhost)
+- AST-validator hardening: block `__builtins__`/`__loader__` and raw-syscall
+  (`os.posix_spawn`, `os.open`/`read`/`write`) escapes
 
 #### Fixed
 - Removed insecure JWT_SECRET default
 - Fixed CORS wildcard security issue
-- Fixed pickle deserialization vulnerability
-- Enhanced code validation in Pro Mode
+- Replaced pickle session storage with JSON
+- Capped httpx/httpcore logging so provider API keys never reach logs
 
-#### Security Improvements
-- Password minimum length: 6 → 12 characters
-- Added password complexity requirements
-- Improved input validation
-- Better error message sanitization
+### 2025-01
+
+#### Added
+- Required JWT_SECRET configuration (no insecure default)
+- Explicit CORS origin configuration
+- JSON-based session storage (replaced pickle)
+- Enhanced code execution sandbox with AST + pattern matching
 
 ## Acknowledgments
 

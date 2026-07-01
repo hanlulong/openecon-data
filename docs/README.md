@@ -249,8 +249,8 @@ LLM-based routing replaced the old deterministic `ProviderRouter` and `keyword_m
 ### Debug Logs
 
 ```bash
-# Backend logs
-tail -f /tmp/backend-dev.log
+# Backend logs (dev)
+tail -f .omx/logs/backend-dev.log
 
 # Check health endpoint
 curl http://localhost:3001/api/health
