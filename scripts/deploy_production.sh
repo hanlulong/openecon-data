@@ -70,7 +70,12 @@ echo "DEPLOY_COMMIT_SHA=$DEPLOY_COMMIT_SHA"
 
 rollback_to_pre_deploy() {
   echo "DEPLOY FAILED — rolling back to ${PRE_DEPLOY_SHA}" >&2
-  git checkout "$PRE_DEPLOY_SHA" -- . || git reset --hard "$PRE_DEPLOY_SHA"
+  # Move the branch ref, not just the worktree. `git checkout <sha> -- .`
+  # restores file content but leaves HEAD at the failed DEPLOY_COMMIT_SHA, so
+  # `git status --porcelain` stays non-empty and the dirty-tree guard below
+  # would REFUSE the next deploy — blocking auto-recovery until a human cleans
+  # up. reset --hard restores content AND ref, leaving a clean tree.
+  git reset --hard "$PRE_DEPLOY_SHA"
   npm run build:frontend || true
   rsync -a --delete "${PROJECT_ROOT}/packages/frontend/dist/" "${PROJECT_ROOT}/packages/frontend/dist-data/" || true
   if service_exists openecon-backend.service; then
@@ -80,6 +85,10 @@ rollback_to_pre_deploy() {
     fi
   fi
   echo "ROLLBACK_COMPLETE_SHA=$(git rev-parse HEAD)" >&2
+  # A rollback that itself comes up unhealthy must not be reported as success.
+  if ! wait_for_url "post-rollback backend health" "http://127.0.0.1:3001/api/health"; then
+    echo "CRITICAL: ROLLBACK TO ${PRE_DEPLOY_SHA} IS UNHEALTHY — manual intervention required" >&2
+  fi
 }
 
 npm run build:frontend
