@@ -152,6 +152,17 @@ _DURATION_MEASUREMENT_CUE_RE = re.compile(
     r"\b\d{1,3}[-\s]+month\s+treasury\s+bill\b",
     flags=re.IGNORECASE,
 )
+# A constant-price BASE YEAR ("in 2015 dollars", "at 2010 prices",
+# "chained 2012 dollars") denominates the values — it is NOT a request to
+# filter the time window to that year. The d8264dc prompt teaches the LLM this,
+# but the text time-scope heuristics still saw the bare year and marked the
+# window user-set, suppressing the default-window strip and Eurostat sparse
+# retry → false "no data". Strip the phrase before the single-year/range tests.
+_CONSTANT_PRICE_BASE_YEAR_RE = re.compile(
+    r"\b(?:constant|chained)\s+(?:19\d{2}|20\d{2})\b"
+    r"|\b(?:19\d{2}|20\d{2})\s+(?:u\.?s\.?\s+)?(?:constant\s+|chained\s+)?(?:dollars?|prices?)\b",
+    flags=re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +359,9 @@ def _query_has_explicit_time_scope(query: str) -> bool:
     recency_query_text = _CURRENT_MEASUREMENT_CUE_RE.sub(" ", query_text)
     if _RECENCY_CUE_RE.search(recency_query_text):
         return True
+    # Neutralize constant-price base years ("in 2015 dollars") before the year
+    # tests so they don't count as an explicit time filter.
+    query_text = _CONSTANT_PRICE_BASE_YEAR_RE.sub(" ", query_text)
     if _TIME_SCOPE_SINGLE_YEAR_RE.search(query_text):
         return True
     for match in _TIME_SCOPE_YEAR_RANGE_RE.finditer(query_text):
@@ -417,6 +431,8 @@ def _coingecko_has_historical_time_scope(query: str) -> bool:
         query_text,
         flags=re.IGNORECASE,
     )
+    # A base year ("in 2015 dollars") is not a historical window request.
+    snapshot_neutral_text = _CONSTANT_PRICE_BASE_YEAR_RE.sub(" ", snapshot_neutral_text)
 
     if re.search(r"\byesterday\b", query_text, flags=re.IGNORECASE):
         return True
