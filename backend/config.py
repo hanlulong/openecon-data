@@ -301,6 +301,27 @@ class Settings(BaseSettings):
         """Check if mock auth should be used (when Supabase is not configured)."""
         return not self.supabase_enabled
 
+    @property
+    def effective_cors_origins(self) -> List[str]:
+        """Origins allowed for credentialed CORS.
+
+        Explicit ALLOWED_ORIGINS always wins. Otherwise the fallback is
+        environment-aware: development trusts the local Vite/CRA dev servers,
+        but production must NEVER fall back to localhost — with
+        allow_credentials=True that lets any page on a victim's own loopback
+        make credentialed reads of /api/*. Production without ALLOWED_ORIGINS
+        falls back to the public app URL (and its www host) only.
+        """
+        if self.allowed_origins:
+            return self.allowed_origins
+        if self.environment != "production":
+            return [self.app_url, "http://localhost:5173", "http://localhost:3000"]
+        origins = [self.app_url]
+        if "://" in self.app_url and "://www." not in self.app_url:
+            scheme, host = self.app_url.split("://", 1)
+            origins.append(f"{scheme}://www.{host}")
+        return origins
+
 
 @lru_cache
 def get_settings() -> Settings:
