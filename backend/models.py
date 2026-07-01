@@ -88,7 +88,7 @@ class ParsedIntent(BaseModel):
     clarificationNeeded: bool
     clarificationQuestions: Optional[List[str]] = None
     confidence: Optional[float] = None
-    recommendedChartType: Optional[str] = Field(default=None, pattern="^(line|bar|scatter|table)$")
+    recommendedChartType: Optional[str] = Field(default=None)
 
     # Query type classification — determines routing path
     # data_fetch: standard data retrieval (default)
@@ -110,6 +110,18 @@ class ParsedIntent(BaseModel):
     decompositionType: Optional[str] = None  # "provinces", "states", "regions", "countries"
     decompositionEntities: Optional[List[str]] = None  # e.g., ["Ontario", "Quebec", "BC", ...]
     useProMode: Optional[bool] = False  # Auto-switch to Pro Mode for complex aggregations
+
+    @field_validator('recommendedChartType', mode='before')
+    @classmethod
+    def coerce_chart_type(cls, v):
+        # A hard pattern here rejected any stray LLM value ("pie", "area",
+        # "histogram") and failed the WHOLE parse — burning all retries and
+        # dropping an otherwise-perfect intent (right provider/indicators/dates).
+        # Coerce anything outside the renderable set to None so the frontend's
+        # structural chart-type inference decides instead of the query aborting.
+        if v is None:
+            return None
+        return v if str(v).strip().lower() in {"line", "bar", "scatter", "table"} else None
 
     @field_validator('apiProvider')
     @classmethod
