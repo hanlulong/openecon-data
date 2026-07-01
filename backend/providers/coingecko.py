@@ -11,7 +11,7 @@ Supports:
 
 import logging
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 
 from ..models import NormalizedData, DataPoint, Metadata
@@ -20,6 +20,21 @@ from ..utils.retry import DataNotAvailableError
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+
+# CoinGecko epoch timestamps are UTC. The host runs in a non-UTC zone
+# (America/New_York), so naive datetime.fromtimestamp()/fromisoformat()
+# silently shifted every historical point by the UTC offset (a UTC-midnight
+# daily candle rendered as the previous day). Convert explicitly in UTC.
+def _epoch_ms_to_iso_utc(timestamp_ms: float) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _date_to_epoch_utc(date_str: str) -> int:
+    dt = datetime.fromisoformat(date_str)
+    if dt.tzinfo is None:  # a bare "YYYY-MM-DD" is UTC midnight, not local
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 class CoinGeckoProvider(BaseProvider):
@@ -327,7 +342,7 @@ class CoinGeckoProvider(BaseProvider):
         data_points = []
         for timestamp, value in data.get(metric_key, []):
             try:
-                date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+                date_str = _epoch_ms_to_iso_utc(timestamp)
                 data_points.append(DataPoint(date=date_str, value=float(value)))
             except (ValueError, TypeError):
                 continue
@@ -389,25 +404,25 @@ class CoinGeckoProvider(BaseProvider):
 
         # Convert dates to Unix timestamps if needed
         if "-" in from_date:
-            from_timestamp = int(datetime.fromisoformat(from_date).timestamp())
+            from_timestamp = _date_to_epoch_utc(from_date)
         else:
             from_timestamp = int(from_date)
 
         if "-" in to_date:
-            to_timestamp = int(datetime.fromisoformat(to_date).timestamp())
+            to_timestamp = _date_to_epoch_utc(to_date)
         else:
             to_timestamp = int(to_date)
 
         # CoinGecko free/demo tier has a 365-day limit for historical data
         # Pro tier doesn't have this limit
-        now_timestamp = int(datetime.now().timestamp())
+        now_timestamp = int(datetime.now(tz=timezone.utc).timestamp())
         max_days_ago = 365 * 24 * 60 * 60  # 365 days in seconds
         min_allowed_timestamp = now_timestamp - max_days_ago
 
         if not self.is_pro and from_timestamp < min_allowed_timestamp:
             logger.warning(f"⚠️ CoinGecko: Free tier limited to 365 days. Adjusting from_date.")
             from_timestamp = min_allowed_timestamp
-            logger.info(f"   - Adjusted from_timestamp: {datetime.fromtimestamp(from_timestamp).isoformat()}")
+            logger.info(f"   - Adjusted from_timestamp: {datetime.fromtimestamp(from_timestamp, tz=timezone.utc).isoformat()}")
 
         params = {
             "vs_currency": vs_currency,
@@ -436,7 +451,7 @@ class CoinGeckoProvider(BaseProvider):
         data_points = []
         for timestamp, value in data.get(metric_key, []):
             try:
-                date_str = datetime.fromtimestamp(timestamp / 1000).isoformat()
+                date_str = _epoch_ms_to_iso_utc(timestamp)
                 data_points.append(DataPoint(date=date_str, value=float(value)))
             except (ValueError, TypeError):
                 continue

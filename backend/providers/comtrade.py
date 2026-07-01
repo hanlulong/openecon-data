@@ -27,6 +27,30 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _comtrade_period_to_iso(period) -> str:
+    """Convert a Comtrade period token to an ISO date.
+
+    Comtrade periods are ``YYYY`` (annual), ``YYYYMM`` (monthly) and ``YYYYQ``
+    (quarterly, Q in 1-4). The old ``f"{period}-01-01"`` produced malformed
+    dates for sub-annual data ("202301-01-01") — the month/quarter digits were
+    absorbed into the "year", corrupting the time axis. Parse by format.
+    """
+    p = str(period).strip()
+    m = re.fullmatch(r"(\d{4})[-_]?Q([1-4])", p, re.IGNORECASE)
+    if m:  # explicit "2023Q1"
+        return f"{m.group(1)}-{(int(m.group(2)) - 1) * 3 + 1:02d}-01"
+    if re.fullmatch(r"\d{6}", p) and 1 <= int(p[4:6]) <= 12:  # YYYYMM
+        return f"{p[:4]}-{p[4:6]}-01"
+    if re.fullmatch(r"\d{5}", p) and p[4] in "1234":  # YYYYQ
+        return f"{p[:4]}-{(int(p[4]) - 1) * 3 + 1:02d}-01"
+    if re.fullmatch(r"\d{4}", p):  # YYYY
+        return f"{p}-01-01"
+    if re.match(r"\d{4}-\d{2}", p):  # already ISO-ish
+        return p if len(p) >= 10 else f"{p}-01"
+    return f"{p}-01-01"  # last resort (preserves prior behaviour for odd input)
+
+
 # Reverse of COUNTRY_CODE_MAPPINGS (name -> Comtrade numeric code) so a partner
 # code can be rendered as a readable name when the /data record omits partnerDesc.
 # Prefer a spaced multi-word alias ("UNITED STATES" over "US"/"USA"/"UNITED_STATES").
@@ -888,7 +912,7 @@ class ComtradeProvider(BaseProvider):
             # When multiple records exist for same period, keep the maximum value (assumes it's the total)
             data_points_map = {}
             for item in flow_records:
-                date_str = f"{item['period']}-01-01"
+                date_str = _comtrade_period_to_iso(item['period'])
                 new_value = item.get("primaryValue") or 0
 
                 # If date already exists, keep the maximum value
