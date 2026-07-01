@@ -1206,13 +1206,17 @@ async def fetch_historical_exchange_from_fred(
     target_upper = target_currency.upper()
     base_upper = base_currency.upper()
 
+    # Every FRED series here is USD-based, so this fallback can only serve a
+    # pair where exactly ONE leg is USD. The old code also fired when NEITHER
+    # leg was USD and returned a single USD leg (e.g. DEXUSUK, USD/GBP)
+    # relabeled as the requested cross rate ("EUR to GBP") — wrong data shown as
+    # success. A cross rate is not a single FRED series, so fail closed and let
+    # the caller surface "historical FX not available for this pair".
     fred_series_id = None
-    if target_upper in fred_fx and target_upper != "USD":
+    if base_upper == "USD" and target_upper in fred_fx:
         fred_series_id = fred_fx[target_upper]
-    elif base_upper in fred_fx and target_upper == "USD":
+    elif target_upper == "USD" and base_upper in fred_fx:
         fred_series_id = fred_fx[base_upper]
-    elif base_upper != "USD" and target_upper != "USD":
-        fred_series_id = fred_fx.get(base_upper) or fred_fx.get(target_upper)
 
     if not fred_series_id:
         return None
