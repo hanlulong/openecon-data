@@ -42,6 +42,46 @@ class TestSecurityValidator:
         assert not is_safe, "Should block os.popen"
         assert any("Forbidden os operation" in v for v in violations)
 
+    def test_blocks_builtins_eval_attribute(self):
+        """__builtins__.eval hides the call in a string the AST never parses."""
+        validator = SecurityValidator()
+        is_safe, violations, _ = validator.validate("__builtins__.eval('1+1')")
+        assert not is_safe, "Should block __builtins__.eval"
+
+    def test_blocks_builtins_subscript(self):
+        """__builtins__['eval'](...) is the subscript form of the same escape."""
+        validator = SecurityValidator()
+        is_safe, violations, _ = validator.validate("__builtins__['exec']('x=1')")
+        assert not is_safe, "Should block __builtins__['exec']"
+
+    def test_blocks_os_posix_spawn(self):
+        """posix_spawn is a process-creation vector the spawn* list missed."""
+        validator = SecurityValidator()
+        code = "import os\nos.posix_spawn('/bin/sh', ['sh'], {})"
+        is_safe, violations, _ = validator.validate(code)
+        assert not is_safe, "Should block os.posix_spawn"
+        assert any("Forbidden os operation" in v for v in violations)
+
+    def test_blocks_os_low_level_fd_io(self):
+        """os.open/read/write reach the same files the open() block forbids."""
+        validator = SecurityValidator()
+        for op in ("os.open('/etc/passwd', 0)", "os.read(0, 10)", "os.write(1, b'x')", "os.dup2(1, 2)"):
+            code = f"import os\n{op}"
+            is_safe, violations, _ = validator.validate(code)
+            assert not is_safe, f"Should block {op}"
+            assert any("Forbidden os operation" in v for v in violations)
+
+    def test_still_allows_legit_os_and_dunder_name_guard(self):
+        """The stopgap must not break normal analysis code or `__name__` checks."""
+        validator = SecurityValidator()
+        for code in (
+            "import os\nprint(os.getcwd())\nos.environ.get('HOME')",
+            "if __name__ == '__main__':\n    print('hi')",
+            "import httpx\nr = httpx.get('https://api.example.com')",
+        ):
+            is_safe, violations, _ = validator.validate(code)
+            assert is_safe, f"Should allow legit code, got: {violations}"
+
     def test_allows_os_path_join(self):
         """Test that os.path.join is allowed (safe operation)"""
         validator = SecurityValidator()

@@ -72,10 +72,19 @@ class SecurityValidator:
         'system', 'popen', 'exec', 'execl', 'execle', 'execlp', 'execlpe',
         'execv', 'execve', 'execvp', 'execvpe', 'spawn', 'spawnl', 'spawnle',
         'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe',
+        # posix_spawn/posix_spawnp are process-creation primitives that the
+        # spawn*/exec* list above missed — a direct shell-exec vector.
+        'posix_spawn', 'posix_spawnp',
         'kill', 'killpg', 'fork', 'forkpty', 'remove', 'unlink', 'rmdir',
         'removedirs', 'rename', 'renames', 'replace', 'link', 'symlink',
         'chown', 'chmod', 'chroot', 'lchmod', 'lchown', 'setuid', 'setgid',
         'seteuid', 'setegid', 'setreuid', 'setregid',
+        # Raw file-descriptor I/O defeats STRICT "no file I/O" (the open()
+        # builtin is blocked, but os.open/read/write reach the same files).
+        # Legit analysis code uses pandas/httpx/os.path, never these.
+        'open', 'read', 'write', 'pread', 'pwrite', 'pipe', 'pipe2',
+        'dup', 'dup2', 'fdopen', 'mkfifo', 'mknod', 'truncate', 'ftruncate',
+        'putenv', 'unsetenv', 'setsid', 'setpgid', 'setpgrp', 'abort', '_exit',
     }
 
     # Dangerous sys attributes
@@ -96,13 +105,18 @@ class SecurityValidator:
         'ssl': "Network access is disabled",
     }
 
-    # Dangerous built-in functions
+    # Dangerous built-in functions and reflective names.
+    # __builtins__ is the master key: `__builtins__.eval('...')` and
+    # `__builtins__['eval'](...)` both hide the real call in a string the AST
+    # never parses, so the eval/exec entries above don't catch them. Blocking
+    # the __builtins__/__loader__ Name reference itself closes both forms.
     DANGEROUS_BUILTINS = {
         'eval', 'exec', 'compile', '__import__',
         'getattr', 'setattr', 'delattr', 'hasattr',
         'globals', 'locals', 'vars', 'dir',
         'input', 'breakpoint', 'help',
         'memoryview', 'bytearray',
+        '__builtins__', '__loader__',
     }
 
     # File operations to block (in STRICT mode)
