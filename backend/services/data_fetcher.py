@@ -20,7 +20,7 @@ from datetime import datetime
 import logging
 import re
 import time
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import httpx
 
@@ -81,6 +81,46 @@ _CURRENCY_TO_RE = re.compile(r"\b([A-Z]{3})\s+TO\s+([A-Z]{3})\b")
 _CURRENCY_SLASH_RE = re.compile(r"\b([A-Z]{3})[/\-]([A-Z]{3})\b")
 _CURRENCY_VS_RE = re.compile(r"\b([A-Z]{3})\s+VS\.?\s+([A-Z]{3})\b")
 _CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
+
+# Country -> ISO-4217 currency, so "<country> exchange rate" (no explicit pair
+# in the text) resolves to that country's currency instead of the USD->EUR
+# default. This is structural reference data (like COUNTRY_CODE_MAPPINGS or the
+# ISO_4217 code list), not a per-query mapping — it works for every country in
+# the table. The upstream country override emits an English NAME for some
+# countries and an ISO-3166 alpha-2 CODE for others (e.g. "Brazil" vs "JP"), so
+# the map is keyed on BOTH forms (all lowercased) to be robust to either.
+_COUNTRY_TO_CURRENCY: Dict[str, str] = {
+    # By English name
+    "united states": "USD", "usa": "USD", "us": "USD", "america": "USD",
+    "eurozone": "EUR", "euro area": "EUR", "european union": "EUR",
+    "germany": "EUR", "france": "EUR", "italy": "EUR", "spain": "EUR",
+    "netherlands": "EUR", "belgium": "EUR", "austria": "EUR", "portugal": "EUR",
+    "ireland": "EUR", "greece": "EUR", "finland": "EUR",
+    "united kingdom": "GBP", "uk": "GBP", "britain": "GBP", "england": "GBP",
+    "japan": "JPY", "china": "CNY", "switzerland": "CHF", "canada": "CAD",
+    "australia": "AUD", "new zealand": "NZD", "india": "INR",
+    "south korea": "KRW", "korea": "KRW", "brazil": "BRL", "russia": "RUB",
+    "mexico": "MXN", "south africa": "ZAR", "turkey": "TRY", "türkiye": "TRY",
+    "singapore": "SGD", "hong kong": "HKD", "sweden": "SEK", "norway": "NOK",
+    "denmark": "DKK", "thailand": "THB", "malaysia": "MYR", "taiwan": "TWD",
+    "indonesia": "IDR", "philippines": "PHP", "poland": "PLN", "hungary": "HUF",
+    "czech republic": "CZK", "czechia": "CZK", "israel": "ILS", "chile": "CLP",
+    "colombia": "COP", "argentina": "ARS", "peru": "PEN", "egypt": "EGP",
+    "nigeria": "NGN", "saudi arabia": "SAR", "united arab emirates": "AED",
+    "uae": "AED", "vietnam": "VND", "pakistan": "PKR", "bangladesh": "BDT",
+    # By ISO-3166 alpha-2 code (lowercased)
+    "us": "USD", "gb": "GBP", "jp": "JPY", "cn": "CNY", "ch": "CHF",
+    "ca": "CAD", "au": "AUD", "nz": "NZD", "in": "INR", "kr": "KRW",
+    "br": "BRL", "ru": "RUB", "mx": "MXN", "za": "ZAR", "tr": "TRY",
+    "sg": "SGD", "hk": "HKD", "se": "SEK", "no": "NOK", "dk": "DKK",
+    "th": "THB", "my": "MYR", "tw": "TWD", "id": "IDR", "ph": "PHP",
+    "pl": "PLN", "hu": "HUF", "cz": "CZK", "il": "ILS", "cl": "CLP",
+    "co": "COP", "ar": "ARS", "pe": "PEN", "eg": "EGP", "ng": "NGN",
+    "sa": "SAR", "ae": "AED", "vn": "VND", "pk": "PKR", "bd": "BDT",
+    "de": "EUR", "fr": "EUR", "it": "EUR", "es": "EUR", "nl": "EUR",
+    "be": "EUR", "at": "EUR", "pt": "EUR", "ie": "EUR", "gr": "EUR",
+    "fi": "EUR",
+}
 _TOP_N_RE = re.compile(r"\btop\s+(\d{1,3})\b")
 _TIME_SCOPE_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _TIME_SCOPE_SINGLE_YEAR_RE = re.compile(
@@ -1359,6 +1399,21 @@ def extract_exchange_rate_params(params: dict, intent: ParsedIntent) -> dict:
                 base_currency = code
                 target_currency = "USD"
             logger.info(f"Single currency name found: {base_currency} -> {target_currency}")
+
+    # Pattern 6: derive from the parsed COUNTRY when the text carried no pair.
+    # "Brazil exchange rate" has no currency token, so without this it would
+    # default to USD->EUR. Map the country to its currency and quote it against
+    # USD (the natural reading of "<country> exchange rate"). Skipped when the
+    # country's currency is USD itself, leaving the USD->EUR default to stand.
+    if not base_currency and not target_currency:
+        country = str(params.get("country") or "").strip().lower()
+        country_currency = _COUNTRY_TO_CURRENCY.get(country)
+        if country_currency and country_currency != "USD":
+            base_currency = "USD"
+            target_currency = country_currency
+            logger.info(
+                f"Derived currency from country '{country}': USD -> {country_currency}"
+            )
 
     # Apply defaults if still not found
     if not base_currency:
