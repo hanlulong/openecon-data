@@ -167,6 +167,15 @@ function getSeriesNames(data: NormalizedData[]): string[] {
   return getSeriesLabels(data)
 }
 
+// Decimals that keep ~3 significant figures on sub-1 values (a USD/JPY rate of
+// 0.0067 must not render as "0.00") while preserving the usual 2-decimal look
+// for ordinary magnitudes.
+function adaptiveDecimals(absValue: number, minDecimals: number): number {
+  if (absValue === 0 || !Number.isFinite(absValue)) return minDecimals
+  const magnitude = Math.floor(Math.log10(absValue))
+  return Math.min(8, Math.max(minDecimals, 2 - magnitude))
+}
+
 function formatNumber(value: number | null | undefined) {
   if (value === null || value === undefined) return 'N/A'
   const absValue = Math.abs(value)
@@ -174,17 +183,40 @@ function formatNumber(value: number | null | undefined) {
   if (absValue >= 1e9) return `${(value / 1e9).toFixed(2)}B`
   if (absValue >= 1e6) return `${(value / 1e6).toFixed(2)}M`
   if (absValue >= 1e3) return `${(value / 1e3).toFixed(2)}K`
-  return value.toFixed(2)
+  return value.toFixed(adaptiveDecimals(absValue, 2))
 }
 
-function formatYAxisTick(value: number) {
-  const absValue = Math.abs(value)
-  if (absValue >= 1e12) return `${(value / 1e12).toFixed(1)}T`
-  if (absValue >= 1e9) return `${(value / 1e9).toFixed(1)}B`
-  if (absValue >= 1e6) return `${(value / 1e6).toFixed(1)}M`
-  if (absValue >= 1e3) return `${(value / 1e3).toFixed(1)}K`
-  if (absValue >= 1) return value.toFixed(0)
-  return value.toFixed(2)
+// Y-axis ticks must resolve the chart's value RANGE, not just each value's
+// magnitude: a [3.4, 4.2] rate axis rendered with toFixed(0) shows "3 4 4 4 4".
+// The formatter therefore closes over the plotted values and picks enough
+// decimals to distinguish adjacent ticks.
+function makeYAxisTickFormatter(values: number[]): (value: number) => string {
+  let min = Infinity
+  let max = -Infinity
+  for (const v of values) {
+    if (!Number.isFinite(v)) continue
+    if (v < min) min = v
+    if (v > max) max = v
+  }
+  const span = max - min
+  // Recharts renders at most ~10 ticks; decimals must resolve one tick step.
+  const step = Number.isFinite(span) && span > 0 ? span / 10 : 0
+
+  const decimalsFor = (scaledStep: number, minDecimals: number) => {
+    if (scaledStep <= 0) return minDecimals
+    return Math.min(6, Math.max(minDecimals, Math.ceil(-Math.log10(scaledStep))))
+  }
+
+  return (value: number) => {
+    const absValue = Math.abs(value)
+    if (absValue >= 1e12) return `${(value / 1e12).toFixed(decimalsFor(step / 1e12, 1))}T`
+    if (absValue >= 1e9) return `${(value / 1e9).toFixed(decimalsFor(step / 1e9, 1))}B`
+    if (absValue >= 1e6) return `${(value / 1e6).toFixed(decimalsFor(step / 1e6, 1))}M`
+    if (absValue >= 1e3) return `${(value / 1e3).toFixed(decimalsFor(step / 1e3, 1))}K`
+    if (step > 0) return value.toFixed(decimalsFor(step, 0))
+    // Flat or single-point series: no range info, fall back to magnitude.
+    return value.toFixed(adaptiveDecimals(absValue, absValue >= 1 ? 0 : 2))
+  }
 }
 
 function formatXAxisTick(dateStr: string, frequency?: string): string {
@@ -294,6 +326,16 @@ interface MessageChartProps {
 export const MessageChart = memo(function MessageChart({ data, chartType, onChartTypeChange, onExport, onShare }: MessageChartProps) {
   const chartData = useMemo(() => transformDataForChart(data), [data])
   const seriesNames = useMemo(() => getSeriesNames(data), [data])
+  const yAxisTickFormatter = useMemo(() => {
+    const values: number[] = []
+    for (const row of chartData) {
+      for (const name of seriesNames) {
+        const v = row[name]
+        if (typeof v === 'number') values.push(v)
+      }
+    }
+    return makeYAxisTickFormatter(values)
+  }, [chartData, seriesNames])
   const [showApiUrls, setShowApiUrls] = useState(false)
 
   // Responsive chart height based on viewport width
@@ -425,7 +467,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
           <YAxis
             stroke={CHART_STYLE.axis}
             style={{ fontSize: '11px' }}
-            tickFormatter={formatYAxisTick}
+            tickFormatter={yAxisTickFormatter}
             tickLine={false}
             axisLine={false}
             width={60}
@@ -444,7 +486,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
               dataKey={name}
               stroke={CHART_COLORS[index % CHART_COLORS.length]}
               strokeWidth={2.5}
-              dot={{ r: 4, fill: '#fff', stroke: CHART_COLORS[index % CHART_COLORS.length], strokeWidth: 2 }}
+              dot={chartData.length > 60 ? false : { r: 4, fill: '#fff', stroke: CHART_COLORS[index % CHART_COLORS.length], strokeWidth: 2 }}
               activeDot={{ r: 6, fill: CHART_COLORS[index % CHART_COLORS.length], stroke: '#fff', strokeWidth: 2 }}
               animationDuration={530}
               animationEasing="ease-out"
@@ -474,7 +516,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
           <YAxis
             stroke={CHART_STYLE.axis}
             style={{ fontSize: '11px' }}
-            tickFormatter={formatYAxisTick}
+            tickFormatter={yAxisTickFormatter}
             tickLine={false}
             axisLine={false}
             width={60}
@@ -522,7 +564,10 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
                         ? typeof row[name] === 'number'
                           ? (row[name] as number).toLocaleString(undefined, {
                               minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
+                              maximumFractionDigits: adaptiveDecimals(
+                                Math.abs(row[name] as number),
+                                2
+                              ),
                             })
                           : row[name]
                         : 'N/A'}

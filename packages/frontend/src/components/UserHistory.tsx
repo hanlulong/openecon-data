@@ -5,6 +5,7 @@ import { MessageChart } from './MessageChart';
 import { downloadExport } from '../lib/export';
 import { extractApiErrorMessage } from '../lib/errors';
 import { logger } from '../utils/logger';
+import { determineChartType } from '../utils/chartType';
 import './UserHistory.css';
 
 interface UserHistoryProps {
@@ -152,7 +153,7 @@ export const UserHistory = ({ onClose }: UserHistoryProps) => {
                       </div>
                       <MessageChart
                         data={item.data}
-                        chartType="line"
+                        chartType={determineChartType(item.data)}
                         onChartTypeChange={() => {}}
                         onExport={(format) => handleExport(item.data!, format)}
                       />

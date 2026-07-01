@@ -10,6 +10,7 @@ import { ProcessingSteps, ProcessingTimelineStep } from './ProcessingSteps'
 import { getOrCreateSessionId } from '../lib/supabase'
 import { useMobile } from '../hooks/useMobile'
 import { logger } from '../utils/logger'
+import { determineChartType } from '../utils/chartType'
 import { downloadExport } from '../lib/export'
 import { extractApiErrorMessage } from '../lib/errors'
 import { ShareModal } from './ShareModal'
@@ -18,45 +19,6 @@ import { RegistrationWall } from './RegistrationWall'
 import './ChatPage.css'
 
 // Pure functions moved outside component for performance
-function determineChartType(data: NormalizedData[]): 'line' | 'bar' | 'table' {
-  if (data.length === 0) return 'line'
-
-  const firstSeries = data[0]
-  const dataPoints = firstSeries.data.length
-  const frequency = firstSeries.metadata.frequency
-
-  // Check if this is exchange rate data (currency codes as dates)
-  const isExchangeRateData = data.length === 1 &&
-    firstSeries.metadata.unit === 'exchange rate' &&
-    firstSeries.data.length > 1 &&
-    firstSeries.data.every(point => /^[A-Z]{3}$/.test(point.date))
-
-  if (isExchangeRateData) {
-    return 'table'
-  }
-
-  // Table for data with widely varying scales across multiple series
-  if (data.length > 1) {
-    const allValues = data.flatMap(series => series.data.map(d => d.value).filter((v): v is number => v !== null).map(v => Math.abs(v)))
-    const minValue = Math.min(...allValues.filter(v => v > 0))
-    const maxValue = Math.max(...allValues)
-
-    // If the ratio between max and min values is very large (e.g., comparing EUR ~0.9 to JPY ~110)
-    // suggest table view for better readability
-    if (maxValue / minValue > 50) {
-      return 'table'
-    }
-  }
-
-  // Bar chart for annual data with few years or categorical comparisons
-  if (frequency === 'annual' && dataPoints <= 10) {
-    return 'bar'
-  }
-
-  // Line chart for time series (default for most economic data)
-  return 'line'
-}
-
 function mapProcessingStepsToTimeline(steps?: ProcessingStep[]): ProcessingTimelineStep[] {
   if (!steps || steps.length === 0) {
     return []
@@ -387,6 +349,7 @@ export function ChatPage() {
           }
 
           if (response.error) {
+            setActiveProcessingSteps([])
             const errorMessage = response.message || response.error
             let displayMessage = errorMessage
             if (response.error === 'data_not_available') {
@@ -407,6 +370,7 @@ export function ChatPage() {
           }
 
           if (response.clarificationNeeded) {
+            setActiveProcessingSteps([])
             setMessages(prev => [...prev, {
               role: 'assistant',
               content: response.clarificationQuestions?.join('\n') || 'Please clarify your request.',
