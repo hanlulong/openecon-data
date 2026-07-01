@@ -3167,6 +3167,13 @@ class QueryService:
             "__time_scope_authority",
             # Transient retry bookkeeping — never part of cache identity.
             "__exclude_indicator_codes",
+            # Raw query text: identity for the cache is the RESOLVED params, not
+            # the phrasing. It is consumed below (still read from `params`) to
+            # build _query_hash for the RAW_QUERY_CACHE_HASH providers only;
+            # leaving it in cache_params re-introduced raw-text differentiation
+            # for EVERY provider, mooting that gating ("US GDP 2020-2024" vs
+            # "show me GDP for the United States 2020 to 2024" → 2 FRED entries).
+            "__original_query",
         ):
             cache_params.pop(internal_key, None)
         cache_params["_cache_version"] = self.CACHE_KEY_VERSION
