@@ -295,6 +295,12 @@ RATE_LIMITS = {
     "/api/query/pro/stream": "10/minute",   # Pro Mode streaming
     "/api/query/stream": "30/minute",       # Standard streaming queries
     "/api/query": "30/minute",              # Standard queries
+    # Diagnostic endpoints: registration is open, so "any authenticated user"
+    # is effectively public. cache/clear flushes Redis+memory (cache-stampede
+    # DoS against upstream provider APIs); performance/* leaks pool/breaker
+    # internals. Keep them well under the 200/min default.
+    "/api/cache/clear": "5/minute",
+    "/api/performance": "20/minute",
 }
 DEFAULT_RATE_LIMIT = "200/minute"  # Default for other endpoints
 
