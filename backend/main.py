@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import contextlib
+import sys
 import uuid
 import time
 from datetime import datetime, timezone
@@ -62,20 +63,24 @@ logging.basicConfig(level=logging.INFO)
 # any per-provider URL masking.
 for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
-# File handler for debugging (uvicorn reloader pipes child output through sockets)
-_LOG_DIR = Path(__file__).resolve().parents[1] / ".omx" / "logs"
-_LOG_DIR.mkdir(parents=True, exist_ok=True)
-_fh = logging.FileHandler(_LOG_DIR / "backend-app.log", mode="a")
-_fh.setLevel(logging.INFO)
-_fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-# Lock down the log file: it has historically captured request URLs and user
-# emails, so it must never be world-readable.
-logging.getLogger().addHandler(_fh)
-try:
-    import os as _os
-    _os.chmod(_LOG_DIR / "backend-app.log", 0o600)
-except OSError:
-    pass
+# File handler for debugging (uvicorn reloader pipes child output through sockets).
+# Skipped under pytest: the suite imports this module, and its mock-auth /
+# fake-provider log lines would interleave with real service traffic in the
+# same file, making production incidents un-debuggable.
+if "pytest" not in sys.modules:
+    _LOG_DIR = Path(__file__).resolve().parents[1] / ".omx" / "logs"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _fh = logging.FileHandler(_LOG_DIR / "backend-app.log", mode="a")
+    _fh.setLevel(logging.INFO)
+    _fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    # Lock down the log file: it has historically captured request URLs and user
+    # emails, so it must never be world-readable.
+    logging.getLogger().addHandler(_fh)
+    try:
+        import os as _os
+        _os.chmod(_LOG_DIR / "backend-app.log", 0o600)
+    except OSError:
+        pass
 
 _background_tasks: set[asyncio.Task] = set()
 
