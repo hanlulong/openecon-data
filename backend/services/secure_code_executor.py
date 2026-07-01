@@ -1371,8 +1371,23 @@ finally:
                         except Exception as e:
                             logger.error(f"Failed to delete {session_dir}: {e}")
 
+            # Prune published Pro Mode media (charts/CSV/JSON). These were
+            # written to public_dir permanently and never cleaned — the one true
+            # unbounded disk leak. Mirror the session TTL: a media file older
+            # than max_age_hours belongs to an already-expired session.
+            if self.public_dir.exists():
+                for media_file in self.public_dir.glob("*"):
+                    if media_file.is_file():
+                        try:
+                            if current_time - media_file.stat().st_mtime > max_age_seconds:
+                                media_file.unlink()
+                                deleted_count += 1
+                                logger.debug(f"Deleted old published media: {media_file.name}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete published media {media_file}: {e}")
+
             if deleted_count > 0:
-                logger.info(f"Session cleanup completed: deleted {deleted_count} old session(s)/work dirs")
+                logger.info(f"Session cleanup completed: deleted {deleted_count} old session(s)/work/media entries")
 
         except Exception as e:
             logger.error(f"Error during session cleanup: {e}")
