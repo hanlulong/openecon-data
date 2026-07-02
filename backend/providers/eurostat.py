@@ -270,6 +270,11 @@ class EurostatProvider(BaseProvider):
         current_year = datetime.now(timezone.utc).year
         used_default_time_range = start_year is None and end_year is None
         query_params["sinceTimePeriod"] = str(start_year or (current_year - 5))
+        # Best-effort upper bound. The SDMX dissemination endpoint doesn't
+        # reliably honor either bound for all datasets, so the returned points
+        # are ALSO trimmed to [start_year, end_year] in code after parsing.
+        if end_year is not None:
+            query_params["untilTimePeriod"] = str(end_year)
 
         # Add mechanical defaults for an already-selected provider-native dataset.
         static_defaults = self.DATASET_DEFAULT_FILTERS.get(dataset_code, {})
@@ -462,6 +467,13 @@ class EurostatProvider(BaseProvider):
         else:
             # Extract unit from API response (preferred) or fallback to hardcoded mapping
             unit = self._extract_unit_from_payload(payload, dataset_code)
+
+        # Enforce the requested window in code. The dissemination endpoint does
+        # not reliably honor since/untilTimePeriod (both are ignored for several
+        # datasets), so "France GDP 2010-2015" otherwise returned 2010→latest.
+        # Runs AFTER the YoY calc so its year lag still had the prior periods.
+        if start_year is not None or end_year is not None:
+            data_points = self._trim_points_to_year_range(data_points, start_year, end_year)
 
         # NOTE: values are returned exactly as Eurostat publishes them — see
         # the FRED provider note on the removed value-sniffing percent
@@ -1243,6 +1255,36 @@ class EurostatProvider(BaseProvider):
             _EUROSTAT_RATE_INTENT_RE.search(indicator_lower)
             or _EUROSTAT_RATE_INTENT_RE.search(query_lower)
         )
+
+    @staticmethod
+    def _trim_points_to_year_range(
+        data_points: list[dict], start_year, end_year
+    ) -> list[dict]:
+        """Keep only points whose year is within [start_year, end_year].
+
+        Guarantees the returned window matches the request even when the API
+        ignores since/untilTimePeriod. Unparseable dates are kept (never drop
+        data on a formatting surprise). The year is the leading 4 chars of the
+        date ("2010", "2010-Q1", "2010-03" all → 2010).
+        """
+        try:
+            lo = int(start_year) if start_year is not None else None
+            hi = int(end_year) if end_year is not None else None
+        except (ValueError, TypeError):
+            return data_points
+
+        def _in_range(pt: dict) -> bool:
+            try:
+                y = int(str(pt.get("date", ""))[:4])
+            except (ValueError, TypeError):
+                return True
+            if lo is not None and y < lo:
+                return False
+            if hi is not None and y > hi:
+                return False
+            return True
+
+        return [pt for pt in data_points if _in_range(pt)]
 
     # Periods per year by frequency — the lag for a year-over-year change.
     _YOY_LAG_BY_FREQUENCY = {"monthly": 12, "quarterly": 4, "annual": 1, "yearly": 1}
