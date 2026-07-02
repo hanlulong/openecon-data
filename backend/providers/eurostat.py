@@ -453,8 +453,10 @@ class EurostatProvider(BaseProvider):
         # Apply year-over-year rate calculation if requested
         # Check if indicator name suggests rate/growth/change calculation is needed
         if self._should_calculate_rate(indicator):
-            logger.info(f"Calculating year-over-year rate for indicator: {indicator}")
-            data_points = self._calculate_year_over_year_change(data_points)
+            logger.info(
+                f"Calculating year-over-year rate for indicator: {indicator} (frequency={frequency})"
+            )
+            data_points = self._calculate_year_over_year_change(data_points, frequency)
             # Update unit to reflect percentage change
             unit = "percent"
         else:
@@ -1242,14 +1244,28 @@ class EurostatProvider(BaseProvider):
             or _EUROSTAT_RATE_INTENT_RE.search(query_lower)
         )
 
-    def _calculate_year_over_year_change(self, data: list[dict]) -> list[dict]:
-        """Calculate year-over-year percentage change from index values."""
-        if not data or len(data) < 2:
-            return data
+    # Periods per year by frequency — the lag for a year-over-year change.
+    _YOY_LAG_BY_FREQUENCY = {"monthly": 12, "quarterly": 4, "annual": 1, "yearly": 1}
+
+    def _calculate_year_over_year_change(
+        self, data: list[dict], frequency: str = "annual"
+    ) -> list[dict]:
+        """Calculate year-over-year percentage change from index/level values.
+
+        The lag must span one YEAR for the series' frequency (12 monthly,
+        4 quarterly, 1 annual). Diffing ADJACENT elements produced a
+        month-over-month / quarter-over-quarter change mislabeled year-over-year
+        — the number itself was wrong for any sub-annual dataset. Assumes data
+        is in ascending time order (same assumption the old adjacent diff made).
+        """
+        lag = self._YOY_LAG_BY_FREQUENCY.get(str(frequency or "annual").lower(), 1)
+        if not data or len(data) <= lag:
+            # Not enough history to span a full year → no YoY is defined.
+            return []
 
         result: list[dict] = []
-        for i in range(1, len(data)):
-            prev_value = data[i-1].get('value')
+        for i in range(lag, len(data)):
+            prev_value = data[i - lag].get('value')
             curr_value = data[i].get('value')
 
             # Skip if either value is None or prev_value is 0 (avoid division by zero)
