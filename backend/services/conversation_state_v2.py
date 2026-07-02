@@ -711,10 +711,21 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.country = None
         merged.decomposition = None
 
-    # Additive: merge new countries into existing list
+    # Additive: merge new countries into existing list.
+    # Dedup by ISO2 identity (mirroring the removal path below) so "US" and
+    # "United States" aren't treated as distinct — raw-string dedup let
+    # "GDP of US and Japan" + "also add the United States" plot the US twice.
+    # The first label for each country is kept for display.
     if delta.added_countries:
         existing = merged.countries or ([merged.country] if merged.country else [])
-        merged_list = list(dict.fromkeys(existing + delta.added_countries))
+        merged_list = []
+        seen_iso2 = set()
+        for c in existing + delta.added_countries:
+            key = _normalize_country_to_iso2(c) or str(c).strip().lower()
+            if key in seen_iso2:
+                continue
+            seen_iso2.add(key)
+            merged_list.append(c)
         if len(merged_list) == 1:
             merged.country = merged_list[0]
             merged.countries = None
