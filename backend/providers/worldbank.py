@@ -1074,6 +1074,33 @@ class WorldBankProvider(BaseProvider):
         }),
     }
 
+    # A requested set must cover this fraction of a region's members before it
+    # is treated as "the region" (i.e. pre-expanded from a named region) rather
+    # than an explicit multi-country comparison.
+    _REGION_COVERAGE_THRESHOLD = 0.85
+
+    @classmethod
+    def _region_aggregate_for_country_set(cls, country_list) -> Optional[str]:
+        """Return a WB region code iff the country set represents ~the whole region.
+
+        Substituting the aggregate is correct only when the query service
+        pre-expanded a named region ("Sub-Saharan Africa" → its members).
+        A small subset (5 African countries out of SSF's 22) is an explicit
+        COMPARISON and must be returned country-by-country, not collapsed into
+        one aggregate — the old `min(len(region),len(set))*0.7` test was a
+        tautology for any subset of a larger region.
+        """
+        if not country_list or len(country_list) < 5:
+            return None
+        country_set = frozenset(str(c).upper() for c in country_list)
+        for region_code, region_members in cls._REGION_COUNTRY_SETS.items():
+            if not region_members:
+                continue
+            overlap = len(country_set & region_members)
+            if overlap >= len(region_members) * cls._REGION_COVERAGE_THRESHOLD:
+                return region_code
+        return None
+
     async def fetch_indicator(
         self,
         indicator: str,
@@ -1115,20 +1142,13 @@ class WorldBankProvider(BaseProvider):
         # When the query service has pre-expanded "Sub-Saharan Africa" into
         # individual ISO2 codes, use the WB region code instead for efficiency
         # and to get the proper aggregate statistic.
-        if len(country_list) >= 5:
-            country_set = frozenset(c.upper() for c in country_list)
-            for region_code, region_members in self._REGION_COUNTRY_SETS.items():
-                # Check if the country set is a subset of the region members
-                # (allows partial matches when query service uses a subset)
-                if country_set <= region_members or region_members <= country_set:
-                    overlap = len(country_set & region_members)
-                    if overlap >= min(len(region_members), len(country_set)) * 0.7:
-                        logger.info(
-                            "🌍 Detected region aggregate: %d/%d countries match %s — using region code",
-                            overlap, len(country_set), region_code,
-                        )
-                        country_list = [region_code]
-                        break
+        region_code = self._region_aggregate_for_country_set(country_list)
+        if region_code:
+            logger.info(
+                "🌍 Detected region aggregate: country set covers %s — using region code",
+                region_code,
+            )
+            country_list = [region_code]
 
         # Expand country groups (e.g., "G7" → ["USA", "GBR", "FRA", ...])
         # ALWAYS expand groups to individual countries - region codes often fail
