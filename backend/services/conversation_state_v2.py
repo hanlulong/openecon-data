@@ -670,6 +670,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             # "verified" authority, so the new indicator silently returns the
             # old table's data (F4).  Drop it so the new indicator re-resolves.
             merged.statscan_product_id = None
+            # A decomposition ("by province"/"by state") belongs to the OLD
+            # indicator; carrying it forward broke the new indicator out by the
+            # old axis ("Canada CPI by province" → "show GDP instead" returned
+            # GDP per province, not national GDP). The country branches already
+            # clear it on a country change — mirror that here.
+            merged.decomposition = None
         # Auto-detect crypto indicator switches and update coin_ids/provider
         _coin = _indicator_to_coin_id(delta.changed_indicator)
         if _coin:
@@ -778,16 +784,18 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         # path with "verified" authority (F4 sibling case).
         merged.statscan_product_id = None
         merged.statscan_cube_metadata = None
-        # base_indicator and dimensions are equally provider-scoped: the base
-        # code was resolved against the OLD provider's catalog and the
-        # dimensions are that provider's coordinate codes. Leaving them made
-        # materialize_intent dispatch the old provider's vector + dimension
-        # filter to the new one ("Canada unemployment by sex" → "use Eurostat"
-        # shipped the StatsCan Sex coordinate to Eurostat). Clear them like the
-        # indicator-change branch does; the semantic `indicator` is preserved so
-        # the new provider re-resolves cleanly.
+        # base_indicator, dimensions and coin_ids are all provider-scoped: the
+        # base code was resolved against the OLD provider's catalog, the
+        # dimensions are that provider's coordinate codes, and coin_ids is a
+        # CoinGecko-only id. Leaving them made materialize_intent dispatch the
+        # old provider's vector + dimension filter to the new one ("Canada
+        # unemployment by sex" → "use Eurostat" shipped the StatsCan Sex
+        # coordinate to Eurostat; __dimensions also short-circuits resolution).
+        # Clear them like the indicator-change branch does; the semantic
+        # `indicator` is preserved so the new provider re-resolves cleanly.
         merged.base_indicator = None
         merged.dimensions = None
+        merged.coin_ids = None
 
     # --- Time ---
     if delta.changed_start_date:
