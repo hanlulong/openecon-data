@@ -1718,10 +1718,17 @@ Output the query_type and any changed fields as JSON."""
         # Try "since YYYY"
         m = _TIME_SINCE_RE.search(query)
         if m:
+            from datetime import datetime
+
             start_year = m.group(1)
             logger.info("Delta: time change → since %s", start_year)
+            # "since YYYY" is open-ended (through the present). Emit an explicit
+            # end date of today so the merge OVERWRITES any prior end_date; a
+            # bare changed_start_date leaves the previous window's end in place
+            # ("2000 to 2015" then "since 2020" → start=2020, end=2015 inverted).
             return FollowUpDelta(
                 changed_start_date=f"{start_year}-01-01",
+                changed_end_date=datetime.now().date().isoformat(),
                 raw_query=query,
                 delta_type="time_change",
             )
