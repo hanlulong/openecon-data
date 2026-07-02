@@ -35,6 +35,26 @@ from .json_parser import parse_json_response, JSONParseError
 logger = logging.getLogger(__name__)
 
 
+def _history_role_and_content(entry: Any, index: int) -> Tuple[str, Any]:
+    """Normalize a conversation-history entry to (role, content).
+
+    History may arrive as role-tagged dicts ({"role", "content"}) or as bare
+    content strings (legacy). Using the REAL stored role — rather than deriving
+    it from array position (i % 2) — prevents a desync: turns that store a user
+    message with no matching assistant reply (clarification / no-data / invalid
+    turns) leave two consecutive user entries, after which parity flips every
+    later role and degrades follow-up detection. Falls back to parity only when
+    no usable role is present.
+    """
+    if isinstance(entry, dict):
+        role = str(entry.get("role") or "").strip().lower()
+        content = entry.get("content", "")
+        if role in ("user", "assistant", "system"):
+            return role, content
+        return ("user" if index % 2 == 0 else "assistant"), content
+    return ("user" if index % 2 == 0 else "assistant"), entry
+
+
 class OpenRouterService:
     """
     Query parsing service using flexible LLM backends.
@@ -238,8 +258,8 @@ class OpenRouterService:
         messages = [{"role": "system", "content": system_prompt}]
         if conversation_history:
             for i, msg in enumerate(conversation_history):
-                role = "user" if i % 2 == 0 else "assistant"
-                messages.append({"role": role, "content": msg})
+                role, content = _history_role_and_content(msg, i)
+                messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": query})
 
         # Reasoning models spend completion tokens on reasoning BEFORE the
@@ -288,8 +308,8 @@ class OpenRouterService:
         context_parts = []
         if conversation_history:
             for i, msg in enumerate(conversation_history):
-                role = "User" if i % 2 == 0 else "Assistant"
-                context_parts.append(f"{role}: {msg}")
+                role, content = _history_role_and_content(msg, i)
+                context_parts.append(f"{role.capitalize()}: {content}")
 
         for attempt in range(max_retries):
             # Build the user prompt with context
@@ -371,8 +391,8 @@ class OpenRouterService:
 
         messages: List[dict[str, Any]] = [{"role": "system", "content": self._system_prompt(conversation_context=conversation_context)}]
         if conversation_history:
-            for index, content in enumerate(conversation_history):
-                role = "user" if index % 2 == 0 else "assistant"
+            for index, entry in enumerate(conversation_history):
+                role, content = _history_role_and_content(entry, index)
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": query})
 

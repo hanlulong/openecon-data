@@ -4180,7 +4180,11 @@ class QueryService:
                 claimable_keys=claimable_owner_keys,
             )
             conversation_manager.refresh_from_redis(conv_id)
-            history = conversation_manager.get_history(conv_id)
+            # Role-tagged messages (not bare content strings): the parser uses
+            # the real role instead of deriving it from position, which desyncs
+            # after a clarification/no-data turn. Used only for a truthiness
+            # check and the parse call below, both dict-safe.
+            history = conversation_manager.get_messages(conv_id)
 
             if normalize_provider_name(self._detect_explicit_provider(query) or "") == "IMF":
                 early_supportability_reason = imf_exact_provider_surface_supportability_reason(query)
@@ -6915,7 +6919,8 @@ class QueryService:
         """
         # This is the original process_query logic
         # For now, just parse and fetch normally
-        history = conversation_manager.get_history(conversation_id) if conversation_id else []
+        # Role-tagged messages so the parser uses real roles (see note above).
+        history = conversation_manager.get_messages(conversation_id) if conversation_id else []
 
         if tracker:
             with tracker.track("parsing_query", "🤖 Understanding your question..."):
