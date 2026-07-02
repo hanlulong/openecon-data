@@ -778,6 +778,16 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         # path with "verified" authority (F4 sibling case).
         merged.statscan_product_id = None
         merged.statscan_cube_metadata = None
+        # base_indicator and dimensions are equally provider-scoped: the base
+        # code was resolved against the OLD provider's catalog and the
+        # dimensions are that provider's coordinate codes. Leaving them made
+        # materialize_intent dispatch the old provider's vector + dimension
+        # filter to the new one ("Canada unemployment by sex" → "use Eurostat"
+        # shipped the StatsCan Sex coordinate to Eurostat). Clear them like the
+        # indicator-change branch does; the semantic `indicator` is preserved so
+        # the new provider re-resolves cleanly.
+        merged.base_indicator = None
+        merged.dimensions = None
 
     # --- Time ---
     if delta.changed_start_date:
