@@ -4097,7 +4097,16 @@ class QueryService:
             logger.warning(f"Attempting fallback from {primary_provider} to {fallback_provider}")
             fb_intent = await asyncio.to_thread(_build_fallback_intent, fallback_provider)
             try:
-                result = await self._fetch_data(fb_intent)
+                # Mirror the primary path's dispatch: a fallback intent that
+                # carries more than one indicator must go through the
+                # multi-indicator fetcher. Calling _fetch_data directly collapsed
+                # it to indicators_to_fetch=[first] and silently dropped every
+                # other requested series (data loss on a multi-indicator query
+                # whose primary provider failed).
+                if fb_intent.indicators and len(fb_intent.indicators) > 1:
+                    result = await self._fetch_multi_indicator_data(fb_intent)
+                else:
+                    result = await self._fetch_data(fb_intent)
                 if result and self._is_fallback_relevant(
                     intent.indicators,
                     result,
