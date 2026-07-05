@@ -33,6 +33,27 @@ def _bis_year_from_iso(date_str: Optional[str]) -> Optional[int]:
     return None
 
 
+def _bis_last_obs_sort_key(nd) -> tuple:
+    """Sortable (year, month, day) of a series' last observation.
+
+    Used to pick the freshest candidate among alternative REF_AREA series.
+    Parses metadata.endDate ("2026-06", "2026-06-01", "1998-12", "2025"), with
+    missing components treated as 0; an unparseable/absent date sorts oldest.
+    """
+    end = ""
+    meta = getattr(nd, "metadata", None)
+    if meta is not None:
+        end = getattr(meta, "endDate", "") or ""
+    key = []
+    for part in str(end).split("-")[:3]:
+        try:
+            key.append(int(part))
+        except (ValueError, TypeError):
+            key.append(0)
+    while len(key) < 3:
+        key.append(0)
+    return tuple(key)
+
 
 class BISProvider(BaseProvider):
     """Bank for International Settlements (BIS) Statistics API provider.
@@ -799,6 +820,15 @@ class BISProvider(BaseProvider):
                 if country_code in self.EUROZONE_COUNTRIES and indicator_code in ["WS_CBPOL", "WS_LONG_CPI"]:
                     country_codes_to_try.append("XM")
 
+                # Collect every candidate REF_AREA's result, then return the one
+                # whose LAST observation is most recent (see freshness selection
+                # after the loop). The old code returned the FIRST candidate with
+                # any data, so a discontinued series (e.g. a euro member's
+                # pre-1999 national policy rate ending 1998-12) shadowed the live
+                # Euro-area aggregate. This selection is provider/indicator
+                # agnostic — no code is special-cased.
+                candidate_results: list = []
+
                 for current_country_code in country_codes_to_try:
                     # WS_EER (Effective Exchange Rates) uses a different key structure:
                     # FREQ.EER_TYPE.EER_BASKET.REF_AREA where EER_TYPE=R (real) or N (nominal)
@@ -991,10 +1021,25 @@ class BISProvider(BaseProvider):
                             endDate=end_date_val,
                         )
 
-                        return NormalizedData(metadata=metadata, data=data_points)
+                        candidate_results.append(NormalizedData(metadata=metadata, data=data_points))
+                        continue
 
                     except Exception:
                         continue
+
+                if candidate_results:
+                    # Freshness wins: return the candidate whose last observation
+                    # is the most recent. Key on the parsed (year, month, day) of
+                    # metadata.endDate so a stale/discontinued series never
+                    # shadows a live one, for any provider/indicator.
+                    best = max(candidate_results, key=_bis_last_obs_sort_key)
+                    if len(candidate_results) > 1:
+                        logger.info(
+                            "🌍 BIS freshness: picked series ending %s over %d other candidate(s)",
+                            (best.metadata.endDate if best.metadata else None),
+                            len(candidate_results) - 1,
+                        )
+                    return best
 
                 return None  # No data found for this country
 
