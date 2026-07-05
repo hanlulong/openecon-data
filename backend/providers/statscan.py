@@ -261,6 +261,9 @@ class StatsCanProvider(BaseProvider):
         self.metadata_search = metadata_search_service  # Optional: for intelligent indicator discovery
         self._statscan_metadata_service = get_statscan_metadata_service()
         self._cube_metadata_cache: Dict[str, Dict[str, Any]] = {}
+        # UOM description per vector (from getSeriesInfoFromVector + codeset),
+        # used to decide monetary normalization off structured metadata.
+        self._vector_uom_cache: Dict[str, Optional[str]] = {}
         # Pre-populate cube metadata cache from local file for key tables.
         # This ensures dimension follow-ups work without runtime API calls.
         for _pid in ["14100287", "18100004", "36100434", "17100005", "34100156",
@@ -1614,6 +1617,79 @@ class StatsCanProvider(BaseProvider):
         logger.info(f"✅ Retrieved {len(data_points)} data points for {indicator} via coordinate query")
         return NormalizedData(metadata=metadata, data=data_points)
 
+    # StatsCan's official UOM codeset (code -> English label), fetched once and
+    # shared across instances. Structured reference data, not a per-query map.
+    _UOM_CODESET_CACHE: Optional[Dict[int, str]] = None
+
+    @staticmethod
+    def _uom_is_currency_level(uom_desc) -> bool:
+        """True iff the UOM is a dollar LEVEL that should scale to billions.
+
+        Levels: "Dollars", "Current dollars", "Thousands of dollars",
+        "Chained (2017) dollars", "Canadian dollars", … . Excluded: rates
+        ("Dollars per litre", "Per dollar of output"), dollar-denominated
+        indexes ("Dollars, 1972=100"), and everything non-dollar (percent,
+        index, number/persons). This drives normalization off the cube's
+        structured unit of measure, never the indicator name.
+        """
+        e = str(uom_desc or "").strip().lower()
+        if "dollar" not in e:
+            return False
+        if " per " in e or e.startswith("per "):
+            return False
+        if "=" in e:  # dollar index, e.g. "Dollars, 1972=100"
+            return False
+        return True
+
+    async def _get_uom_codeset(self) -> Dict[int, str]:
+        """Load and cache StatsCan's UOM codeset (memberUomCode -> English)."""
+        if StatsCanProvider._UOM_CODESET_CACHE is not None:
+            return StatsCanProvider._UOM_CODESET_CACHE
+        codeset: Dict[int, str] = {}
+        try:
+            client = get_statscan_http_client()
+            resp = await self._get_with_retry(
+                client, f"{self.base_url}/getCodeSets", timeout=30.0
+            )
+            data = resp.json()
+            for u in (data.get("object") or {}).get("uom") or []:
+                code = u.get("memberUomCode")
+                label = u.get("memberUomEn")
+                if code is not None and label:
+                    codeset[int(code)] = str(label)
+        except Exception as e:
+            logger.warning(f"StatsCan: failed to load UOM codeset: {e}")
+        StatsCanProvider._UOM_CODESET_CACHE = codeset
+        return codeset
+
+    async def _get_vector_uom_description(self, vector_id) -> Optional[str]:
+        """UOM label for a vector via getSeriesInfoFromVector + codeset (cached)."""
+        key = str(vector_id)
+        if key in self._vector_uom_cache:
+            return self._vector_uom_cache[key]
+        desc: Optional[str] = None
+        try:
+            vid_int = int(str(vector_id).lstrip("vV"))
+            client = get_statscan_http_client()
+            resp = await self._post_with_retry(
+                client,
+                f"{self.base_url}/getSeriesInfoFromVector",
+                json=[{"vectorId": vid_int}],
+                headers={"Content-Type": "application/json"},
+                timeout=30.0,
+            )
+            data = resp.json()
+            if data and isinstance(data, list):
+                obj = data[0].get("object", data[0])
+                uom_code = obj.get("memberUomCode")
+                if uom_code is not None:
+                    codeset = await self._get_uom_codeset()
+                    desc = codeset.get(int(uom_code))
+        except Exception as e:
+            logger.debug(f"StatsCan: UOM lookup failed for vector {vector_id}: {e}")
+        self._vector_uom_cache[key] = desc
+        return desc
+
     async def fetch_series(
         self, params: Dict[str, any]
     ) -> NormalizedData:
@@ -1675,12 +1751,22 @@ class StatsCanProvider(BaseProvider):
 
         frequency = self._map_frequency(freq_code)
 
-        # Determine if we should normalize units to billions (for monetary values)
-        # GDP and similar monetary indicators should be in billions for readability
-        should_normalize = indicator_name and any(
-            term in indicator_name.upper()
-            for term in ["GDP", "REVENUE", "EXPENDITURE", "DEBT", "DEFICIT", "SURPLUS"]
-        )
+        # Decide monetary (billions) normalization from the cube's STRUCTURED
+        # unit of measure, not the indicator name. The old name rule normalized
+        # any title containing "GDP"/"DEBT" — including "government debt as % of
+        # GDP", which divided 180.5(%) by 1e9 into 1.8e-7 labeled "billions".
+        # Only a dollar LEVEL (Dollars / Millions of dollars / chained dollars)
+        # should scale; a percent, index, count, or dollar-rate must not.
+        uom_desc = await self._get_vector_uom_description(target_vector)
+        if uom_desc is not None:
+            should_normalize = self._uom_is_currency_level(uom_desc)
+        else:
+            # UOM unavailable (rare API failure) — fall back to the legacy name
+            # heuristic so behaviour is unchanged when metadata can't be read.
+            should_normalize = bool(indicator_name and any(
+                term in indicator_name.upper()
+                for term in ["GDP", "REVENUE", "EXPENDITURE", "DEBT", "DEFICIT", "SURPLUS"]
+            ))
 
         # Convert values if needed
         if should_normalize:
