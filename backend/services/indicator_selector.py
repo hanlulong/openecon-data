@@ -448,11 +448,12 @@ class IndicatorSelector:
         # guessing. This reduces overconfident wrong picks.
         # Threshold: if top 3+ candidates are within 0.03 cosine similarity,
         # they're too similar for automated selection.
-        candidates_are_ambiguous = self._scores_are_ambiguous(scores)
+        candidates_are_ambiguous = self._scores_are_ambiguous(scores, fusion_mode)
         if candidates_are_ambiguous:
             logger.info(
-                "🔍 Top candidates very similar (spread=%.4f < 0.03) — will prefer ASK",
+                "🔍 Top candidates very similar (spread=%.4f, fusion=%s) — will prefer ASK",
                 scores[0] - scores[2],
+                fusion_mode,
             )
 
         # Step 2: LLM picks from top 20 candidates (embedding retrieves 50 for better recall)
@@ -488,7 +489,7 @@ class IndicatorSelector:
                     if retry_conflict:
                         return SelectionResult(code=None, source="country_mismatch")
                 if retry_candidates:
-                    retry_ambiguous = self._scores_are_ambiguous(retry_scores)
+                    retry_ambiguous = self._scores_are_ambiguous(retry_scores, fusion_mode)
                     retry_result = await self._llm_pick(
                         retry_query,
                         retry_candidates[:20],
@@ -623,13 +624,24 @@ class IndicatorSelector:
         return kept, kept_scores, False, bool(matching)
 
     @staticmethod
-    def _scores_are_ambiguous(scores: List[float]) -> bool:
+    def _scores_are_ambiguous(scores: List[float], fusion_mode: str = "legacy") -> bool:
         if len(scores) >= 3 and all(score > 0 for score in scores[:3]):
             first, second, third = scores[:3]
             # FTS5 candidates and embedding candidates are merged by evidence
             # source, so score order is not guaranteed. Only use the score-gap
             # ambiguity signal when the first three scores are actually ordered.
             if first >= second >= third:
+                if fusion_mode == "rrf":
+                    # RRF scores are reciprocal-rank sums (Σ 1/(k+rank), max
+                    # ~2/61 ≈ 0.033), so the absolute 0.03 cosine threshold is
+                    # satisfied on almost every query — the ambiguity signal
+                    # degenerates to constant-true and biases the LLM to ASK
+                    # everywhere. Use a SCALE-INVARIANT relative gap instead:
+                    # ambiguous only when the 1st and 3rd candidates are within
+                    # 5% of the top score of each other (a genuine near-tie).
+                    return (first - third) < first * 0.05
+                # legacy/cosine merge: keep the original absolute threshold
+                # (this path is the rollback-only strategy; behaviour unchanged).
                 return (first - third) < 0.03
         return False
 
