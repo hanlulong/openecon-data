@@ -2975,6 +2975,11 @@ class StatsCanProvider(BaseProvider):
             return None
 
         data_object = successful_data_object(payload)
+        # Tracks whether we had to substitute a DIFFERENT coordinate (a nearby
+        # metadata-derived alternative) because the requested one was
+        # unpublished. When true the returned series may not match the
+        # requested geography/breakdown, so the label must not assert them.
+        used_fallback_coordinate = False
         if not data_object:
             error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
 
@@ -3024,8 +3029,9 @@ class StatsCanProvider(BaseProvider):
                 data_object = successful_data_object(fallback_payload)
                 if data_object:
                     coordinate = str(data_object.get("coordinate") or "").strip() or coordinate
+                    used_fallback_coordinate = True
                     logger.info(
-                        "✅ StatsCan fallback coordinate selected for %s: %s",
+                        "✅ StatsCan fallback coordinate selected for %s: %s (substituted for requested)",
                         product_id,
                         coordinate,
                     )
@@ -3062,9 +3068,12 @@ class StatsCanProvider(BaseProvider):
         if start_date or end_date:
             data_points = self._filter_by_date_range(data_points, start_date, end_date)
 
-        # Build full indicator name
+        # Build full indicator name. Prepend the requested geography ONLY when
+        # we actually fetched the requested coordinate; a substituted fallback
+        # coordinate may be a different geography, so asserting "Ontario …" over
+        # what could be Newfoundland data would be a silent mislabel.
         indicator_name = indicator
-        if geography:
+        if geography and not used_fallback_coordinate:
             indicator_name = f"{geography} {indicator}"
 
         # Human-readable URL for data verification on Statistics Canada website
@@ -3097,7 +3106,16 @@ class StatsCanProvider(BaseProvider):
             dataType=data_type,
             priceType=None,  # Not typically available in dynamic discovery
             description=indicator_name,
-            notes=None,  # StatsCan doesn't provide detailed notes easily
+            notes=(
+                [
+                    "The requested coordinate was unpublished; the nearest "
+                    "available series was returned instead. Its geography or "
+                    f"breakdown may differ from the request — the exact series "
+                    f"is {product_id}:{coordinate} (see seriesId)."
+                ]
+                if used_fallback_coordinate
+                else None
+            ),
             scaleFactor=self._map_scalar_factor(scalar_code) if scalar_code else None,
             startDate=data_points[0]["date"] if data_points else None,
             endDate=data_points[-1]["date"] if data_points else None,
