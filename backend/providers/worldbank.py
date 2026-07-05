@@ -873,8 +873,14 @@ class WorldBankProvider(BaseProvider):
             return []
         records = [record for record in (source.get("data") or []) if isinstance(record, dict)]
         total_pages = int(payload.get("pages") or 1)
-        if 1 < total_pages <= 10:
-            for page_num in range(2, total_pages + 1):
+        # Page through the FULL result set, not just the first 10 pages. The old
+        # `1 < total_pages <= 10` had no else branch, so any response with >10
+        # pages silently returned page 1 as if it were the whole dataset. Cap at
+        # a generous MAX to bound work, and when the cap is hit record an
+        # explicit truncation note (below) so coverage loss is never silent.
+        last_page_to_fetch, pages_truncated = self._source_paging_plan(total_pages)
+        if total_pages > 1:
+            for page_num in range(2, last_page_to_fetch + 1):
                 page_params = {**params, "page": page_num}
                 page_response = await self._get_with_retry(
                     client,
@@ -1015,6 +1021,12 @@ class WorldBankProvider(BaseProvider):
                     f"response limited to first {max_source_series} series"
                 ) if total_records > max_source_series else "source endpoint returned complete first page",
             ]
+            if pages_truncated:
+                notes.append(
+                    f"WARNING: result has {total_pages} pages; fetched the first "
+                    f"{self._MAX_SOURCE_PAGES} — coverage is truncated. Add a country or "
+                    f"date filter to narrow the request."
+                )
             if bucket.get("uses_lastupdated_date"):
                 notes.append(
                     "WorldBank MRNEV source response omitted an observation period; "
@@ -1078,6 +1090,27 @@ class WorldBankProvider(BaseProvider):
     # is treated as "the region" (i.e. pre-expanded from a named region) rather
     # than an explicit multi-country comparison.
     _REGION_COVERAGE_THRESHOLD = 0.85
+
+    # Upper bound on pages fetched from the source-specific endpoint. Bounds
+    # work while never silently truncating: hitting the cap records a note.
+    _MAX_SOURCE_PAGES = 50
+
+    @classmethod
+    def _source_paging_plan(cls, total_pages: int) -> tuple:
+        """(last_page_to_fetch, truncated) for the source-specific endpoint.
+
+        Fetches every page up to _MAX_SOURCE_PAGES. The old code paged only when
+        total_pages <= 10 and had NO else branch, so any >10-page result kept
+        just page 1 as though it were complete — silent data loss.
+        """
+        try:
+            total = int(total_pages)
+        except (ValueError, TypeError):
+            total = 1
+        if total < 1:
+            total = 1
+        last_page = min(total, cls._MAX_SOURCE_PAGES)
+        return last_page, total > cls._MAX_SOURCE_PAGES
 
     @classmethod
     def _region_aggregate_for_country_set(cls, country_list) -> Optional[str]:
