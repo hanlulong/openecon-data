@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import get_settings
@@ -77,38 +78,83 @@ def _country_label_for_iso2(iso2: str) -> str:
     return aliases[0].title() if aliases else iso2.upper()
 
 
-def _text_targets_country(text: str, iso2: str) -> bool:
-    """Return whether provider-native text explicitly names a country."""
-    text_lower = str(text or "").lower()
-    if not text_lower:
-        return False
-    for alias in _country_aliases_for_iso2(iso2):
-        if re.search(rf"\b{re.escape(alias.lower())}\b", text_lower):
-            return True
-    return False
+@lru_cache(maxsize=1)
+def _country_alias_index() -> tuple[tuple[str, str], ...]:
+    """(alias, iso2) pairs for country names >= 4 chars, LONGEST alias first.
 
-
-def _infer_country_from_fred_info(info: Dict[str, Any]) -> str:
-    """Infer country scope from FRED's provider-native series title.
-
-    FRED contains both U.S. domestic series and international series published
-    by upstream sources.  The provider API does not expose a normalized country
-    field, but international series titles commonly carry explicit scope such as
-    "Gross Domestic Product for Canada".  Treat that provider-native title text
-    as mechanical country-scope metadata; otherwise preserve the historical U.S.
-    default for domestic FRED series.
+    Longest-first so a multi-word name wins over a shorter name it contains
+    ("guinea-bissau" over "guinea", "united kingdom" over a bare "united"
+    prefix). Aliases < 4 chars are dropped for the same reason
+    ``_country_aliases_for_iso2`` drops them: the 3-letter ISO3 codes collide
+    with ordinary English words. Only real 2-letter ISO country codes are kept:
+    aggregate/region pseudo-geographies (e.g. code "1W" = World, aliased
+    "global"/"world") are not national geographies, so a "Global price of ..."
+    title must not be pinned to them — it resolves to no country instead.
     """
-    title = str(info.get("title") or "")
-    for iso2 in sorted(set(CountryResolver.COUNTRY_ALIASES.values())):
-        # The US is the default below; scanning the title for it only serves to
-        # relabel US series as the long ".title()" form "United States Of America",
-        # leaving the country field inconsistent (some US series "US", others
-        # "United States Of America"). Skip it so every US series stays "US".
-        if iso2 == "US":
-            continue
-        if _text_targets_country(title, iso2):
-            return _country_label_for_iso2(iso2)
-    return "US"
+    pairs = [
+        (alias.lower(), code)
+        for alias, code in CountryResolver.COUNTRY_ALIASES.items()
+        if len(alias) > 3 and len(code) == 2 and code.isalpha()
+    ]
+    pairs.sort(key=lambda item: len(item[0]), reverse=True)
+    return tuple(pairs)
+
+
+def _country_from_for_phrase(title_lower: str) -> Optional[str]:
+    """ISO2 of the country named as the series' SUBJECT geography via FRED's
+    "... for <Country>" (optionally "for the <Country>") title convention.
+
+    This denotes the reporting geography, not a counterparty, so a bilateral
+    "Imports from China" (no "for") is deliberately NOT matched — only e.g.
+    "Gross Domestic Product for Japan".
+    """
+    for alias, iso2 in _country_alias_index():
+        if re.search(rf"\bfor\s+(?:the\s+)?{re.escape(alias)}(?![0-9a-z])", title_lower):
+            return iso2
+    return None
+
+
+def _country_from_leading_name(title_lower: str) -> Optional[str]:
+    """ISO2 of a country named at the START of the title (its subject geography).
+
+    Handles "U.S. Imports from China" -> US (the leading "U.S." is the geography;
+    the "from China" counterparty is ignored) and "Japan's GDP" -> Japan.
+    """
+    stripped = title_lower.lstrip()
+    for alias, iso2 in _country_alias_index():
+        if stripped.startswith(alias):
+            nxt = stripped[len(alias): len(alias) + 1]
+            if nxt == "" or not nxt.isalnum():
+                return iso2
+    return None
+
+
+def _fred_country_label(iso2: Optional[str]) -> Optional[str]:
+    """Human-readable label for an inferred ISO2, or None when unset."""
+    if not iso2:
+        return None
+    if iso2 == "US":
+        # One consistent US label rather than the long ".title()" alias form.
+        return "US"
+    return _country_label_for_iso2(iso2)
+
+
+def _infer_country_from_fred_info(info: Dict[str, Any]) -> Optional[str]:
+    """Infer a FRED series' geography ONLY from a positive structured signal.
+
+    FRED hosts both U.S. domestic series and international series and exposes no
+    normalized country field. We assign a country only when the provider-native
+    title names one as the series' SUBJECT geography — a leading "<Country> ..."
+    token or the "... for <Country>" convention — never from a mere mention (a
+    bilateral "Imports from China" stays US/unset, never China). With no positive
+    signal the country is left UNSET (None) rather than defaulting to "US": FRED
+    is not US-only, so a blanket US default mislabels its global/foreign series.
+    """
+    title_lower = str(info.get("title") or "").lower()
+    if not title_lower:
+        return None
+    iso2 = _country_from_for_phrase(title_lower) or _country_from_leading_name(title_lower)
+    return _fred_country_label(iso2)
 
 
 class FREDProvider(BaseProvider):

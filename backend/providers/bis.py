@@ -473,16 +473,22 @@ class BISProvider(BaseProvider):
 
             freq_label = {"M": "monthly", "Q": "quarterly", "A": "annual"}.get(frequency, frequency)
             dataflow_name, dataflow_description = self._lookup_dataflow_info(indicator_code)
-            selected_country = None
-            for dim_id in self._country_dimension_ids(series_dimensions):
+            # Label the country from the SELECTED series' own country dimension,
+            # never from the request. A WS_* dataflow with no country dimension
+            # serves a single global aggregate; the per-country fan-out asks for
+            # it once per requested country, so stamping the requested name would
+            # mint N identical series labeled US/GB/FR... Deriving from the served
+            # dims labels each as its actual country (or "Global"), and the
+            # (country, seriesId) dedup then collapses the country-less copies.
+            country_dim_ids = self._country_dimension_ids(series_dimensions)
+            served_country = None
+            for dim_id in country_dim_ids:
                 value_id = str(selected_dimensions.get(dim_id, {}).get("id") or "").upper()
-                if requested_country_code and value_id == requested_country_code:
-                    selected_country = value_id
+                if value_id:
+                    served_country = value_id
                     break
             display_country = (
-                self._display_country_name(selected_country)
-                if selected_country
-                else ("Global" if not requested_country_code else self._display_country_name(requested_country_code))
+                self._display_country_name(served_country) if served_country else "Global"
             )
             selected_dimension_text = "; ".join(
                 f"{dim_id}={dim.get('id') or ''} ({dim.get('name') or ''})"
@@ -620,6 +626,127 @@ class BISProvider(BaseProvider):
         if context_parts:
             return f"{base_name} ({'; '.join(context_parts[:2])})"
         return base_name
+
+    # SDMX dimension IDs that carry a series' unit / valuation. Structural
+    # reference data (the BIS SDMX data-structure-definition), consulted
+    # generically — not per query.
+    _UNIT_DIMENSION_IDS = {"UNIT_TYPE", "UNIT_MEASURE", "UNIT"}
+    _VALUATION_DIMENSION_IDS = {"VALUATION", "PP_VALUATION"}
+
+    # BIS SDMX codelist labels for well-known unit-dimension VALUES. Consulted
+    # generically only to label a decoded value whose served ``name`` is absent;
+    # when the response carries a ``name``, that authoritative label wins.
+    _UNIT_VALUE_CODE_LABELS = {
+        "UNIT_TYPE": {"770": "% of GDP"},
+        "UNIT_MEASURE": {"628": "Index", "USD": "US Dollar"},
+    }
+
+    def _unit_from_dims(self, selected_dims: Dict[str, Dict[str, str]]) -> Optional[str]:
+        """Return the unit label of the SELECTED series' unit dimension.
+
+        Returns ``None`` when the served series has no unit dimension (the caller
+        may then use the indicator-level ladder). Returns ``""`` when a unit
+        dimension IS present but has no usable label, so the caller does NOT
+        substitute a ladder unit that could contradict the served series.
+        """
+        for dim_id, value in selected_dims.items():
+            if str(dim_id).upper() not in self._UNIT_DIMENSION_IDS:
+                continue
+            name = str(value.get("name") or "").strip()
+            if name:
+                return name
+            code = str(value.get("id") or "").strip()
+            table = self._UNIT_VALUE_CODE_LABELS.get(str(dim_id).upper(), {})
+            return table.get(code, "")
+        return None
+
+    def _price_type_from_dims(self, selected_dims: Dict[str, Dict[str, str]]) -> Optional[str]:
+        """Derive real/nominal price type from the selected series' valuation dim."""
+        for dim_id, value in selected_dims.items():
+            if str(dim_id).upper() not in self._VALUATION_DIMENSION_IDS:
+                continue
+            value_id = str(value.get("id") or "").upper()
+            value_name = str(value.get("name") or "").lower()
+            if value_id == "R" or "real" in value_name:
+                return "Real (inflation-adjusted)"
+            if value_id == "N" or "nominal" in value_name:
+                return "Nominal (current prices)"
+        return None
+
+    @staticmethod
+    def _data_type_from_dims(unit: Optional[str]) -> Optional[str]:
+        """Classify data type from a unit already derived from the series' dims.
+
+        Only ``Index`` is derivable from the unit alone; Rate/Gap/Level are
+        indicator-level classifications with no dedicated BIS dimension, so they
+        defer to the ladder.
+        """
+        if unit and "index" in unit.lower():
+            return "Index"
+        return None
+
+    @staticmethod
+    def _ladder_unit(indicator_code: str) -> str:
+        """Indicator-level unit fallback for series that carry no unit dimension."""
+        if indicator_code == "WS_CBPOL":
+            return "percent"
+        if indicator_code in ("WS_LONG_CPI", "WS_CPP"):
+            return "index"
+        if indicator_code in ("WS_XRU", "WS_EER"):
+            return "index"
+        if indicator_code == "WS_CREDIT_GAP":
+            return "percentage points"
+        if indicator_code == "WS_TC":
+            return "percent of GDP"
+        if indicator_code == "WS_SPP":
+            return "index"
+        return ""
+
+    @staticmethod
+    def _ladder_data_type(indicator_code: str) -> Optional[str]:
+        """Indicator-level dataType fallback."""
+        if indicator_code == "WS_CBPOL":
+            return "Rate"
+        if indicator_code in ("WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_EER", "WS_SPP"):
+            return "Index"
+        if indicator_code == "WS_CREDIT_GAP":
+            return "Gap"
+        if indicator_code in ("WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"):
+            return "Level"
+        return None
+
+    @staticmethod
+    def _ladder_price_type(indicator_code: str, indicator_name: Optional[str]) -> Optional[str]:
+        """Indicator-level priceType fallback for series with no valuation dim."""
+        if indicator_code in ("WS_SPP", "WS_CPP") and "real" in str(indicator_name or "").lower():
+            return "Real (inflation-adjusted)"
+        return None
+
+    def _descriptive_metadata_from_dims(
+        self,
+        selected_dims: Dict[str, Dict[str, str]],
+        indicator_code: str,
+        indicator_name: Optional[str],
+    ) -> tuple[str, Optional[str], Optional[str]]:
+        """Derive (unit, dataType, priceType) from the SELECTED series' decoded
+        dimension values, falling back to indicator-level defaults only for the
+        attributes the served series carries no structured dimension for.
+        """
+        derived_unit = self._unit_from_dims(selected_dims)
+        # ``None`` -> no unit dimension at all -> ladder is safe. ``""`` -> a unit
+        # dimension is present but unlabelable -> keep it empty rather than assert
+        # a ladder unit that could contradict the served series.
+        unit = self._ladder_unit(indicator_code) if derived_unit is None else derived_unit
+
+        price_type = self._price_type_from_dims(selected_dims)
+        if price_type is None:
+            price_type = self._ladder_price_type(indicator_code, indicator_name)
+
+        data_type = self._data_type_from_dims(unit)
+        if data_type is None:
+            data_type = self._ladder_data_type(indicator_code)
+
+        return unit, data_type, price_type
 
     async def _fetch_data(self, **params) -> List[NormalizedData]:
         """Implement BaseProvider interface by routing to fetch_indicator."""
@@ -897,7 +1024,14 @@ class BISProvider(BaseProvider):
                             continue
 
                         data_points = []
-                        for time_idx_str, obs_data in observations.items():
+                        # Observation keys are TIME_PERIOD indices; sort them
+                        # chronologically before slicing so data_points[0]/[-1]
+                        # (used as start/end below and by the freshness sort key)
+                        # reflect the true first/last period, not dict order.
+                        for time_idx_str in sorted(
+                            observations, key=lambda item: int(item) if str(item).isdigit() else -1
+                        ):
+                            obs_data = observations[time_idx_str]
                             try:
                                 time_idx = int(time_idx_str)
                             except (ValueError, TypeError):
@@ -933,32 +1067,32 @@ class BISProvider(BaseProvider):
 
                         freq_label = {"M": "monthly", "Q": "quarterly", "A": "annual"}.get(frequency, frequency)
 
-                        if indicator_code == "WS_CBPOL":
-                            unit = "percent"
-                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP"]:
-                            unit = "index"
-                        elif indicator_code in ["WS_XRU", "WS_EER"]:
-                            unit = "index"
-                        elif indicator_code == "WS_CREDIT_GAP":
-                            unit = "percentage points"
-                        elif indicator_code == "WS_TC":
-                            unit = "percent of GDP"
-                        elif indicator_code == "WS_SPP":
-                            unit = "index"
-                        else:
-                            unit = ""
-
-                        api_url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
-                        if date_params:
-                            param_str = "&".join(f"{k}={v}" for k, v in date_params.items())
-                            api_url += f"?{param_str}"
-
                         indicator_name = self._build_indicator_display_name(
                             indicator_code=indicator_code,
                             indicator_label=indicator_label,
                             series_key=best_series_key,
                             series_dimensions=series_dimensions,
                         )
+
+                        # Descriptive attributes (unit/dataType/priceType) follow
+                        # the SELECTED series' own decoded dimensions, not an
+                        # indicator_code ladder that can diverge from whatever
+                        # sub-series _select_best_series actually returned (a
+                        # missing preferred sub-series silently falls through).
+                        selected_dims = self._selected_series_dimension_values(
+                            best_series_key, series_dimensions
+                        )
+                        unit, data_type, price_type = self._descriptive_metadata_from_dims(
+                            selected_dims=selected_dims,
+                            indicator_code=indicator_code,
+                            indicator_name=indicator_name,
+                        )
+
+                        api_url = f"{self.base_url}/data/{indicator_code}/{sdmx_key}"
+                        if date_params:
+                            param_str = "&".join(f"{k}={v}" for k, v in date_params.items())
+                            api_url += f"?{param_str}"
+
                         _, dataflow_description = self._lookup_dataflow_info(indicator_code)
 
                         display_country = self._display_country_name(current_country_code)
@@ -978,6 +1112,9 @@ class BISProvider(BaseProvider):
                         topic = topic_map.get(indicator_code, indicator_code)
                         source_url = f"https://data.bis.org/topics/{topic}"
 
+                        # Seasonal-adjustment cue keys off the DERIVED unit, so a
+                        # WS_TC sub-series served in domestic currency (not % of
+                        # GDP) is no longer mislabeled as unadjusted.
                         if indicator_code == "WS_TC":
                             if "percent" in unit.lower() or "gdp" in unit.lower():
                                 seasonal_adjustment = None
@@ -985,19 +1122,6 @@ class BISProvider(BaseProvider):
                                 seasonal_adjustment = "Seasonally Adjusted"
                         else:
                             seasonal_adjustment = None
-
-                        if indicator_code == "WS_CBPOL":
-                            data_type = "Rate"
-                        elif indicator_code in ["WS_LONG_CPI", "WS_CPP", "WS_XRU", "WS_EER", "WS_SPP"]:
-                            data_type = "Index"
-                        elif indicator_code == "WS_CREDIT_GAP":
-                            data_type = "Gap"
-                        elif indicator_code in ["WS_TC", "WS_DSR", "WS_GLI", "WS_DEBT_SEC2_PUB"]:
-                            data_type = "Level"
-                        else:
-                            data_type = None
-
-                        price_type = "Real (inflation-adjusted)" if indicator_code in ["WS_SPP", "WS_CPP"] and "real" in indicator_name.lower() else None
 
                         start_date_val = data_points[0]["date"] if data_points else None
                         end_date_val = data_points[-1]["date"] if data_points else None
@@ -1177,9 +1301,14 @@ class BISProvider(BaseProvider):
             if not observations:
                 return results
 
-            # Build data points
+            # Build data points. Sort the TIME_PERIOD indices chronologically
+            # before slicing so data_points[0]/[-1] are the true first/last
+            # period (start/end below), independent of dict ordering.
             data_points = []
-            for time_idx_str, obs_data in observations.items():
+            for time_idx_str in sorted(
+                observations, key=lambda item: int(item) if str(item).isdigit() else -1
+            ):
+                obs_data = observations[time_idx_str]
                 time_idx = int(time_idx_str)
                 if time_idx < len(time_values):
                     time_period = time_values[time_idx]["id"]
