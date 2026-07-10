@@ -10251,7 +10251,7 @@ class QueryServiceTests(unittest.TestCase):
 
         async def _fake_fetch_data(fallback_intent):
             captured_intent["intent"] = fallback_intent
-            return [sample_series()]
+            return [sample_series_with(source="World Bank")]
 
         with patch.object(self.service, "_get_fallback_providers", return_value=["WORLDBANK"]), \
              patch.object(self.service, "_fetch_data", side_effect=_fake_fetch_data), \
@@ -10268,8 +10268,12 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(fallback_intent.apiProvider, "WORLDBANK")
         self.assertNotIn("indicator", fallback_intent.parameters)
         self.assertNotIn("seriesId", fallback_intent.parameters)
-        self.assertEqual(intent.parameters.get("indicator"), "BM_GDP")
-        self.assertEqual(intent.parameters.get("seriesId"), "BM_GDP")
+        # F2 provenance fix: the served provider is restamped onto the original
+        # intent and the primary provider's code is cleared, so a follow-up
+        # cannot send a foreign code to the fallback provider's namespace.
+        self.assertEqual(intent.apiProvider, "WORLDBANK")
+        self.assertNotIn("indicator", intent.parameters)
+        self.assertNotIn("seriesId", intent.parameters)
 
     def test_try_with_fallback_replaces_single_indicator_with_semantic_fallback_query(self) -> None:
         """Fallback should resolve indicator on the TARGET provider, not pass source codes.

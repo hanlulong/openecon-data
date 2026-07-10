@@ -2121,12 +2121,17 @@ class QueryService:
         semantic_indicator_label = str(params.get("__semantic_indicator_label") or "").strip()
         if semantic_indicator_label:
             state.indicator = semantic_indicator_label
-        if intent is not None and intent.indicators:
-            state.last_indicators_resolved = list(intent.indicators)
-        resolved_indicator = str(params.get("indicator") or "").strip()
-        if resolved_indicator:
-            state.resolved_indicator_code = resolved_indicator
-        provider_name = ""
+        # Derive the provider that actually SERVED the data from its metadata
+        # (authoritative) BEFORE persisting any resolved identifiers, so we can
+        # enforce namespace consistency. When a fallback served from a different
+        # provider than the one the code/indicators were resolved under,
+        # persisting (serving_provider, primary_code) would send a
+        # foreign-namespace code to the wrong provider next turn (F2).
+        # _try_with_fallback already restamps + clears the code for the
+        # cross-provider fallback path; this is the general, independent guard
+        # for any other path that reaches here with a mismatched
+        # (provider, resolved_code) pair.
+        data_derived_provider = ""
         if data:
             data_providers = {
                 normalize_provider_name(
@@ -2138,7 +2143,32 @@ class QueryService:
                 )
             }
             if len(data_providers) == 1:
-                provider_name = next(iter(data_providers))
+                data_derived_provider = next(iter(data_providers))
+
+        code_namespace_provider = normalize_provider_name(getattr(intent, "apiProvider", "") or "")
+        namespace_mismatch = bool(
+            data_derived_provider
+            and code_namespace_provider
+            and data_derived_provider != code_namespace_provider
+        )
+        if namespace_mismatch:
+            logger.info(
+                "Namespace mismatch on persist: identifiers resolved under %s but "
+                "data served by %s; leaving resolved code/indicators unset so the "
+                "next turn re-resolves in the serving provider's namespace.",
+                code_namespace_provider, data_derived_provider,
+            )
+
+        # Only carry resolved identifiers forward when they belong to the
+        # serving provider's namespace. On a mismatch, leave them so the next
+        # turn re-resolves cleanly rather than sending a foreign code.
+        if intent is not None and intent.indicators and not namespace_mismatch:
+            state.last_indicators_resolved = list(intent.indicators)
+        resolved_indicator = str(params.get("indicator") or "").strip()
+        if resolved_indicator and not namespace_mismatch:
+            state.resolved_indicator_code = resolved_indicator
+
+        provider_name = data_derived_provider
         if not provider_name:
             provider_name = normalize_provider_name(
                 getattr(intent, "apiProvider", "") or getattr(state, "provider", "") or getattr(state, "routed_provider", "") or ""
@@ -4124,6 +4154,44 @@ class QueryService:
                 logger.warning(f"Fallback to {fallback_provider} failed: {e}")
                 return None
 
+        def _restamp_intent_to_serving_provider(result: Optional[list]) -> Optional[list]:
+            """Make the ORIGINAL intent reflect the provider that actually
+            served the fallback data.
+
+            Callers persist conversation state and build the response from this
+            same `intent` object, so a fallback that served from a DIFFERENT
+            provider than the failed primary otherwise (a) makes
+            response.intent.apiProvider lie and (b) leaks the primary provider's
+            resolved code into the persisted state under the serving provider's
+            name — sending e.g. a FRED code to World Bank on the next turn (F2).
+            Restamp the provider (reference semantics propagate to every caller)
+            and drop the primary's provider-specific resolved-code fields so the
+            next turn re-resolves in the serving provider's namespace. The
+            human-readable __semantic_indicator_label is left intact so the
+            re-resolution keeps its semantic anchor. Skip when the served data
+            spans multiple providers (no single namespace to stamp) — done at
+            the OUTER return sites only, never inside the closure passed to
+            asyncio.gather, which would race on the shared intent.
+            """
+            serving = {
+                normalize_provider_name(
+                    getattr(getattr(series, "metadata", None), "source", "") or ""
+                )
+                for series in (result or [])
+                if normalize_provider_name(
+                    getattr(getattr(series, "metadata", None), "source", "") or ""
+                )
+            }
+            if len(serving) != 1:
+                return result
+            serving_provider = next(iter(serving))
+            if serving_provider and serving_provider != normalize_provider_name(intent.apiProvider):
+                intent.apiProvider = serving_provider
+                if intent.parameters:
+                    for key in ("indicator", "seriesId", "series_id", "code"):
+                        intent.parameters.pop(key, None)
+            return result
+
         # --- Parallel fallback for top-2 providers ---
         # When 2+ fallback providers are available, try the top 2 in parallel
         # to reduce latency (especially when WB circuit breaker is open).
@@ -4144,25 +4212,116 @@ class QueryService:
                     logger.warning(f"Parallel fallback {top_two[i]} raised: {result}")
                     last_error = result
                 elif result is not None:
-                    return result
+                    return _restamp_intent_to_serving_provider(result)
 
             # Both top-2 failed — continue sequentially with remaining
             for fallback_provider in remaining:
                 result = await _try_single_fallback(fallback_provider)
                 if result is not None:
-                    return result
+                    return _restamp_intent_to_serving_provider(result)
         else:
             # Only 1 fallback provider — try it directly
             for fallback_provider in fallback_providers:
                 result = await _try_single_fallback(fallback_provider)
                 if result is not None:
-                    return result
+                    return _restamp_intent_to_serving_provider(result)
 
         # All fallbacks failed
         logger.error(f"All fallbacks failed for {primary_provider}")
         raise primary_error  # Raise original error
 
+    def _finalize_empty_data_response(self, response: QueryResponse) -> QueryResponse:
+        """Guarantee a completed data_fetch never returns silently empty.
+
+        Historically ~14% of production traffic returned data=[] with no error,
+        no clarification, and no explanation — the UI showed a blank result the
+        user could not act on. This is the SINGLE response-assembly chokepoint
+        (process_query's return, shared by the non-stream and SSE paths): when a
+        data_fetch response completed with empty data and carries no error,
+        clarification, or text answer, stamp a structured, scope-aware
+        explanation so the outcome is always legible. Informational/analysis
+        text answers, Pro-Mode answers, clarifications, existing errors, and
+        every non-empty result pass through untouched, and the transform is
+        idempotent (a stamped response already has .error/.message set).
+        """
+        try:
+            if response is None:
+                return response
+            if response.data:  # non-empty result — nothing to explain
+                return response
+            if response.error or response.clarificationNeeded:
+                return response
+            if response.message or response.codeExecution:
+                return response  # already carries an explanation / text answer
+            intent = response.intent
+            query_type = str(getattr(intent, "queryType", None) or "data_fetch").strip().lower()
+            if query_type != "data_fetch":
+                return response  # informational/analysis/comparison text answers
+            # Build a scope-aware explanation from the intent that was executed.
+            indicators = ""
+            provider = ""
+            country = ""
+            time_window = ""
+            if intent is not None:
+                indicators = ", ".join(intent.indicators) if intent.indicators else ""
+                provider = str(intent.apiProvider or "")
+                params = intent.parameters or {}
+                country = str(params.get("country") or "")
+                if not country:
+                    countries = params.get("countries") or []
+                    if countries:
+                        country = ", ".join(str(c) for c in countries)
+                start = str(params.get("startDate") or "").strip()
+                end = str(params.get("endDate") or "").strip()
+                if start or end:
+                    time_window = f"({start or '?'}–{end or '?'})"
+            label = indicators or "the requested indicator"
+            scope_bits = [f"**{label}**"]
+            if country:
+                scope_bits.append(f"for **{country}**")
+            if time_window:
+                scope_bits.append(time_window)
+            if provider:
+                scope_bits.append(f"from **{provider}**")
+            scope = " ".join(scope_bits)
+            response.error = "no_data_found"
+            response.message = (
+                f"⚠️ **No Data Available**\n\nNo data found for {scope}. The "
+                "provider may not publish this series at this scope — try "
+                "broadening the time range or rephrasing the indicator."
+            )
+        except Exception as exc:  # never let finalization break a response
+            logger.debug("Empty-data finalization skipped: %s", exc)
+        return response
+
     async def process_query(
+        self,
+        query: str,
+        conversation_id: Optional[str] = None,
+        auto_pro_mode: bool = False,
+        use_orchestrator: bool = False,
+        allow_orchestrator: bool = True,
+        owner_key: Optional[str] = None,
+        claimable_owner_keys: Optional[List[str]] = None,
+    ) -> QueryResponse:
+        """Public entry point for both the non-stream and SSE paths.
+
+        Delegates to _process_query_impl and routes the result through the
+        single empty-data finalization chokepoint (_finalize_empty_data_response)
+        so no completed data_fetch ever reaches the caller silently empty.
+        """
+        response = await self._process_query_impl(
+            query,
+            conversation_id=conversation_id,
+            auto_pro_mode=auto_pro_mode,
+            use_orchestrator=use_orchestrator,
+            allow_orchestrator=allow_orchestrator,
+            owner_key=owner_key,
+            claimable_owner_keys=claimable_owner_keys,
+        )
+        return self._finalize_empty_data_response(response)
+
+    async def _process_query_impl(
         self,
         query: str,
         conversation_id: Optional[str] = None,
@@ -6255,7 +6414,7 @@ class QueryService:
             intent=intent,
             clarificationNeeded=False,
             error="no_data_found",
-            message=f"No Data Available\n\n{' '.join(error_details)}\n\n{suggestions}",
+            message=f"⚠️ **No Data Available**\n\n{' '.join(error_details)}\n\n{suggestions}",
             processingSteps=tracker.to_list() if tracker else None,
         )
 

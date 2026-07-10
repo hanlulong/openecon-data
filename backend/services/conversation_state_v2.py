@@ -806,7 +806,21 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         # A date change extracted from the follow-up is user language.
         merged.time_scope_source = "user"
     if delta.changed_frequency:
+        # Frequency is a resolution constraint, not just a display knob: a code
+        # resolved for annual data may not exist (or may differ) at quarterly
+        # frequency. When the frequency actually changes, null the resolved code
+        # + multi-indicator list so the selector re-resolves under the new
+        # frequency, mirroring the indicator (line ~660) and provider (line
+        # ~779) branches above (F1a). merged is a copy of the previous state, so
+        # merged.frequency still holds the previous value at this point.
+        frequency_changed = (
+            str(delta.changed_frequency).strip().lower()
+            != str(merged.frequency or "").strip().lower()
+        )
         merged.frequency = delta.changed_frequency
+        if frequency_changed:
+            merged.resolved_indicator_code = None
+            merged.last_indicators_resolved = None
 
     # --- Dimensions ---
     if delta.added_dimensions:
@@ -1301,6 +1315,16 @@ def merge_new_state_with_previous(
         and previous.provider
         and str(new_state.provider).strip().upper() != str(previous.provider).strip().upper()
     )
+    # Frequency is a resolution constraint (see F1a in merge_state): a code
+    # resolved at one frequency may not exist at another, so a frequency change
+    # must force re-resolution rather than carrying the stale code forward. A
+    # frequency-only follow-up ("...but quarterly") reaches this non-delta path,
+    # where the previous resolved code would otherwise be carried at :~1333.
+    frequency_changed = bool(
+        new_state.frequency
+        and previous.frequency
+        and str(new_state.frequency).strip().lower() != str(previous.frequency).strip().lower()
+    )
 
     # --- Geography ---
     _new_has_geo = new_state.country or new_state.countries
@@ -1333,6 +1357,7 @@ def merge_new_state_with_previous(
     if (
         not indicator_changed
         and not provider_changed
+        and not frequency_changed
         and not new_state.resolved_indicator_code
         and previous.resolved_indicator_code
     ):
@@ -1350,6 +1375,7 @@ def merge_new_state_with_previous(
     if (
         not indicator_changed
         and not provider_changed
+        and not frequency_changed
         and not new_state.last_indicators_resolved
         and previous.last_indicators_resolved
     ):
@@ -1360,7 +1386,18 @@ def merge_new_state_with_previous(
     # provider switches away from StatsCan, drop them so they cannot leak
     # into a downstream FRED/WB/IMF query path. Phase 2.9 — invariant #3
     # preserved (statscan_cube_metadata still survives intra-StatsCan turns).
-    if not new_state.dimensions and previous.dimensions:
+    #
+    # dimensions are provider-namespaced coordinate codes bound to the resolved
+    # indicator: carrying them forward across an indicator or provider change
+    # leaks the old namespace (e.g. a StatsCan "Sex" coordinate onto a new
+    # indicator/provider), so gate the carry on the same changed-guards as the
+    # provider-scoped neighbors here (F3).
+    if (
+        not indicator_changed
+        and not provider_changed
+        and not new_state.dimensions
+        and previous.dimensions
+    ):
         new_state.dimensions = previous.dimensions
     if (
         not indicator_changed

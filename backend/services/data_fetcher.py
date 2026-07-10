@@ -541,6 +541,22 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["start_date"] = params.get("startDate")
         contract["end_date"] = params.get("endDate")
 
+    # Frequency (and FRED's aggregation method) are part of the request
+    # IDENTITY, not just the payload: two requests that differ ONLY in frequency
+    # — e.g. annual vs quarterly GDP for the same series/country/window —
+    # otherwise collide in _cache_identity, so the second request silently
+    # receives the first's cached slice (F1b). Include these generically for
+    # every provider (previously only Eurostat's catch-all filters carried
+    # frequency), but ONLY when actually set: an absent frequency keeps the
+    # contract byte-identical to the pre-fix version so the common
+    # no-frequency case is not cache-invalidated.
+    effective_frequency = str(params.get("frequency") or "").strip()
+    if effective_frequency:
+        contract["frequency"] = effective_frequency
+    aggregation_method = str(params.get("aggregation_method") or "").strip()
+    if aggregation_method:
+        contract["aggregation_method"] = aggregation_method
+
     return contract
 
 
@@ -3114,21 +3130,47 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         else:
             results.append(asyncio.TimeoutError("indicator fetch timed out"))
 
-    # Collect successful results
+    # Collect successful results, tracking which indicators produced nothing so
+    # a PARTIAL success can surface a transparency note instead of silently
+    # dropping the missing series (F6). An empty list counts as a failure for
+    # that indicator (a provider that returned [] served nothing usable).
+    failed_indicators: list[str] = []
     for i, result in enumerate(results):
+        indicator_name = intent.indicators[i] if i < len(intent.indicators) else "unknown"
         if isinstance(result, Exception):
-            indicator_name = intent.indicators[i] if i < len(intent.indicators) else "unknown"
             logger.warning("Failed to fetch indicator %s: %s", indicator_name, result)
+            failed_indicators.append(indicator_name)
             continue
         if isinstance(result, list):
-            all_data.extend(result)
-        else:
+            if result:
+                all_data.extend(result)
+            else:
+                failed_indicators.append(indicator_name)
+        elif result is not None:
             all_data.append(result)
+        else:
+            failed_indicators.append(indicator_name)
 
     if not all_data:
         raise DataNotAvailableError(
             f"Could not fetch any of the requested indicators: {', '.join(intent.indicators)}"
         )
+
+    # Partial success: at least one indicator resolved but others did not.
+    # Attach a transparency note (reusing the metadata.notes convention from the
+    # StatsCan coordinate-substitution fix) naming the missing indicators so the
+    # response can explain the gap rather than presenting a silently short list.
+    if failed_indicators:
+        missing = ", ".join(dict.fromkeys(failed_indicators))
+        note = (
+            f"Could not fetch data for: {missing}. The results shown cover only "
+            "the indicators that resolved successfully; the missing series may "
+            "be unavailable from the selected provider(s) at this scope."
+        )
+        first_meta = all_data[0].metadata
+        existing_notes = list(first_meta.notes or [])
+        existing_notes.append(note)
+        first_meta.notes = existing_notes
 
     logger.info("Successfully fetched %s datasets for %s indicators", len(all_data), len(intent.indicators))
     return all_data
