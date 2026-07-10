@@ -45,6 +45,8 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 # COMTRADE_API_KEY=your_comtrade_api_key
 ```
 
+The defaults above use OpenRouter's hosted `openai/gpt-4o-mini` for zero-setup; production instead runs a local vLLM model (`LLM_PROVIDER=vllm`, `LLM_MODEL=gpt-oss-120b`) — see [`.env.example`](../../.env.example) for the full vLLM/SSH-tunnel configuration.
+
 Tip: instead of writing `.env` by hand, run `./scripts/setup.sh` (or `cp .env.example .env`) and edit the generated file.
 
 Restart the backend after editing secrets (use `python3 scripts/restart_dev.py --backend`).

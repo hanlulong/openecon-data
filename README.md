@@ -23,6 +23,7 @@
   <a href="https://openecon.ai">Website</a> &middot;
   <a href="https://data.openecon.ai/chat">Live App</a> &middot;
   <a href="docs/README.md">Docs</a> &middot;
+  <a href="docs/reference/api.md">API Reference</a> &middot;
   <a href="docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md">Contributing</a>
 </p>
 
@@ -193,6 +194,20 @@ python3 scripts/restart_dev.py
 See [Getting Started Guide](docs/guides/getting-started.md) for full setup instructions.
 </details>
 
+### Use the HTTP API
+
+Prefer to call the service directly? The same natural-language queries work over HTTP. Base URL: `https://data.openecon.ai`.
+
+```bash
+curl -X POST https://data.openecon.ai/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "US unemployment rate"}'
+```
+
+There's also a streaming endpoint — `POST /api/query/stream` returns Server-Sent Events for real-time progress.
+
+See the [API Reference](docs/reference/api.md) for the full endpoint list and request/response schemas.
+
 ## How It Works
 
 ```
@@ -230,7 +245,7 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 **Multi-Country Comparisons** — Say "G7", "BRICS", "EU", "ASEAN", "Nordic" or list specific countries. Auto-expands to all members.
 
-**Fast** — Repeat queries return in ~0.1 seconds. First-time queries take ~4 seconds end-to-end.
+**Fast** — Repeat queries return in ~0.1 seconds. First-time queries typically take a few seconds; the first uncached query can take longer.
 
 **Resilient** — If one provider is down, the system automatically falls back to the next-best source. No manual retries needed.
 
@@ -250,7 +265,7 @@ See [Getting Started Guide](docs/guides/getting-started.md) for full setup instr
 
 | Metric | Value |
 |--------|-------|
-| First query | ~4.3s end-to-end |
+| First query | typically a few seconds (first uncached query can take longer) |
 | Repeat query (cached) | ~0.1s |
 | Indicator database | 330,000+ indexed series across 10 providers |
 

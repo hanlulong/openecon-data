@@ -462,6 +462,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             tickFormatter={xAxisFormatter}
             tickLine={false}
             axisLine={{ stroke: CHART_STYLE.grid }}
+            minTickGap={40}
             dy={8}
           />
           <YAxis
@@ -511,6 +512,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             tickFormatter={xAxisFormatter}
             tickLine={false}
             axisLine={{ stroke: CHART_STYLE.grid }}
+            minTickGap={40}
             dy={8}
           />
           <YAxis

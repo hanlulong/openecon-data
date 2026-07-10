@@ -212,6 +212,10 @@ export const api = {
       onData?: (data: QueryResponse) => void;
       onError?: (error: { error: string; message: string }) => void;
       onDone?: (conversationId: string) => void;
+      // Fires whenever bytes arrive on the stream — including SSE keepalive
+      // comment frames (": ...") that carry no event. Lets the caller reset an
+      // inactivity watchdog without treating keepalives as data events.
+      onActivity?: () => void;
     },
     abortSignal?: AbortSignal
   ): Promise<void> {
@@ -237,16 +241,27 @@ export const api = {
     });
 
     if (!response.ok) {
-      // Try to parse error body for detailed message
-      let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      // Mirror lib/errors.ts: read error → detail → message in priority order,
+      // for ALL statuses. The 429 rate-limit body is
+      // {"detail": "Rate limit exceeded. Limit: 30/minute"}, so without reading
+      // `detail` the user only ever saw a bare "HTTP 429".
+      let serverMessage = '';
       try {
         const errorData = await response.json();
-        if (errorData.message || errorData.error) {
-          errorMessage = errorData.message || errorData.error;
-        }
+        serverMessage = errorData?.error || errorData?.detail || errorData?.message || '';
       } catch {
-        // JSON parse failed, use default message
+        // Body was not JSON — fall back to the status line below.
       }
+
+      let errorMessage = serverMessage || `HTTP ${response.status}: ${response.statusText}`;
+
+      // Rate limiting deserves an actionable message: the wait is short.
+      if (response.status === 429) {
+        errorMessage = serverMessage
+          ? `${serverMessage} — please wait about a minute and try again.`
+          : 'Rate limit reached — please wait about a minute and try again.';
+      }
+
       throw new Error(errorMessage);
     }
 
@@ -317,6 +332,11 @@ export const api = {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        // Bytes arrived — including SSE keepalive comment frames that carry no
+        // event — so the connection is alive. Signal the caller before parsing
+        // so its inactivity watchdog resets even on comment-only keepalives.
+        callbacks.onActivity?.();
 
         // Decode chunk and add to buffer
         buffer += decoder.decode(value, { stream: true });

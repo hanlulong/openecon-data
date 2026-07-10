@@ -58,7 +58,7 @@ const demoExamples = [
     query: 'US unemployment rate and inflation 2019-2024',
     title: 'US Labor & Prices',
     source: 'FRED',
-    insight: 'Unemployment spiked to 8.1% in 2020, while inflation surged to 8% in 2022.',
+    insight: 'Unemployment averaged 8.1% in 2020, peaking at 14.7% in April, while inflation surged to 8% in 2022.',
     chartType: 'line' as const,
     data: [
       { date: '2019', 'Unemployment': 3.7, 'Inflation': 1.8 },
@@ -76,7 +76,7 @@ const demoExamples = [
     query: 'GDP growth China, India, Brazil 2018-2023',
     title: 'Emerging Giants',
     source: 'World Bank',
-    insight: 'India leads with 9.2% growth in 2023, outpacing China (5.4%) and Brazil (3.2%).',
+    insight: 'India leads with 8.2% growth in 2023, outpacing China (5.4%) and Brazil (3.2%).',
     chartType: 'bar' as const,
     data: [
       { date: '2018', 'China': 6.8, 'India': 6.5, 'Brazil': 1.8 },
@@ -84,7 +84,7 @@ const demoExamples = [
       { date: '2020', 'China': 2.3, 'India': -5.8, 'Brazil': -3.3 },
       { date: '2021', 'China': 8.6, 'India': 9.7, 'Brazil': 4.8 },
       { date: '2022', 'China': 3.1, 'India': 7.6, 'Brazil': 3.0 },
-      { date: '2023', 'China': 5.4, 'India': 9.2, 'Brazil': 3.2 },
+      { date: '2023', 'China': 5.4, 'India': 8.2, 'Brazil': 3.2 },
     ],
     series: ['China', 'India', 'Brazil'],
     colors: ['#ef4444', '#f59e0b', '#10b981'],

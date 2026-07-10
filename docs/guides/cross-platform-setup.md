@@ -40,7 +40,10 @@ nano .env  # or use your preferred editor
 # Activate virtual environment
 source backend/.venv/bin/activate
 
-# Start development servers
+# Start development servers (recommended)
+python3 scripts/restart_dev.py
+
+# Alternative:
 npm run dev
 ```
 
@@ -63,7 +66,10 @@ notepad .env
 # Activate virtual environment
 backend\.venv\Scripts\Activate.ps1
 
-# Start development servers
+# Start development servers (recommended)
+python3 scripts/restart_dev.py
+
+# Alternative:
 npm run dev
 ```
 
@@ -83,7 +89,10 @@ notepad .env
 REM Activate virtual environment
 backend\.venv\Scripts\activate.bat
 
-REM Start development servers
+REM Start development servers (recommended)
+python3 scripts/restart_dev.py
+
+REM Alternative:
 npm run dev
 ```
 
@@ -127,7 +136,10 @@ sudo dnf install git
 # Activate virtual environment
 source backend/.venv/bin/activate
 
-# Start both servers
+# Start both servers (recommended)
+python3 scripts/restart_dev.py
+
+# Alternative — start both with npm:
 npm run dev
 
 # Or start individually:
@@ -204,7 +216,10 @@ Same as Ubuntu/Linux (see above).
 # Activate virtual environment
 backend\.venv\Scripts\Activate.ps1
 
-# Start both servers
+# Start both servers (recommended)
+python3 scripts/restart_dev.py
+
+# Alternative — start both with npm:
 npm run dev
 
 # Or start individually in separate terminals
@@ -220,7 +235,10 @@ deactivate
 REM Activate virtual environment
 backend\.venv\Scripts\activate.bat
 
-REM Start both servers
+REM Start both servers (recommended)
+python3 scripts/restart_dev.py
+
+REM Alternative:
 npm run dev
 
 REM Deactivate when done
@@ -302,6 +320,10 @@ copy .env.example .env  # Windows
 ### 6. Start Development Servers
 
 ```bash
+# Recommended
+python3 scripts/restart_dev.py
+
+# Alternative
 npm run dev
 ```
 

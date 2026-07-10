@@ -87,13 +87,20 @@ function getDisplayContent(message: Message): string {
   return message.content
 }
 
-// Example queries array - consistent with landing page
+// Example queries — the single source of truth for both the welcome screen
+// (a randomized subset of 4) and the anonymous sidebar (full list). Curated to
+// span providers (FRED, World Bank, Eurostat, Statistics Canada, IMF, BIS, UN
+// Comtrade) and difficulty (a simple no-date starter plus multi-country
+// comparisons), not just GDP.
 const EXAMPLE_QUERIES = [
   "US unemployment rate 2019-2024",
   "GDP growth China, India, Brazil 2018-2023",
+  "Euro area inflation 2019-2024",
+  "Canada unemployment rate 2019-2024",
   "GDP growth US, Germany, Japan from IMF 2018-2023",
   "Central bank policy rates US, UK, Japan from BIS 2019-2024",
   "Total exports US, China 2018-2023 from Comtrade",
+  "US inflation rate",
 ]
 
 export function ChatPage() {
@@ -104,6 +111,20 @@ export function ChatPage() {
   const [conversationId, setConversationId] = useState<string | undefined>()
   const [loadingStatus, setLoadingStatus] = useState<string>('')
   const [activeProcessingSteps, setActiveProcessingSteps] = useState<ProcessingTimelineStep[]>([])
+
+  // Randomized-but-stable-per-mount subset of the examples for the welcome
+  // screen, so repeat visitors don't always see the same four chips. The
+  // sidebar still shows the full EXAMPLE_QUERIES list.
+  const welcomeExamples = useMemo(() => {
+    const shuffled = [...EXAMPLE_QUERIES]
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const tmp = shuffled[i]
+      shuffled[i] = shuffled[j]
+      shuffled[j] = tmp
+    }
+    return shuffled.slice(0, 4)
+  }, [])
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login')
   // Dismissible banner shown after the user clicks the email-confirmation link
@@ -301,9 +322,38 @@ export function ChatPage() {
     const startTime = Date.now()
     const stepMap = new Map<string, ProcessingTimelineStep>()
 
+    // Guard against a stream that dies without any terminal event (idle proxy
+    // timeout, backend restart mid-deploy, a done-only stream). We (a) remember
+    // whether a terminal event ever fired so `finally` can surface a message
+    // instead of letting the query vanish, and (b) abort if no bytes at all
+    // arrive for a while — SSE keepalive comments re-arm this via onActivity, so
+    // only a genuinely dead connection trips it.
+    let sawTerminalEvent = false
+    const STREAM_INACTIVITY_TIMEOUT_MS = 120000
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null
+    const clearInactivityTimer = () => {
+      if (inactivityTimer !== null) {
+        clearTimeout(inactivityTimer)
+        inactivityTimer = null
+      }
+    }
+    const armInactivityTimer = () => {
+      clearInactivityTimer()
+      inactivityTimer = setTimeout(() => {
+        logger.warn('Streaming query inactivity timeout, aborting:', q)
+        abortController.abort()
+      }, STREAM_INACTIVITY_TIMEOUT_MS)
+    }
+
     // Use streaming for both regular and Pro Mode
     try {
+      armInactivityTimer()
       await api.queryStream(q, conversationId, {
+        onActivity: () => {
+          // Bytes (a real event or just an SSE keepalive) are still flowing —
+          // reset the watchdog so a slow-but-alive stream isn't aborted.
+          armInactivityTimer()
+        },
         onStep: (step: StreamProcessingStepEvent) => {
           // Update or add processing step in real-time
           // If step has a status field, use it; if it has duration_ms, it's completed
@@ -320,6 +370,7 @@ export function ChatPage() {
           setActiveProcessingSteps(Array.from(stepMap.values()))
         },
         onData: (response) => {
+          sawTerminalEvent = true
           const elapsed = Date.now() - startTime
           logger.log(`Query completed in ${elapsed}ms`)
 
@@ -414,6 +465,7 @@ export function ChatPage() {
           }
         },
         onError: (error) => {
+          sawTerminalEvent = true
           logger.error('Stream error:', error)
           setLoadingStatus('')
           processingQuery.current = null
@@ -427,6 +479,7 @@ export function ChatPage() {
           }])
         },
         onDone: (convId) => {
+          sawTerminalEvent = true
           logger.log('Stream completed for conversation:', convId)
           if (convId) {
             setConversationId(convId)
@@ -454,16 +507,29 @@ export function ChatPage() {
         isError: true,
       }])
     } finally {
+      clearInactivityTimer()
       // Recover from a stream that closes without onData/onError/onDone firing
-      // (idle proxy timeout, backend restart mid-deploy, a done-only stream):
-      // otherwise processingQuery.current stays set and the input is disabled
-      // forever. Only clear if THIS call still owns the marker — a newer query
-      // that aborted us will have already claimed processingQuery.current, and
-      // we must not wipe its in-flight state.
+      // (idle proxy timeout, backend restart mid-deploy, a done-only stream, or
+      // our own inactivity abort): otherwise processingQuery.current stays set
+      // and the input is disabled forever. Only clear if THIS call still owns
+      // the marker — a newer query that aborted us will have already claimed
+      // processingQuery.current, and we must not wipe its in-flight state.
       if (processingQuery.current === q) {
         processingQuery.current = null
         setLoadingStatus('')
         setActiveProcessingSteps([])
+        // No terminal event ever arrived, so nothing was rendered for this
+        // query — surface it instead of letting it silently vanish. A backend
+        // error or a thrown HTTP error is handled elsewhere (onError, or the
+        // catch above which nulls the marker), so we never double up here.
+        if (!sawTerminalEvent) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: 'Connection interrupted — please try again.',
+            timestamp: new Date(),
+            isError: true,
+          }])
+        }
       }
     }
   }, [conversationId, isAuthenticated, loadHistory, loadSessionHistory])
@@ -1183,7 +1249,7 @@ print(f"\\nData source: ${sourceUrl}")
                 <h1 className="welcome-title">What can I help with?</h1>
                 <p className="welcome-subtitle">Ask about economic data in natural language</p>
                 <div className="welcome-examples">
-                  {EXAMPLE_QUERIES.slice(0, 4).map((ex, i) => (
+                  {welcomeExamples.map((ex, i) => (
                     <button
                       key={i}
                       className="welcome-example-chip"
