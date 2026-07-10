@@ -2607,6 +2607,34 @@ async def resolve_indicator_for_fetch(
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
 
+    # Region-as-series providers (see provider_strategy) need the region
+    # inside the retrieval text, or the static-map/search/selector paths
+    # resolve the NATIONAL series for a state request. The mutation covers
+    # both params["indicator"] (direct provider resolution) and
+    # intent.indicators[0] (selector-query construction). If a stale
+    # region-qualified code later mismatches a follow-up's region, the
+    # subnational fail-closed check backstops it.
+    from .provider_strategy import REGION_AS_SERIES_PROVIDERS as _REGION_AS_SERIES
+    _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+    if provider in _REGION_AS_SERIES and _region:
+        _ind_text = str(
+            params.get("indicator")
+            or (intent.indicators[0] if intent.indicators else "")
+            or ""
+        ).strip()
+        _is_code = False
+        try:
+            _is_code = bool(
+                _ind_text and svc._looks_like_provider_indicator_code(provider, _ind_text)
+            )
+        except Exception:
+            _is_code = False
+        if _ind_text and not _is_code and _region.lower() not in _ind_text.lower():
+            _qualified = f"{_region} {_ind_text}"
+            params["indicator"] = _qualified
+            if intent.indicators:
+                intent.indicators = [_qualified] + list(intent.indicators[1:])
+
     def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
         semantic_label = str(
             params.get("__semantic_indicator_label")

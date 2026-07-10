@@ -26,6 +26,7 @@ import httpx
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
+from ..services.provider_strategy import REGION_AS_SERIES_PROVIDERS
 from ..services.user_messages import get_message as _localized_message
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
@@ -3059,6 +3060,15 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
             country_text = f" for {', '.join(str(c) for c in countries_list[:3])}"
         elif country_single:
             country_text = f" for {country_single}"
+        # Region-as-series providers (see provider_strategy) need the region in
+        # the retrieval text or the national series wins for a state request.
+        _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+        if (
+            _region
+            and normalize_provider_name(single_provider) in REGION_AS_SERIES_PROVIDERS
+            and _region.lower() not in str(indicator).lower()
+        ):
+            indicator = f"{_region} {indicator}"
         narrowed_query = f"{indicator}{country_text}"
 
         single_intent = ParsedIntent(

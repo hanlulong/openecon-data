@@ -8,8 +8,10 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
 
     # Guardrail: keep prompt compact to reduce token overhead and policy drift.
     # Bumped 260 -> 280 for the multilingual additions (English-canonical
-    # indicators rule, subnationalRegion extraction, language detection).
-    assert len(prompt.splitlines()) < 280
+    # indicators rule, subnationalRegion extraction, language detection);
+    # 280 -> 290 for the FX currency-pair extraction rule (baseCurrency/
+    # targetCurrency from the user's wording in any language).
+    assert len(prompt.splitlines()) < 290
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
@@ -43,8 +45,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # in the system prompt for LLM-driven routing — cycle 36; to 330 after
     # adding relative-period date examples "last N months"/YTD; to 355 after
     # the multilingual additions — subnationalRegion + language + English
-    # canonical indicators)
-    assert len(prompt.splitlines()) < 355
+    # canonical indicators; to 370 after the FX currency-pair rule and the
+    # keep-region-in-indicator subnational examples)
+    assert len(prompt.splitlines()) < 370
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

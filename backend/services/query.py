@@ -4313,10 +4313,16 @@ class QueryService:
     # carries US state series through the indicator text. The subnational
     # fail-closed check must NOT fire for these (country stays CA/US and the
     # sub-region rides through their own paths) — see _enforce_subnational_fail_closed.
+    # StatsCan's provincial decomposition is dimension-driven and its label
+    # formats vary, so it keeps a blanket exemption. FRED deliberately has
+    # none: FRED titles always name their geography, so the
+    # served-data-references-region check reliably passes genuine state series
+    # ("Unemployment Rate in Texas") while catching the failure this guards
+    # against — state retrieval missing and NATIONAL data being served for a
+    # state request (observed live: "California GDP" -> national US GDP).
     _SUBNATIONAL_EXEMPT = (
         ("STATSCAN", frozenset({"CA", "CANADA"})),
         ("STATISTICS CANADA", frozenset({"CA", "CANADA"})),
-        ("FRED", frozenset({"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"})),
     )
 
     @staticmethod

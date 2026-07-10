@@ -105,6 +105,13 @@ Important constraints:
   copied from the user's intent, never provider-native IDs/codes unless the user explicitly
   supplied that exact code.
 - The indicators array MUST use English canonical metric names, translating the concept when the user wrote another language (e.g. "失业率" -> ["unemployment rate"], "浙江GDP" -> ["GDP"]). This array is the English-language search key used to look the metric up. Never alter the metric's meaning; the user's original wording is preserved elsewhere for display.
+- For currency-conversion queries, set parameters.baseCurrency and parameters.targetCurrency
+  to the ISO-4217 codes of the currencies the user actually named, in any language
+  (e.g. "美元兑人民币汇率" -> baseCurrency "USD", targetCurrency "CNY"; "euro to yen" ->
+  "EUR"/"JPY"). Do not substitute a currency the user did not name. When the query names a
+  country rather than currencies ("Brazil exchange rate"), leave both null — the country's
+  currency is derived automatically downstream; this is NOT ambiguous and needs no
+  clarification.
 - Do not convert count/number questions into financial stock concepts. For any direct
   count/number/total request, preserve the requested count metric wording; do not infer
   debt, credit, balance-sheet, distribution, or ratio concepts unless the user asked for them.
@@ -164,11 +171,13 @@ Geography extraction:
   province, prefecture, municipality, city, etc.), set subnationalRegion to that
   region's name AND still set country to the PARENT country. Set null when the
   user asks about a whole country or no region is named. Do NOT put the region in
-  country — a region is never a country.
-  - "北京GDP" -> country "China", subnationalRegion "Beijing"
-  - "浙江省人均GDP" -> country "China", subnationalRegion "Zhejiang"
-  - "Ontario unemployment" -> country "Canada", subnationalRegion "Ontario"
-  - "California GDP" -> country "United States", subnationalRegion "California"
+  country — a region is never a country. Keep the indicator name itself
+  region-free (the region is applied downstream according to how each source
+  models regional data).
+  - "北京GDP" -> country "China", subnationalRegion "Beijing", indicators ["GDP"]
+  - "浙江省人均GDP" -> country "China", subnationalRegion "Zhejiang", indicators ["GDP per capita"]
+  - "Ontario unemployment" -> country "Canada", subnationalRegion "Ontario", indicators ["unemployment rate"]
+  - "California GDP" -> country "United States", subnationalRegion "California", indicators ["GDP"]
   - "US GDP" -> country "United States", subnationalRegion null
 
 Language:
@@ -208,7 +217,9 @@ Output schema (all keys required unless noted null):
     "commodity": "...",
     "flow": "IMPORT|EXPORT|BOTH",
     "coinIds": ["..."],
-    "vsCurrency": "..."
+    "vsCurrency": "...",
+    "baseCurrency": "...",
+    "targetCurrency": "..."
   }},
   "clarificationNeeded": false,
   "clarificationQuestions": [],

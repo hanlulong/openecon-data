@@ -26,6 +26,15 @@ PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
     # Eurostat and OECD are handled dynamically via CountryResolver
 }
 
+# Providers whose sub-country regional data lives in SEPARATE SERIES with
+# region-qualified titles (FRED: "Unemployment Rate in Texas" = TXUR). For
+# these, the region must be part of the indicator retrieval text or the
+# national series resolves for a state request. Dimension-modeled providers
+# (StatsCan geography members) must NOT get the region in the retrieval text —
+# it pollutes cube selection; their dimension extraction applies the region.
+# Structural data-model fact per provider, not a semantic rule.
+REGION_AS_SERIES_PROVIDERS = frozenset({"FRED"})
+
 
 # ---------------------------------------------------------------------------
 # Country collection
