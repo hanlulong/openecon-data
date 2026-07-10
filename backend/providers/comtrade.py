@@ -443,7 +443,12 @@ class ComtradeProvider(BaseProvider):
         {"ALL", "TOTAL", "COMMODITY", "COMMODITIES", "GOODS", "PRODUCTS",
          "MERCHANDISE", "TRADE"}
     )
-    _TOTAL_TRADE_CORE = frozenset({"ALL", "TOTAL"})
+    # The all-merchandise nouns are core on their own: a commodity of just
+    # "goods"/"merchandise"/"products" means total trade, not an unresolved
+    # commodity to fail closed on.
+    _TOTAL_TRADE_CORE = frozenset(
+        {"ALL", "TOTAL", "GOODS", "MERCHANDISE", "PRODUCTS", "COMMODITY", "COMMODITIES"}
+    )
 
     @staticmethod
     def _is_total_trade_request(commodity: Optional[str]) -> bool:

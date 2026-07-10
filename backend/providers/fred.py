@@ -712,10 +712,23 @@ class FREDProvider(BaseProvider):
             notes_text = notes[:500] if len(notes) > 500 else notes
             notes_list = [n.strip() for n in notes_text.split('.') if n.strip()][:3]
 
+        # FRED's own labeling convention: foreign/aggregate series name their
+        # geography in the title, US-domestic series usually don't. So when the
+        # title names no competing geography AND this series was resolved for a
+        # US-scoped request, US attribution is a positive signal (keeps
+        # multi-country coverage accounting from flagging the US leg missing).
+        # Non-US requests stay honest: no signal -> None, and the country-scope
+        # validator fails closed on genuine mismatches.
+        inferred_country = _infer_country_from_fred_info(info)
+        if inferred_country is None:
+            _requested = str(params.get("country") or "").strip().upper()
+            if _requested in {"US", "USA", "UNITED STATES"}:
+                inferred_country = "US"
+
         metadata = Metadata(
             source="FRED",
             indicator=info["title"],
-            country=_infer_country_from_fred_info(info),
+            country=inferred_country,
             frequency=self._map_frequency(info["frequency"]),
             unit=unit,
             lastUpdated=info.get("last_updated", ""),

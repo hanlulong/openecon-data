@@ -1350,10 +1350,13 @@ def merge_new_state_with_previous(
     # must force re-resolution rather than carrying the stale code forward. A
     # frequency-only follow-up ("...but quarterly") reaches this non-delta path,
     # where the previous resolved code would otherwise be carried at :~1333.
+    # None -> explicit counts as a change ("US GDP" then "make it quarterly"
+    # arrives here with previous.frequency=None); requiring both sides truthy
+    # would carry the stale code past the new constraint.
     frequency_changed = bool(
         new_state.frequency
-        and previous.frequency
-        and str(new_state.frequency).strip().lower() != str(previous.frequency).strip().lower()
+        and str(new_state.frequency).strip().lower()
+        != str(previous.frequency or "").strip().lower()
     )
 
     # --- Geography ---

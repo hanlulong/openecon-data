@@ -4192,6 +4192,13 @@ class QueryService:
                 if intent.parameters:
                     for key in ("indicator", "seriesId", "series_id", "code"):
                         intent.parameters.pop(key, None)
+                # intent.indicators may hold a primary-provider CODE (e.g. the
+                # WB multi-collapse path overwrites it with the resolved code);
+                # persisting that under the serving provider would leak a
+                # foreign-namespace code into the next turn. Reset it to the
+                # human-readable phrase the fallback itself resolved with.
+                if indicator and str(indicator).strip():
+                    intent.indicators = [str(indicator).strip()]
             return result
 
         # --- Parallel fallback for top-2 providers ---

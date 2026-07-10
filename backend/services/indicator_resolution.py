@@ -2930,9 +2930,17 @@ async def resolve_indicator_for_fetch(
         english_terms = " ".join(
             str(term).strip() for term in (intent.indicators or []) if str(term).strip()
         ).strip()
+        # Gate on the parse LLM's language verdict: for English queries the
+        # selector_query is already English, so the arm would only re-rank the
+        # dominant path with an unvalidated second retrieval (indicators[] is a
+        # subset of the query, so a raw != comparison always differs there).
+        _intent_language = str(getattr(intent, "language", "") or "").strip().lower()
         _english_kw = (
             {"english_terms": english_terms}
-            if english_terms and english_terms.lower() != str(selector_query or "").strip().lower()
+            if english_terms
+            and _intent_language
+            and _intent_language != "en"
+            and english_terms.lower() != str(selector_query or "").strip().lower()
             else {}
         )
         if metadata_query:

@@ -473,7 +473,12 @@ export function ChatPage() {
 
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: `⚠️ ${error.message || error.error}`,
+            // Catalog messages already carry their own ⚠️ prefix — don't stack
+            // a second one; bare codes/prose still get the warning icon.
+            content: (() => {
+              const raw = error.message || error.error
+              return raw.trimStart().startsWith('⚠️') ? raw : `⚠️ ${raw}`
+            })(),
             timestamp: new Date(),
             isError: true,
           }])
