@@ -138,7 +138,11 @@ class EmbeddingRetrieval:
             if not api_key:
                 api_key = settings.openrouter_api_key
                 base_url = "https://openrouter.ai/api/v1"
-            self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+            # Bound every embeddings.create call: without an explicit timeout
+            # the OpenAI client defaults to ~600s, so a hung endpoint can pin a
+            # thread-pool thread (the selector offloads retrieval via
+            # asyncio.to_thread) for ~10 minutes and starve the pool.
+            self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=30)
         return self._client
 
     def _load_index(self) -> bool:

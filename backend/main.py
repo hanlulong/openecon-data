@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import weakref
+import ipaddress
+import json
 import logging
 import contextlib
 import sys
@@ -49,6 +53,7 @@ from .services.redis_cache import get_redis_cache
 from .services.conversation import conversation_manager
 from .services.export import export_service
 from .services.feedback import feedback_service
+from .services.anon_token import issue_anon_token, verify_anon_token
 from .services.query import QueryService
 from .services.user_store import user_store
 from .utils.dependencies import require_promode
@@ -83,6 +88,50 @@ if "pytest" not in sys.modules:
         pass
 
 _background_tasks: set[asyncio.Task] = set()
+
+# Per-conversation request-edge locks. Serialize concurrent turns on the SAME
+# conversationId within a worker so an overlapping double-submit / client retry
+# can't interleave two process_query runs and lose a conversation-state update
+# (the in-memory ConversationState is last-writer-wins). Held only at the HTTP
+# request edge — internal process_query recursion (deep-agent/orchestrator
+# sub-fetches) calls the service method directly and never re-acquires this
+# lock, so there is no self-deadlock even when the stream path holds it for the
+# full stream duration.
+#
+# A WeakValueDictionary self-bounds the map: a lock is retained only while some
+# in-flight turn holds a strong reference to it (the `async with` local keeps it
+# alive), and is garbage-collected once the conversation goes idle. No manual
+# eviction, no unbounded growth. Cross-worker races (two uvicorn workers, same
+# conversation) remain possible but are rare in turn-based UX and out of scope.
+_conversation_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _get_conversation_lock(conversation_id: str) -> asyncio.Lock:
+    """Return the process-local asyncio.Lock for a conversationId, creating it
+    on first use. Does not await, so under asyncio's single thread the
+    get-or-create is atomic (no lost or duplicated lock)."""
+    lock = _conversation_locks.get(conversation_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _conversation_locks[conversation_id] = lock
+    return lock
+
+
+def _conversation_turn_lock(conversation_id: Optional[str]):
+    """Async context manager that serializes turns on one conversation. A no-op
+    (nullcontext) when there is no conversationId — one-shot anonymous queries
+    without a conversation are never serialized against each other."""
+    if conversation_id:
+        return _get_conversation_lock(conversation_id)
+    return contextlib.nullcontext()
+
+
+# Seconds of SSE silence before the stream emits a keepalive comment frame.
+# Module-level so it can be tuned (and tests can shorten it) without touching
+# the generator body.
+_SSE_KEEPALIVE_INTERVAL = 15.0
 
 
 settings: Settings = get_settings()
@@ -301,6 +350,13 @@ RATE_LIMITS = {
     # internals. Keep them well under the 200/min default.
     "/api/cache/clear": "5/minute",
     "/api/performance": "20/minute",
+    # Unauthenticated, persists JSON to disk, and emails the site owner on every
+    # submit. Left at the 200/min default it is a cheap spam/mail-flood vector.
+    "/api/feedback": "5/minute",
+    # POST /mcp/messages* carries the JSON-RPC tool calls (the LLM-spend path).
+    # Applied via the explicit /mcp handling in the middleware; kept here so the
+    # limit is discoverable and unit-testable through get_rate_limit_for_path.
+    "/mcp/messages": "30/minute",
 }
 DEFAULT_RATE_LIMIT = "200/minute"  # Default for other endpoints
 
@@ -327,6 +383,14 @@ class RateLimitASGIMiddleware:
         self.app = app
         self.settings = settings_obj
         self.limiter = limiter_obj
+        # No-deploy off-switch for /mcp throttling (config.py has no field for
+        # it, so read the env directly, once, at middleware init). Default ON;
+        # set MCP_RATE_LIMIT_ENABLED=false/0/no/off to disable without a code
+        # change if the connection/message limits ever misbehave.
+        self._mcp_rate_limit_enabled = (
+            os.environ.get("MCP_RATE_LIMIT_ENABLED", "true").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -336,8 +400,13 @@ class RateLimitASGIMiddleware:
         request = Request(scope, receive=receive)
         path = request.url.path
 
-        # Skip rate limiting for health check, static files, and MCP endpoint
-        if path in ("/api/health", "/health") or path.startswith("/static") or path.startswith("/mcp"):
+        # Skip rate limiting for health check and static files only. /mcp is
+        # deliberately NOT exempted here: it is the only otherwise-uncapped
+        # LLM-spend path, so it must fall through to IP resolution and the
+        # dedicated /mcp connection/message limiting below. Genuinely-local and
+        # loopback MCP traffic is still exempted by the localhost bypass that
+        # follows (so internal self-calls and local MCP clients are unaffected).
+        if path in ("/api/health", "/health") or path.startswith("/static"):
             await self.app(scope, receive, send)
             return
 
@@ -355,46 +424,75 @@ class RateLimitASGIMiddleware:
         forwarded_for_header = request.headers.get("X-Forwarded-For")
         trusted_proxies = set(self.settings.trusted_proxies or [])
 
-        if forwarded_for_header and direct_ip in trusted_proxies:
-            # Trusted reverse proxy. Apache (and most proxies) APPEND the peer
-            # they received from, so the chain reads "client-supplied …, real
-            # client". The leftmost entry is therefore attacker-controlled — a
-            # spoofed "X-Forwarded-For: 1.2.3.4" arrives as "1.2.3.4, <real>".
-            # Resolve rightmost-untrusted: walk from the right, skip our own
-            # trusted proxies, and take the first hop we did not add ourselves.
-            chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
-            client_ip = direct_ip
-            for hop in reversed(chain):
-                if hop not in trusted_proxies:
-                    client_ip = hop
-                    break
-        else:
-            # Untrusted source — use direct connection IP, ignore XFF
-            client_ip = direct_ip
-            if forwarded_for_header:
-                # uvicorn runs with proxy_headers enabled (its default,
-                # trusting the loopback proxy), so by the time we see the
-                # scope, scope["client"] has often ALREADY been rewritten to
-                # the real client resolved from this same XFF chain. If our
-                # own rightmost-untrusted resolution agrees with the direct
-                # IP, this is that benign double-resolution, not an untrusted
-                # proxy injecting headers — don't warn.
-                chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
-                resolved = next(
-                    (h for h in reversed(chain) if h not in trusted_proxies), None
-                )
-                if resolved != direct_ip:
-                    logger.warning(
-                        "Ignoring X-Forwarded-For from untrusted source %s (set TRUSTED_PROXIES to allow)",
-                        direct_ip,
-                    )
+        # Rightmost-untrusted resolution (shared with resolve_client_ip / the
+        # anon-identity + analytics helpers). Only honors X-Forwarded-For when
+        # the direct peer is a trusted proxy; otherwise ignores XFF and uses the
+        # direct connection IP. Apache (and most proxies) APPEND the peer they
+        # received from, so a spoofed "X-Forwarded-For: 1.2.3.4" arrives as
+        # "1.2.3.4, <real>" and the rightmost-untrusted hop is the real client.
+        client_ip = _resolve_client_ip_from(direct_ip, forwarded_for_header, trusted_proxies)
 
-        # Skip rate limiting for direct localhost connections (no XFF present)
+        if forwarded_for_header and direct_ip not in trusted_proxies:
+            # Untrusted source supplied an XFF (ignored above). uvicorn runs with
+            # proxy_headers enabled (its default, trusting the loopback proxy),
+            # so scope["client"] has often ALREADY been rewritten to the real
+            # client resolved from this same chain. If our own rightmost-untrusted
+            # resolution agrees with the direct IP, this is that benign double-
+            # resolution, not an untrusted proxy injecting headers — don't warn.
+            chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
+            resolved = next(
+                (h for h in reversed(chain) if h not in trusted_proxies), None
+            )
+            if resolved != direct_ip:
+                logger.warning(
+                    "Ignoring X-Forwarded-For from untrusted source %s (set TRUSTED_PROXIES to allow)",
+                    direct_ip,
+                )
+
+        # Explicit exemption for the fastapi_mcp internal self-call. When an MCP
+        # client invokes the `query_data` tool, fastapi_mcp re-dispatches it to
+        # POST /api/query over an in-process ASGITransport with a synthetic
+        # client (127.0.0.1) and no X-Forwarded-For. Throttling that self-call
+        # would let a burst of MCP tool invocations rate-limit the server
+        # against itself. The generic loopback bypass below already covers this,
+        # but we pin it explicitly so a future httpx/fastapi_mcp change to the
+        # synthetic client's address can't silently start counting these calls
+        # against a shared bucket.
+        if path == "/api/query" and not forwarded_for_header and direct_ip in ("127.0.0.1", "::1"):
+            await self.app(scope, receive, send)
+            return
+
+        # Skip rate limiting for direct localhost connections (no XFF present).
+        # This also exempts local MCP clients and our own MCP service reaching
+        # /mcp over loopback, so only remote /mcp traffic is throttled.
         if not forwarded_for_header and client_ip in ("127.0.0.1", "::1", "localhost"):
             await self.app(scope, receive, send)
             return
 
-        rate_limit_str = get_rate_limit_for_path(path)
+        # Determine the limit bucket + rate for this request. /mcp needs bespoke
+        # keys (a long-lived SSE stream vs. its JSON-RPC message posts); every
+        # other path is a straightforward per-(ip, path) bucket.
+        if path.startswith("/mcp"):
+            if not self._mcp_rate_limit_enabled:
+                # Off-switch engaged — behave as before (fully exempt).
+                await self.app(scope, receive, send)
+                return
+            if request.method == "GET":
+                # GET /mcp opens the long-lived SSE stream. Limit CONNECTION
+                # opens, not per-request: the stream is a single request that
+                # stays open, so a per-request limit would 429 the persistent
+                # connection itself. One hit per stream open, generously capped.
+                limit_key = f"mcp_conn:{client_ip}"
+                rate_limit_str = "12/minute"
+            else:
+                # POST /mcp/messages* carries the actual JSON-RPC tool calls —
+                # a normal per-path limit keyed on a stable bucket (independent
+                # of any ?session_id= query or trailing slash).
+                limit_key = f"{client_ip}:/mcp/messages"
+                rate_limit_str = get_rate_limit_for_path("/mcp/messages")
+        else:
+            limit_key = f"{client_ip}:{path}"
+            rate_limit_str = get_rate_limit_for_path(path)
 
         # Only the rate-limit DECISION is wrapped in try/except, so we can tell
         # "limit exceeded" (a real 429) apart from "limiter backend unavailable"
@@ -403,7 +501,6 @@ class RateLimitASGIMiddleware:
         # the limiter is unreachable. The downstream app call is OUTSIDE this
         # block so genuine handler errors are never masked as rate-limit 503s.
         try:
-            limit_key = f"{client_ip}:{path}"
             rate_limit = parse_rate_limit(rate_limit_str)
             allowed = self.limiter._limiter.hit(rate_limit, limit_key)
         except Exception as e:
@@ -533,21 +630,124 @@ async def log_query_to_supabase(
         logger.error(f"Failed to log {'Pro Mode ' if pro_mode else ''}query to Supabase: {e}")
 
 
-def _client_ip(req) -> Optional[str]:
-    """Best-effort real client IP for analytics, honoring the trusted-proxy
-    X-Forwarded-For chain (rightmost-untrusted), mirroring the rate-limit
-    middleware so we don't record Apache's loopback for every request."""
+def _resolve_client_ip_from(direct_ip, forwarded_for_header, trusted_proxies) -> Optional[str]:
+    """Pure rightmost-untrusted X-Forwarded-For resolution, shared by the
+    rate-limit middleware, resolve_client_ip, and the analytics helper.
+
+    Only honors X-Forwarded-For when the direct peer is itself a trusted proxy;
+    otherwise the header is attacker-controllable and is ignored (return the
+    direct connection IP). ``trusted_proxies`` is any container supporting ``in``.
+    """
+    if forwarded_for_header and direct_ip in trusted_proxies:
+        chain = [h.strip() for h in forwarded_for_header.split(",") if h.strip()]
+        for hop in reversed(chain):
+            if hop not in trusted_proxies:
+                return hop
+    return direct_ip
+
+
+def resolve_client_ip(request, trusted_proxies=None) -> Optional[str]:
+    """Resolve the real client IP for a request, honoring the trusted-proxy
+    X-Forwarded-For chain (rightmost-untrusted). Usable outside the middleware.
+
+    Defaults to the global settings' trusted proxies; callers inside the
+    middleware pass their own so the two never diverge.
+    """
     try:
-        direct = req.client.host if req.client else None
-        xff = req.headers.get("X-Forwarded-For")
-        trusted = set(settings.trusted_proxies or [])
-        if xff and direct in trusted:
-            chain = [h.strip() for h in xff.split(",") if h.strip()]
-            for hop in reversed(chain):
-                if hop not in trusted:
-                    return hop
-        return direct
+        direct = request.client.host if request.client else None
+        xff = request.headers.get("X-Forwarded-For")
+        trusted = set(
+            trusted_proxies if trusted_proxies is not None else (settings.trusted_proxies or [])
+        )
+        return _resolve_client_ip_from(direct, xff, trusted)
     except Exception:
+        return None
+
+
+def ip_identity(ip: Optional[str]) -> Optional[str]:
+    """Coarse, privacy-preserving identity key derived from a client IP.
+
+    IPv6 is masked to its /64 — the smallest block typically assigned to a
+    single subscriber — so a browser rotating through addresses inside one /64
+    is not counted as many distinct users. IPv4 is used whole. Returns None for
+    an empty or unparseable address.
+
+    Format: ``"ip6:<network-address>/64"`` or ``"ip4:<address>"``.
+    """
+    if not ip:
+        return None
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if addr.version == 6:
+        net = ipaddress.ip_network(f"{ip}/64", strict=False)
+        return f"ip6:{net.network_address}/64"
+    return f"ip4:{addr}"
+
+
+def _client_ip(req) -> Optional[str]:
+    """Best-effort real client IP for analytics. Thin alias over
+    resolve_client_ip (kept for existing call sites)."""
+    return resolve_client_ip(req)
+
+
+def resolve_anon_identity(request, body_session_id, body_token=None):
+    """Resolve a stable anonymous-identity key and its kind, in priority order:
+
+      1. valid anon session token (X-OE-Session header, or explicit body_token)
+         → ("tok:<sid>", "token")
+      2. legacy frontend sessionId → (sessionId, "legacy")  — the key is used
+         verbatim, so existing browsers keep their quota (no reset)
+      3. neither → coarse IP identity
+         → ("ip6:<net>/64", "ip6") or ("ip4:<addr>", "ip4")
+
+    Returns (None, "none") when nothing resolves (e.g. no client IP).
+    """
+    token = request.headers.get("X-OE-Session") if request is not None else None
+    token = token or body_token
+    if token:
+        sid = verify_anon_token(token)
+        if sid:
+            return f"tok:{sid}", "token"
+    if body_session_id:
+        return body_session_id, "legacy"
+    ident = ip_identity(resolve_client_ip(request))
+    if ident:
+        return ident, ("ip6" if ident.startswith("ip6:") else "ip4")
+    return None, "none"
+
+
+def _log_anon_identity_shadow(request, body_session_id, legacy_key) -> None:
+    """SHADOW-MODE measurement: resolve the new anon identity and emit exactly
+    one structured log line per anonymous query WITHOUT changing the gate. The
+    log stream is the measurement — no extra Supabase RPC. Never raises."""
+    try:
+        identity, kind = resolve_anon_identity(request, body_session_id)
+        logger.info(
+            "anon_identity_shadow %s",
+            json.dumps({"legacy_key": legacy_key, "new_identity": identity, "kind": kind}),
+        )
+    except Exception as e:  # measurement must never break a request
+        logger.debug("anon_identity_shadow logging failed: %s", e)
+
+
+def maybe_issue_anon_token(request, body_session_id) -> Optional[str]:
+    """Token to set as the X-OE-Session response header for an anonymous caller
+    that presented no valid token, or None if a valid token was already
+    presented or the feature is off (legacy mode).
+
+    Seeds the new token's sid from the legacy sessionId when present so the
+    switch to token-based identity is continuous (the quota does not reset)."""
+    if settings.anon_identity_mode == "legacy":
+        return None
+    existing = request.headers.get("X-OE-Session") if request is not None else None
+    if existing and verify_anon_token(existing):
+        return None  # already carries a valid token — nothing to mint
+    try:
+        return issue_anon_token(sid=body_session_id or None)
+    except Exception as e:
+        logger.debug("anon token issuance failed: %s", e)
         return None
 
 
@@ -580,6 +780,16 @@ async def check_anon_gate(req, user, body_session_id, conversation_id, pro_mode:
     if user is not None or limit <= 0:
         return _AnonGate(False, 0, limit, ip, ua, None)
     session_id = body_session_id or (f"anon_{conversation_id}" if conversation_id else None)
+    # FIX 8 — anonymous-identity SHADOW MODE. The gating decision below stays
+    # EXACTLY on the legacy session_id key; here we only additionally measure the
+    # new token/IP-based identity by logging one line per anonymous query.
+    #
+    # NOTE: 'enforce' mode is intentionally NOT implemented. When implemented it
+    # would replace `session_id` with resolve_anon_identity()'s result so the
+    # quota keys on token>legacy>ip. Until then enforce behaves like shadow
+    # (measure only) and the gate stays on the legacy session key.
+    if settings.anon_identity_mode != "legacy":
+        _log_anon_identity_shadow(req, body_session_id, legacy_key=session_id)
     if not session_id:
         return _AnonGate(False, 0, limit, ip, ua, None)
     try:
@@ -674,7 +884,14 @@ def save_to_user_history(
 async def _conversation_cleanup_loop() -> None:
     while True:
         await asyncio.sleep(600)  # every 10 minutes
-        conversation_manager.cleanup()
+        # Wrap the body so a single failure (e.g. a transient Redis/serialization
+        # error inside cleanup) can't permanently kill the loop and leave
+        # conversation TTL cleanup dead → unbounded in-memory growth. Mirrors
+        # the try/except in _file_cleanup_loop below.
+        try:
+            conversation_manager.cleanup()
+        except Exception as e:
+            logger.error(f"Conversation cleanup error: {e}", exc_info=True)
 
 
 async def _file_cleanup_loop() -> None:
@@ -994,12 +1211,25 @@ async def session_history(request: Request, limit: Optional[int] = Query(default
     ),
     tags=["Economic Data"],
 )
-async def query_endpoint(request: QueryRequest, raw_request: Request, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
+async def query_endpoint(request: QueryRequest, raw_request: Request, response: Response = None, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
 
     query_start = time.perf_counter()
     conversation_id = get_request_conversation_id(request, user)
+
+    # FIX 8: issue an anon session token to anonymous callers that presented no
+    # valid one, so the free-query quota can follow the browser (shadow mode —
+    # measured, not yet enforced). Header-only (X-OE-Session): the header rides
+    # along with the returned QueryResponse model. A typed body field would
+    # require editing QueryResponse in models.py, outside this change's lane.
+    # `response` is FastAPI-injected at runtime; the `= None` default keeps
+    # direct callers (unit tests invoking this coroutine) working, hence the
+    # None guard below.
+    if user is None and response is not None:
+        _anon_token = maybe_issue_anon_token(raw_request, request.sessionId)
+        if _anon_token:
+            response.headers["X-OE-Session"] = _anon_token
 
     # Anonymous free-query gate: count this prompt and, once over the limit,
     # ask the user to register instead of processing (registered users exempt).
@@ -1029,16 +1259,20 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, user: Opti
     # exposing the service to resource exhaustion.
     owner_key, claimable_keys = get_conversation_owner(request, user)
     try:
-        result = await asyncio.wait_for(
-            query_service.process_query(
-                request.query,
-                conversation_id,
-                auto_pro_mode=auto_pro,
-                owner_key=owner_key,
-                claimable_owner_keys=claimable_keys,
-            ),
-            timeout=float(settings.query_timeout_seconds),
-        )
+        # Serialize concurrent turns on the same conversation (no-op for
+        # one-shot anonymous queries with no conversationId). The query
+        # deadline runs INSIDE the lock so a stuck turn can't hold it forever.
+        async with _conversation_turn_lock(conversation_id):
+            result = await asyncio.wait_for(
+                query_service.process_query(
+                    request.query,
+                    conversation_id,
+                    auto_pro_mode=auto_pro,
+                    owner_key=owner_key,
+                    claimable_owner_keys=claimable_keys,
+                ),
+                timeout=float(settings.query_timeout_seconds),
+            )
     except asyncio.TimeoutError:
         timeout_conversation_id = conversation_id or str(uuid.uuid4())
         logger.warning(
@@ -1154,6 +1388,16 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
 
     conversation_id = get_request_conversation_id(request, user)
 
+    # FIX 8: header-only anon token issuance for streaming. SSE response headers
+    # are flushed before the body, so we mint here and attach to whichever
+    # StreamingResponse we return (blocked or normal). Shadow mode — measured,
+    # not enforced.
+    _anon_stream_headers: dict = {}
+    if user is None:
+        _anon_token = maybe_issue_anon_token(raw_request, request.sessionId)
+        if _anon_token:
+            _anon_stream_headers["X-OE-Session"] = _anon_token
+
     # Anonymous free-query gate: once over the limit, emit a registrationRequired
     # data event instead of processing the query (registered users exempt).
     gate = await check_anon_gate(raw_request, user, request.sessionId, conversation_id, pro_mode=False)
@@ -1174,7 +1418,11 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             yield f"event: data\ndata: {json.dumps(payload)}\n\n"
             yield f"event: done\ndata: {json.dumps({'done': True, 'conversationId': _blocked_cid})}\n\n"
 
-        return StreamingResponse(_blocked_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            _blocked_stream(),
+            media_type="text/event-stream",
+            headers=_anon_stream_headers or None,
+        )
 
     logger.info("📝 Stream Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
@@ -1189,8 +1437,22 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
         tracker_token = None
         query_task = None
         client_disconnected = False
+        _conv_lock = _get_conversation_lock(conversation_id) if conversation_id else None
+        _lock_held = False
 
         try:
+            # Serialize turns on the same conversation for the FULL stream
+            # duration: a second turn on the same conversationId must wait for
+            # this one to finish (intended — turn-based UX). Held manually
+            # rather than via `async with` because the lock must span this whole
+            # generator, including the finally-cleanup that cancels the query
+            # task. Internal process_query recursion never re-acquires this edge
+            # lock, so holding it across the stream cannot self-deadlock. No-op
+            # for one-shot anonymous queries without a conversationId.
+            if _conv_lock is not None:
+                await _conv_lock.acquire()
+                _lock_held = True
+
             # Create tracker with callback that puts events in queue
             def stream_callback(step):
                 event = StreamEvent(
@@ -1230,6 +1492,8 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             processing_complete = False
             _stream_start = time.perf_counter()
             _STREAM_TIMEOUT = 300  # 5 minute overall timeout for streaming queries
+            _last_emit = time.perf_counter()  # last time we wrote to the wire
+            _KEEPALIVE_INTERVAL = _SSE_KEEPALIVE_INTERVAL  # silence before keepalive
             while not processing_complete:
                 # Check overall streaming timeout
                 if time.perf_counter() - _stream_start > _STREAM_TIMEOUT:
@@ -1241,9 +1505,17 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
                     yield f"event: {event.event}\ndata: {json.dumps(event.data)}\n\n"
+                    _last_emit = time.perf_counter()
                 except asyncio.TimeoutError:
-                    # No event available
-                    pass
+                    # No event this tick. Emit an SSE comment as a keepalive if
+                    # we've been silent for a while, so a long processing step
+                    # doesn't look hung and intermediary proxies don't idle-
+                    # timeout the persistent connection. Comment frames (lines
+                    # starting with ':') are ignored by SSE clients.
+                    now = time.perf_counter()
+                    if now - _last_emit >= _KEEPALIVE_INTERVAL:
+                        yield ": keepalive\n\n"
+                        _last_emit = now
                 except asyncio.CancelledError:
                     # Client disconnected
                     client_disconnected = True
@@ -1369,6 +1641,14 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                     logger.debug("Unexpected error while cancelling query task: %s", _cancel_exc)
                 logger.info("📡 Cleaned up pending query task")
 
+            # Release the per-conversation turn lock LAST, after the query task
+            # has been fully cancelled/awaited above, so the lock covers the
+            # task's entire lifetime. Guarded by _lock_held so a stream that was
+            # cancelled while still waiting to acquire never over-releases.
+            if _lock_held and _conv_lock is not None:
+                _conv_lock.release()
+                _lock_held = False
+
     return StreamingResponse(
         generate_events(),
         media_type="text/event-stream",
@@ -1376,6 +1656,9 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
+            # FIX 8: anon session token (present only for anonymous callers that
+            # lacked a valid one). Empty-string default is harmless if absent.
+            **_anon_stream_headers,
         }
     )
 

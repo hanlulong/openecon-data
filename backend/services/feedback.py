@@ -24,6 +24,12 @@ from ..models import FeedbackRequest, FeedbackResponse
 
 logger = logging.getLogger("openecon.feedback")
 
+# Strong references to in-flight background email tasks. Without this the task
+# returned by loop.create_task is only weakly held by the event loop and can be
+# garbage-collected mid-flight, silently dropping the notification email. Mirror
+# the pattern in main.py: keep the task alive until it finishes, then discard.
+_background_tasks: set = set()
+
 # Feedback storage directory
 FEEDBACK_DIR = Path(__file__).parent.parent / "data" / "feedback"
 
@@ -120,7 +126,11 @@ class FeedbackService:
         # immediately; the task is tracked so it can be reaped/observed.
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(asyncio.to_thread(self._send_email_notification, feedback_entry))
+            task = loop.create_task(
+                asyncio.to_thread(self._send_email_notification, feedback_entry)
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
         except RuntimeError:
             # No running loop — fall back to the synchronous path.
             self._send_email_notification(feedback_entry)

@@ -191,6 +191,19 @@ class Settings(BaseSettings):
         description="Number of free queries for anonymous users before registration is required (0 = unlimited)."
     )
 
+    # Anonymous-identity resolution mode for the free-query gate.
+    #   legacy  = original behavior only (key on frontend sessionId); no token
+    #             issuance, no shadow logging.
+    #   shadow  = keep the legacy gating decision UNCHANGED, but additionally
+    #             resolve+log the new token/IP-based identity and issue anon
+    #             session tokens so the scheme can be measured before cutover.
+    #   enforce = (NOT IMPLEMENTED) would gate on the resolved identity itself.
+    anon_identity_mode: str = Field(
+        default="shadow",
+        alias="ANON_IDENTITY_MODE",
+        description="Anonymous identity mode: 'legacy' (session-id only), 'shadow' (measure new scheme without changing gating), or 'enforce' (not implemented)."
+    )
+
     email_confirm_redirect_url: str = Field(
         default="https://data.openecon.ai/chat?confirmed=1",
         alias="EMAIL_CONFIRM_REDIRECT_URL",
