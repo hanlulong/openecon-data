@@ -22,6 +22,7 @@ Coverage Goals:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -35,6 +36,14 @@ logger = logging.getLogger(__name__)
 
 # Database path
 DB_PATH = Path(__file__).parent.parent / "data" / "indicators.db"
+
+# Source-lifecycle markers that denote an archival or discontinued World Bank
+# database. Every WB row carries a structured `source.value`; these markers are
+# matched generically against that field (not against indicator ids), so ~1,180
+# archive/discontinued codes stop out-ranking their live equivalents. Keyed on
+# the SOURCE's lifecycle semantics ("archive"/"discontinued"), plus the World
+# Bank's own discontinued "Doing Business" database.
+_WB_ARCHIVAL_SOURCE_MARKERS = ("archive", "discontinued", "doing business")
 
 
 def _word_in(word: str, text: str) -> bool:
@@ -1203,6 +1212,25 @@ class IndicatorLookup:
                     score -= 15  # Penalize national-only estimates (sparse data)
                 elif "modeled estimate" in name_lower:
                     score += 6  # Boost modeled estimates (broad coverage)
+
+                # Penalize archival/discontinued sources. WB rows have NULL
+                # end_date, so the staleness scorer above never fires for them;
+                # the one structured freshness signal present on 100% of WB rows
+                # is raw_metadata.source. Parse it and strongly de-rank series
+                # published under an archived/discontinued database so live
+                # equivalents win. Uniform rule over a structured metadata field
+                # — not a per-indicator code list.
+                raw_metadata = r.get("raw_metadata")
+                if raw_metadata:
+                    try:
+                        source_value = (
+                            (json.loads(raw_metadata) or {}).get("source", {}) or {}
+                        ).get("value", "")
+                    except (ValueError, TypeError):
+                        source_value = ""
+                    source_lower = str(source_value).lower()
+                    if any(marker in source_lower for marker in _WB_ARCHIVAL_SOURCE_MARKERS):
+                        score -= 20  # Strong penalty for archived/discontinued sources
 
             r["_score"] = score
             ranked.append(r)

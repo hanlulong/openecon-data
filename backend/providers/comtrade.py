@@ -436,6 +436,31 @@ class ComtradeProvider(BaseProvider):
                 )
         return str(scored[0][1].get("code") or "").strip() or None
 
+    # Vocabulary for recognizing an explicit "all/total trade" request. The
+    # phrase must be built ENTIRELY from these tokens (order-independent set
+    # membership, not substring matching) and contain at least one core word.
+    _TOTAL_TRADE_TOKENS = frozenset(
+        {"ALL", "TOTAL", "COMMODITY", "COMMODITIES", "GOODS", "PRODUCTS",
+         "MERCHANDISE", "TRADE"}
+    )
+    _TOTAL_TRADE_CORE = frozenset({"ALL", "TOTAL"})
+
+    @staticmethod
+    def _is_total_trade_request(commodity: Optional[str]) -> bool:
+        """True only when the phrase means all-commodity trade.
+
+        Set-membership over an explicit vocabulary — every token must be a
+        total/filler word and at least one must be a core word ("all"/"total").
+        "all commodities" / "total trade" -> True; "vegetable oil",
+        "totally random thing", "oil" -> False.
+        """
+        tokens = re.findall(r"[A-Za-z]+", str(commodity or "").upper())
+        if not tokens:
+            return False
+        if not all(tok in ComtradeProvider._TOTAL_TRADE_TOKENS for tok in tokens):
+            return False
+        return any(tok in ComtradeProvider._TOTAL_TRADE_CORE for tok in tokens)
+
     @staticmethod
     def _commodity_code(commodity: Optional[str]) -> str:
         """Convert commodity name/HS code to Comtrade commodity code.
@@ -496,13 +521,29 @@ class ComtradeProvider(BaseProvider):
         if code:
             return code
 
-        # Tier 7: Partial match - find commodity containing this term
-        for mapping_key, mapping_code in ComtradeProvider.COMMODITY_MAPPINGS.items():
-            if key in mapping_key or mapping_key in key:
-                return mapping_code
+        # No exact / catalog tier matched. Preserve TOTAL ONLY when the phrase
+        # genuinely denotes all-commodity trade (e.g. "all", "total trade",
+        # "all commodities"). The dispatch layer sends commodity=None for an
+        # ABSENT commodity (handled at the top of this method), so a non-empty
+        # string that names a SPECIFIC commodity must never silently degrade to
+        # the world total — fail closed so the pipeline surfaces a clear
+        # "not recognized" message and the user can rephrase.
+        #
+        # The removed tier-7 pass did an order-dependent substring scan over
+        # COMMODITY_MAPPINGS and mis-resolved compound terms: "vegetable oil"
+        # matched "OIL" (dict order) and returned HS 27 (petroleum). It also
+        # accidentally back-filled the silent TOTAL default for gibberish
+        # (e.g. "totally ..." matched "TOTAL"). Both are wrong-data failures.
+        if ComtradeProvider._is_total_trade_request(commodity):
+            return "TOTAL"
 
-        # Default to TOTAL if no mapping found
-        return "TOTAL"
+        from ..utils.retry import DataNotAvailableError
+
+        raise DataNotAvailableError(
+            f"comtrade_commodity_unresolved: '{commodity}' did not match any "
+            "UN Comtrade HS commodity. Try an HS code (e.g. 'HS 1512') or a "
+            "more specific commodity name."
+        )
 
     @staticmethod
     def _country_code(country: str) -> str:
@@ -1421,6 +1462,56 @@ class ComtradeProvider(BaseProvider):
 
         return self._merge_series_segments(all_results)
 
+    @staticmethod
+    def _region_expansion_count(name: Optional[str]) -> Optional[int]:
+        """Member count if `name` is a known multi-member region, else None.
+
+        Mirrors the region normalization used by fetch_trade_data so the
+        trade-balance labeling and coverage logic recognizes the same groups
+        (EU, G7, ASEAN, ...). A single country returns None.
+        """
+        if not name:
+            return None
+        from ..routing.country_resolver import CountryResolver
+
+        key = str(name).upper().replace(" ", "_").replace("-", "_")
+        expanded = CountryResolver.get_region_expansion(key, format="un_numeric")
+        if not expanded and ("_COUNTRIES" in key or "_NATIONS" in key):
+            variant = key.replace("_COUNTRIES", "").replace("_NATIONS", "")
+            expanded = CountryResolver.get_region_expansion(variant, format="un_numeric")
+        if expanded and len(expanded) > 1:
+            return len(expanded)
+        return None
+
+    @staticmethod
+    def _aggregate_member_series(
+        series_list: List[NormalizedData],
+    ) -> Tuple[Dict[str, float], int]:
+        """Sum member series into one date->value map.
+
+        For each date, sum the values of the members that reported that date
+        ('only sum periods present' — absent member/period cells are not
+        fabricated as zeros). Returns (summed_map, member_series_count), where
+        the count is the number of series that contributed at least one point.
+        """
+        summed: Dict[str, float] = {}
+        member_count = 0
+        for series in series_list or []:
+            if not series or not series.data:
+                continue
+            member_count += 1
+            for point in series.data:
+                if isinstance(point, dict):
+                    date = point.get("date")
+                    value = point.get("value")
+                else:
+                    date = getattr(point, "date", None)
+                    value = getattr(point, "value", None)
+                if not date:
+                    continue
+                summed[str(date)] = summed.get(str(date), 0.0) + (value or 0)
+        return summed, member_count
+
     async def fetch_trade_balance(
         self,
         reporter: str,
@@ -1489,24 +1580,112 @@ class ComtradeProvider(BaseProvider):
                 f"No trade data available for {reporter}" + (f" with {partner}" if partner else " (world)")
             )
 
-        # Extract the first series from each result (should only be one per flow)
-        exports = exports_data[0] if exports_data else None
-        imports = imports_data[0] if imports_data else None
+        # A region reporter/partner is expanded to individual member countries
+        # inside fetch_trade_data, which returns ONE series per member. Taking
+        # exports_data[0] would report a SINGLE member's balance under the
+        # region's name — wrong data with plausible metadata. Detect the
+        # multi-member shape and SUM the members per period before computing
+        # the balance.
+        reporter_members = self._region_expansion_count(reporter)
+        partner_members = self._region_expansion_count(partner)
+        is_group_query = reporter_members is not None or partner_members is not None
+        is_aggregate = is_group_query or len(exports_data) > 1 or len(imports_data) > 1
 
-        if not exports or not imports:
-            raise DataNotAvailableError(
-                "Missing import or export data for trade balance calculation"
+        notes: Optional[List[str]] = None
+
+        if is_aggregate:
+            # Sum member series per period. "Only sum periods present": for each
+            # period we add the values of the members that reported it (absent
+            # member/period cells are NOT fabricated as zeros), so a period
+            # observed by fewer members is a smaller sum by construction.
+            export_map, export_series_count = self._aggregate_member_series(exports_data)
+            import_map, import_series_count = self._aggregate_member_series(imports_data)
+            if not export_map or not import_map:
+                raise DataNotAvailableError(
+                    f"No data points available for {reporter}"
+                    + (f" with {partner}" if partner else " (world)")
+                )
+
+            ref_meta = next(
+                (s.metadata for s in exports_data if s and s.metadata),
+                exports_data[0].metadata,
             )
-
-        # Check that we have actual data points
-        if not exports.data or not imports.data:
-            raise DataNotAvailableError(
-                f"No data points available for {reporter}" + (f" with {partner}" if partner else " (world)")
+            # Label the reporter as a group only when the served series carry
+            # more than one distinct reporter country; otherwise keep the single
+            # resolved country (e.g. reporter=US, partner=EU stays "United States").
+            reporter_countries = {
+                str(s.metadata.country)
+                for s in exports_data
+                if s and s.metadata and s.metadata.country
+            }
+            country_label = (
+                next(iter(reporter_countries))
+                if len(reporter_countries) == 1
+                else reporter
             )
+            ref_frequency = ref_meta.frequency
+            ref_api_url = ref_meta.apiUrl
 
-        # Create maps for easier lookup
-        import_map = {point.date: point.value or 0 for point in imports.data}
-        export_map = {point.date: point.value or 0 for point in exports.data}
+            # Transparency note derived from what was actually served.
+            group_names = [
+                name
+                for name, is_group in (
+                    (reporter, reporter_members is not None),
+                    (partner, partner_members is not None),
+                )
+                if is_group and name
+            ]
+            group_desc = (
+                f"'{' and '.join(group_names)}' (expanded to individual member countries)"
+                if group_names
+                else "a multi-country selection"
+            )
+            notes = [
+                f"Trade balance aggregated over {group_desc}: summed "
+                f"{export_series_count} export and {import_series_count} import "
+                "member series. Each period is the sum of the members reporting "
+                "in that period; members missing a period are excluded from that "
+                "period's total."
+            ]
+
+            # Flag partial coverage when the expected member count is known.
+            expected_members: Optional[int] = None
+            if reporter_members is not None and partner_members is not None:
+                expected_members = reporter_members * partner_members
+            elif reporter_members is not None:
+                expected_members = reporter_members
+            elif partner_members is not None:
+                expected_members = partner_members
+            if expected_members is not None:
+                returned = min(export_series_count, import_series_count)
+                if returned < expected_members:
+                    notes.append(
+                        f"Partial coverage: {returned} of {expected_members} "
+                        "expected member series returned data; members without "
+                        "data are absent from these totals."
+                    )
+        else:
+            # Single reporter/partner pair: unchanged behavior.
+            exports = exports_data[0] if exports_data else None
+            imports = imports_data[0] if imports_data else None
+
+            if not exports or not imports:
+                raise DataNotAvailableError(
+                    "Missing import or export data for trade balance calculation"
+                )
+
+            # Check that we have actual data points
+            if not exports.data or not imports.data:
+                raise DataNotAvailableError(
+                    f"No data points available for {reporter}"
+                    + (f" with {partner}" if partner else " (world)")
+                )
+
+            import_map = {point.date: point.value or 0 for point in imports.data}
+            export_map = {point.date: point.value or 0 for point in exports.data}
+            country_label = exports.metadata.country
+            ref_frequency = exports.metadata.frequency
+            ref_api_url = exports.metadata.apiUrl
 
         # Get all unique dates from both series
         all_dates = sorted(set(list(import_map.keys()) + list(export_map.keys())))
@@ -1530,16 +1709,16 @@ class ComtradeProvider(BaseProvider):
             metadata=Metadata(
                 source="UN Comtrade",
                 indicator=f"Trade Balance{partner_desc}",
-                country=exports.metadata.country,
-                frequency=exports.metadata.frequency,
+                country=country_label,
+                frequency=ref_frequency,
                 unit="US Dollars",
                 lastUpdated=datetime.now(timezone.utc).isoformat(),
-                apiUrl=exports.metadata.apiUrl,
+                apiUrl=ref_api_url,
                 seasonalAdjustment=None,
                 dataType="Level",
                 priceType="Nominal (current prices)",
                 description=f"Trade Balance{partner_desc}",
-                notes=None,
+                notes=notes,
                 startDate=start_date,
                 endDate=end_date,
             ),

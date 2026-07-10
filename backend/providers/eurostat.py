@@ -280,15 +280,34 @@ class EurostatProvider(BaseProvider):
         static_defaults = self.DATASET_DEFAULT_FILTERS.get(dataset_code, {})
         for key, value in static_defaults.items():
             query_params[key] = value
+        # Members we asked Eurostat to filter each dimension to. When the API
+        # honors a filter the dimension collapses to one member; when it IGNORES
+        # one (unknown code) the response stays multi-valued and the parser must
+        # decide which member to slice. requested_members lets the parser honor
+        # the intended member instead of blind index 0. Caller `filters` are
+        # STRICT (fail closed if the member is unavailable — never silently pick
+        # something else over an explicit request); the dataset's mechanical
+        # static defaults are honored-if-present but fall back to the
+        # TOTAL/aggregate member rather than erroring.
+        _excluded_dims = {"country", "countries", "geo", "freq", "time", "time_period", "indicator"}
+        requested_members: Dict[str, str] = {}
+        strict_member_dims: set[str] = set()
+        for key, value in static_defaults.items():
+            dim_key = str(key or "").strip().lower()
+            if not dim_key or dim_key in _excluded_dims or dim_key.startswith("__"):
+                continue
+            if value is None or value == "":
+                continue
+            requested_members[dim_key] = str(value)
         for key, value in (filters or {}).items():
             dim_key = str(key or "").strip().lower()
-            if not dim_key or dim_key in {"country", "countries", "geo", "freq", "time", "time_period", "indicator"}:
-                continue
-            if dim_key.startswith("__"):
+            if not dim_key or dim_key in _excluded_dims or dim_key.startswith("__"):
                 continue
             if value is None or value == "":
                 continue
             query_params[dim_key] = str(value)
+            requested_members[dim_key] = str(value)
+            strict_member_dims.add(dim_key)
 
         def latest_default_time_params() -> Dict[str, str]:
             bounded_params = dict(query_params)
@@ -389,7 +408,9 @@ class EurostatProvider(BaseProvider):
                     )
                 raise
 
-        data_points, frequency = self._parse_dataset(payload, dataset_code)
+        data_points, frequency, slice_notes = self._parse_dataset(
+            payload, dataset_code, requested_members, strict_member_dims
+        )
         if not data_points and "freq" in effective_query_params:
             # The freq filter above is inferred from the dataset-code suffix,
             # which is only a naming convention — e.g. prc_hicp_manr is a
@@ -403,7 +424,9 @@ class EurostatProvider(BaseProvider):
             }
             try:
                 retry_payload = await fetch_payload(no_freq_params)
-                retry_points, retry_frequency = self._parse_dataset(retry_payload, dataset_code)
+                retry_points, retry_frequency, retry_notes = self._parse_dataset(
+                    retry_payload, dataset_code, requested_members, strict_member_dims
+                )
                 if retry_points:
                     logger.info(
                         "Eurostat %s: inferred freq=%s returned no data; "
@@ -415,6 +438,7 @@ class EurostatProvider(BaseProvider):
                     payload = retry_payload
                     data_points = retry_points
                     frequency = retry_frequency
+                    slice_notes = retry_notes
                     effective_query_params = no_freq_params
             except (httpx.HTTPStatusError, DataNotAvailableError) as freq_retry_error:
                 logger.debug(
@@ -436,11 +460,14 @@ class EurostatProvider(BaseProvider):
                             f"country={country_code or 'ALL_AVAILABLE'}"
                         ) from retry_error
                     raise
-                retry_points, retry_frequency = self._parse_dataset(retry_payload, dataset_code)
+                retry_points, retry_frequency, retry_notes = self._parse_dataset(
+                    retry_payload, dataset_code, requested_members, strict_member_dims
+                )
                 if retry_points:
                     payload = retry_payload
                     data_points = retry_points
                     frequency = retry_frequency
+                    slice_notes = retry_notes
                     effective_query_params = retry_params
 
         if not data_points:
@@ -528,7 +555,7 @@ class EurostatProvider(BaseProvider):
             dataType=data_type,
             priceType=price_type,
             description=dataset_label or payload.get("label", indicator),
-            notes=None,
+            notes=(slice_notes or None),
             startDate=start_date,
             endDate=end_date,
         )
@@ -887,18 +914,34 @@ class EurostatProvider(BaseProvider):
 
         return f"{base_url}?{urlencode(params)}"
 
-    def _parse_dataset(self, payload: Dict[str, Any], dataset_code: str) -> tuple[list[Dict[str, Any]], str]:
+    def _parse_dataset(
+        self,
+        payload: Dict[str, Any],
+        dataset_code: str,
+        requested_members: Optional[Dict[str, str]] = None,
+        strict_member_dims: Optional[set] = None,
+    ) -> tuple[list[Dict[str, Any]], str, list]:
         """Parse JSON-stat 2.0 format from Eurostat API.
 
         The JSON-stat format has a flat structure with:
         - value: dict/array of data values indexed by position
         - dimension: metadata about dimensions including time
+
+        Returns (data_points, frequency, slice_notes) where slice_notes records
+        any defaulted/verified dimension member selections for transparency.
         """
         # Check for JSON-stat format (statistics/1.0 API)
         if "value" in payload and "dimension" in payload:
-            data_points = self._parse_json_stat(payload, dataset_code)
+            slice_notes: list = []
+            data_points = self._parse_json_stat(
+                payload,
+                dataset_code,
+                requested_members=requested_members,
+                strict_member_dims=strict_member_dims,
+                notes_sink=slice_notes,
+            )
             frequency = self._infer_frequency(payload.get("dimension", {}).get("time", {}), dataset_code)
-            return data_points, frequency
+            return data_points, frequency, slice_notes
 
         # Fallback: try SDMX-JSON format (data/sdmx API) - legacy support
         # Phase 3.4 error-handling convention: distinguish "API success with
@@ -912,7 +955,7 @@ class EurostatProvider(BaseProvider):
             datasets = [datasets]
         if not datasets:
             # Empty dataset list is legitimate "no data" from the API.
-            return [], "annual"
+            return [], "annual", []
 
         dataset = datasets[0]
         values = dataset.get("value", {})
@@ -922,7 +965,7 @@ class EurostatProvider(BaseProvider):
         if not values:
             # API returned a dataset envelope but no observations — treat
             # as legitimate "no data" rather than parse failure.
-            return [], "annual"
+            return [], "annual", []
 
         dimensions = dataset.get("dimension", {})
         if not dimensions:
@@ -959,7 +1002,7 @@ class EurostatProvider(BaseProvider):
             )
 
         frequency = self._infer_frequency(time_dim, dataset_code)
-        return data_points, frequency
+        return data_points, frequency, []
 
     _UNIT_AFFINITY_STOPWORDS = frozenset(
         {"of", "the", "in", "and", "to", "a", "an", "by", "for", "from", "with", "at", "t"}
@@ -1039,8 +1082,62 @@ class EurostatProvider(BaseProvider):
             )
         return unit_indexes[best_code], unit_labels.get(best_code)
 
-    def _parse_json_stat(self, payload: Dict[str, Any], dataset_code: str) -> list[Dict[str, Any]]:
-        """Parse JSON-stat 2.0 format from Eurostat API with proper unit selection."""
+    @staticmethod
+    def _aggregate_member_score(value_id: str) -> int:
+        """Score a JSON-stat category member by how 'aggregate/total' it is.
+
+        Shared by the primary parser's default-member selection and the
+        sparse-series fallback so both prefer the same TOTAL/aggregate members
+        instead of blind index 0.
+        """
+        value_upper = str(value_id or "").upper()
+        if value_upper in {"TOTAL", "T"} or value_upper.endswith("_TOTAL"):
+            return 5
+        return 0
+
+    @classmethod
+    def _select_default_member_index(cls, idx_to_value: Dict[int, str]) -> int:
+        """Pick a dimension's member index when none was requested.
+
+        Prefer the TOTAL/aggregate member; tie-break on the lowest index so the
+        choice is deterministic and matches the prior index-0 bias when no
+        aggregate member exists.
+        """
+        best_idx = 0
+        best_score: Optional[int] = None
+        for idx in sorted(idx_to_value.keys()):
+            score = cls._aggregate_member_score(idx_to_value[idx])
+            if best_score is None or score > best_score:
+                best_score = score
+                best_idx = idx
+        return best_idx
+
+    def _parse_json_stat(
+        self,
+        payload: Dict[str, Any],
+        dataset_code: str,
+        requested_members: Optional[Dict[str, str]] = None,
+        strict_member_dims: Optional[set] = None,
+        notes_sink: Optional[list] = None,
+    ) -> list[Dict[str, Any]]:
+        """Parse JSON-stat 2.0 format from Eurostat API with proper unit selection.
+
+        For every non-unit/non-time dimension the response leaves multi-valued,
+        select a member deliberately rather than blind index 0:
+          * a requested member (caller filter or dataset default) is honored
+            when present in the category list; a STRICT (caller-supplied) filter
+            that the API ignored and whose member is absent FAILS CLOSED;
+          * otherwise prefer the TOTAL/aggregate member and record the actual
+            member (code + label) chosen into notes_sink for transparency.
+        """
+        from ..utils.retry import DataNotAvailableError
+
+        requested_members = {
+            str(k).strip().lower(): str(v)
+            for k, v in (requested_members or {}).items()
+            if v not in (None, "")
+        }
+        strict_member_dims = {str(d).strip().lower() for d in (strict_member_dims or set())}
         values = payload.get("value", {})
         if isinstance(values, list):
             values = {str(idx): val for idx, val in enumerate(values)}
@@ -1057,43 +1154,108 @@ class EurostatProvider(BaseProvider):
 
         data_points: list[Dict[str, Any]] = []
 
-        # Calculate the correct value index based on dimensions
-        for label, idx in ordered:
-            # Build the position in the flattened array
-            if len(sizes) == len(id_list) and "unit" in id_list:
-                # Find positions of unit and time in the dimension list
-                unit_pos = id_list.index("unit")
-                time_pos = id_list.index("time") if "time" in id_list else -1
+        structured = len(sizes) == len(id_list) and "time" in id_list
+        if structured:
+            time_pos = id_list.index("time")
+            unit_pos = id_list.index("unit") if "unit" in id_list else -1
 
-                # Calculate the flattened index
+            # Choose a member index for every non-time, non-unit dimension ONCE.
+            # (Time varies per observation; unit is chosen by _select_unit_choice.)
+            dim_selected_index: Dict[int, int] = {}
+            for pos, dim_id in enumerate(id_list):
+                if pos == time_pos or pos == unit_pos:
+                    continue
+                size = sizes[pos] if pos < len(sizes) else 1
+                category = dimensions.get(dim_id, {}).get("category", {})
+                index_map = category.get("index", {}) or {}
+                label_map = category.get("label", {}) or {}
+                idx_to_value = {i: value_id for value_id, i in index_map.items()}
+                if size <= 1:
+                    # Constrained to a single member — nothing to choose/disclose.
+                    dim_selected_index[pos] = 0
+                    continue
+
+                dim_key = str(dim_id).lower()
+                requested = requested_members.get(dim_key)
+                if requested:
+                    selected_idx = next(
+                        (
+                            i
+                            for i, value_id in idx_to_value.items()
+                            if str(value_id).upper() == requested.upper()
+                        ),
+                        None,
+                    )
+                    if selected_idx is not None:
+                        dim_selected_index[pos] = selected_idx
+                        if notes_sink is not None:
+                            selected_label = label_map.get(requested)
+                            notes_sink.append(
+                                f"Eurostat left dimension '{dim_id}' multi-valued "
+                                f"despite the requested filter; selected requested "
+                                f"member '{requested}'"
+                                + (f" ({selected_label})" if selected_label else "")
+                                + "."
+                            )
+                        continue
+                    if dim_key in strict_member_dims:
+                        # An EXPLICIT caller filter the API ignored, whose member
+                        # is not offered — never silently slice something else.
+                        available = ", ".join(
+                            sorted(str(v) for v in idx_to_value.values())[:12]
+                        )
+                        raise DataNotAvailableError(
+                            f"eurostat_filter_member_unavailable: dataset "
+                            f"{dataset_code!r} dimension {dim_id!r} does not offer "
+                            f"requested member {requested!r} (available: {available})"
+                        )
+                    # Non-strict (dataset default) member unavailable — fall back
+                    # to the aggregate member below and disclose it.
+
+                selected_idx = self._select_default_member_index(idx_to_value)
+                dim_selected_index[pos] = selected_idx
+                selected_code = idx_to_value.get(selected_idx, "")
+                selected_label = label_map.get(selected_code, "")
+                if notes_sink is not None:
+                    prefix = (
+                        f"requested member '{requested}' unavailable, "
+                        if requested
+                        else "no member requested; "
+                    )
+                    notes_sink.append(
+                        f"Dimension '{dim_id}' had {size} members ({prefix}"
+                        f"defaulted to '{selected_code}'"
+                        + (f" ({selected_label})" if selected_label else "")
+                        + ")."
+                    )
+
+            for label, idx in ordered:
                 position = 0
                 multiplier = 1
-
-                # Work backwards through dimensions to calculate position
                 for i in range(len(id_list) - 1, -1, -1):
                     if i == time_pos:
                         position += idx * multiplier
                     elif i == unit_pos:
                         position += unit_index * multiplier
-                    # Other dimensions default to 0 (first value)
-
+                    else:
+                        position += dim_selected_index.get(i, 0) * multiplier
                     if i > 0:
                         multiplier *= sizes[i]
-
                 value = values.get(str(position))
-            else:
-                # Fallback to simple time-based indexing
+                if value is None:
+                    continue
+                data_points.append(
+                    {"date": self._normalize_time_label(label), "value": value}
+                )
+        else:
+            for label, idx in ordered:
                 value = values.get(str(idx))
+                if value is None:
+                    continue
+                data_points.append(
+                    {"date": self._normalize_time_label(label), "value": value}
+                )
 
-            if value is None:
-                continue
-
-            data_points.append(
-                {
-                    "date": self._normalize_time_label(label),
-                    "value": value,
-                }
-            )
         if data_points:
             return data_points
 
@@ -1102,6 +1264,7 @@ class EurostatProvider(BaseProvider):
             dimensions=dimensions,
             id_list=id_list,
             sizes=sizes,
+            notes_sink=notes_sink,
         )
 
     def _parse_first_available_json_stat_series(
@@ -1111,6 +1274,7 @@ class EurostatProvider(BaseProvider):
         dimensions: Dict[str, Any],
         id_list: list[str],
         sizes: list[int],
+        notes_sink: Optional[list] = None,
     ) -> list[Dict[str, Any]]:
         """Parse the first viable non-default JSON-stat series.
 
@@ -1156,9 +1320,7 @@ class EurostatProvider(BaseProvider):
                 if pos == time_pos:
                     continue
                 value_id = dim_value_by_position.get(dim_id, {}).get(coordinates[pos], "")
-                value_upper = str(value_id or "").upper()
-                if value_upper in {"TOTAL", "T"} or value_upper.endswith("_TOTAL"):
-                    score += 5
+                score += self._aggregate_member_score(value_id)
                 if pos == 0:
                     score += max(0, 3 - coordinates[pos])
             return score
@@ -1200,19 +1362,39 @@ class EurostatProvider(BaseProvider):
         if not grouped:
             return []
 
-        best = max(
-            grouped.values(),
-            key=lambda bucket: (
-                len(bucket["points"]),
-                bucket["preference"],
-                -bucket["first_flat_index"],
+        best_key = max(
+            grouped,
+            key=lambda key: (
+                len(grouped[key]["points"]),
+                grouped[key]["preference"],
+                -grouped[key]["first_flat_index"],
             ),
         )
+        best = grouped[best_key]
         points = sorted(best["points"], key=lambda point: point["date"])
         logger.info(
             "Eurostat JSON-stat default tuple was empty; selected sparse series with %d points",
             len(points),
         )
+        if notes_sink is not None:
+            # best_key holds the non-time coordinates in id_list order; decode
+            # them back to member codes so the returned slice is transparent.
+            member_descs: list[str] = []
+            key_iter = iter(best_key)
+            for pos, dim_id in enumerate(id_list):
+                if pos == time_pos:
+                    continue
+                coord = next(key_iter, None)
+                if coord is None:
+                    continue
+                value_id = dim_value_by_position.get(dim_id, {}).get(coord, "")
+                member_descs.append(f"{dim_id}={value_id}")
+            notes_sink.append(
+                "Eurostat default member tuple had no data; returned the "
+                "best-covered available series ("
+                + ", ".join(member_descs)
+                + ")."
+            )
         return points
 
     def _normalize_time_label(self, label: str) -> str:
