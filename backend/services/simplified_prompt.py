@@ -104,6 +104,7 @@ Important constraints:
 - Do not invent indicator codes. Indicator arrays must contain plain-language metric names
   copied from the user's intent, never provider-native IDs/codes unless the user explicitly
   supplied that exact code.
+- The indicators array MUST use English canonical metric names, translating the concept when the user wrote another language (e.g. "失业率" -> ["unemployment rate"], "浙江GDP" -> ["GDP"]). This array is the English-language search key used to look the metric up. Never alter the metric's meaning; the user's original wording is preserved elsewhere for display.
 - Do not convert count/number questions into financial stock concepts. For any direct
   count/number/total request, preserve the requested count metric wording; do not infer
   debt, credit, balance-sheet, distribution, or ratio concepts unless the user asked for them.
@@ -159,6 +160,22 @@ Geography extraction:
 - For one country: set parameters.country.
 - For multiple countries: set parameters.countries as an ordered list.
 - Keep user-stated order in multi-country queries.
+- subnationalRegion: when the user asks about a sub-country region (a state,
+  province, prefecture, municipality, city, etc.), set subnationalRegion to that
+  region's name AND still set country to the PARENT country. Set null when the
+  user asks about a whole country or no region is named. Do NOT put the region in
+  country — a region is never a country.
+  - "北京GDP" -> country "China", subnationalRegion "Beijing"
+  - "浙江省人均GDP" -> country "China", subnationalRegion "Zhejiang"
+  - "Ontario unemployment" -> country "Canada", subnationalRegion "Ontario"
+  - "California GDP" -> country "United States", subnationalRegion "California"
+  - "US GDP" -> country "United States", subnationalRegion null
+
+Language:
+- language: set to the ISO 639-1 code of the language the user actually wrote the
+  query in ("en" for English, "zh" for Chinese, "es" for Spanish, "fr" for French,
+  "de" for German, "ja" for Japanese, etc.). Judge this from the wording itself.
+  - "北京GDP" -> "zh"    "PIB de México" -> "es"    "US GDP 2020" -> "en"
 
 Trade extraction:
 - For trade flow queries, extract when present:
@@ -197,6 +214,8 @@ Output schema (all keys required unless noted null):
   "clarificationQuestions": [],
   "confidence": 0.0,
   "recommendedChartType": "line",
+  "subnationalRegion": null,
+  "language": "en",
   "needsDecomposition": false,
   "decompositionType": null,
   "decompositionEntities": null,
@@ -221,6 +240,8 @@ Required formatting rules:
 - clarificationQuestions: array (empty when clarificationNeeded=false)
 - confidence: float from 0.0 to 1.0
 - recommendedChartType: one of "line", "bar", "scatter", "table"
+- subnationalRegion: string naming a sub-country region, or null (see Geography extraction)
+- language: ISO 639-1 code of the query's language ("en", "zh", "es", …); default "en"
 - useProMode: boolean (default false). Set to true only when:
   - Query requires calculation/correlation ("calculate correlation between X and Y")
   - Query needs custom visualization ("heatmap of trade flows")

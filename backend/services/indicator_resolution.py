@@ -2623,6 +2623,15 @@ async def resolve_indicator_for_fetch(
         merged = {**params, "indicator": indicator_value, **extra}
         if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
+        # A.3 display carry: preserve the user's ORIGINAL phrasing so display
+        # sites never fall all the way back to a bare English-canonical
+        # intent.indicators[0] token for a non-English user. This only ever acts
+        # as a fallback AFTER __semantic_indicator_label (the clean label); it is
+        # the raw query text, so it may include geography/time words, which is
+        # acceptable for a last-resort label and never overrides the clean one.
+        display_label = (_effective_original_query(intent) or "").strip()
+        if display_label and not str(merged.get("__display_indicator_label") or "").strip():
+            merged["__display_indicator_label"] = display_label
         return merged
 
     def _statscan_selected_product_extra(indicator_value: str, authority: str) -> Dict[str, str]:
@@ -2911,15 +2920,31 @@ async def resolve_indicator_for_fetch(
         # EXECUTABLE candidate instead of re-picking the dead code.
         _raw_exclude = params.get("__exclude_indicator_codes") or []
         exclude_codes = {str(c).strip() for c in _raw_exclude if str(c).strip()} or None
+        # English canonical retrieval arm (Proposal A): intent.indicators carries
+        # the English canonical metric name(s) the parse LLM produced. When the
+        # selector_query is a non-English original phrasing, this adds lexical
+        # recall for the English catalog. Thread english_terms ONLY when it would
+        # actually activate the arm (non-empty AND different from selector_query,
+        # the same condition select() uses to no-op) — so English-query call
+        # sites keep their exact prior behaviour and signature.
+        english_terms = " ".join(
+            str(term).strip() for term in (intent.indicators or []) if str(term).strip()
+        ).strip()
+        _english_kw = (
+            {"english_terms": english_terms}
+            if english_terms and english_terms.lower() != str(selector_query or "").strip().lower()
+            else {}
+        )
         if metadata_query:
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
                 metadata_query=metadata_query, exclude_codes=exclude_codes,
+                **_english_kw,
             )
         else:
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
-                exclude_codes=exclude_codes,
+                exclude_codes=exclude_codes, **_english_kw,
             )
         selector_source = str(getattr(selection, "source", "") or "")
         selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")

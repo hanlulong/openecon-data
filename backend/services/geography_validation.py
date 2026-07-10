@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from ..models import NormalizedData, ParsedIntent
 from .provider_fallback import normalize_country_to_iso2
 from .provider_strategy import collect_target_countries
+from .user_messages import get_message as _localized_message
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,13 @@ def assess_country_coverage(
 
 def build_country_coverage_warning_message(
     coverage: Dict[str, Any],
+    language: Optional[str] = None,
 ) -> str:
-    """Create a concise user-facing warning for partial multi-country coverage."""
+    """Create a concise user-facing warning for partial multi-country coverage.
+
+    Renders in the user's language (via the user_messages catalog) when
+    ``language`` is supplied, falling back to English otherwise.
+    """
     missing_display = [str(item) for item in (coverage.get("missing_display") or []) if item]
     returned_display = [str(item) for item in (coverage.get("returned_display") or []) if item]
 
@@ -85,11 +91,20 @@ def build_country_coverage_warning_message(
         missing_text = ", ".join(missing_display)
         if returned_display:
             available_text = ", ".join(returned_display)
-            return (
+            return _localized_message(
+                "country_coverage_partial_with_available",
+                language,
+                missing=missing_text,
+                available=available_text,
+            ) or (
                 "Data is only available for a subset of requested countries. "
                 f"Missing: {missing_text}. Available: {available_text}."
             )
-        return (
+        return _localized_message(
+            "country_coverage_partial_missing_only",
+            language,
+            missing=missing_text,
+        ) or (
             "Data is only available for a subset of requested countries. "
             f"Missing: {missing_text}."
         )

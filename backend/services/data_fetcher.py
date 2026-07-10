@@ -26,6 +26,7 @@ import httpx
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
+from ..services.user_messages import get_message as _localized_message
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
 from ..utils.retry import retry_async, DataNotAvailableError
@@ -1782,6 +1783,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         )
         indicator_label = str(
             params.get("__semantic_indicator_label")
+            or params.get("__display_indicator_label")
             or (intent.indicators[0] if intent.indicators else indicator)
             or indicator
             or ""
@@ -1828,7 +1830,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     decomposition_params = {
                         "productId": _product_id_dim,
                         "indicator": _base,
-                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
+                        "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                         "axis": dimension_decomposition_axis,
                         "periods": dimension_periods,
                         "dimensions": dimensions,
@@ -1859,6 +1861,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                             periods=params.get("periods", _statscan_periods_from_date_range(params, 240)),
                             indicator_label=(
                                 params.get("__semantic_indicator_label")
+                                or params.get("__display_indicator_label")
                                 or str(intent.indicators[0] if intent.indicators else _base)
                             ),
                             product_id=state_product_id,
@@ -1887,7 +1890,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     province_params = {
                         "productId": _product_id,
                         "indicator": _base,
-                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
+                        "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                         "provinces": "all",
                         "periods": province_periods,
                         "dimensions": _non_breakdown_dims,
@@ -1911,7 +1914,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     categorical_params = {
                         "productId": state_product_id,
                         "indicator": indicator or _base,
-                        "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or _base),
+                        "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or _base),
                         "periods": params.get("periods", 240),
                         "dimensions": dimensions,
                         "startDate": params.get("startDate"),
@@ -1931,7 +1934,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     start_year=start_year,
                     end_year=end_year,
                     periods=params.get("periods", 240),
-                    indicator_label=params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
+                    indicator_label=params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                     product_id=state_product_id,
                 )
                 return [series]
@@ -1967,7 +1970,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         logger.info("StatsCan exact product dispatch before modifier extraction: product=%s", state_product_id)
         dynamic_params = {
             "indicator": state_product_id,
-            "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or state_product_id),
+            "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or state_product_id),
             "periods": params.get("periods", 240),
             "__exact_indicator_title_match": True,
         }
@@ -1988,7 +1991,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     # age terms, product categories, etc.) that should narrow the data.
     # This uses the table's actual metadata, NOT hardcoded modifier lists.
     if indicator and not dimensions and state_product_id:
-        _indicator_label = params.get("__semantic_indicator_label") or str(
+        _indicator_label = params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(
             intent.indicators[0] if intent.indicators else indicator
         )
         if state_product_id:
@@ -2031,7 +2034,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         # discovers table metadata and builds coordinates dynamically.
         # fetch_categorical_data is only for basic product ID / dimensions combos.
         _base = params.get("__base_indicator") or indicator or ""
-        _indicator_label_for_dim = params.get("__semantic_indicator_label") or str(
+        _indicator_label_for_dim = params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(
             intent.indicators[0] if intent.indicators else _base
         )
 
@@ -2119,7 +2122,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             logger.info(f"Using dynamic discovery for StatsCan indicator: {indicator}")
             dynamic_params = {
                 "indicator": indicator,
-                "indicatorLabel": params.get("__semantic_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator),
+                "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator),
                 "geography": params.get("geography"),
                 "periods": params.get("periods", 240),
             }
@@ -3162,7 +3165,11 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
     # response can explain the gap rather than presenting a silently short list.
     if failed_indicators:
         missing = ", ".join(dict.fromkeys(failed_indicators))
-        note = (
+        # Localize the transparency note to the query's language (available on
+        # the intent here); English is the guaranteed fallback.
+        note = _localized_message(
+            "multi_indicator_partial", getattr(intent, "language", None), missing=missing,
+        ) or (
             f"Could not fetch data for: {missing}. The results shown cover only "
             "the indicators that resolved successfully; the missing series may "
             "be unavailable from the selected provider(s) at this scope."

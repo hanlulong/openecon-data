@@ -70,6 +70,7 @@ from ..services.geography_validation import (
     assess_country_coverage as _gv_assess_country_coverage,
     build_country_coverage_warning_message as _gv_build_country_coverage_warning_message,
 )
+from ..services.user_messages import get_message as _localized_message
 from ..services.query_parsing import (
     extract_indicator_text_from_refined_query,
     infer_multi_concept_indicators_from_query as _qp_infer_multi_concept_indicators_from_query,
@@ -3925,9 +3926,10 @@ class QueryService:
     def _build_country_coverage_warning_message(
         self,
         coverage: Dict[str, Any],
+        language: Optional[str] = None,
     ) -> str:
         """Delegates to :func:`geography_validation.build_country_coverage_warning_message`."""
-        return _gv_build_country_coverage_warning_message(coverage)
+        return _gv_build_country_coverage_warning_message(coverage, language=language)
 
     async def _maybe_improve_country_coverage(
         self,
@@ -4284,14 +4286,124 @@ class QueryService:
             if provider:
                 scope_bits.append(f"from **{provider}**")
             scope = " ".join(scope_bits)
+            language = getattr(intent, "language", None) if intent is not None else None
             response.error = "no_data_found"
-            response.message = (
+            # Render in the user's language when available; the inline English
+            # is the guaranteed fallback if the catalog lookup ever misses.
+            response.message = _localized_message(
+                "no_data_finalization", language, scope=scope,
+            ) or (
                 f"⚠️ **No Data Available**\n\nNo data found for {scope}. The "
                 "provider may not publish this series at this scope — try "
                 "broadening the time range or rephrasing the indicator."
             )
         except Exception as exc:  # never let finalization break a response
             logger.debug("Empty-data finalization skipped: %s", exc)
+        return response
+
+    # Providers whose existing mechanisms genuinely serve subnational data:
+    # StatsCan decomposes to Canadian provinces via cube dimensions, and FRED
+    # carries US state series through the indicator text. The subnational
+    # fail-closed check must NOT fire for these (country stays CA/US and the
+    # sub-region rides through their own paths) — see _enforce_subnational_fail_closed.
+    _SUBNATIONAL_EXEMPT = (
+        ("STATSCAN", frozenset({"CA", "CANADA"})),
+        ("STATISTICS CANADA", frozenset({"CA", "CANADA"})),
+        ("FRED", frozenset({"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"})),
+    )
+
+    @staticmethod
+    def _served_data_references_region(data: List[Any], region: str) -> bool:
+        """Structural check: does any served series' metadata reference *region*?
+
+        A case-insensitive substring match over each series' metadata string
+        fields (indicator title, description, country, notes, series id, …). This
+        is a STRUCTURAL test on the served payload, not a semantic judgment: if
+        the provider actually decomposed to the region, its label will name it,
+        and we must let the data through. Never raises.
+        """
+        needle = str(region or "").strip().lower()
+        if not needle:
+            return False
+        for series in data or []:
+            metadata = getattr(series, "metadata", None)
+            if metadata is None:
+                continue
+            fields = (
+                getattr(metadata, "indicator", None),
+                getattr(metadata, "country", None),
+                getattr(metadata, "description", None),
+                getattr(metadata, "seriesId", None),
+                getattr(metadata, "seasonalAdjustment", None),
+                getattr(metadata, "dataType", None),
+            )
+            for value in fields:
+                if value and needle in str(value).lower():
+                    return True
+            notes = getattr(metadata, "notes", None) or []
+            for note in notes:
+                if note and needle in str(note).lower():
+                    return True
+        return False
+
+    def _enforce_subnational_fail_closed(self, response: QueryResponse) -> QueryResponse:
+        """Fail closed when national data is served for a sub-country request (Proposal B).
+
+        When the user named a sub-country region (``intent.subnationalRegion``)
+        but the served data is national-level — the provider did not decompose to
+        a matching sub-geography, detected structurally by
+        :meth:`_served_data_references_region` — replace the response with an
+        explicit explanation rather than returning national data silently
+        mislabeled as the region. Exempts the providers whose own mechanisms
+        serve genuine subnational data (StatsCan+CA, FRED+US). Idempotent and
+        never raises: a response already carrying an error/clarification, empty
+        data, or no region annotation passes through untouched.
+        """
+        try:
+            if response is None or not response.data:
+                return response
+            if response.error or response.clarificationNeeded:
+                return response
+            intent = response.intent
+            if intent is None:
+                return response
+            region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+            if not region:
+                return response
+            provider = str(intent.apiProvider or "").strip().upper()
+            params = intent.parameters or {}
+            country = str(params.get("country") or "").strip()
+            if not country:
+                countries = params.get("countries") or []
+                country = str(countries[0]) if countries else ""
+            country_up = country.strip().upper()
+            for exempt_provider, exempt_countries in self._SUBNATIONAL_EXEMPT:
+                if provider == exempt_provider and country_up in exempt_countries:
+                    return response
+            # The provider genuinely decomposed to the region — let it through.
+            if self._served_data_references_region(response.data, region):
+                return response
+            # National data was served for a sub-region the provider does not
+            # publish. Replace it with a fail-closed explanation.
+            display_country = country or "the requested country"
+            display_provider = str(intent.apiProvider or "the provider")
+            message = _localized_message(
+                "subnational_national_only",
+                getattr(intent, "language", None),
+                region=region,
+                country=display_country,
+                provider=display_provider,
+            ) or (
+                f"⚠️ **{region}-level data not available**\n\nOnly national-level "
+                f"data is available for **{display_country}** from "
+                f"**{display_provider}**; **{region}**-level data is not "
+                "published there."
+            )
+            response.data = None
+            response.error = "subnational_data_unavailable"
+            response.message = message
+        except Exception as exc:  # never let enforcement break a response
+            logger.debug("Subnational fail-closed enforcement skipped: %s", exc)
         return response
 
     async def process_query(
@@ -4319,6 +4431,10 @@ class QueryService:
             owner_key=owner_key,
             claimable_owner_keys=claimable_owner_keys,
         )
+        # Subnational fail-closed runs before empty-data finalization: it may
+        # convert a served-national-data response into an explanation (data=None
+        # + message), which finalization then leaves untouched (message set).
+        response = self._enforce_subnational_fail_closed(response)
         return self._finalize_empty_data_response(response)
 
     async def _process_query_impl(

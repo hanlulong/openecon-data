@@ -464,6 +464,10 @@ class ConversationState(BaseModel):
     resolved_indicator_code: Optional[str] = None
     country: Optional[str] = None
     countries: Optional[List[str]] = None
+    # Named sub-country region the user asked about (Proposal B). Carried so
+    # follow-ups keep the annotation; cleared when the indicator or geography
+    # changes (a new metric/country invalidates the old sub-region).
+    subnational_region: Optional[str] = None
     provider: Optional[str] = None
     provider_locked: bool = False
     start_date: Optional[str] = None
@@ -497,6 +501,11 @@ class ConversationState(BaseModel):
     # --- Crypto-specific fields ---
     coin_ids: Optional[List[str]] = None
     vs_currency: Optional[str] = None
+
+    # --- Response language (Proposal C) ---
+    # ISO 639-1 language of the conversation, carried across turns so a follow-up
+    # whose delta omits language still renders responses in the user's language.
+    language: Optional[str] = None
 
     # --- Provenance ---
     original_query: Optional[str] = None
@@ -642,6 +651,10 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             trade_reporter=delta.changed_trade_reporter,
             trade_partner=delta.changed_trade_partner,
             trade_commodity=delta.changed_trade_commodity,
+            # Language is sticky per conversation (a new topic from the same
+            # user stays in their language); the sub-region annotation is
+            # topic-specific and resets on a genuinely new query.
+            language=current.language,
             original_query=delta.raw_query,
             turn_number=current.turn_number + 1,
         )
@@ -652,6 +665,11 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     merged = current.model_copy(deep=True)
     merged.turn_number = current.turn_number + 1
     merged.original_query = delta.raw_query or current.original_query
+    # Proposal B: a changed metric or geography invalidates the carried
+    # sub-region (e.g. "北京GDP" -> "show inflation" / "now for the US" must
+    # drop Beijing). Language is left intact — it stays sticky via model_copy.
+    if delta.changed_indicator or delta.changed_country or delta.changed_countries:
+        merged.subnational_region = None
 
     # --- Indicator ---
     if delta.changed_indicator:
@@ -1016,6 +1034,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         clarificationNeeded=False,
         confidence=0.9,
         recommendedChartType=state.chart_type or "line",
+        subnationalRegion=state.subnational_region,
+        language=state.language,
         originalQuery=state.original_query,
         needsDecomposition=needs_decomp,
         decompositionType=decomp_type,
@@ -1251,6 +1271,8 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         statscan_cube_metadata=statscan_cube_metadata_val,
         country=country,
         countries=countries,
+        subnational_region=(str(intent.subnationalRegion).strip() or None) if intent.subnationalRegion else None,
+        language=(str(intent.language).strip() or None) if intent.language else None,
         provider=provider_name,
         provider_locked=bool(params.get("__semantic_provider_locked")),
         routed_provider=provider_name,
@@ -1299,6 +1321,14 @@ def merge_new_state_with_previous(
 
     new_state.turn_number = previous.turn_number + 1
     explicit_geo_in_new_state = bool(new_state.country or new_state.countries)
+    # NOTE (Proposal A cross-language hazard): indicator names are now English
+    # canonical from the parse LLM. A conversation whose FIRST turn was stored
+    # BEFORE this change may hold a non-English previous.indicator (e.g. "失业率")
+    # while the new turn is "unemployment rate", so this string comparison can
+    # read as a spurious indicator change for exactly one transition. This is an
+    # accepted one-transition-window hazard (only pre-deploy in-flight
+    # conversations, self-heals on the next turn once both sides are English);
+    # do NOT add language-aware comparison here.
     indicator_changed = bool(
         new_state.indicator
         and previous.indicator
@@ -1332,6 +1362,41 @@ def merge_new_state_with_previous(
     if not _new_has_geo and _prev_has_geo:
         new_state.country = previous.country
         new_state.countries = previous.countries
+
+    # --- Subnational region (Proposal B) ---
+    # Carry the sub-region annotation forward only when the new turn neither
+    # names its own region nor changes the metric or geography. A new indicator
+    # or a DIFFERENT country invalidates the previous region (e.g. a
+    # "北京GDP" -> "现在看美国" switch must drop Beijing). Geography must be
+    # compared by canonical identity, not mere presence: a follow-up that
+    # re-states the same country ("China") is not a geography change, so the
+    # region must survive it.
+    def _geo_iso_set(state: ConversationState) -> set:
+        raw = list(state.countries or ([state.country] if state.country else []))
+        keys = set()
+        for c in raw:
+            key = _normalize_country_to_iso2(c) or str(c or "").strip().lower()
+            if key:
+                keys.add(key)
+        return keys
+
+    _new_geo = _geo_iso_set(new_state)
+    _prev_geo = _geo_iso_set(previous)
+    geography_changed = bool(_new_geo and _prev_geo and _new_geo != _prev_geo)
+    if (
+        not new_state.subnational_region
+        and previous.subnational_region
+        and not indicator_changed
+        and not geography_changed
+    ):
+        new_state.subnational_region = previous.subnational_region
+
+    # --- Response language (Proposal C) ---
+    # Sticky across the whole conversation: a Chinese user's follow-up whose
+    # delta omits language must still render in Chinese. Explicit new-turn
+    # language always wins.
+    if not new_state.language and previous.language:
+        new_state.language = previous.language
 
     # --- Provider ---
     if not new_state.provider and previous.provider:
@@ -1517,6 +1582,10 @@ def reset_state_for_topic_change(
         prev_family and new_family and prev_family != new_family
     )
 
+    # Same accepted cross-language one-transition hazard as indicator_changed
+    # above (Proposal A): a pre-deploy non-English previous.indicator vs. an
+    # English-canonical new indicator may read as changed for one turn. Left
+    # as-is by design; no language-aware comparison here.
     concept_changed = bool(
         new_state.indicator
         and previous.indicator

@@ -100,6 +100,19 @@ class ParsedIntent(BaseModel):
     # Original query text for downstream processing (e.g., time period extraction)
     originalQuery: Optional[str] = None
 
+    # Named sub-country region when the user asks about one (e.g. "Beijing" for
+    # "北京GDP", "Ontario" for "Ontario unemployment"), else None. The country
+    # stays the parent country — this is an ANNOTATION used at the result stage
+    # to fail closed when a provider served national data for a sub-region it
+    # cannot decompose to (Proposal B). It does NOT reroute or rewrite country.
+    subnationalRegion: Optional[str] = None
+
+    # ISO 639-1 language of the user's query ("en", "zh", "es", …) as detected
+    # semantically by the parse LLM (never by regex/charset rules). Used to
+    # render user-facing response strings in the user's language via the
+    # user_messages catalog (Proposal C). Carried across follow-up turns.
+    language: Optional[str] = None
+
     # Follow-up detection fields (populated by LLM when conversation context is provided)
     isFollowUp: bool = False
     followUpType: Optional[str] = None  # "country_change", "indicator_switch", "time_change", "provider_change", "pronoun_reuse", "clarification_answer"

@@ -365,6 +365,7 @@ class IndicatorSelector:
         country: Optional[str] = None,
         metadata_query: Optional[str] = None,
         exclude_codes: Optional[set] = None,
+        english_terms: Optional[str] = None,
     ) -> SelectionResult:
         """
         Select the best indicator for a query.
@@ -383,6 +384,12 @@ class IndicatorSelector:
                 when an LLM-picked code returns no data, re-adjudicating with it
                 excluded lets the LLM choose the next-best EXECUTABLE code while
                 preserving its semantic judgement (no blind next-in-rank pick).
+            english_terms: Optional English canonical metric name(s) from the
+                parse LLM (Proposal A). When non-empty and different from
+                ``query`` (case-insensitive), the retrieval runs an ADDITIONAL
+                FTS5 + embedding arm on it and fuses those ranked lists into the
+                same RRF, giving non-English queries lexical recall against the
+                English catalog. A no-op when empty or identical to ``query``.
 
         Returns:
             SelectionResult with selected code or options for user choice
@@ -411,7 +418,13 @@ class IndicatorSelector:
         # every concurrent request behind it. (Made thread-safe by the locked
         # lazy-init in embedding_retrieval/indicator_database and the per-call
         # sqlite connection in _get_candidates_fts5.)
-        candidates, scores = await asyncio.to_thread(self._get_candidates_with_scores, query, provider)
+        # Only thread english_query when it is actually present, so retrieval
+        # overrides/fakes with the original signature keep working and the extra
+        # arm stays a strict opt-in.
+        _english_kw = {"english_query": english_terms} if english_terms else {}
+        candidates, scores = await asyncio.to_thread(
+            self._get_candidates_with_scores, query, provider, **_english_kw,
+        )
         candidates, scores = _drop_excluded(candidates, scores)
 
         if not candidates:
@@ -651,6 +664,7 @@ class IndicatorSelector:
 
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
+        english_query: Optional[str] = None,
     ) -> tuple[List[tuple[str, str]], List[float]]:
         """Step 1: Find nearest indicators using hybrid FTS5 + embedding retrieval.
 
@@ -675,63 +689,79 @@ class IndicatorSelector:
         # as STATSCAN miss the StatsCan embedding partition and silently degrade
         # to lexical-only retrieval.
         retrieval_provider = self._catalog_provider_name(provider)
-        embedding_candidates: List[tuple[str, str]] = []
-        embedding_scores: List[float] = []
-        try:
-            from .embedding_retrieval import get_embedding_retrieval
-            er = get_embedding_retrieval()
-            results = er.search(query, provider=retrieval_provider, top_k=top_k)
-            if results:
-                embedding_candidates = [(r["code"], r["name"]) for r in results]
-                embedding_scores = [r.get("score", 0.0) for r in results]
-        except Exception as e:
-            logger.warning("Embedding retrieval failed: %s", e)
 
-        # FTS5 retrieval — uses bm25 lexical matching, complements embeddings
-        fts5_candidates: List[tuple[str, str]] = []
-        try:
-            fts5_candidates = self._get_candidates_fts5(query, retrieval_provider, top_k=20)
-        except Exception as e:
-            logger.debug("FTS5 retrieval failed: %s", e)
+        def _retrieve(text: str) -> tuple[List[tuple[str, str]], List[float], List[tuple[str, str]]]:
+            """Run the embedding + FTS5 arms for one query string."""
+            emb_c: List[tuple[str, str]] = []
+            emb_s: List[float] = []
+            try:
+                from .embedding_retrieval import get_embedding_retrieval
+                er = get_embedding_retrieval()
+                results = er.search(text, provider=retrieval_provider, top_k=top_k)
+                if results:
+                    emb_c = [(r["code"], r["name"]) for r in results]
+                    emb_s = [r.get("score", 0.0) for r in results]
+            except Exception as e:
+                logger.warning("Embedding retrieval failed: %s", e)
+            fts_c: List[tuple[str, str]] = []
+            try:
+                fts_c = self._get_candidates_fts5(text, retrieval_provider, top_k=20)
+            except Exception as e:
+                logger.debug("FTS5 retrieval failed: %s", e)
+            return emb_c, emb_s, fts_c
+
+        embedding_candidates, embedding_scores, fts5_candidates = _retrieve(query)
+
+        # English canonical retrieval arm (Proposal A). When the query was
+        # written in another language, the parse LLM also produced an English
+        # canonical metric name; retrieving on it too and fusing the extra
+        # ranked lists into the SAME fusion gives non-English queries lexical
+        # recall against the English catalog. Skipped (strict no-op) when the
+        # english terms are empty or case-insensitively identical to the primary
+        # query, so English queries keep their exact current arms and ranking.
+        english_text = str(english_query or "").strip()
+        use_english_arm = bool(english_text) and english_text.lower() != str(query or "").strip().lower()
+        if use_english_arm:
+            eng_embedding_candidates, eng_embedding_scores, eng_fts5_candidates = _retrieve(english_text)
+        else:
+            eng_embedding_candidates, eng_embedding_scores, eng_fts5_candidates = [], [], []
 
         # 2. Merge with score-aware hybrid ordering.  FTS5 is excellent recall
         # evidence for lexical/provider-title surfaces, but it must not occupy the
         # whole front of the LLM prompt ahead of much stronger embedding matches.
         # Keep both evidence sources, dedupe by provider code, and let the final
         # LLM selector adjudicate semantics.
-        if embedding_candidates or fts5_candidates:
+        if embedding_candidates or fts5_candidates or eng_embedding_candidates or eng_fts5_candidates:
             merged_by_code: Dict[str, Dict[str, Any]] = {}
 
-            for rank, (code, name) in enumerate(fts5_candidates[:20]):
-                code_text = str(code or "").strip()
-                if not code_text:
-                    continue
-                entry = merged_by_code.setdefault(
-                    code_text,
+            def _ensure(code: Any, name: Any) -> Dict[str, Any]:
+                return merged_by_code.setdefault(
+                    str(code or "").strip(),
                     {
                         "candidate": (code, name),
                         "embedding_score": None,
                         "embedding_rank": None,
                         "fts_rank": None,
+                        # English-arm ranks (Proposal A); always None when the
+                        # english arm is off, so fusion reduces to the primary.
+                        "english_embedding_score": None,
+                        "english_embedding_rank": None,
+                        "english_fts_rank": None,
                     },
                 )
+
+            for rank, (code, name) in enumerate(fts5_candidates[:20]):
+                if not str(code or "").strip():
+                    continue
+                entry = _ensure(code, name)
                 if entry["fts_rank"] is None:
                     entry["fts_rank"] = rank
 
             for rank, (code, name) in enumerate(embedding_candidates):
-                code_text = str(code or "").strip()
-                if not code_text:
+                if not str(code or "").strip():
                     continue
                 score = embedding_scores[rank] if rank < len(embedding_scores) else 0.0
-                entry = merged_by_code.setdefault(
-                    code_text,
-                    {
-                        "candidate": (code, name),
-                        "embedding_score": None,
-                        "embedding_rank": None,
-                        "fts_rank": None,
-                    },
-                )
+                entry = _ensure(code, name)
                 # Prefer the embedding-sourced display name when this source has
                 # stronger numeric evidence; FTS-only candidates still remain as
                 # recall candidates below embedding-backed matches.
@@ -739,6 +769,26 @@ class IndicatorSelector:
                     entry["candidate"] = (code, name)
                     entry["embedding_score"] = score
                     entry["embedding_rank"] = rank
+
+            # English-arm ranked lists fold into the same merged_by_code. They
+            # only ever contribute rank fields (never overwrite a primary-arm
+            # display name); a candidate the primary query missed keeps the name
+            # from whichever english source first inserted it.
+            for rank, (code, name) in enumerate(eng_fts5_candidates[:20]):
+                if not str(code or "").strip():
+                    continue
+                entry = _ensure(code, name)
+                if entry["english_fts_rank"] is None:
+                    entry["english_fts_rank"] = rank
+
+            for rank, (code, name) in enumerate(eng_embedding_candidates):
+                if not str(code or "").strip():
+                    continue
+                score = eng_embedding_scores[rank] if rank < len(eng_embedding_scores) else 0.0
+                entry = _ensure(code, name)
+                if entry["english_embedding_score"] is None or score > float(entry["english_embedding_score"]):
+                    entry["english_embedding_score"] = score
+                    entry["english_embedding_rank"] = rank
 
             # Two fusion strategies behind INDICATOR_FUSION:
             # - "legacy" (default): the score-aware merge with magic constants
@@ -757,30 +807,63 @@ class IndicatorSelector:
                 embedding_score = entry["embedding_score"]
                 fts_rank = entry["fts_rank"]
                 embedding_rank = entry["embedding_rank"]
+                eng_embedding_score = entry["english_embedding_score"]
+                eng_fts_rank = entry["english_fts_rank"]
+                eng_embedding_rank = entry["english_embedding_rank"]
                 if embedding_score is not None:
                     lexical_boost = 0.02 / (int(fts_rank) + 1) if fts_rank is not None else 0.0
+                    # English arm adds an extra lexical boost only when present;
+                    # all english_* fields are None when the arm is off, so this
+                    # reduces to the exact legacy formula for English queries.
+                    if eng_fts_rank is not None:
+                        lexical_boost += 0.02 / (int(eng_fts_rank) + 1)
                     effective_score = float(embedding_score) + lexical_boost
+                elif eng_embedding_score is not None:
+                    # English-arm embedding evidence for a candidate the primary
+                    # query missed — treat it like primary embedding evidence so
+                    # genuine recall survives the [:top_k] cut.
+                    lexical_boost = 0.02 / (int(eng_fts_rank) + 1) if eng_fts_rank is not None else 0.0
+                    effective_score = float(eng_embedding_score) + lexical_boost
                 else:
-                    # FTS-only rows are useful recall candidates, but their
-                    # synthetic score must stay below real embedding evidence.
-                    effective_score = 0.55 - min(0.10, 0.005 * int(fts_rank or 0))
-                return (
-                    -effective_score,
-                    int(embedding_rank) if embedding_rank is not None else top_k + int(fts_rank or 0),
-                    int(fts_rank) if fts_rank is not None else top_k,
-                    code,
+                    # FTS-only rows (primary or english) are useful recall
+                    # candidates, but their synthetic score must stay below real
+                    # embedding evidence.
+                    best_fts_rank = min(
+                        [r for r in (fts_rank, eng_fts_rank) if r is not None],
+                        default=0,
+                    )
+                    effective_score = 0.55 - min(0.10, 0.005 * int(best_fts_rank))
+                tie_embedding_rank = (
+                    int(embedding_rank) if embedding_rank is not None
+                    else int(eng_embedding_rank) if eng_embedding_rank is not None
+                    else top_k + int(fts_rank if fts_rank is not None else (eng_fts_rank or 0))
                 )
+                tie_fts_rank = (
+                    int(fts_rank) if fts_rank is not None
+                    else int(eng_fts_rank) if eng_fts_rank is not None
+                    else top_k
+                )
+                return (-effective_score, tie_embedding_rank, tie_fts_rank, code)
 
             def _rrf_rank(item: tuple[str, Dict[str, Any]]) -> tuple[float, str]:
-                """Reciprocal Rank Fusion: score(c) = Σ 1/(k + rank_i(c))."""
+                """Reciprocal Rank Fusion: score(c) = Σ 1/(k + rank_i(c)).
+
+                The english canonical arm (Proposal A) contributes two more
+                ranked lists to the same sum; its ranks are None (no
+                contribution) whenever the arm is off, so English queries score
+                identically to before.
+                """
                 _code, entry = item
-                fts_rank = entry["fts_rank"]
-                embedding_rank = entry["embedding_rank"]
                 score = 0.0
-                if fts_rank is not None:
-                    score += 1.0 / (rrf_k + int(fts_rank) + 1)
-                if embedding_rank is not None:
-                    score += 1.0 / (rrf_k + int(embedding_rank) + 1)
+                for rank_field in (
+                    "fts_rank",
+                    "embedding_rank",
+                    "english_fts_rank",
+                    "english_embedding_rank",
+                ):
+                    rank_value = entry[rank_field]
+                    if rank_value is not None:
+                        score += 1.0 / (rrf_k + int(rank_value) + 1)
                 return (-score, _code)
 
             if fusion_mode == "rrf":

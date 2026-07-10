@@ -7,7 +7,9 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     prompt = SimplifiedPrompt.generate()
 
     # Guardrail: keep prompt compact to reduce token overhead and policy drift.
-    assert len(prompt.splitlines()) < 260
+    # Bumped 260 -> 280 for the multilingual additions (English-canonical
+    # indicators rule, subnationalRegion extraction, language detection).
+    assert len(prompt.splitlines()) < 280
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
@@ -39,8 +41,10 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # Guardrail: even with context, prompt should remain under limit
     # (Expanded from 300 to 320 after enriching provider selection rules
     # in the system prompt for LLM-driven routing — cycle 36; to 330 after
-    # adding relative-period date examples "last N months"/YTD)
-    assert len(prompt.splitlines()) < 330
+    # adding relative-period date examples "last N months"/YTD; to 355 after
+    # the multilingual additions — subnationalRegion + language + English
+    # canonical indicators)
+    assert len(prompt.splitlines()) < 355
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

@@ -2349,6 +2349,10 @@ async def build_prefetch_indicator_choice_clarification(
     )
     current_indicator_name = str(
         params.get("__semantic_indicator_label")
+        # A.3 display carry: the user's original phrasing before the bare
+        # (now English-canonical) indicators[0] token, so a non-English user's
+        # "current indicator" prose is not shown a foreign-to-them English term.
+        or params.get("__display_indicator_label")
         or (intent.indicators[0] if intent.indicators else "")
         or current_indicator
     )

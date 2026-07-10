@@ -628,7 +628,9 @@ async def maybe_improve_country_coverage(
                 "Coverage fallback returned data without country labels; keeping primary result"
             )
 
-    warning_message = svc._build_country_coverage_warning_message(best_coverage)
+    warning_message = svc._build_country_coverage_warning_message(
+        best_coverage, language=getattr(intent, "language", None)
+    )
     return best_data, warning_message or None
 
 
