@@ -2930,6 +2930,17 @@ async def resolve_indicator_for_fetch(
         english_terms = " ".join(
             str(term).strip() for term in (intent.indicators or []) if str(term).strip()
         ).strip()
+        # Mirror what an English query naturally carries: the raw English query
+        # ("Canada unemployment rate") includes the geography, so the English
+        # arm gets it too — otherwise the arm under-specifies vs the English
+        # twin and near-ties trip the clarification gate.
+        _arm_country = str(selector_country or "").strip()
+        if (
+            english_terms
+            and _arm_country
+            and _arm_country.lower() not in english_terms.lower()
+        ):
+            english_terms = f"{english_terms} {_arm_country}"
         # Gate on the parse LLM's language verdict: for English queries the
         # selector_query is already English, so the arm would only re-rank the
         # dominant path with an unvalidated second retrieval (indicators[] is a
@@ -3142,7 +3153,15 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
 
     original_terms = tokenize_indicator_terms(original_query)
     indicator_terms = tokenize_indicator_terms(indicator_query)
-    if original_terms and indicator_terms:
+    # The low-overlap guard catches LLM hallucination (parsed indicator
+    # diverging from what the user asked) — but a non-English query and its
+    # canonical-English translation share zero tokens BY DESIGN, so firing
+    # here would throw away the English key and send raw non-English text
+    # into lexical retrieval. Cross-language overlap is not a hallucination
+    # signal; skip the guard when the parse marked the query non-English.
+    _intent_lang = str(getattr(intent, "language", "") or "").strip().lower()
+    _cross_language = bool(_intent_lang) and _intent_lang != "en"
+    if original_terms and indicator_terms and not _cross_language:
         overlap = len(original_terms & indicator_terms) / max(len(original_terms), 1)
         if overlap < 0.15:
             logger.info(

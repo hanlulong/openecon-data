@@ -127,6 +127,31 @@ def format_indicator_option_name(
     return re.sub(r"\s+", " ", candidate_name.replace("_", " ")).strip()
 
 
+def semantic_scoring_query(query: str, intent: Optional[ParsedIntent]) -> str:
+    """Text to use for lexical relevance scoring / cue extraction / option retrieval.
+
+    The relevance scorer and cue extractor are lexical against English series
+    text, so a non-English query scores ~0 for EVERY series — the uncertainty
+    gate then discards correct data and clarifies with cross-lingual-embedding
+    noise. When the parse LLM marked the query non-English, score with the
+    canonical-English indicator key it emitted (plus geography, mirroring what
+    an English query naturally carries) instead of the raw text. English
+    queries are untouched.
+    """
+    lang = str(getattr(intent, "language", "") or "").strip().lower()
+    if not intent or not lang or lang == "en":
+        return query
+    terms = " ".join(
+        str(t).strip() for t in (intent.indicators or []) if str(t).strip()
+    ).strip()
+    if not terms:
+        return query
+    country = str((intent.parameters or {}).get("country") or "").strip()
+    if country and country.lower() not in terms.lower():
+        terms = f"{terms} {country}"
+    return terms
+
+
 def dedupe_indicator_choice_options(qs: Any, options: List[str]) -> List[str]:
     """De-duplicate clarification options while preserving order.
 
@@ -2314,6 +2339,9 @@ async def build_prefetch_indicator_choice_clarification(
     processing_steps: Optional[List[Any]] = None,
 ) -> Optional[QueryResponse]:
     """Clarify indicator choice before fetch when the routed provider guess is weak."""
+    # See semantic_scoring_query: non-English raw text zero-scores against
+    # English series/candidate text throughout this gate.
+    query = semantic_scoring_query(query, intent)
     if not intent:
         return None
     if explicit_provider:
@@ -3018,6 +3046,9 @@ def build_uncertain_result_clarification(
     processing_steps: Optional[List[Any]] = None,
 ) -> Optional[QueryResponse]:
     """Return a clarification response with options when series selection is uncertain."""
+    # Lexical scoring below needs an English key for non-English queries; the
+    # raw text would zero-score every series and force a noise clarification.
+    query = semantic_scoring_query(query, intent)
     if intent and _is_exact_match_locked(intent.parameters):
         return None
     if (
