@@ -212,4 +212,10 @@ def test_is_total_trade_request_predicate():
     assert ComtradeProvider._is_total_trade_request("total") is True
     assert ComtradeProvider._is_total_trade_request("vegetable oil") is False
     assert ComtradeProvider._is_total_trade_request("oil") is False
-    assert ComtradeProvider._is_total_trade_request("merchandise") is False  # no core word
+    # Contract updated in review: bare all-merchandise nouns MEAN total trade
+    # ("goods"/"merchandise"/"products" alone are not unresolved commodities
+    # to fail closed on — they are the total-trade request itself).
+    assert ComtradeProvider._is_total_trade_request("merchandise") is True
+    assert ComtradeProvider._is_total_trade_request("goods") is True
+    # A real commodity phrase containing such a noun is still NOT total trade.
+    assert ComtradeProvider._is_total_trade_request("leather goods") is False

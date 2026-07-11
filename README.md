@@ -27,6 +27,11 @@
   <a href="docs/development/DEVELOPER_CONTRIBUTOR_GUIDE.md">Contributing</a>
 </p>
 
+<p align="center">
+  <a href="README.md">English</a> &middot;
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 ---
 
 ## Install (One Line, Then Just Talk)
@@ -236,6 +241,8 @@ See the [API Reference](docs/reference/api.md) for the full endpoint list and re
 **MCP Server** — First-class [Model Context Protocol](https://modelcontextprotocol.io) support. Give Claude Code, Codex, or any MCP-compatible agent access to verified economic data.
 
 **Natural Language** — No API docs, no country codes, no series IDs. Just describe what you want.
+
+**Ask in Your Language** — Query in English, 中文, Español, Français, and more. The parser detects your language, finds the right indicator, and (for key messages) replies in kind. Try "北京的GDP" or "PIB de México".
 
 **330K Indicator Discovery** — Full-text search across FRED, World Bank, IMF, Eurostat, BIS, and more. Ask "What trade data does Comtrade have?" and get a browsable list.
 

@@ -4,6 +4,8 @@ Base URL: `http://localhost:3001` (dev) | `https://data.openecon.ai` (prod)
 
 All endpoints are prefixed with `/api` unless noted otherwise.
 
+**Interactive docs (public):** the API ships auto-generated interactive documentation — Swagger UI at `/docs`, ReDoc at `/redoc`, and the raw OpenAPI schema at `/openapi.json`.
+
 ---
 
 ## Authentication
@@ -205,6 +207,8 @@ event: done
 data: {}
 ```
 
+**Keepalive frames:** to keep the connection alive through proxies during long-running work, the stream emits an SSE comment line — `: keepalive` followed by a blank line — roughly every 15 seconds of silence (when no `step`/`data` event has been sent). These are standard SSE comments and carry no payload. Per the SSE spec, parsers MUST tolerate and ignore any line beginning with `:`.
+
 The anonymous free-query limit applies here too: once an unauthenticated session is over the limit, the stream emits a single `data` event with `registrationRequired: true` (and no query processing), followed by `done`.
 
 ### POST /api/query/pro
@@ -241,6 +245,16 @@ The anonymous free-query limit applies here too: once an unauthenticated session
 ### POST /api/query/pro/stream
 
 Streaming version of Pro Mode. Same SSE event format as `/api/query/stream`, and the same rules as `/api/query/pro`: requires `PROMODE_ENABLED=true` (`403` otherwise), and anonymous callers receive a single `data` event with `registrationRequired: true` followed by `done`.
+
+### Anonymous session token (`X-OE-Session`)
+
+When `ANON_IDENTITY_MODE=shadow` (the default), an unauthenticated call to `/api/query` or `/api/query/stream` returns an `X-OE-Session` response header carrying a signed anonymous session token. It lets the free-query quota follow the browser even when the client sends no `sessionId`.
+
+- It is a signed JWT with `kind: "anon"` and an opaque session id — no PII, no account. Treat it as **opaque**; do not parse or depend on its contents.
+- It is valid for **90 days**.
+- Clients may echo it back on subsequent requests (send it as the `X-OE-Session` request header) to keep the same anonymous identity.
+- Authenticated requests (those with an `Authorization: Bearer` token) do **not** receive this header — the account identifies the user instead.
+- When `ANON_IDENTITY_MODE=legacy`, no token is issued.
 
 ---
 
@@ -542,6 +556,8 @@ LLM-parsed interpretation of the user's query.
 | `recommendedChartType` | string or null | `"line"`, `"bar"`, `"scatter"`, or `"table"` |
 | `queryType` | string | `"data_fetch"`, `"informational"`, `"analysis"`, or `"comparison"` |
 | `originalQuery` | string or null | Raw query text |
+| `subnationalRegion` | string or null | Named sub-country region when the user asks about one (e.g., `"Beijing"` for "北京GDP", `"Ontario"` for "Ontario unemployment"). An annotation only — the country stays the parent country and routing is unchanged; it lets the result stage fail closed if a provider serves national data for a sub-region it cannot decompose to. `null` when no sub-country region was named. |
+| `language` | string or null | ISO 639-1 language of the user's query (`"en"`, `"zh"`, `"es"`, …), detected semantically by the parse LLM. Used to render user-facing messages in the user's language, and preserved across follow-up turns. |
 | `isFollowUp` | bool | Whether this is a follow-up to a previous query in the conversation |
 | `followUpType` | string or null | Follow-up category (see [Conversation Flow](#conversation-flow)) |
 | `resolvedQuery` | string or null | Explicit rewritten query if this is a follow-up |
@@ -654,8 +670,12 @@ Rate limits apply **only in production** for remote IPs. Localhost and developme
 | `/api/query/stream` | 30/minute |
 | `/api/query/pro` | 10/minute |
 | `/api/query/pro/stream` | 10/minute |
+| `GET /mcp` (SSE connect) | 12/minute |
+| `POST /mcp/messages*` | 30/minute |
 | All other endpoints | 200/minute |
-| `/api/health`, `/static/*`, `/mcp` | Exempt |
+| `/api/health`, `/static/*` | Exempt |
+
+The `/mcp` limits, like all others, apply only to remote IPs in production — localhost and loopback (including the server's own MCP service) are exempt. The `GET /mcp` limit throttles SSE connection opens rather than per-request. Both `/mcp` limits can be turned off with `MCP_RATE_LIMIT_ENABLED=false` (no code change or redeploy of the limits themselves required).
 
 When rate limited, the response is:
 ```
@@ -690,15 +710,19 @@ Check breaker status via `GET /api/performance/metrics` (the `circuit_breakers` 
 
 ## Error Handling
 
-Errors are returned as `200` with the `error` field set in `QueryResponse`, except for true server failures which return `500`.
+Most errors are returned **in-band**: HTTP `200` with the `error` field set on the `QueryResponse` (the query was understood but produced no usable data). Only true failures escalate to a non-`200` status — an internal exception (`500`), a request-body validation failure (`422`), or a server-side deadline (`504`). On the streaming endpoints an in-band `error` rides inside the final `data` event, while a mid-stream processing failure is delivered as an `error` SSE event instead.
 
-Common error values:
+| `error` value | Meaning | HTTP status |
+|---------------|---------|-------------|
+| `"no_data_found"` | The indicator resolved but the provider returned no observations for the requested country/period. | `200` (in-band) |
+| `"data_not_available"` | The requested data could not be retrieved — the indicator/country/period is unavailable at the selected provider, or the fetch failed after fallbacks. | `200` (in-band) |
+| `"subnational_data_unavailable"` | The query named a sub-country region (e.g., a city or province) but only national-level data exists and cannot be decomposed to that region. | `200` (in-band) |
+| `"verification_failed"` | A result was fetched but failed post-fetch verification (e.g., it did not match the requested indicator or geography), so it was withheld rather than returned as wrong data. | `200` (in-band) |
+| `"pro_mode_error"` | Pro Mode code generation or execution failed. | `200` (in-band) |
+| `"langchain_error"` | The LangChain orchestration path failed while processing the query. | `200` (in-band) |
+| `"processing_error"` | Internal server error during query processing. | `500` (non-streaming); delivered as an `error` SSE event on streaming endpoints |
+| `"request_timeout"` | The request exceeded the server-side deadline (`QUERY_TIMEOUT_SECONDS` / `PRO_QUERY_TIMEOUT_SECONDS`). Retry via the streaming endpoint for long-running queries. | `504` |
+| `"validation_error"` | The request body failed validation. The response also includes a `fields` array describing which fields were invalid. | `422` |
+| `null` | No error. | `200` |
 
-| `error` value | Meaning |
-|---------------|---------|
-| `"data_not_available"` | No data found for the requested indicator/country/period |
-| `"processing_error"` | Internal server error during query processing |
-| `"pro_mode_error"` | Pro Mode code generation or execution failed |
-| `null` | No error |
-
-The `message` field contains a human-readable explanation when `error` is set.
+The `message` field carries a human-readable explanation whenever `error` is set. Beyond these top-level codes, provider adapters may embed finer-grained diagnostic tokens inside that human-readable `message` (e.g., a provider-specific reason for `data_not_available`) — treat the top-level `error` value as the stable, machine-readable signal and the `message` as advisory detail.

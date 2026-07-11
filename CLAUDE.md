@@ -45,7 +45,8 @@ Rate limiting is **bypassed** for localhost and development mode. Only applies i
 Production limits (per IP, per minute):
 - `/api/auth/register`: 5/min | `/api/auth/login`: 10/min
 - `/api/query/*`: 30/min | `/api/query/pro/*`: 10/min
-- Default: 200/min | Health/static/MCP: exempt
+- `GET /mcp` (SSE connect): 12/min | `POST /mcp/messages*`: 30/min (disable both with `MCP_RATE_LIMIT_ENABLED=false`)
+- Default: 200/min | Health/static: exempt
 
 ### 4. Frontend Verification
 

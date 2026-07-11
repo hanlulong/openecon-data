@@ -242,7 +242,12 @@ CURRENT_BANNED_SEMANTIC_DEBT = frozenset()
 REVIEWED_PHASE0_FINDINGS = CURRENT_BANNED_SEMANTIC_DEBT
 
 
-def iter_scan_paths(root: Path = Path(".")) -> list[Path]:
+# Anchored to this file so the scanners work regardless of pytest's CWD
+# (running from backend/ used to glob nothing and fail tests spuriously).
+_DEFAULT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def iter_scan_paths(root: Path = _DEFAULT_ROOT) -> list[Path]:
     """Return files included in the expanded Phase 0 scanner scope."""
     paths: set[Path] = set()
     for glob in SCAN_GLOBS:
@@ -250,7 +255,7 @@ def iter_scan_paths(root: Path = Path(".")) -> list[Path]:
     return sorted(paths)
 
 
-def scan_semantic_shortcuts(root: Path = Path(".")) -> list[ShortcutFinding]:
+def scan_semantic_shortcuts(root: Path = _DEFAULT_ROOT) -> list[ShortcutFinding]:
     """Scan reviewed high-risk semantic shortcut patterns."""
     findings: list[ShortcutFinding] = []
     for pattern in PATTERNS:

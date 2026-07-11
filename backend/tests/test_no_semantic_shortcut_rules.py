@@ -25,16 +25,21 @@ from backend.tests.semantic_shortcut_audit import (
 from backend.utils.retry import DataNotAvailableError
 
 
+# Anchored to this file's location so the suite passes regardless of pytest's
+# CWD (running from backend/ used to FileNotFoundError on these CWD-relative
+# paths and fail 5 tests spuriously).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 RUNTIME_FILES = [
-    Path("backend/services/indicator_resolution.py"),
-    Path("backend/services/query.py"),
-    Path("backend/services/data_fetcher.py"),
-    Path("backend/routing/unified_router.py"),
-    Path("backend/services/indicator_selector.py"),
-    Path("backend/services/indicator_clarification.py"),
-    Path("backend/services/query_helpers.py"),
-    Path("backend/services/provider_fallback.py"),
-    Path("backend/services/query_pipeline.py"),
+    _REPO_ROOT / "backend/services/indicator_resolution.py",
+    _REPO_ROOT / "backend/services/query.py",
+    _REPO_ROOT / "backend/services/data_fetcher.py",
+    _REPO_ROOT / "backend/routing/unified_router.py",
+    _REPO_ROOT / "backend/services/indicator_selector.py",
+    _REPO_ROOT / "backend/services/indicator_clarification.py",
+    _REPO_ROOT / "backend/services/query_helpers.py",
+    _REPO_ROOT / "backend/services/provider_fallback.py",
+    _REPO_ROOT / "backend/services/query_pipeline.py",
 ]
 
 FORBIDDEN_RUNTIME_MARKERS = [
@@ -133,7 +138,10 @@ def test_runtime_matching_files_do_not_contain_forced_catalog_or_translation_mar
 
 
 def test_expanded_semantic_shortcut_scan_scope_covers_plan_required_files() -> None:
-    scanned = {path.as_posix() for path in iter_scan_paths()}
+    scanned = {
+        path.resolve().relative_to(_REPO_ROOT).as_posix()
+        for path in iter_scan_paths()
+    }
 
     required = {
         "backend/routing/unified_router.py",
@@ -176,7 +184,7 @@ def test_semantic_shortcut_audit_classifies_current_rule_surfaces() -> None:
 
 
 def test_imf_supportability_does_not_use_query_text_marker_sets() -> None:
-    source = Path("backend/utils/imf_supportability.py").read_text()
+    source = (_REPO_ROOT / "backend/utils/imf_supportability.py").read_text()
 
     forbidden_markers = {
         "_DETAIL_MARKERS",
@@ -227,8 +235,8 @@ def test_indicator_resolution_no_longer_promotes_rule_plausibility_to_authority(
 
 def test_legacy_resolver_and_translator_modules_are_removed() -> None:
     retired_paths = [
-        Path("backend/services/indicator_resolver.py"),
-        Path("backend/services/indicator_translator.py"),
+        _REPO_ROOT / "backend/services/indicator_resolver.py",
+        _REPO_ROOT / "backend/services/indicator_translator.py",
     ]
 
     assert [path.as_posix() for path in retired_paths if path.exists()] == []
@@ -245,9 +253,9 @@ def test_runtime_code_does_not_import_retired_resolver_or_translator() -> None:
         "translate_indicator",
     )
     scanned = [
-        *Path("backend/services").glob("*.py"),
-        *Path("backend/providers").glob("*.py"),
-        *Path("backend/routing").glob("*.py"),
+        *(_REPO_ROOT / "backend/services").glob("*.py"),
+        *(_REPO_ROOT / "backend/providers").glob("*.py"),
+        *(_REPO_ROOT / "backend/routing").glob("*.py"),
     ]
 
     offenders: list[str] = []
@@ -271,9 +279,9 @@ def test_tests_do_not_patch_retired_resolver_shims() -> None:
         "backend.services.indicator_" + "translator.get_indicator_translator",
     )
     scanned = [
-        Path("backend/tests/test_query_service.py"),
-        Path("backend/tests/test_providers.py"),
-        Path("backend/tests/test_indicator_resolution.py"),
+        _REPO_ROOT / "backend/tests/test_query_service.py",
+        _REPO_ROOT / "backend/tests/test_providers.py",
+        _REPO_ROOT / "backend/tests/test_indicator_resolution.py",
     ]
 
     offenders = [
