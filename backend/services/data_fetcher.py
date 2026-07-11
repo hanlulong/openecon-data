@@ -527,6 +527,9 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         contract["dimensions"] = dict(params.get("__dimensions") or params.get("dimensions") or {})
         contract["decomposition_axis"] = str(params.get("__statscan_decomposition_axis") or "").strip() or None
         contract["product_id"] = str(params.get("__statscan_product_id") or "").strip() or None
+        # Geography is part of the request identity: "Canada GDP" and
+        # "Ontario GDP" must never share a cache entry.
+        contract["geography"] = str(params.get("geography") or "").strip() or None
 
     if provider_norm == "IMF":
         contract["indicator"] = str(code or "").strip()
@@ -1724,6 +1727,25 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
     if not dimensions and params.get("__dimensions"):
         dimensions = params["__dimensions"]
         logger.info(f"StatsCan: using __dimensions from conversation state: {dimensions}")
+
+    # Bridge the parse-level region annotation into StatsCan's geography
+    # dimension. The parser deliberately keeps indicators region-free and
+    # annotates subnationalRegion; without this bridge "Ontario GDP" served
+    # NATIONAL Canada data (the query-text dimension scan does not cover every
+    # dispatch path, and non-English queries never lexically match member
+    # names). An explicit geography param still wins.
+    _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+    # Non-invasive: feed the region ONLY as a dimension modifier — the same
+    # channel the query-text scan uses — so the dimension-aware dispatch paths
+    # apply it via cube member matching. Deliberately NOT set as
+    # params["geography"]: that steers dispatch into coordinate paths that
+    # fail where the modifier path succeeds (observed live). If the selected
+    # cube has no geography dimension, the modifier is unmatched and the
+    # subnational fail-closed check turns the national result into an honest
+    # explanation instead of mislabeled data.
+    if _region and "geography" not in {str(k).lower() for k in dimensions}:
+        dimensions = {**dimensions, "geography": _region}
+        logger.info(f"StatsCan: geography dimension from subnationalRegion annotation: {_region}")
 
     entity = params.get("entity")
     indicator = params.get("indicator", intent.indicators[0] if intent.indicators else None)

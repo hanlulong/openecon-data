@@ -56,11 +56,29 @@ def test_statscan_canada_province_untouched():
     assert out.data == data and out.error is None
 
 
-def test_statscan_canada_national_label_still_untouched():
-    # Even if StatsCan served a nationally-labeled series, CA+StatsCan is exempt
-    # because its decomposition path is the mechanism, not this check.
+def test_statscan_national_data_for_region_now_fails_closed():
+    # Contract updated 2026-07-10: the blanket StatsCan exemption hid the
+    # exact failure this check exists for — a national-only cube selected for
+    # "Ontario GDP" served NATIONAL data silently. Nationally-labeled StatsCan
+    # data for a region request now fails closed like every other provider.
     intent = _intent(provider="STATSCAN", region="Ontario", country="Canada")
     data = [_series(indicator="Unemployment rate", country="Canada", source="StatsCan")]
+    out = _svc()._enforce_subnational_fail_closed(_resp(intent, data))
+    assert not out.data
+    assert out.error == "subnational_data_unavailable"
+
+
+def test_statscan_genuine_provincial_series_passes():
+    # Genuine provincial results NAME the region (verified live:
+    # "Canadian Unemployment Rate - Ontario") — the reference check passes them.
+    intent = _intent(provider="STATSCAN", region="Ontario", country="Canada")
+    data = [
+        _series(
+            indicator="Canadian Unemployment Rate - Ontario",
+            country="Canada",
+            source="StatsCan",
+        )
+    ]
     out = _svc()._enforce_subnational_fail_closed(_resp(intent, data))
     assert out.data == data and out.error is None
 

@@ -935,8 +935,13 @@ class TestFetchWithDimensionsCoordinates:
         )
 
         assert result is not None
-        assert len(captured_requests) == 1
-        coord = captured_requests[0][0]["coordinate"]
+        # The UOM lookup (getSeriesInfoFromCubePidCoord) legitimately adds a
+        # second POST; assert on the DATA request specifically.
+        data_requests = [
+            r for r in captured_requests if "latestN" in (r[0] if r else {})
+        ]
+        assert len(data_requests) == 1
+        coord = data_requests[0][0]["coordinate"]
         parts = coord.split(".")
 
         # Ontario is member ID 7 in product 14100287

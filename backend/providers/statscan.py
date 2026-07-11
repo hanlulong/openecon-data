@@ -1824,14 +1824,13 @@ class StatsCanProvider(BaseProvider):
         frequency = self._map_frequency(freq_code)
         unit = self._get_unit_description(indicator, scalar_code)
 
-        # Convert data points
-        data_points = [
-            {
-                "date": point["refPer"],
-                "value": point["value"] if point["value"] is not None else None,
-            }
-            for point in vector_data
-        ]
+        # Shared UOM-driven normalization (see _apply_uom_normalization).
+        uom_desc = await self._get_coordinate_uom_description(product_id, coordinate)
+        data_points, normalized_unit = self._apply_uom_normalization(
+            vector_data, scalar_code, str(indicator or ""), uom_desc
+        )
+        if normalized_unit:
+            unit = normalized_unit
 
         # Apply date range filter if specified
         if start_date or end_date:
@@ -1927,6 +1926,85 @@ class StatsCanProvider(BaseProvider):
             logger.debug(f"StatsCan: UOM lookup failed for vector {vector_id}: {e}")
         self._vector_uom_cache[key] = desc
         return desc
+
+    async def _get_coordinate_uom_description(
+        self, product_id, coordinate: str
+    ) -> Optional[str]:
+        """UOM label for a (product, coordinate) series via
+        getSeriesInfoFromCubePidCoord + codeset (cached).
+
+        The coordinate twin of _get_vector_uom_description, so every WDS
+        response path can drive unit normalization off the same structured
+        metadata instead of only the vector path.
+        """
+        key = f"{product_id}:{coordinate}"
+        if key in self._vector_uom_cache:
+            return self._vector_uom_cache[key]
+        desc: Optional[str] = None
+        try:
+            client = get_statscan_http_client()
+            resp = await self._post_with_retry(
+                client,
+                f"{self.base_url}/getSeriesInfoFromCubePidCoord",
+                json=[{"productId": int(str(product_id)), "coordinate": coordinate}],
+                headers={"Content-Type": "application/json"},
+                timeout=30.0,
+            )
+            data = resp.json()
+            if data and isinstance(data, list):
+                obj = data[0].get("object", data[0])
+                uom_code = obj.get("memberUomCode")
+                if uom_code is not None:
+                    codeset = await self._get_uom_codeset()
+                    desc = codeset.get(int(uom_code))
+        except Exception as e:
+            logger.debug(
+                f"StatsCan: UOM lookup failed for coordinate {product_id}:{coordinate}: {e}"
+            )
+        self._vector_uom_cache[key] = desc
+        return desc
+
+    def _apply_uom_normalization(
+        self,
+        vector_data: List[Dict[str, Any]],
+        scalar_code: int,
+        indicator_name: str,
+        uom_desc: Optional[str],
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """Shared unit normalization for every WDS response path.
+
+        Returns (data_points, unit_or_None). When the series' structured UOM
+        is a currency LEVEL (Dollars / Millions of dollars / chained dollars),
+        values convert to billions with a matching unit label — exactly what
+        the vector path has long done. Any other UOM (percent, index, count,
+        dollar-rate) or an unreadable UOM returns the points unconverted with
+        unit None so the caller keeps its existing labeling. This closes the
+        vector-vs-coordinate 1000x display mismatch ("Canada GDP" in billions
+        next to a provincial follow-up in raw millions on one chart).
+        """
+        should_normalize = bool(uom_desc is not None and self._uom_is_currency_level(uom_desc))
+        if not should_normalize:
+            return (
+                [
+                    {
+                        "date": point["refPer"],
+                        "value": point["value"] if point["value"] is not None else None,
+                    }
+                    for point in vector_data
+                ],
+                None,
+            )
+        data_points = []
+        final_unit: Optional[str] = "billions"
+        for point in vector_data:
+            converted_value, final_unit = self._normalize_units(
+                point["value"],
+                scalar_code,
+                to_unit="billions",
+                indicator_name=indicator_name,
+            )
+            data_points.append({"date": point["refPer"], "value": converted_value})
+        return data_points, final_unit
 
     async def fetch_series(
         self, params: Dict[str, any]
@@ -2439,14 +2517,15 @@ class StatsCanProvider(BaseProvider):
             else display_indicator
         )
 
-        # Build data points first (needed for startDate/endDate)
-        data_points = [
-            {
-                "date": point["refPer"],
-                "value": point["value"] if point["value"] is not None else None,
-            }
-            for point in vector_data
-        ]
+        # Shared UOM-driven normalization: currency-LEVEL series convert to
+        # billions exactly like the vector path, so a provincial follow-up
+        # can't sit 1000x off from "Canada GDP" on the same chart.
+        uom_desc = await self._get_coordinate_uom_description(normalized_pid, coordinate)
+        data_points, normalized_unit = self._apply_uom_normalization(
+            vector_data, scalar_code, indicator_name, uom_desc
+        )
+        if normalized_unit:
+            unit = normalized_unit
 
         # Apply date range filter if specified
         start_date = params.get("startDate")
@@ -3330,14 +3409,13 @@ class StatsCanProvider(BaseProvider):
         frequency = self._map_frequency(freq_code)
         unit = self._unit_with_rate_awareness(scalar_code, indicator)
 
-        # Build data points
-        data_points = [
-            {
-                "date": point["refPer"],
-                "value": point["value"] if point["value"] is not None else None,
-            }
-            for point in vector_data
-        ]
+        # Shared UOM-driven normalization (see _apply_uom_normalization).
+        uom_desc = await self._get_coordinate_uom_description(product_id, coordinate)
+        data_points, normalized_unit = self._apply_uom_normalization(
+            vector_data, scalar_code, str(indicator or ""), uom_desc
+        )
+        if normalized_unit:
+            unit = normalized_unit
 
         # Apply date range filter if specified
         if start_date or end_date:
@@ -3567,13 +3645,13 @@ class StatsCanProvider(BaseProvider):
         frequency = self._map_frequency(freq_code)
         unit = self._get_unit_description(base_indicator, scalar_code)
 
-        data_points = [
-            {
-                "date": point["refPer"],
-                "value": point["value"] if point["value"] is not None else None,
-            }
-            for point in vector_data
-        ]
+        # Shared UOM-driven normalization (see _apply_uom_normalization).
+        uom_desc = await self._get_coordinate_uom_description(product_id, coordinate)
+        data_points, normalized_unit = self._apply_uom_normalization(
+            vector_data, scalar_code, str(base_indicator or ""), uom_desc
+        )
+        if normalized_unit:
+            unit = normalized_unit
 
         if start_date or end_date:
             data_points = self._filter_by_date_range(data_points, start_date, end_date)
@@ -4127,14 +4205,16 @@ class StatsCanProvider(BaseProvider):
             # Use helper method to ensure 10-digit product ID format
             source_url = self._get_table_viewer_url(product_id)
 
-            # Build data points first (needed for startDate/endDate)
-            data_points = [
-                {
-                    "date": point["refPer"],
-                    "value": point["value"] if point["value"] is not None else None,
-                }
-                for point in vector_data
-            ]
+            # Shared UOM-driven normalization: provinces of one cube share its
+            # UOM, and the lookup is cached per product:coordinate, so dollar-
+            # LEVEL cubes (provincial GDP) come back in billions like every
+            # other WDS path instead of raw millions.
+            uom_desc = await self._get_coordinate_uom_description(product_id, coordinate)
+            data_points, normalized_unit = self._apply_uom_normalization(
+                vector_data, scalar_factor, indicator or "", uom_desc
+            )
+            if normalized_unit:
+                unit = normalized_unit
 
             # Apply date range filter if specified
             if start_date or end_date:

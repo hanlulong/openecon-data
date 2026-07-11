@@ -4392,21 +4392,15 @@ class QueryService:
         return response
 
     # Providers whose existing mechanisms genuinely serve subnational data:
-    # StatsCan decomposes to Canadian provinces via cube dimensions, and FRED
-    # carries US state series through the indicator text. The subnational
-    # fail-closed check must NOT fire for these (country stays CA/US and the
-    # sub-region rides through their own paths) — see _enforce_subnational_fail_closed.
-    # StatsCan's provincial decomposition is dimension-driven and its label
-    # formats vary, so it keeps a blanket exemption. FRED deliberately has
-    # none: FRED titles always name their geography, so the
-    # served-data-references-region check reliably passes genuine state series
-    # ("Unemployment Rate in Texas") while catching the failure this guards
-    # against — state retrieval missing and NATIONAL data being served for a
-    # state request (observed live: "California GDP" -> national US GDP).
-    _SUBNATIONAL_EXEMPT = (
-        ("STATSCAN", frozenset({"CA", "CANADA"})),
-        ("STATISTICS CANADA", frozenset({"CA", "CANADA"})),
-    )
+    # No provider is blanket-exempt from the subnational fail-closed check.
+    # Genuine subnational results NAME their region in the served metadata on
+    # every provider path (FRED: "Unemployment Rate in Texas"; StatsCan
+    # provincial series: "Canadian Unemployment Rate - Ontario" — verified
+    # live), so the served-data-references-region check passes them naturally.
+    # The blanket StatsCan exemption instead hid the failure it exists to
+    # catch: a national-only cube selected for "Ontario GDP" served NATIONAL
+    # Canada data labeled as such, silently (observed live 2026-07-10).
+    _SUBNATIONAL_EXEMPT = ()
 
     @staticmethod
     def _served_data_references_region(data: List[Any], region: str) -> bool:
