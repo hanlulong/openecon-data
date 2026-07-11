@@ -2613,27 +2613,23 @@ async def resolve_indicator_for_fetch(
     # both params["indicator"] (direct provider resolution) and
     # intent.indicators[0] (selector-query construction). If a stale
     # region-qualified code later mismatches a follow-up's region, the
-    # subnational fail-closed check backstops it.
-    from .provider_strategy import REGION_AS_SERIES_PROVIDERS as _REGION_AS_SERIES
-    _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
-    if provider in _REGION_AS_SERIES and _region:
-        _ind_text = str(
-            params.get("indicator")
-            or (intent.indicators[0] if intent.indicators else "")
-            or ""
-        ).strip()
-        _is_code = False
-        try:
-            _is_code = bool(
-                _ind_text and svc._looks_like_provider_indicator_code(provider, _ind_text)
-            )
-        except Exception:
-            _is_code = False
-        if _ind_text and not _is_code and _region.lower() not in _ind_text.lower():
-            _qualified = f"{_region} {_ind_text}"
-            params["indicator"] = _qualified
-            if intent.indicators:
-                intent.indicators = [_qualified] + list(intent.indicators[1:])
+    # subnational fail-closed check backstops it. (The prefetch clarification
+    # stage applies the same helper BEFORE this runs — see
+    # indicator_clarification.build_prefetch_indicator_choice_clarification.)
+    from .provider_strategy import region_qualified_indicator_text as _region_qualify
+    _ind_text = str(
+        params.get("indicator")
+        or (intent.indicators[0] if intent.indicators else "")
+        or ""
+    ).strip()
+    _qualified = _region_qualify(
+        intent, provider, _ind_text,
+        is_code=lambda p, t: bool(svc._looks_like_provider_indicator_code(p, t)),
+    )
+    if _qualified != _ind_text:
+        params["indicator"] = _qualified
+        if intent.indicators:
+            intent.indicators = [_qualified] + list(intent.indicators[1:])
 
     def _apply_indicator_with_semantic_label(indicator_value: str, **extra: Any) -> dict:
         semantic_label = str(

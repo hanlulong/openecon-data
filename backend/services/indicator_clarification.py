@@ -49,6 +49,7 @@ from ..services.indicator_resolution import (
     is_placeholder_indicator_code as _is_placeholder_indicator_code,
     is_resolved_indicator_plausible as _is_resolved_indicator_plausible,
 )
+from ..services.provider_strategy import region_qualified_indicator_text
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -2370,6 +2371,20 @@ async def build_prefetch_indicator_choice_clarification(
         return None
 
     provider = normalize_provider_name(intent.apiProvider or "")
+
+    # Region-as-series providers (FRED): the prefetch selector must see the
+    # subnational region in the retrieval text, or it resolves the NATIONAL
+    # series (UNRATE for "Texas unemployment rate") and stamps it into
+    # params["indicator"] as final authority below — defeating
+    # resolve_indicator_for_fetch's later qualification (it declines to
+    # re-qualify an already-code-shaped indicator) and tripping the
+    # subnational fail-closed backstop. StatsCan is excluded by
+    # REGION_AS_SERIES_PROVIDERS, so cube selection never sees region text.
+    indicator_query = region_qualified_indicator_text(
+        intent, provider, indicator_query,
+        is_code=looks_like_provider_indicator_code,
+    )
+
     current_indicator = str(params.get("indicator") or "").strip()
     current_indicator_is_provider_code = bool(
         current_indicator

@@ -190,6 +190,7 @@ from ..services.data_fetcher import (
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
 )
 from ..services.provider_strategy import (
+    GEOGRAPHY_ENCODED_PROVIDERS,
     collect_target_countries as _ps_collect_target_countries,
     get_provider_for_single_country as _ps_get_provider_for_single_country,
     provider_supports_requested_scope as _ps_provider_supports_requested_scope,
@@ -205,6 +206,59 @@ logger = logging.getLogger(__name__)
 
 # Year extraction – matches 4-digit years in the 1900–2099 range.
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+
+# Providers whose code shapes the read-time namespace sanitizer checks against
+# (FIX 3). Used only to POSITIVELY identify a stale cross-namespace code — a
+# code that looks native to one of these but NOT to the state's own provider.
+_NAMESPACE_CHECK_PROVIDERS = (
+    "FRED", "WORLDBANK", "IMF", "EUROSTAT", "OECD", "BIS", "STATSCAN", "COMTRADE",
+)
+
+
+def _delta_reflects_frequency_change(delta: Any, prev_state: Any) -> bool:
+    """FIX 2b: True only when *delta* carries a GENUINE frequency change.
+
+    A frequency change is a resolution constraint (a code resolved at one
+    frequency may not exist at another), so it must force indicator
+    re-resolution. Compares the delta's requested frequency against the PRIOR
+    frequency so a no-op restatement ("annual" when already annual) does not
+    churn a still-valid resolved code. Mirrors the ``merge_state`` F1a guard.
+    """
+    changed = getattr(delta, "changed_frequency", None)
+    if changed is None:
+        return False
+    return (
+        str(changed).strip().lower()
+        != str(getattr(prev_state, "frequency", None) or "").strip().lower()
+    )
+
+
+def _persisted_resolved_code_is_foreign_namespace(provider: str, code: str) -> bool:
+    """FIX 3: True when *code* positively belongs to a DIFFERENT provider's
+    namespace than *provider*.
+
+    A pre-deploy Redis conversation state (persisted before a namespace-guard
+    deploy, ≤24h TTL window) can carry a ``resolved_indicator_code`` that was
+    resolved under a different provider. Reusing it dispatches a foreign code to
+    the wrong provider. This guard clears such a code ONLY when it is confidently
+    a foreign code: it does NOT look like a code for *provider*, but DOES look
+    like a native code for some OTHER provider. Plain-English labels (which no
+    provider claims) and codes that match *provider* return False → left intact,
+    so the check never clears a legitimately-namespaced or semantic value.
+    """
+    if not code or not provider:
+        return False
+    prov = normalize_provider_name(provider)
+    if not prov:
+        return False
+    if _ic_looks_like_provider_indicator_code(prov, code):
+        return False  # matches its own namespace — keep
+    return any(
+        _ic_looks_like_provider_indicator_code(candidate, code)
+        for candidate in _NAMESPACE_CHECK_PROVIDERS
+        if candidate != prov
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1035,7 +1089,14 @@ class QueryService:
         if explicit_provider_requested:
             intent.apiProvider = explicit_provider_requested
             return explicit_provider_requested
-        if countries and len(countries) > 1 and not self._provider_covers_country_list(routed_provider, countries):
+        # Capability validation runs for ANY country count. It used to be
+        # gated on len(countries) > 1, so a single-country mis-route ("France
+        # unemployment" → FRED at conf 0.60) was trusted and either failed
+        # downstream (FRED's country-scope validator rejects non-US) or, worse,
+        # served a US series. The coverage table is structural provider
+        # metadata, and the user-explicit provider branch above still bypasses
+        # this — an explicit "from FRED" is honored and fails closed downstream.
+        if countries and not self._provider_covers_country_list(routed_provider, countries):
             logger.info(
                 "🧭 Coverage override: %s does not cover countries=%s, using WorldBank baseline",
                 routed_provider,
@@ -2206,7 +2267,9 @@ class QueryService:
     # country (F6).  Country-AGNOSTIC providers (World Bank, IMF, Eurostat,
     # OECD, BIS) take the country as a separate parameter, so the SAME code
     # (e.g. "NY.GDP.PCAP.CD") is correct for every country and may be shared.
-    _GEOGRAPHY_ENCODED_PROVIDERS = {"FRED", "STATSCAN", "COMTRADE", "COINGECKO"}
+    # Canonical definition now lives in provider_strategy (structural provider
+    # metadata); kept here as a back-compat alias for existing call-sites.
+    _GEOGRAPHY_ENCODED_PROVIDERS = GEOGRAPHY_ENCODED_PROVIDERS
 
     def _collective_share_country_key(self, member: Any) -> str:
         """Canonical country component for a collective share-key (F6).
@@ -3380,17 +3443,35 @@ class QueryService:
             return
         cache_params = self._build_cache_params(provider, params)
 
-        # Save to Redis cache
+        # ONE coherent TTL for both cache tiers: the stricter of the
+        # provider's freshness ceiling and the data-frequency TTL. Previously
+        # Redis used the provider TTL while the memory backup independently
+        # used a frequency TTL up to 12x longer — after Redis expiry the read
+        # path fell through to the much staler memory copy.
+        coherent_ttl: Optional[int] = None
         try:
             redis_cache = await get_redis_cache()
+            provider_ceiling = redis_cache.ttl_for_provider(provider)
+            frequency = ""
+            if isinstance(data, list) and data:
+                frequency = getattr(data[0].metadata, "frequency", "") or ""
+            freq_ttl = cache_service._ttl_for_frequency(frequency)
+            coherent_ttl = min(provider_ceiling, freq_ttl)
+        except Exception:
+            redis_cache = None
+
+        # Save to Redis cache
+        try:
+            if redis_cache is None:
+                redis_cache = await get_redis_cache()
             query_key = self._serialize_cache_query(cache_params)
-            await redis_cache.set(provider, query_key, data, cache_params)
+            await redis_cache.set(provider, query_key, data, cache_params, ttl=coherent_ttl)
             logger.debug(f"Saved to Redis cache: {provider}")
         except Exception as e:
             logger.warning(f"Failed to save to Redis: {e}")
 
-        # Always save to in-memory cache as backup
-        cache_service.cache_data(provider, cache_params, data)
+        # Always save to in-memory cache as backup (same TTL as Redis)
+        cache_service.cache_data(provider, cache_params, data, ttl=coherent_ttl)
         logger.debug(f"Saved to in-memory cache: {provider}")
 
     def _collect_target_countries(self, parameters: Optional[dict]) -> List[str]:
@@ -4258,9 +4339,11 @@ class QueryService:
                 return response
             if response.data:  # non-empty result — nothing to explain
                 return response
-            if response.error or response.clarificationNeeded:
+            # Whitespace-only error/message strings are NOT explanations —
+            # observed live: a path set error=" " and the user got a blank.
+            if (response.error or "").strip() or response.clarificationNeeded:
                 return response
-            if response.message or response.codeExecution:
+            if (response.message or "").strip() or response.codeExecution:
                 return response  # already carries an explanation / text answer
             intent = response.intent
             query_type = str(getattr(intent, "queryType", None) or "data_fetch").strip().lower()
@@ -4622,6 +4705,32 @@ class QueryService:
             # LLM sets alongside the changed fields. This eliminates the
             # separate classifier call (~300ms saved per follow-up).
             _current_conv_state = conversation_manager.get_conversation_state(conv_id)
+            # Read-time namespace sanitizer (FIX 3): a conversation state
+            # persisted before a namespace-guard deploy can still carry a
+            # resolved code from a DIFFERENT provider's namespace within the
+            # Redis TTL window. If the carried code positively looks like a
+            # foreign provider's code (not this provider's), clear it so this
+            # turn re-resolves cleanly instead of dispatching a foreign code.
+            if (
+                _current_conv_state is not None
+                and _current_conv_state.resolved_indicator_code
+            ):
+                _state_provider = (
+                    _current_conv_state.provider
+                    or _current_conv_state.routed_provider
+                    or ""
+                )
+                if _persisted_resolved_code_is_foreign_namespace(
+                    _state_provider, _current_conv_state.resolved_indicator_code
+                ):
+                    logger.info(
+                        "Read-time namespace sanitizer: persisted resolved code "
+                        "%r does not belong to provider %s; clearing so this turn "
+                        "re-resolves in the serving provider's namespace.",
+                        _current_conv_state.resolved_indicator_code, _state_provider,
+                    )
+                    _current_conv_state.resolved_indicator_code = None
+                    _current_conv_state.last_indicators_resolved = None
             _query_type = None
             _delta = None
             _llm_new_query = False
@@ -4877,10 +4986,18 @@ class QueryService:
                         normalize_provider_name(_delta_intent.apiProvider)
                         != normalize_provider_name(_current_conv_state.provider or _current_conv_state.routed_provider or "")
                     )
+                    # A genuine frequency change is a resolution constraint: a
+                    # code resolved at one frequency may not exist at another, so
+                    # force re-resolution (belt-and-suspenders with the PHASE A
+                    # state-reflecting gate and merge_state F1a).
+                    _frequency_changed = _delta_reflects_frequency_change(
+                        _delta, _current_conv_state
+                    )
                     _indicator_changed = (
                         _delta.changed_indicator is not None
                         or _delta.added_indicators is not None
                         or _delta.changed_trade_flow is not None
+                        or _frequency_changed
                         or _provider_changed
                     )
                     _delta_intent.parameters["__delta_resolved"] = True
@@ -6177,7 +6294,15 @@ class QueryService:
             fallback_intent = intent if 'intent' in locals() and intent else None
             try:
                 logger.info("Orchestration fallback to standard pipeline")
-                parse_result = await self.pipeline.parse_and_route(query, [])
+                # Recovery must keep the conversation context: re-parsing a
+                # follow-up ("what about Canada?") with no history guesses a
+                # fresh interpretation and silently answers a different
+                # question. conversation_history was fetched earlier in this
+                # method; guard for the pre-fetch failure case.
+                _recovery_history = (
+                    conversation_history if 'conversation_history' in locals() else []
+                )
+                parse_result = await self.pipeline.parse_and_route(query, _recovery_history)
                 fallback_intent = parse_result.intent
                 return await self._execute_standard_pipeline(
                     query, conversation_id, parse_result.intent, tracker,

@@ -154,15 +154,27 @@ class CacheService:
 
         self._last_cleanup = now
 
-    def cache_data(self, provider: str, params: Dict[str, Any], data: NormalizedData | list[NormalizedData]) -> None:
+    def cache_data(
+        self,
+        provider: str,
+        params: Dict[str, Any],
+        data: NormalizedData | list[NormalizedData],
+        ttl: Optional[int] = None,
+    ) -> None:
         key = self._key(provider, params)
 
-        # Calculate TTL based on data frequency
-        ttl = self.DEFAULT_TTL
-        if isinstance(data, list) and data:
-            ttl = self._ttl_for_frequency(data[0].metadata.frequency)
-        elif isinstance(data, NormalizedData):
-            ttl = self._ttl_for_frequency(data.metadata.frequency)
+        # An explicit TTL wins: the query-service write path computes ONE
+        # coherent TTL for both the Redis and in-memory copies (previously the
+        # memory backup used a frequency-keyed TTL up to 12x longer than the
+        # provider-keyed Redis TTL, so after Redis expiry the read path fell
+        # through to a much staler memory copy).
+        if ttl is None:
+            # Calculate TTL based on data frequency
+            ttl = self.DEFAULT_TTL
+            if isinstance(data, list) and data:
+                ttl = self._ttl_for_frequency(data[0].metadata.frequency)
+            elif isinstance(data, NormalizedData):
+                ttl = self._ttl_for_frequency(data.metadata.frequency)
 
         # Set with calculated TTL (atomic operation within set method)
         self.set(key, data, ttl)

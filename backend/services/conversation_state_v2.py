@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from ..models import NormalizedData, ParsedIntent
 from ..utils.providers import normalize_provider_name
+from .provider_strategy import GEOGRAPHY_ENCODED_PROVIDERS
 from .query_parsing import infer_multi_concept_indicators_from_query
 
 logger = logging.getLogger(__name__)
@@ -555,6 +556,11 @@ class FollowUpDelta(BaseModel):
     removed_dimensions: Optional[List[str]] = None
     changed_chart_type: Optional[str] = None
     changed_decomposition: Optional[Dict[str, Any]] = None
+    # Response language switch (FIX 4). Language is otherwise sticky per
+    # conversation; this is populated only when the user writes the follow-up in
+    # a DIFFERENT language or explicitly asks for another language ("in English
+    # please"). When absent, merge_state carries the previous language forward.
+    changed_language: Optional[str] = None
     changed_trade_flow: Optional[str] = None
     changed_trade_reporter: Optional[str] = None
     changed_trade_partner: Optional[str] = None
@@ -653,8 +659,9 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             trade_commodity=delta.changed_trade_commodity,
             # Language is sticky per conversation (a new topic from the same
             # user stays in their language); the sub-region annotation is
-            # topic-specific and resets on a genuinely new query.
-            language=current.language,
+            # topic-specific and resets on a genuinely new query. An explicit
+            # language switch on the same turn (FIX 4) still wins.
+            language=delta.changed_language or current.language,
             original_query=delta.raw_query,
             turn_number=current.turn_number + 1,
         )
@@ -734,6 +741,27 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         merged.countries = delta.changed_countries
         merged.country = None
         merged.decomposition = None
+
+    # Defense-in-depth (FIX 1b): for GEOGRAPHY-ENCODED providers a single
+    # series code names a specific geography (FRED "TXUR" = Texas; a StatsCan
+    # vector binds a province/country), so REPLACING the country invalidates
+    # the carried resolved code — reusing it would silently serve the OLD
+    # geography's data mislabeled as the new one ("Texas unemployment" -> "now
+    # California" served the Texas series). Drop the resolved code + snapshot so
+    # the new country re-resolves. Country-AGNOSTIC providers (World Bank/IMF/
+    # Eurostat/OECD/BIS) take the country as a separate parameter, so the SAME
+    # code is correct for the new country and is preserved ("Germany inflation"
+    # -> "what about France" reuses Eurostat TEC00118). Only REPLACE
+    # (changed_country/changed_countries) clears; ADD keeps the snapshot until
+    # runtime validates scope (see indicator-switch/provider branches, which
+    # already clear for their own reasons).
+    if delta.changed_country or delta.changed_countries:
+        _merged_provider = normalize_provider_name(
+            merged.provider or merged.routed_provider or ""
+        ).upper()
+        if _merged_provider in GEOGRAPHY_ENCODED_PROVIDERS:
+            merged.resolved_indicator_code = None
+            merged.last_indicators_resolved = None
 
     # Additive: merge new countries into existing list.
     # Dedup by ISO2 identity (mirroring the removal path below) so "US" and
@@ -864,6 +892,12 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     # --- Chart type ---
     if delta.changed_chart_type:
         merged.chart_type = _normalize_chart_type(delta.changed_chart_type) or merged.chart_type
+
+    # --- Language (FIX 4) ---
+    # Apply an explicit language switch; otherwise the previous language is
+    # carried forward via model_copy (sticky per conversation).
+    if delta.changed_language:
+        merged.language = delta.changed_language
 
     # --- Decomposition ---
     if delta.changed_decomposition is not None:

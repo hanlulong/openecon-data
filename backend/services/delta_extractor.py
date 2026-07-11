@@ -929,6 +929,11 @@ class DeltaExtractor:
             state_lines.append(f"  Country: {_san(state.country)}")
         if state.countries:
             state_lines.append(f"  Countries: {', '.join(_san(c) for c in state.countries)}")
+        # Surface the active sub-country region (FIX 1a) so the LLM can see when
+        # the conversation is scoped to a state/province/city and correctly
+        # treat a NEW sub-region as a topic change rather than a country delta.
+        if state.subnational_region:
+            state_lines.append(f"  Sub-region: {_san(state.subnational_region)}")
         if state.provider or state.routed_provider:
             state_lines.append(f"  Provider: {_san(state.provider or state.routed_provider)}")
         if state.start_date:
@@ -947,6 +952,10 @@ class DeltaExtractor:
             state_lines.append(f"  Trade reporter: {_san(state.trade_reporter)}")
         if state.trade_partner:
             state_lines.append(f"  Trade partner: {_san(state.trade_partner)}")
+        # Surface the conversation language (FIX 4) so the LLM can detect when a
+        # follow-up is written in a DIFFERENT language and set changed_language.
+        if state.language:
+            state_lines.append(f"  Language: {_san(state.language)}")
         state_text = "\n".join(state_lines) if state_lines else "  (empty)"
 
         # Add available dimension members if StatsCan cube metadata is cached.
@@ -996,6 +1005,24 @@ STEP 1 — CLASSIFY the query into one of these types:
 
 Set the query_type field accordingly.
 
+SUB-COUNTRY REGION SWITCH → new_query (IMPORTANT):
+When the follow-up names a SUB-COUNTRY region — a US state, a Canadian province,
+a Chinese province/city, a prefecture, a municipality, etc. — and this is a
+CHANGE of sub-region (especially when a "Sub-region:" is already listed in
+CURRENT STATE, or the new region belongs to a different area than the current
+one), classify the turn as "new_query" (set is_new_query=true,
+query_type="new_query") instead of emitting a country/parameter delta. A
+sub-region is NOT a country, and the resolved series/code for the old region is
+specific to that old region — reusing it would silently serve the WRONG
+region's data. A full re-parse re-extracts the new sub-region cleanly.
+Examples:
+- State "Sub-region: Texas" + follow-up "now California" → new_query (not changed_country)
+- State "Sub-region: Beijing" (北京GDP) + follow-up "上海呢" (what about Shanghai?) → new_query
+- State "Sub-region: Ontario" + follow-up "what about Alberta" → new_query
+EXCEPTION: if "Available dimensions" below list the region as a Geography member
+(StatsCan cube), follow the dimension rules instead (added_dimensions /
+changed_decomposition) — that provider models regions as in-cube dimensions.
+
 STEP 2 — If query_type is "parameter_delta", populate the changed fields:
 1. Only populate fields the user explicitly wants to change.
 2. For countries:
@@ -1022,6 +1049,15 @@ STEP 2 — If query_type is "parameter_delta", populate the changed fields:
    - changed_frequency: use this for "monthly frequency", "quarterly data", "annual data", "daily data", "weekly data"
    - valid values: monthly, quarterly, annual, daily, weekly
    - DO NOT put frequency in changed_chart_type
+5b. For language (FIX 4):
+   - changed_language: set this to the ISO 639-1 code (e.g. "en", "zh", "fr", "es", "de", "ja")
+     ONLY when the user writes THIS follow-up in a DIFFERENT language than the
+     "Language:" listed in CURRENT STATE, or explicitly asks for another
+     language ("answer in English", "用中文回答", "en français").
+   - Do NOT set changed_language when the follow-up stays in the current language.
+     Language is otherwise sticky and carried forward automatically.
+   - A pure language request ("in English please") with no other change is a
+     parameter_delta with only changed_language set.
 6. Set delta_type to one of: country_change, additive_country, time_change, indicator_switch, provider_change, dimension_change, chart_change, new_query, compound_change
 7. For time changes: use ISO format dates (YYYY-MM-DD). "last N years" = start_date N years before today.
 8. "Compare X and Y" or "Compare with Y" when X is already shown → ADDITIVE for geography/countries.
@@ -1117,7 +1153,7 @@ Output the query_type and any changed fields as JSON."""
                     "changed_start_date", "changed_end_date",
                     "changed_frequency",
                     "added_dimensions", "removed_dimensions", "changed_decomposition",
-                    "changed_chart_type", "changed_trade_flow",
+                    "changed_chart_type", "changed_language", "changed_trade_flow",
                     "changed_trade_reporter", "changed_trade_partner",
                     "changed_trade_commodity",
                 ]

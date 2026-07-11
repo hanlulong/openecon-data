@@ -72,6 +72,12 @@ class RedisCacheService:
             "default": 3600        # 1 hour default
         }
 
+    def ttl_for_provider(self, provider: str) -> int:
+        """Provider TTL ceiling — the freshness contract for this source."""
+        return self.ttl_config.get(
+            str(provider or "").upper(), self.ttl_config["default"]
+        )
+
     @staticmethod
     def _to_jsonable(payload: Any) -> Any:
         """Recursively convert payloads into JSON-serializable structures."""

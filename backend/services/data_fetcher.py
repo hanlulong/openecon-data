@@ -26,7 +26,10 @@ import httpx
 
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
-from ..services.provider_strategy import REGION_AS_SERIES_PROVIDERS
+from ..services.provider_strategy import (
+    REGION_AS_SERIES_PROVIDERS,
+    region_qualified_indicator_text,
+)
 from ..services.user_messages import get_message as _localized_message
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS, normalize_provider_name
@@ -1916,7 +1919,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                         "productId": state_product_id,
                         "indicator": indicator or _base,
                         "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or _base),
-                        "periods": params.get("periods", 240),
+                        "periods": _statscan_periods_from_date_range(params, 240),
                         "dimensions": dimensions,
                         "startDate": params.get("startDate"),
                         "endDate": params.get("endDate"),
@@ -1934,7 +1937,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     modifiers=dimensions,
                     start_year=start_year,
                     end_year=end_year,
-                    periods=params.get("periods", 240),
+                    periods=_statscan_periods_from_date_range(params, 240),
                     indicator_label=params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else _base),
                     product_id=state_product_id,
                 )
@@ -1953,7 +1956,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
             "vectorId": params.get("vectorId"),
             "startDate": params.get("startDate"),
             "endDate": params.get("endDate"),
-            "periods": params.get("periods", 240),
+            "periods": _statscan_periods_from_date_range(params, 240),
         }
         series = await svc.statscan_provider.fetch_with_breakdown(breakdown_params)
         return [series]
@@ -1972,7 +1975,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         dynamic_params = {
             "indicator": state_product_id,
             "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator or state_product_id),
-            "periods": params.get("periods", 240),
+            "periods": _statscan_periods_from_date_range(params, 240),
             "__exact_indicator_title_match": True,
         }
         if params.get("geography"):
@@ -2018,7 +2021,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                         modifiers=_modifiers,
                         start_year=start_year,
                         end_year=end_year,
-                        periods=params.get("periods", 240),
+                        periods=_statscan_periods_from_date_range(params, 240),
                         product_id=state_product_id,
                     )
                     return [series]
@@ -2074,7 +2077,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                         "productId": state_product_id,
                         "indicator": indicator or _indicator_label_for_dim,
                         "indicatorLabel": _indicator_label_for_dim,
-                        "periods": params.get("periods", 240),
+                        "periods": _statscan_periods_from_date_range(params, 240),
                         "dimensions": dimensions,
                         "startDate": params.get("startDate"),
                         "endDate": params.get("endDate"),
@@ -2091,7 +2094,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                     modifiers=dimensions,
                     start_year=start_year,
                     end_year=end_year,
-                    periods=params.get("periods", 240),
+                    periods=_statscan_periods_from_date_range(params, 240),
                     indicator_label=_indicator_label_for_dim,
                     product_id=state_product_id,
                 )
@@ -2125,7 +2128,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
                 "indicator": indicator,
                 "indicatorLabel": params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(intent.indicators[0] if intent.indicators else indicator),
                 "geography": params.get("geography"),
-                "periods": params.get("periods", 240),
+                "periods": _statscan_periods_from_date_range(params, 240),
             }
             if params.get("startDate"):
                 dynamic_params["startDate"] = params.get("startDate")
@@ -2510,6 +2513,40 @@ async def _fetch_from_oecd(
 # Main fetch orchestration
 # ---------------------------------------------------------------------------
 
+def _carried_indicator_dispatchable_as_is(
+    svc: Any,
+    provider: str,
+    indicator_name: str,
+    indicator_changed: bool,
+    resolved_code_present: bool,
+) -> bool:
+    """State-reflecting gate for the PHASE A "use carried indicator as-is" path (FIX 2).
+
+    The fast path dispatches the carried indicator directly — and stamps
+    ``verified_conversation_state`` authority — WITHOUT re-resolving. That is
+    only safe when the carried value actually reflects a dispatchable code:
+
+    * a resolved provider code is already present in ``params["indicator"]``, or
+    * the carried indicator itself looks like a provider-native code for the
+      dispatch provider.
+
+    A bare human label ("GDP", "unemployment rate") carried after ``merge_state``
+    nulled the resolved code — a frequency change (F1a) or a geography switch on
+    a geography-encoded provider (FIX 1b) — must NOT be dispatched as-is and
+    re-stamped verified; it has to fall through to normal resolution so a code is
+    re-resolved under the new constraints. Returns ``False`` (→ resolve) unless
+    we are confident the carried value is dispatchable.
+    """
+    if indicator_changed:
+        return False
+    if resolved_code_present:
+        return True
+    return bool(
+        indicator_name
+        and svc._looks_like_provider_indicator_code(provider, indicator_name)
+    )
+
+
 async def fetch_data(
     svc: Any,
     intent: ParsedIntent,
@@ -2606,7 +2643,16 @@ async def fetch_data(
     elif _is_delta_resolved:
         _indicator_name = intent.indicators[0] if intent.indicators else ""
         _indicator_changed = bool(params.get("__delta_indicator_changed"))
-        if not _indicator_changed:
+        # State-reflecting gate (FIX 2): the carried indicator may be dispatched
+        # as-is (and re-stamped verified) only when a resolved code is present or
+        # the carried value looks like a provider code for THIS provider. A bare
+        # label carried after merge_state nulled the resolved code (frequency
+        # change F1a, or geography switch FIX 1b) must fall through to normal
+        # resolution instead of being dispatched — and re-verified — unchanged.
+        _resolved_code_present = bool(str(params.get("indicator") or "").strip())
+        if _carried_indicator_dispatchable_as_is(
+            svc, provider, _indicator_name, _indicator_changed, _resolved_code_present
+        ):
             # Indicator preserved from prior turn — use as-is, no resolution.
             params["indicator"] = _indicator_name
             intent.parameters = params
@@ -2625,8 +2671,9 @@ async def fetch_data(
                 _indicator_name,
             )
         else:
-            # New indicator or provider changed — resolve using indicator name
-            # as query.  When the indicator name is a provider-specific code
+            # New indicator, provider changed, OR a bare carried label with no
+            # resolved code — resolve using the indicator name as query.  When
+            # the indicator name is a provider-specific code
             # from a *prior* provider (e.g. A191RL1Q225SBEA from FRED, but
             # we're now routing to WorldBank), resolve via the catalog concept
             # name instead (e.g. "gdp growth") so the new provider can find
@@ -3062,13 +3109,7 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
             country_text = f" for {country_single}"
         # Region-as-series providers (see provider_strategy) need the region in
         # the retrieval text or the national series wins for a state request.
-        _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
-        if (
-            _region
-            and normalize_provider_name(single_provider) in REGION_AS_SERIES_PROVIDERS
-            and _region.lower() not in str(indicator).lower()
-        ):
-            indicator = f"{_region} {indicator}"
+        indicator = region_qualified_indicator_text(intent, single_provider, indicator)
         narrowed_query = f"{indicator}{country_text}"
 
         single_intent = ParsedIntent(

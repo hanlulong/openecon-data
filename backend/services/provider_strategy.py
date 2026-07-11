@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..utils.providers import normalize_provider_name
 
@@ -34,6 +34,53 @@ PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
 # it pollutes cube selection; their dimension extraction applies the region.
 # Structural data-model fact per provider, not a semantic rule.
 REGION_AS_SERIES_PROVIDERS = frozenset({"FRED"})
+
+# Providers whose series codes are GEOGRAPHY-ENCODED: a single code names a
+# specific country/region (FRED "UNRATE" = US only, "TXUR" = Texas; StatsCan
+# vectors bind a province/country; COMTRADE encodes the reporter; CoinGecko has
+# no country axis at all). For these, a country switch INVALIDATES a carried
+# resolved code — the code cannot be reused for a different geography, so it
+# must be dropped and re-resolved. Country-AGNOSTIC providers (World Bank, IMF,
+# Eurostat, OECD, BIS) take the country as a SEPARATE parameter, so the SAME
+# code (e.g. "NY.GDP.PCAP.CD", Eurostat "TEC00118") is correct for every
+# country and MUST be preserved across a country switch. Structural provider
+# data-model metadata, not a semantic rule.
+GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGECKO"})
+
+
+def region_qualified_indicator_text(
+    intent: Any,
+    provider: str,
+    indicator_text: str,
+    is_code: Optional[Callable[[str, str], bool]] = None,
+) -> str:
+    """Prepend intent.subnationalRegion to indicator retrieval text for
+    region-as-series providers (REGION_AS_SERIES_PROVIDERS).
+
+    FRED carries US state data in SEPARATE region-titled series (TXUR =
+    "Unemployment Rate in Texas"), so the region must be in the retrieval text
+    or the national series resolves for a state request. Returns the text
+    unchanged when the provider isn't region-as-series, no region is set, the
+    region is already present, or the text already looks like a provider code
+    (per the injected is_code check — injected to avoid circular imports).
+    StatsCan is excluded by the frozenset, so its cube selection never sees
+    region text; its dimension extraction applies geography separately.
+    """
+    region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+    text = str(indicator_text or "").strip()
+    if not region or not text:
+        return text
+    if normalize_provider_name(provider) not in REGION_AS_SERIES_PROVIDERS:
+        return text
+    if region.lower() in text.lower():
+        return text
+    if is_code is not None:
+        try:
+            if is_code(provider, text):
+                return text
+        except Exception:
+            pass
+    return f"{region} {text}"
 
 
 # ---------------------------------------------------------------------------
