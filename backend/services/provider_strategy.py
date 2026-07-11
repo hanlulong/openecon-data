@@ -47,6 +47,30 @@ REGION_AS_SERIES_PROVIDERS = frozenset({"FRED"})
 # data-model metadata, not a semantic rule.
 GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGECKO"})
 
+# Provider-NATIVE aggregate geography codes for country groups (keys match
+# CountryResolver.detect_regions_in_query outputs). When the routed provider
+# publishes an official aggregate for the requested group, the pipeline serves
+# it directly instead of asking "compare members or one value?" — the official
+# series is population/PPP-weighted by the source (correct), while member
+# averaging is not. Groups absent here (G7/G20/BRICS: no official aggregate
+# series at these providers) keep the clarification. Structural reference
+# data, consulted generically.
+PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
+    "EUROSTAT": {
+        "EUROZONE": "EA20",
+        "EU": "EU27_2020",
+    },
+    "WORLDBANK": {
+        "EUROZONE": "EMU",
+        "EU": "EUU",
+        "WORLD": "WLD",
+    },
+    "IMF": {
+        # DataMapper accepts region aggregates for WEO-style codes.
+        "EUROZONE": "EA",
+    },
+}
+
 
 def region_qualified_indicator_text(
     intent: Any,

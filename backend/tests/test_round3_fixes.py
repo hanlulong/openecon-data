@@ -134,3 +134,44 @@ def test_coingecko_frequency_from_spacing():
     assert f(daily, 365) == "daily"
     assert f(minutely, 1) == "5-minute"
     assert f([], 365) == "daily"           # fallback ladder
+
+
+# --- Round 5: provider-native group aggregates -------------------------------
+
+def test_group_scope_resolves_native_aggregate_instead_of_asking():
+    from backend.services.indicator_clarification import build_group_scope_clarification
+    from backend.services.query import QueryService
+
+    svc = QueryService.__new__(QueryService)
+    intent = ParsedIntent(
+        apiProvider="EUROSTAT",
+        indicators=["inflation rate"],
+        parameters={"countries": ["AT", "BE", "DE"]},
+        clarificationNeeded=False,
+        originalQuery="euro area inflation rate",
+    )
+    out = build_group_scope_clarification(
+        svc, "c1", "euro area inflation rate", intent, is_multi_indicator=False
+    )
+    assert out is None  # no clarification
+    assert intent.parameters.get("country") == "EA20"
+    assert "countries" not in intent.parameters
+
+
+def test_group_scope_without_native_aggregate_still_asks():
+    from backend.services.indicator_clarification import build_group_scope_clarification
+    from backend.services.query import QueryService
+
+    svc = QueryService.__new__(QueryService)
+    intent = ParsedIntent(
+        apiProvider="WORLDBANK",
+        indicators=["gdp growth"],
+        parameters={"countries": ["US", "DE", "JP"]},
+        clarificationNeeded=False,
+        originalQuery="G7 gdp growth",
+    )
+    out = build_group_scope_clarification(
+        svc, "c1", "G7 gdp growth", intent, is_multi_indicator=False
+    )
+    # No official G7 aggregate series → the clarification still applies.
+    assert out is not None and out.clarificationNeeded

@@ -1952,6 +1952,27 @@ def build_group_scope_clarification(
     if has_explicit_group_scope(qs, query):
         return None
 
+    # When the routed provider publishes an OFFICIAL aggregate for this group
+    # (Eurostat EA20/EU27_2020, WB EMU/EUU/WLD — see provider_strategy), serve
+    # it directly instead of asking: the source's aggregate is the correct
+    # single-value answer, and "compare member countries" remains one natural
+    # follow-up away. Previously EVERY "euro area X" query stopped at this
+    # clarification despite the native series existing.
+    from .provider_strategy import PROVIDER_GROUP_AGGREGATES
+
+    provider_norm = normalize_provider_name(getattr(intent, "apiProvider", "") or "") if intent else ""
+    aggregate_code = PROVIDER_GROUP_AGGREGATES.get(provider_norm, {}).get(region)
+    if aggregate_code and intent is not None:
+        params = dict(intent.parameters or {})
+        params["country"] = aggregate_code
+        params.pop("countries", None)
+        intent.parameters = params
+        logger.info(
+            "🌍 Group scope resolved to provider-native aggregate: %s/%s -> %s",
+            provider_norm, region, aggregate_code,
+        )
+        return None
+
     region_label = humanize_region_name(region)
     options = [
         ClarificationOption(

@@ -4341,6 +4341,9 @@ class QueryService:
                 return response
             # Whitespace-only error/message strings are NOT explanations —
             # observed live: a path set error=" " and the user got a blank.
+            if response.error is not None and not response.error.strip():
+                # Normalize the junk value so telemetry/clients never see " ".
+                response.error = None
             if (response.error or "").strip() or response.clarificationNeeded:
                 return response
             if (response.message or "").strip() or response.codeExecution:
