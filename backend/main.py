@@ -54,6 +54,7 @@ from .services.conversation import conversation_manager
 from .services.export import export_service
 from .services.feedback import feedback_service
 from .services.anon_token import issue_anon_token, verify_anon_token
+from .services.grok import CodeGenerationError
 from .services.query import QueryService
 from .services.user_store import user_store
 from .utils.dependencies import require_promode
@@ -353,6 +354,10 @@ RATE_LIMITS = {
     # Unauthenticated, persists JSON to disk, and emails the site owner on every
     # submit. Left at the 200/min default it is a cheap spam/mail-flood vector.
     "/api/feedback": "5/minute",
+    # Unauthenticated CPU/memory-amplifying formatter (caller-supplied data is
+    # fully re-materialized; .dta especially). Payload is also size-bounded at
+    # the model layer.
+    "/api/export": "30/minute",
     # POST /mcp/messages* carries the JSON-RPC tool calls (the LLM-spend path).
     # Applied via the explicit /mcp handling in the middleware; kept here so the
     # limit is discoverable and unit-testable through get_rate_limit_for_path.
@@ -579,6 +584,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    expose_headers=["X-OE-Session"],
 )
 app.add_middleware(RateLimitASGIMiddleware, settings_obj=settings, limiter_obj=limiter)
 app.add_middleware(SecureLoggingASGIMiddleware)
@@ -594,6 +600,32 @@ def format_sse_event(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
+def derive_response_status(result: Any) -> str:
+    """One machine-readable outcome per query for analytics.
+
+    error_message alone conflates outcomes: clarifications and messaged
+    no-data rows both log as NULL/NULL, which is indistinguishable in SQL
+    from a blank response (the pre-fix silent-empty class). This single enum
+    keeps the silent-empty fix measurable.
+    """
+    try:
+        if result is None:
+            return "empty"
+        if (getattr(result, "error", None) or "").strip():
+            return "error"
+        if getattr(result, "clarificationNeeded", False):
+            return "clarification"
+        if getattr(result, "registrationRequired", False):
+            return "registration_gate"
+        if getattr(result, "data", None):
+            return "data"
+        if (getattr(result, "message", None) or "").strip() or getattr(result, "codeExecution", None):
+            return "messaged_no_data"
+        return "empty"
+    except Exception:
+        return "unknown"
+
+
 async def log_query_to_supabase(
     query: str,
     user: Optional[User],
@@ -606,6 +638,7 @@ async def log_query_to_supabase(
     error_message: Optional[str] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
+    response_status: Optional[str] = None,
 ) -> None:
     """
     Log query to Supabase for both authenticated and anonymous users.
@@ -625,6 +658,7 @@ async def log_query_to_supabase(
             error_message=error_message,
             ip_address=ip_address,
             user_agent=user_agent,
+            response_status=response_status,
         )
     except Exception as e:
         logger.error(f"Failed to log {'Pro Mode ' if pro_mode else ''}query to Supabase: {e}")
@@ -1366,6 +1400,7 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
         error_message=result.error,
         ip_address=gate.ip,
         user_agent=gate.user_agent,
+        response_status=derive_response_status(result),
     )
 
     return result
@@ -1450,8 +1485,20 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             # lock, so holding it across the stream cannot self-deadlock. No-op
             # for one-shot anonymous queries without a conversationId.
             if _conv_lock is not None:
-                await _conv_lock.acquire()
-                _lock_held = True
+                # Emit keepalive comment frames WHILE waiting on the lock: a
+                # second turn queued behind a long-running stream on the same
+                # conversation would otherwise send zero bytes for the whole
+                # wait and trip the client's inactivity watchdog with a
+                # spurious "connection interrupted".
+                while True:
+                    try:
+                        await asyncio.wait_for(
+                            _conv_lock.acquire(), timeout=_SSE_KEEPALIVE_INTERVAL
+                        )
+                        _lock_held = True
+                        break
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
 
             # Create tracker with callback that puts events in queue
             def stream_callback(step):
@@ -1596,6 +1643,7 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 error_message=result.error,
                 ip_address=gate.ip,
                 user_agent=gate.user_agent,
+                response_status=derive_response_status(result),
             )
 
             # Send final result
@@ -1880,10 +1928,22 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
             pro_mode=True,
             code_execution=execution_result.model_dump() if execution_result else None,
             error_message=execution_result.error if execution_result else None,
+            response_status=derive_response_status(response),
         )
 
         return response
 
+    except CodeGenerationError as e:
+        # Generation produced no usable code — the message is user-safe and
+        # actionable (retry/rephrase), unlike internal execution errors.
+        logger.warning(f"Pro Mode code generation failed: {e}")
+        return QueryResponse(
+            conversationId=request.conversationId or str(uuid.uuid4()),
+            clarificationNeeded=False,
+            error="code_generation_failed",
+            message=str(e),
+            isProMode=True
+        )
     except Exception as e:
         logger.error(f"Pro Mode error: {str(e)}", exc_info=True)
         # Sanitize error message - don't expose internal details to client
@@ -2326,6 +2386,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
                 pro_mode=True,
                 code_execution=execution_result.model_dump() if execution_result else None,
                 error_message=execution_result.error if execution_result else None,
+                response_status=derive_response_status(response),
             )
 
             # Send final result
@@ -2343,6 +2404,15 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
         except asyncio.CancelledError:
             # Client disconnected - cleanup handled below
             logger.info("📡 Pro Mode stream cancelled (client disconnect)")
+        except CodeGenerationError as e:
+            # Generation produced no usable code — message is user-safe.
+            logger.warning(f"Pro Mode code generation failed (stream): {e}")
+            error_event = {
+                "error": "code_generation_failed",
+                "message": str(e),
+            }
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+            yield f"event: done\ndata: {json.dumps({})}\n\n"
         except Exception as e:
             logger.exception("Pro Mode streaming error")
             # Sanitize error message - don't expose internal details to client

@@ -260,9 +260,23 @@ class StreamEvent(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    data: List[NormalizedData]
+    # Bounded: the endpoint is unauthenticated and fully re-materializes the
+    # payload (Stata .dta is O(dates × series)); an unbounded list was a
+    # single-request memory-exhaustion vector against the whole backend.
+    data: List[NormalizedData] = Field(..., min_length=1, max_length=100)
     format: str
     filename: Optional[str] = None
+
+    @field_validator("data")
+    @classmethod
+    def _bound_total_points(cls, v: List[NormalizedData]) -> List[NormalizedData]:
+        total_points = sum(len(series.data or []) for series in v)
+        if total_points > 200_000:
+            raise ValueError(
+                f"export too large: {total_points} data points exceeds the "
+                "200,000-point limit; narrow the date range or series count"
+            )
+        return v
 
 
 class User(BaseModel):

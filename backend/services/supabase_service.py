@@ -456,6 +456,7 @@ class SupabaseService:
         processing_time_ms: Optional[float] = None,
         user_agent: Optional[str] = None,
         ip_address: Optional[str] = None,
+        response_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Log a user query to the database asynchronously."""
         if not self.client:
@@ -486,6 +487,7 @@ class SupabaseService:
             "processing_time_ms": processing_time_ms,
             "user_agent": user_agent,
             "ip_address": ip_address,
+            "response_status": response_status,
         }
 
         # Remove None values
