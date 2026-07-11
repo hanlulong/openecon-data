@@ -89,34 +89,40 @@ class IndicatorDatabase:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: Optional[sqlite3.Connection] = None
+        # Per-thread connections: search() runs concurrently from
+        # asyncio.to_thread workers, and a single shared connection
+        # (check_same_thread=False) corrupted in-flight cursors under
+        # concurrency (sqlite3.InterfaceError "bad parameter or other API
+        # misuse" / IndexError seen in prod), silently degrading the lexical
+        # retrieval arm. sqlite3 connections are cheap; FTS reads are safe in
+        # parallel across connections.
+        self._local = threading.local()
+        self._all_conns: List[sqlite3.Connection] = []
         self._initialized = False
         self._write_lock = threading.Lock()  # Thread safety for write operations
-        self._conn_lock = threading.Lock()  # Thread safety for lazy connection init
+        self._conn_lock = threading.Lock()  # Guards schema init + conn registry
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create database connection (thread-safe lazy init).
+        """Get or create THIS THREAD's database connection.
 
-        Double-checked locking: this is reached from worker threads
-        (IndicatorSelector offloads via asyncio.to_thread), so unlocked
-        check-then-act could create duplicate connections or expose a
-        connection before the schema exists.
+        Each worker thread (IndicatorSelector offloads via asyncio.to_thread)
+        gets its own connection — sqlite3 cursors are not safe to share across
+        concurrently-executing threads even with check_same_thread=False.
+        Schema init runs exactly once, under the lock, before any connection
+        is handed out.
         """
-        conn = self._conn
+        conn = getattr(self._local, "conn", None)
         if conn is not None:
             return conn
         with self._conn_lock:
-            if self._conn is None:
-                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                conn.row_factory = sqlite3.Row
-                # Enable FTS5 if not initialized
-                if not self._initialized:
-                    self._initialize_db(conn)
-                    self._initialized = True
-                # Publish only after schema init so lock-free fast-path
-                # readers never see a connection with missing tables.
-                self._conn = conn
-            return self._conn
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            if not self._initialized:
+                self._initialize_db(conn)
+                self._initialized = True
+            self._all_conns.append(conn)
+        self._local.conn = conn
+        return conn
 
     def _initialize_db(self, conn: sqlite3.Connection) -> None:
         """Initialize database schema with FTS5 for full-text search."""
@@ -428,12 +434,12 @@ class IndicatorDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Build FTS query with proper escaping
-        # Escape special FTS5 characters and punctuation that causes provider-title
-        # token mismatches in exact-title search flows: " ' ( ) * - : ^ % /
-        safe_query = query
-        for char in ['"', "'", '(', ')', '*', '-', ':', '^', '%', '/']:
-            safe_query = safe_query.replace(char, ' ')
+        # Build FTS query with proper escaping. The index's unicode61 tokenizer
+        # splits on EVERY non-alphanumeric character, so the query must too —
+        # an enumerated char list left e.g. commas inside quoted tokens
+        # ('"2025,"*'), which is an FTS5 syntax error that killed the whole
+        # lexical arm for any query with stray punctuation (seen in prod).
+        safe_query = re.sub(r"[^\w]+", " ", query, flags=re.UNICODE)
 
         # Split into words and filter empty strings
         words = [w.strip() for w in safe_query.split() if w.strip()]
@@ -573,11 +579,16 @@ class IndicatorDatabase:
         conn.commit()
 
     def close(self) -> None:
-        """Close database connection."""
+        """Close all per-thread database connections."""
         with self._conn_lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+            for conn in self._all_conns:
+                try:
+                    conn.close()
+                except Exception:  # already closed / owning thread gone
+                    pass
+            self._all_conns.clear()
+        self._local = threading.local()
+        self._initialized = False
 
 
 # Global instance

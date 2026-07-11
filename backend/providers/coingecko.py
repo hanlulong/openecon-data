@@ -47,6 +47,34 @@ class CoinGeckoProvider(BaseProvider):
     def provider_name(self) -> str:
         return "CoinGecko"
 
+    @staticmethod
+    def _frequency_from_point_spacing(raw_points: Any, requested_days: float) -> str:
+        """Label frequency from the ACTUAL spacing of the returned points.
+
+        CoinGecko's market_chart auto-granularity (intraday / hourly / daily)
+        depends on the window in ways that have shifted over time; deriving
+        the label from the served data can never mislabel (a request-days
+        ladder called 8-90 day hourly windows "daily").
+        """
+        timestamps = [pt[0] for pt in (raw_points or []) if isinstance(pt, (list, tuple)) and pt]
+        if len(timestamps) >= 3:
+            deltas = sorted(
+                t2 - t1 for t1, t2 in zip(timestamps, timestamps[1:]) if t2 > t1
+            )
+            if deltas:
+                median_ms = deltas[len(deltas) // 2]
+                if median_ms <= 30 * 60 * 1000:
+                    return "5-minute"
+                if median_ms <= 6 * 60 * 60 * 1000:
+                    return "hourly"
+                return "daily"
+        # Too few points to measure — fall back to the request-window ladder.
+        if requested_days <= 1:
+            return "5-minute"
+        if requested_days <= 90:
+            return "hourly"
+        return "daily"
+
     def __init__(self, api_key: Optional[str] = None, timeout: float = 30.0):
         """
         Initialize CoinGecko provider.
@@ -308,9 +336,11 @@ class CoinGeckoProvider(BaseProvider):
 
         # CoinGecko free/demo tier has a 365-day limit for historical data
         # Pro tier doesn't have this limit
+        was_clamped_to_free_tier = False
         if not self.is_pro and days > 365:
             logger.warning(f"⚠️ CoinGecko: Free tier limited to 365 days, requested {days} days. Capping at 365.")
             days = 365
+            was_clamped_to_free_tier = True
         params = {
             "vs_currency": vs_currency,
             "days": str(days),
@@ -349,13 +379,11 @@ class CoinGeckoProvider(BaseProvider):
 
         logger.info(f"📊 Created {len(data_points)} data points for {metric}")
 
-        # Determine frequency
-        if days == 1:
-            frequency = "5-minute"
-        elif days <= 7:
-            frequency = "hourly"
-        else:
-            frequency = "daily"
+        # Determine frequency from the ACTUAL point spacing the API returned
+        # (its auto-granularity: intraday for 1 day, hourly for 2-90 days,
+        # daily beyond). The old request-days ladder mislabeled 8-90 day
+        # windows as "daily" while the points were hourly.
+        frequency = self._frequency_from_point_spacing(data.get(metric_key, []), days)
 
         # Determine indicator name and unit based on metric
         metric_display_mapping = {
@@ -374,6 +402,14 @@ class CoinGeckoProvider(BaseProvider):
             lastUpdated=datetime.now().isoformat(),
             seriesId=coin_id,
             apiUrl=api_url,
+            notes=(
+                [
+                    "CoinGecko's free tier limits history to the last 365 days; "
+                    "the requested range was truncated accordingly."
+                ]
+                if was_clamped_to_free_tier
+                else None
+            ),
         )
 
         return [NormalizedData(metadata=metadata, data=data_points)]
@@ -419,9 +455,11 @@ class CoinGeckoProvider(BaseProvider):
         max_days_ago = 365 * 24 * 60 * 60  # 365 days in seconds
         min_allowed_timestamp = now_timestamp - max_days_ago
 
+        was_clamped_to_free_tier = False
         if not self.is_pro and from_timestamp < min_allowed_timestamp:
             logger.warning(f"⚠️ CoinGecko: Free tier limited to 365 days. Adjusting from_date.")
             from_timestamp = min_allowed_timestamp
+            was_clamped_to_free_tier = True
             logger.info(f"   - Adjusted from_timestamp: {datetime.fromtimestamp(from_timestamp, tz=timezone.utc).isoformat()}")
 
         params = {
@@ -456,14 +494,9 @@ class CoinGeckoProvider(BaseProvider):
             except (ValueError, TypeError):
                 continue
 
-        # Determine frequency based on date range
+        # Frequency from actual point spacing (see _frequency_from_point_spacing)
         days_diff = (to_timestamp - from_timestamp) / 86400
-        if days_diff <= 1:
-            frequency = "5-minute"
-        elif days_diff <= 7:
-            frequency = "hourly"
-        else:
-            frequency = "daily"
+        frequency = self._frequency_from_point_spacing(data.get(metric_key, []), days_diff)
 
         # Determine indicator name and unit based on metric
         metric_display_mapping = {
@@ -482,6 +515,14 @@ class CoinGeckoProvider(BaseProvider):
             lastUpdated=datetime.now().isoformat(),
             seriesId=coin_id,
             apiUrl=api_url,
+            notes=(
+                [
+                    "CoinGecko's free tier limits history to the last 365 days; "
+                    "the requested range was truncated accordingly."
+                ]
+                if was_clamped_to_free_tier
+                else None
+            ),
         )
 
         return [NormalizedData(metadata=metadata, data=data_points)]

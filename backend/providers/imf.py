@@ -707,13 +707,32 @@ class IMFProvider(BaseProvider):
         # an EMPTY unit. Use the catalog unit when present; fall back to the
         # heuristic only when it is missing. Graceful on any lookup failure.
         catalog_unit = ""
+        # DataMapper website anchor for the verification sourceUrl. The catalog
+        # records the DataMapper dataset a code belongs to (WEO, FM, GDD,
+        # AFRREO, ...) in the raw payload and in the `category` column; the
+        # legacy hardcoded "@WEO" mislabeled every non-WEO code. Prefer the
+        # payload's own dataset id, then the catalog category. If neither is
+        # derivable, the URL below links the generic indicator page instead of
+        # asserting a wrong dataset.
+        dataset_anchor = ""
         try:
             from ..services.indicator_database import get_indicator_lookup
             _imf_meta = get_indicator_lookup().get("IMF", indicator_code)
             if _imf_meta:
                 catalog_unit = str(_imf_meta.get("unit") or "").strip()
+                raw_meta = _imf_meta.get("raw_metadata")
+                if raw_meta:
+                    try:
+                        dataset_anchor = str((json.loads(raw_meta) or {}).get("dataset") or "").strip()
+                    except (ValueError, TypeError):
+                        dataset_anchor = ""
+                if not dataset_anchor:
+                    category = str(_imf_meta.get("category") or "").strip()
+                    if category and category.upper() != "INDICATOR":
+                        dataset_anchor = category
         except Exception:
             catalog_unit = ""
+            dataset_anchor = ""
 
         # Process each requested country
         results = []
@@ -771,9 +790,16 @@ class IMFProvider(BaseProvider):
             # see the FRED provider note on the removed value-sniffing
             # percent normalizer (it corrupted legitimately small series).
 
-            # Human-readable URL for data verification on IMF DataMapper website
-            # Format: https://www.imf.org/external/datamapper/{INDICATOR_CODE}@WEO/{COUNTRY}
-            source_url = f"https://www.imf.org/external/datamapper/{indicator_code}@WEO/{country_code}"
+            # Human-readable URL for data verification on IMF DataMapper website.
+            # Format with a known dataset:
+            #   https://www.imf.org/external/datamapper/{CODE}@{DATASET}/{COUNTRY}
+            # When the dataset is not derivable from the catalog, link the
+            # dataset-agnostic indicator page (IMF's routing picks the dataset)
+            # rather than asserting a wrong "@WEO" anchor.
+            if dataset_anchor:
+                source_url = f"https://www.imf.org/external/datamapper/{indicator_code}@{dataset_anchor}/{country_code}"
+            else:
+                source_url = f"https://www.imf.org/external/datamapper/{indicator_code}"
 
             # Build country-specific API URL for reproducibility
             # Format: https://www.imf.org/external/datamapper/api/v1/{INDICATOR_CODE}/{COUNTRY}
@@ -1556,34 +1582,66 @@ class IMFProvider(BaseProvider):
     def _parse_sdmx_csv(
         self,
         response_text: str,
+        dimension_ids: Optional[List[str]] = None,
     ) -> List[tuple[Dict[str, str], List[Dict[str, str]]]]:
-        """Parse IMF SDMX CSV into the same series/observation shape as XML."""
+        """Parse IMF SDMX CSV into the same series/observation shape as XML.
+
+        Series identity is defined by the DSD's structural dimensions only.
+        When the caller supplies the dataflow's ``dimension_ids`` (from
+        ``_get_imf_dataflow_structure``), group strictly by those columns and
+        treat every other column as a per-observation attribute. Without
+        structure metadata, fall back to a conservative exclusion list of the
+        observation/attribute columns the live IMF.STA CSV is known to emit.
+        """
         rows = [
             {str(key): str(value) for key, value in row.items() if key is not None and value is not None}
             for row in csv.DictReader(io.StringIO(str(response_text or "")))
         ]
         grouped: Dict[tuple[tuple[str, str], ...], List[Dict[str, str]]] = {}
         series_dimensions_by_key: Dict[tuple[tuple[str, str], ...], Dict[str, str]] = {}
-        observation_columns = {
+
+        allowed_dimensions: Optional[set[str]] = None
+        if dimension_ids:
+            allowed_dimensions = {
+                str(dim).strip().upper() for dim in dimension_ids if str(dim or "").strip()
+            }
+
+        # Observation values and per-observation attributes are never
+        # series-defining. STATUS/SCALE/DECIMALS_DISPLAYED are the real column
+        # names emitted by the live IMF.STA SDMX 2.1 CSV; the SDMX-standard
+        # OBS_STATUS/UNIT_MULT/DECIMALS names are kept for other flows/versions.
+        attribute_columns = {
             "TIME_PERIOD",
             "OBS_VALUE",
             "OBS_STATUS",
             "OBS_CONF",
             "UNIT_MULT",
             "DECIMALS",
+            "STATUS",
+            "SCALE",
+            "DECIMALS_DISPLAYED",
         }
 
         for row in rows:
             if not row.get("TIME_PERIOD") or "OBS_VALUE" not in row:
                 continue
-            dimensions = {
-                key: value
-                for key, value in row.items()
-                if key not in observation_columns
-                and not key.startswith("OBS_")
-                and key
-                and value != ""
-            }
+            if allowed_dimensions is not None:
+                dimensions = {
+                    key: value
+                    for key, value in row.items()
+                    if key
+                    and str(key).strip().upper() in allowed_dimensions
+                    and value != ""
+                }
+            else:
+                dimensions = {
+                    key: value
+                    for key, value in row.items()
+                    if key
+                    and str(key).strip().upper() not in attribute_columns
+                    and not str(key).startswith("OBS_")
+                    and value != ""
+                }
             key = tuple(sorted(dimensions.items()))
             series_dimensions_by_key.setdefault(key, dimensions)
             grouped.setdefault(key, []).append(row)
@@ -1609,9 +1667,24 @@ class IMFProvider(BaseProvider):
         last_error: Optional[Exception] = None
         indicator_name = indicator_label or indicator_code
 
+        # Accumulate the first successful candidate per requested country so a
+        # multi-country comparison returns every country that resolves, not just
+        # the first one. Candidates are country-major (see
+        # _build_sdmx_series_candidates), so the previous early ``return`` on the
+        # first success silently dropped every country after the first. This
+        # mirrors the DataMapper JSON path, which iterates all requested
+        # countries before returning. Partial coverage is intentional; the
+        # pipeline's coverage-warning machinery discloses the missing countries.
+        results_by_country: Dict[str, List[NormalizedData]] = {}
+
         for candidate in candidates:
             flow = candidate["flow"]
             key = candidate["key"]
+            candidate_country = candidate.get("country") or key.split(".", 1)[0]
+            # A country already satisfied by an earlier candidate (for CPI, a
+            # lower frequency) does not need its remaining candidates attempted.
+            if candidate_country in results_by_country:
+                continue
             url = self._sdmx_data_url(
                 flow=flow,
                 key=key,
@@ -1640,14 +1713,26 @@ class IMFProvider(BaseProvider):
                 response_text = getattr(response, "text", "")
                 content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()
                 if "csv" in content_type or str(response_text).lstrip().startswith("DATAFLOW,"):
-                    series_payloads = self._parse_sdmx_csv(response_text)
+                    # Series identity must be defined by the DSD's structural
+                    # dimensions only. The live IMF.STA CSV also emits per-obs
+                    # attribute columns (STATUS/SCALE/DECIMALS_DISPLAYED) that,
+                    # if treated as dimensions, fragment a series whose STATUS
+                    # varies mid-history. Pass the real dimension ids so the CSV
+                    # parser groups strictly by them (cached structure lookup).
+                    structure = await self._get_imf_dataflow_structure(flow)
+                    dimension_ids = (
+                        structure.get("dimension_ids")
+                        if isinstance(structure, dict)
+                        else None
+                    )
+                    series_payloads = self._parse_sdmx_csv(response_text, dimension_ids)
                 else:
                     series_payloads = self._parse_sdmx_structure_specific_xml(response_text)
             except Exception as exc:
                 last_error = exc
                 continue
 
-            results: List[NormalizedData] = []
+            candidate_results: List[NormalizedData] = []
             for series_attrs, observations in series_payloads:
                 data_points = [
                     {
@@ -1695,10 +1780,18 @@ class IMFProvider(BaseProvider):
                     startDate=data_points[0]["date"],
                     endDate=data_points[-1]["date"],
                 )
-                results.append(NormalizedData(metadata=metadata, data=data_points))
+                candidate_results.append(NormalizedData(metadata=metadata, data=data_points))
 
-            if results:
-                return results
+            if candidate_results:
+                results_by_country[candidate_country] = candidate_results
+
+        all_results = [
+            series
+            for country_results in results_by_country.values()
+            for series in country_results
+        ]
+        if all_results:
+            return all_results
 
         diagnostic = f" Attempted SDMX keys: {', '.join(attempted)}." if attempted else ""
         error_suffix = f" Last error: {last_error}." if last_error else ""

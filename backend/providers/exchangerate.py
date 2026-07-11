@@ -133,7 +133,7 @@ class ExchangeRateProvider(BaseProvider):
             response = await self._get_with_retry(client, full_url, timeout=15.0)
             logger.info(f"📊 Response status: {response.status_code}")
             data = response.json()
-            logger.info(f"✅ Response received. Result: {data.get('result')}, Rates count: {len(data.get('rates', {}))}")
+            logger.info(f"✅ Response received. Result: {data.get('result')}, Rates count: {len(data.get('rates') or data.get('conversion_rates') or {})}")
 
             if data.get("result") != "success":
                 error_msg = data.get('error-type', 'Unknown error')
@@ -156,7 +156,10 @@ class ExchangeRateProvider(BaseProvider):
             logger.error(f"Unexpected error fetching exchange rates: {str(e)}")
             raise DataNotAvailableError(f"Failed to fetch exchange rates: {str(e)}")
 
-        rates = data.get("rates", {})
+        # Keyless open endpoint returns "rates"; the keyed v6 API returns
+        # "conversion_rates" for the same call — read whichever is present so
+        # setting an API key doesn't hard-break every spot-rate query.
+        rates = data.get("rates") or data.get("conversion_rates") or {}
         time_last_update = data.get("time_last_update_utc", "")
 
         logger.info(f"📈 Processing {len(rates)} exchange rates")
