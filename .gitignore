@@ -143,16 +143,12 @@ validation_private/*
 validation/reports/*
 !validation/reports/.gitkeep
 
-# Local Codex runtime artifacts (keep only shared hook config)
-.codex/*
-!.codex/hooks.json
+# Local Codex runtime and configuration
+.codex/
 
 # Generated test reports under docs/testing/reports
 docs/testing/reports/*.json
-!.codex/agents/
-!.codex/agents/**
-!.codex/skills/
-!.codex/skills/**
-.codex/skills/.system/**
-!.codex/prompts/
-!.codex/prompts/**
+
+# SQLite WAL sidecars for the (already-ignored) indicators database
+backend/data/indicators.db-wal
+backend/data/indicators.db-shm
