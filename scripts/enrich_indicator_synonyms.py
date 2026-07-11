@@ -176,7 +176,11 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=60)
+    # The production backend reads this DB concurrently; WAL + busy timeout
+    # let the enrichment writer commit without "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")
     rows = fetch_rows(conn, args.provider, args.min_popularity, args.limit, args.force,
                       category=args.category)
     _scope = (f"category={args.category!r}" if args.category

@@ -115,8 +115,14 @@ class IndicatorDatabase:
         if conn is not None:
             return conn
         with self._conn_lock:
-            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
+            # WAL journal: readers never block the (rare, offline-enrichment)
+            # writer and vice versa; busy_timeout covers checkpoint moments.
+            try:
+                conn.execute("PRAGMA busy_timeout=30000")
+            except sqlite3.Error:
+                pass
             if not self._initialized:
                 self._initialize_db(conn)
                 self._initialized = True
