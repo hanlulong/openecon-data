@@ -1114,11 +1114,23 @@ async def fetch_from_coingecko(
 
     if is_ranking and "market cap" in metric_text:
         top_n_match = _TOP_N_RE.search(query_lower)
-        per_page = int(top_n_match.group(1)) if top_n_match else 10
-        per_page = max(1, min(250, per_page))
-        return await coingecko_provider.get_market_data(
+        requested_n = int(top_n_match.group(1)) if top_n_match else 10
+        per_page = max(1, min(250, requested_n))
+        result = await coingecko_provider.get_market_data(
             vs_currency=vs_currency, order="market_cap_desc", per_page=per_page,
         )
+        if requested_n > per_page:
+            # Disclose the API's page cap instead of silently serving fewer
+            # entries than requested ("top 300" returned 250 with no note).
+            for series in result or []:
+                meta = getattr(series, "metadata", None)
+                if meta is not None:
+                    note = (
+                        f"CoinGecko returns at most {per_page} entries per "
+                        f"ranking; the requested top {requested_n} was truncated."
+                    )
+                    meta.notes = (meta.notes or []) + [note]
+        return result
 
     metric = "price"
     if any(t in metric_text for t in ["volume", "trading volume", "24h volume", "24-hour volume"]):
