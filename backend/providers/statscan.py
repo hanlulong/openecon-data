@@ -343,7 +343,21 @@ class StatsCanProvider(BaseProvider):
         return normalized
 
     @staticmethod
-    def _dimension_has_aggregate_member(members: List[Dict[str, Any]]) -> bool:
+    def _detect_aggregate_member_id(members: List[Dict[str, Any]]) -> Optional[int]:
+        """Return the ID of a dimension's aggregate/total member, or None.
+
+        Uses only structured metadata signals, never the query text:
+          1. ``memberNameEn`` matching total/all/aggregate semantics.
+          2. The hierarchy root — a lone member whose ``parentMemberId`` is null
+             while other members descend from it (the classic WDS roll-up node,
+             e.g. "All industries [T001]").
+        Returns None when the dimension exposes no defaultable aggregate, so
+        callers can fail closed instead of taking an arbitrary positional member
+        that frequently maps to a suppressed cross-tab cell.
+        """
+        if not members:
+            return None
+
         aggregate_names = {
             "all",
             "all ages",
@@ -353,26 +367,66 @@ class StatsCanProvider(BaseProvider):
             "canada",
             "total",
         }
+
+        def as_int(value: Any) -> Optional[int]:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         for member in members:
             name = StatsCanProvider._extract_member_name(member).lower()
-            if name in aggregate_names or name.startswith("total "):
-                return True
-        return False
+            if name in aggregate_names or name.startswith("total ") or name.startswith("all "):
+                member_id = as_int(member.get("memberId"))
+                if member_id is not None:
+                    return member_id
+
+        # Structural fallback: a single root node that other members hang off is
+        # the dimension's roll-up aggregate. Flat dimensions (no parent links)
+        # deliberately do NOT qualify — there is no structural aggregate to pick.
+        if len(members) > 1:
+            root_ids = [
+                as_int(m.get("memberId"))
+                for m in members
+                if m.get("parentMemberId") in (None, 0)
+            ]
+            root_ids = [rid for rid in root_ids if rid is not None]
+            has_children = any(
+                m.get("parentMemberId") not in (None, 0) for m in members
+            )
+            if has_children and len(root_ids) == 1:
+                return root_ids[0]
+
+        return None
 
     @staticmethod
-    def _requires_explicit_dimension_member(dim_name: str, members: List[Dict[str, Any]]) -> bool:
-        """Return whether defaulting this dimension would be arbitrary.
+    def _dimension_has_aggregate_member(members: List[Dict[str, Any]]) -> bool:
+        return StatsCanProvider._detect_aggregate_member_id(members) is not None
 
-        High-cardinality dimensions with no aggregate member (for example a
-        first-name list) are provider-native required dimensions.  Picking the
-        first member would be a hidden default, so callers must supply a member
-        or fail closed as supportability-blocked.
+    def _requires_explicit_dimension_member(
+        self,
+        dim_name: str,
+        members: List[Dict[str, Any]],
+        indicator_lower: str = "",
+    ) -> bool:
+        """Return whether defaulting this dimension would be an arbitrary guess.
+
+        A dimension is "required" when it exposes more than one member yet
+        ``_select_default_member_id`` cannot resolve a member from structured
+        signals (an explicit semantic branch or a detectable aggregate). Such
+        dimensions — a first-name list, or a Frequency/Rank/Proportion indicator
+        axis — must be supplied by the caller or fail closed; picking the first
+        member would be a hidden default that often lands on a suppressed cell.
+
+        This replaces the former ``len(members) > 100`` cardinality gate, which
+        missed small no-aggregate dimensions entirely. Consulted by
+        ``fetch_multi_dimension_data`` before it builds a batch of coordinates;
+        the single-series coordinate builders instead recover via the shared
+        coordinate probe (see ``_fetch_coordinate_with_fallback``).
         """
-        if len(members) <= 100:
+        if not members or len(members) <= 1:
             return False
-        if StatsCanProvider._dimension_has_aggregate_member(members):
-            return False
-        return True
+        return self._select_default_member_id(dim_name, members, indicator_lower) is None
 
     def _find_member_id_by_keywords(self, members: List[Dict[str, Any]], keywords: List[str]) -> Optional[int]:
         """Find the best matching member ID using exact-first keyword scoring.
@@ -537,10 +591,16 @@ class StatsCanProvider(BaseProvider):
         dimension_name: str,
         members: List[Dict[str, Any]],
         indicator_lower: str,
-    ) -> int:
-        """Choose a semantically sensible default instead of blindly taking member 1."""
+    ) -> Optional[int]:
+        """Choose a semantically sensible default member for a dimension.
+
+        Returns None when no confident default exists — an unknown dimension
+        with no detectable aggregate — so callers fail closed rather than fall
+        back to an arbitrary positional member[0] that frequently maps to a
+        suppressed cross-tab cell (WDS then rejects the coordinate).
+        """
         if not members:
-            return 1
+            return None
 
         # Normalize underscores to spaces so "unemployment_rate" matches "unemployment rate"
         indicator_lower = indicator_lower.replace("_", " ")
@@ -605,8 +665,12 @@ class StatsCanProvider(BaseProvider):
         if "age group" in dimension_name_lower:
             return self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
 
-        return self._find_member_id_by_keywords(members, ["total", "all", "canada", "estimate"]) or (
-            members[0].get("memberId") if members[0].get("memberId") is not None else 1
+        # Terminal fallback for a dimension no explicit branch handled: prefer a
+        # detectable aggregate (total/all/roll-up root). If none exists, return
+        # None so the caller fails closed instead of gambling on member[0].
+        return (
+            self._find_member_id_by_keywords(members, ["total", "all", "canada", "estimate"])
+            or self._detect_aggregate_member_id(members)
         )
 
     @staticmethod
@@ -622,7 +686,7 @@ class StatsCanProvider(BaseProvider):
         dimension_name: str,
         members: List[Dict[str, Any]],
         indicator_lower: str,
-        selected_member_id: int,
+        selected_member_id: Optional[int],
         *,
         limit: int = 6,
     ) -> List[int]:
@@ -656,6 +720,168 @@ class StatsCanProvider(BaseProvider):
             if len(candidates) >= limit:
                 break
         return candidates[:limit] or [1]
+
+    @staticmethod
+    def _raise_required_dimension(product_id: Any, dim_name: str) -> None:
+        """Fail closed for a dimension that has no defaultable aggregate member.
+
+        Uses the same machine-parseable supportability reason as
+        ``fetch_multi_dimension_data`` so a missing required dimension surfaces
+        as an attributable Statistics Canada block instead of a silent arbitrary
+        member selection (which would either return wrong data or trigger
+        cross-provider wandering).
+        """
+        raise DataNotAvailableError(
+            "fail-closed supportability block: "
+            "reason=statscan_required_dimension_missing; "
+            f"product={product_id}; "
+            f"missing_dimensions={dim_name}"
+        )
+
+    def _default_member_or_raise(
+        self,
+        product_id: Any,
+        dim_name: str,
+        members: List[Dict[str, Any]],
+        indicator_lower: str,
+        arbitrary_note_sink: Optional[List[str]] = None,
+    ) -> int:
+        """Default-member selection that never silently gambles on member[0].
+
+        Every coordinate builder must use this (not _select_default_member_id
+        directly). When a dimension has no detectable aggregate member:
+        - with an ``arbitrary_note_sink`` (callers that DISCLOSE substitutions
+          via metadata notes), the first member is selected and a transparency
+          note naming the dimension and the picked member is appended — the
+          user sees exactly which slice was served (9dd6f15 convention);
+        - without a sink, the attributable supportability error is raised so
+          the failure stays fail-closed instead of returning wrong data.
+        """
+        mid = self._select_default_member_id(dim_name, members, indicator_lower)
+        if mid is not None:
+            return mid
+        if arbitrary_note_sink is not None and members:
+            first = members[0]
+            first_id = first.get("memberId")
+            if isinstance(first_id, int):
+                arbitrary_note_sink.append(
+                    f"Dimension '{dim_name}' has no overall/total member; "
+                    f"'{first.get('memberNameEn', first_id)}' was selected. "
+                    "Name a specific value for this dimension to change it."
+                )
+                return first_id
+        self._raise_required_dimension(product_id, dim_name)
+
+    async def _fetch_coordinate_with_fallback(
+        self,
+        client: httpx.AsyncClient,
+        product_id: Any,
+        coordinate: str,
+        coordinate_candidate_parts: Optional[List[List[int]]],
+        periods: int,
+        *,
+        max_alternatives: int = 48,
+    ) -> tuple[Optional[Dict[str, Any]], str, bool]:
+        """Fetch a WDS coordinate, probing bounded alternatives if it is unpublished.
+
+        Shared by all three single-series coordinate builders
+        (``fetch_categorical_data``, ``fetch_from_product_with_discovery``,
+        ``fetch_with_dimensions``) so one suppressed cell no longer causes an
+        immediate hard failure and cross-provider wandering. When the requested
+        coordinate returns no SUCCESS series, up to ``max_alternatives``
+        metadata-derived neighbours (the cartesian expansion of
+        ``coordinate_candidate_parts``) are probed in one batch and the first
+        provider-successful series is returned.
+
+        Returns ``(data_object, coordinate_used, used_fallback)``:
+          * ``data_object`` is None when neither the requested coordinate nor any
+            probed alternative succeeded — the caller then raises its own
+            context-specific error so the failure stays attributed to Statistics
+            Canada.
+          * ``used_fallback`` preserves the 9dd6f15 substitution-transparency
+            convention: when True the returned series may differ from the request
+            and the caller must disclose it and not assert the requested slice.
+
+        Transient upstream failures (429/5xx) still raise via ``_post_with_retry``.
+        """
+        endpoint = f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods"
+
+        def successful_data_object(items: Any) -> Optional[Dict[str, Any]]:
+            for item in items or []:
+                if item.get("status") != "SUCCESS":
+                    continue
+                item_object = item.get("object", {})
+                if not isinstance(item_object, dict):
+                    continue
+                if item_object.get("vectorDataPoint"):
+                    return item_object
+            return None
+
+        response = await self._post_with_retry(
+            client,
+            endpoint,
+            raise_on_status=False,
+            json=[{"productId": product_id, "coordinate": coordinate, "latestN": periods}],
+            headers={"Content-Type": "application/json"},
+            timeout=300.0,
+        )
+        data_object: Optional[Dict[str, Any]] = None
+        if 200 <= response.status_code < 300:
+            data_object = successful_data_object(response.json())
+        if data_object is not None:
+            return data_object, coordinate, False
+
+        # Requested coordinate unpublished — probe bounded metadata-derived
+        # neighbours in one batch and take the first provider-successful series.
+        fallback_coordinates: List[str] = []
+        if coordinate_candidate_parts:
+            def expand_candidates(index: int, parts: List[int]) -> None:
+                if len(fallback_coordinates) >= max_alternatives:
+                    return
+                if index >= len(coordinate_candidate_parts):
+                    candidate_coordinate = self._build_wds_coordinate(parts)
+                    if candidate_coordinate != coordinate and candidate_coordinate not in fallback_coordinates:
+                        fallback_coordinates.append(candidate_coordinate)
+                    return
+                for member_id in coordinate_candidate_parts[index]:
+                    expand_candidates(index + 1, [*parts, member_id])
+                    if len(fallback_coordinates) >= max_alternatives:
+                        break
+
+            expand_candidates(0, [])
+
+        if not fallback_coordinates:
+            return None, coordinate, False
+
+        logger.info(
+            "StatsCan coordinate %s failed for %s; probing %s metadata-derived alternatives",
+            coordinate,
+            product_id,
+            len(fallback_coordinates),
+        )
+        fallback_response = await self._post_with_retry(
+            client,
+            endpoint,
+            raise_on_status=False,
+            json=[
+                {"productId": product_id, "coordinate": alt, "latestN": periods}
+                for alt in fallback_coordinates
+            ],
+            headers={"Content-Type": "application/json"},
+            timeout=300.0,
+        )
+        if 200 <= fallback_response.status_code < 300:
+            fallback_object = successful_data_object(fallback_response.json())
+            if fallback_object:
+                used_coordinate = str(fallback_object.get("coordinate") or "").strip() or coordinate
+                logger.info(
+                    "✅ StatsCan fallback coordinate selected for %s: %s (substituted for requested)",
+                    product_id,
+                    used_coordinate,
+                )
+                return fallback_object, used_coordinate, True
+
+        return None, coordinate, False
 
     @staticmethod
     def _title_specialization_penalty(query_text: str, candidate_text: str) -> float:
@@ -1378,13 +1604,25 @@ class StatsCanProvider(BaseProvider):
                 f"Available breakdowns: {', '.join(available[:8])}..."
             )
 
-        # Build coordinate: default member IDs (1) for all dimensions except the target
+        # Build coordinate: the target dimension is pinned to the requested
+        # member; every OTHER dimension goes through the same aggregate-or-
+        # fail-closed default selection as the other coordinate builders.
+        # (Hardcoding "1" gambled on provider table order — member 1 is NOT
+        # guaranteed to be an aggregate, so e.g. Current-dollars could be
+        # served where Chained was the default elsewhere.)
+        indicator_lower = str(indicator or "").lower()
         coordinate_parts = []
         for i, dim in enumerate(dimensions):
             if i == dim_idx:
                 coordinate_parts.append(str(member_id))
             else:
-                coordinate_parts.append("1")  # Default to first member (usually "Total" or "All")
+                default_mid = self._default_member_or_raise(
+                    product_id,
+                    dim.get("dimensionNameEn", ""),
+                    dim.get("member", []),
+                    indicator_lower,
+                )
+                coordinate_parts.append(str(default_mid))
 
         # Pad to 10 dimensions
         while len(coordinate_parts) < 10:
@@ -2046,16 +2284,33 @@ class StatsCanProvider(BaseProvider):
         # For each dimension discovered in the metadata we decide the member ID
         # using keyword matching against the dimension name.
         coordinate_parts: List[int] = []
+        # Disclosure sink for dimensions with no aggregate member (arbitrary
+        # pick is allowed here only because it is surfaced via metadata notes).
+        member_notes: List[str] = []
+        # Per-dimension probe candidates for the shared coordinate fallback:
+        # user-EXPLICIT dimensions (a named geography/gender/age) are pinned to
+        # exactly the requested member — a substitution there would answer a
+        # different question — while defaulted dimensions may probe bounded
+        # aggregate-like neighbours when the requested cell is unpublished.
+        candidate_parts: List[List[int]] = []
         for dim in meta_dimensions:
-            dim_name_lower = dim.get("dimensionNameEn", "").lower()
+            dim_name = dim.get("dimensionNameEn", "")
+            dim_name_lower = dim_name.lower()
             members = dim.get("member", [])
 
             if "geogr" in dim_name_lower:
                 if geography:
                     mid = await self.resolve_member_id(normalized_pid, "geogr", geography)
+                    candidate_parts.append([mid])
                 else:
-                    mid = self._select_default_member_id(
-                        dim.get("dimensionNameEn", ""), members, indicator_lower
+                    mid = self._default_member_or_raise(
+                        normalized_pid, dim_name, members, indicator_lower,
+                        arbitrary_note_sink=member_notes,
+                    )
+                    candidate_parts.append(
+                        self._coordinate_member_candidates(
+                            dim_name, members, indicator_lower, mid
+                        )
                     )
                 coordinate_parts.append(mid)
 
@@ -2070,9 +2325,14 @@ class StatsCanProvider(BaseProvider):
                             f"Available: {', '.join(available)}"
                         )
                     coordinate_parts.append(mid)
+                    candidate_parts.append([mid])
                 else:
-                    coordinate_parts.append(
-                        self._find_member_id_by_keywords(members, ["both sexes", "total"]) or 1
+                    mid = self._find_member_id_by_keywords(members, ["both sexes", "total"]) or 1
+                    coordinate_parts.append(mid)
+                    candidate_parts.append(
+                        self._coordinate_member_candidates(
+                            dim_name, members, indicator_lower, mid
+                        )
                     )
 
             elif "age" in dim_name_lower:
@@ -2085,16 +2345,26 @@ class StatsCanProvider(BaseProvider):
                             f"Available (partial): {', '.join(available)}..."
                         )
                     coordinate_parts.append(mid)
+                    candidate_parts.append([mid])
                 else:
-                    coordinate_parts.append(
-                        self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
+                    mid = self._find_member_id_by_keywords(members, ["15 years and over", "all ages", "total"]) or 1
+                    coordinate_parts.append(mid)
+                    candidate_parts.append(
+                        self._coordinate_member_candidates(
+                            dim_name, members, indicator_lower, mid
+                        )
                     )
 
             else:
                 # Use semantic default selection for any other dimension
-                coordinate_parts.append(
-                    self._select_default_member_id(
-                        dim.get("dimensionNameEn", ""), members, indicator_lower
+                mid = self._default_member_or_raise(
+                    normalized_pid, dim_name, members, indicator_lower,
+                    arbitrary_note_sink=member_notes,
+                )
+                coordinate_parts.append(mid)
+                candidate_parts.append(
+                    self._coordinate_member_candidates(
+                        dim_name, members, indicator_lower, mid
                     )
                 )
 
@@ -2121,43 +2391,23 @@ class StatsCanProvider(BaseProvider):
 
         # Use shared HTTP client pool for better performance
         client = get_statscan_http_client()
-        # raise_on_status=False: the 406 "invalid coordinate" branch below must
-        # inspect the response itself; 429/5xx retry and breaker protection
-        # still come from the base helper.
-        response = await self._post_with_retry(
+        # Shared bounded coordinate probe: one unpublished/suppressed cell no
+        # longer hard-fails into cross-provider wandering — nearby coordinates
+        # (user-explicit dimensions pinned) are tried first.
+        data_object, coordinate_used, used_fallback = await self._fetch_coordinate_with_fallback(
             client,
-            f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
-            raise_on_status=False,
-            json=[{
-                "productId": normalized_pid,
-                "coordinate": coordinate,
-                "latestN": periods
-            }],
-            headers={"Content-Type": "application/json"},
-            timeout=300.0,
+            normalized_pid,
+            coordinate,
+            candidate_parts,
+            periods,
         )
-
-        if response.status_code == 406:
+        if data_object is None:
             raise DataNotAvailableError(
-                f"Invalid coordinate format for product {product_id}. "
-                f"Coordinate: {coordinate}. "
-                f"This may indicate the product structure has changed."
+                f"StatsCan WDS query failed for {description}: neither the "
+                f"requested coordinate {coordinate} nor any nearby published "
+                f"coordinate of product {product_id} returned data."
             )
-
-        self._raise_for_status_or_data_unavailable(
-            response,
-            f"fetching product {product_id} coordinate {coordinate}",
-        )
-        payload = response.json()
-
-        if not payload or payload[0].get("status") != "SUCCESS":
-            error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
-            raise DataNotAvailableError(
-                f"StatsCan WDS query failed for {description}. "
-                f"Error: {error_msg}"
-            )
-
-        data_object = payload[0]["object"]
+        coordinate = coordinate_used
         vector_data = data_object.get("vectorDataPoint", [])
 
         if not vector_data:
@@ -2215,10 +2465,23 @@ class StatsCanProvider(BaseProvider):
         else:
             data_type = "Level"
 
+        # 9dd6f15 substitution transparency: when a nearby coordinate was
+        # served instead of the requested one, do NOT assert the requested
+        # slice and disclose the real source cell in a note.
+        substitution_notes = list(member_notes)
+        asserted_country = geography or "Canada"
+        if used_fallback:
+            substitution_notes.append(
+                "The requested data slice was unpublished; a nearby published "
+                f"series from the same table was served instead ({product_id}:{coordinate})."
+            )
+            asserted_country = "Canada"
+        substitution_notes = substitution_notes or None
+
         metadata = Metadata(
             source="Statistics Canada",
             indicator=indicator_name,
-            country=geography or "Canada",
+            country=asserted_country,
             frequency=frequency,
             unit=unit if unit else "persons",
             lastUpdated=vector_data[-1].get("releaseTime", "") if vector_data else "",
@@ -2230,7 +2493,7 @@ class StatsCanProvider(BaseProvider):
             dataType=data_type,
             priceType=None,  # Not typically available for categorical queries
             description=indicator_name,
-            notes=None,  # StatsCan doesn't provide detailed notes easily
+            notes=substitution_notes,
             scaleFactor=self._map_scalar_factor(scalar_code) if scalar_code else None,
             startDate=data_points[0]["date"] if data_points else None,
             endDate=data_points[-1]["date"] if data_points else None,
@@ -2849,6 +3112,9 @@ class StatsCanProvider(BaseProvider):
         # Use intelligent dimension matching based on indicator context
         coordinate_parts = []
         coordinate_candidate_parts: List[List[int]] = []
+        # Disclosure sink: dimensions with no aggregate member record which
+        # member was arbitrarily selected (surfaced via metadata notes).
+        member_notes: List[str] = []
         for dim_info in dimensions:
             dim_name = dim_info.get("dimensionNameEn", "").upper()
             dim_name_lower = dim_name.lower()
@@ -2896,11 +3162,17 @@ class StatsCanProvider(BaseProvider):
                     append_coordinate_part(
                         found_id
                         if found_id
-                        else self._select_default_member_id(dim_name, members, indicator_lower)
+                        else self._default_member_or_raise(
+                            product_id, dim_name, members, indicator_lower,
+                            arbitrary_note_sink=member_notes,
+                        )
                     )
                 else:
                     append_coordinate_part(
-                        self._select_default_member_id(dim_name, members, indicator_lower)
+                        self._default_member_or_raise(
+                            product_id, dim_name, members, indicator_lower,
+                            arbitrary_note_sink=member_notes,
+                        )
                     )
 
             # 2. Trade dimension - match based on indicator (balance, export, import)
@@ -2938,7 +3210,10 @@ class StatsCanProvider(BaseProvider):
             # 6. Default to the best semantic aggregate rather than blindly taking member 1
             else:
                 append_coordinate_part(
-                    self._select_default_member_id(dim_name, members, indicator_lower)
+                    self._default_member_or_raise(
+                        product_id, dim_name, members, indicator_lower,
+                        arbitrary_note_sink=member_notes,
+                    )
                 )
 
         coordinate = self._build_wds_coordinate(coordinate_parts)
@@ -3107,14 +3382,18 @@ class StatsCanProvider(BaseProvider):
             priceType=None,  # Not typically available in dynamic discovery
             description=indicator_name,
             notes=(
-                [
-                    "The requested coordinate was unpublished; the nearest "
-                    "available series was returned instead. Its geography or "
-                    f"breakdown may differ from the request — the exact series "
-                    f"is {product_id}:{coordinate} (see seriesId)."
-                ]
-                if used_fallback_coordinate
-                else None
+                (
+                    [
+                        "The requested coordinate was unpublished; the nearest "
+                        "available series was returned instead. Its geography or "
+                        f"breakdown may differ from the request — the exact series "
+                        f"is {product_id}:{coordinate} (see seriesId)."
+                    ]
+                    if used_fallback_coordinate
+                    else []
+                )
+                + member_notes
+                or None
             ),
             scaleFactor=self._map_scalar_factor(scalar_code) if scalar_code else None,
             startDate=data_points[0]["date"] if data_points else None,
@@ -3199,6 +3478,12 @@ class StatsCanProvider(BaseProvider):
         # 3. Build coordinate by matching modifiers to dimensions
         coordinate_parts: list[int] = []
         matched_descriptions: list[str] = []
+        # Disclosure sink for dimensions with no aggregate member.
+        member_notes: list[str] = []
+        # Probe candidates: modifier-matched dimensions are pinned to exactly
+        # the requested member; defaulted ones may probe aggregate-like
+        # neighbours if the requested cell is unpublished.
+        candidate_parts: list[list[int]] = []
 
         for dim in dimensions:
             dim_name = dim.get("dimensionNameEn", "")
@@ -3215,6 +3500,7 @@ class StatsCanProvider(BaseProvider):
                     mid = self._find_member_id_by_keywords(members, [search_term])
                     if mid is not None:
                         coordinate_parts.append(mid)
+                        candidate_parts.append([mid])
                         # Find the member name for description
                         member_name = search_term
                         for m in members:
@@ -3226,9 +3512,16 @@ class StatsCanProvider(BaseProvider):
                         break
 
             if not matched:
-                # Use semantic default
-                coordinate_parts.append(
-                    self._select_default_member_id(dim_name, members, indicator_lower)
+                # Use semantic default (fail closed when no aggregate exists)
+                default_mid = self._default_member_or_raise(
+                    product_id, dim_name, members, indicator_lower,
+                    arbitrary_note_sink=member_notes,
+                )
+                coordinate_parts.append(default_mid)
+                candidate_parts.append(
+                    self._coordinate_member_candidates(
+                        dim_name, members, indicator_lower, default_mid
+                    )
                 )
 
         # Pad to 10 dimensions
@@ -3246,26 +3539,23 @@ class StatsCanProvider(BaseProvider):
         end_date = f"{end_year}-12-31" if end_year else None
 
         client = get_statscan_http_client()
-        response = await self._post_with_retry(
+        # Shared bounded coordinate probe (modifier-matched dims pinned): one
+        # unpublished cell no longer hard-fails into cross-provider wandering.
+        data_object, coordinate_used, used_fallback = await self._fetch_coordinate_with_fallback(
             client,
-            f"{self.base_url}/getDataFromCubePidCoordAndLatestNPeriods",
-            json=[{
-                "productId": product_id,
-                "coordinate": coordinate,
-                "latestN": periods,
-            }],
-            headers={"Content-Type": "application/json"},
-            timeout=300.0,
+            product_id,
+            coordinate,
+            candidate_parts,
+            periods,
         )
-        payload = response.json()
-
-        if not payload or payload[0].get("status") != "SUCCESS":
-            error_msg = payload[0].get("object", "Unknown error") if payload else "Empty response"
+        if data_object is None:
             raise DataNotAvailableError(
-                f"StatsCan query failed for {base_indicator} with modifiers {modifiers}: {error_msg}"
+                f"StatsCan query failed for {base_indicator} with modifiers "
+                f"{modifiers}: neither the requested coordinate {coordinate} nor "
+                f"any nearby published coordinate of product {product_id} "
+                f"returned data."
             )
-
-        data_object = payload[0]["object"]
+        coordinate = coordinate_used
         vector_data = data_object.get("vectorDataPoint", [])
         if not vector_data:
             raise DataNotAvailableError(
@@ -3306,6 +3596,16 @@ class StatsCanProvider(BaseProvider):
         else:
             data_type = detailed_meta.get("dataType", "Level")
 
+        # 9dd6f15 substitution transparency: disclose when a nearby coordinate
+        # was served instead of the requested one.
+        substitution_notes = list(member_notes)
+        if used_fallback:
+            substitution_notes.append(
+                "The requested data slice was unpublished; a nearby published "
+                f"series from the same table was served instead ({product_id}:{coordinate})."
+            )
+        substitution_notes = substitution_notes or None
+
         metadata_obj = Metadata(
             source="Statistics Canada",
             indicator=indicator_name,
@@ -3320,6 +3620,7 @@ class StatsCanProvider(BaseProvider):
             priceType=detailed_meta.get("priceType"),
             dataType=data_type,
             description=detailed_meta.get("description"),
+            notes=substitution_notes,
             scaleFactor=self._map_scalar_factor(scalar_code) if scalar_code else None,
             startDate=data_points[0]["date"] if data_points else None,
             endDate=data_points[-1]["date"] if data_points else None,
@@ -3723,15 +4024,16 @@ class StatsCanProvider(BaseProvider):
                     if labour_char:
                         mid = self._find_member_id_by_keywords(members, [labour_char]) or 1
                     else:
-                        mid = self._select_default_member_id(
-                            dim_info.get("dimensionNameEn", ""), members, indicator_lower
+                        mid = self._default_member_or_raise(
+                            product_id, dim_info.get("dimensionNameEn", ""), members, indicator_lower
                         )
                     coordinate_parts.append(str(mid))
 
                 else:
                     # For any other dimension, use semantic default selection
-                    mid = self._select_default_member_id(
-                        dim_info.get("dimensionNameEn", ""), members, indicator_lower
+                    # (fails closed when no aggregate member is detectable)
+                    mid = self._default_member_or_raise(
+                        product_id, dim_info.get("dimensionNameEn", ""), members, indicator_lower
                     )
                     coordinate_parts.append(str(mid))
 
@@ -3959,6 +4261,8 @@ class StatsCanProvider(BaseProvider):
                 f"No non-aggregate members found for axis '{axis_hint}' in product {product_id}"
             )
 
+        indicator_lower = display_indicator.lower().replace("_", " ")
+
         missing_required_dimensions: List[str] = []
         for dim_idx, dim_info in enumerate(dimensions_list):
             if dim_idx == axis_dim_idx:
@@ -3977,7 +4281,10 @@ class StatsCanProvider(BaseProvider):
                         break
             if has_supplied_member:
                 continue
-            if self._requires_explicit_dimension_member(dim_name, members):
+            # Pass the indicator so the guard matches the SAME default the build
+            # loop below would compute (aggregate/semantic branch) and only fails
+            # closed on genuinely undefaultable dimensions.
+            if self._requires_explicit_dimension_member(dim_name, members, indicator_lower):
                 missing_required_dimensions.append(dim_name)
 
         if missing_required_dimensions:
@@ -3988,7 +4295,6 @@ class StatsCanProvider(BaseProvider):
                 f"missing_dimensions={', '.join(missing_required_dimensions)}"
             )
 
-        indicator_lower = display_indicator.lower().replace("_", " ")
         coordinate_requests: List[Dict[str, Any]] = []
         member_name_by_coordinate: Dict[str, str] = {}
 
