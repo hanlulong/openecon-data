@@ -265,8 +265,12 @@ def _persisted_resolved_code_is_foreign_namespace(provider: str, code: str) -> b
 # Intent cache — avoids re-parsing identical queries via LLM (saves 4-6s)
 # ---------------------------------------------------------------------------
 _intent_cache: Dict[str, Tuple[Any, float]] = {}  # hash -> (ParseRouteResult, timestamp)
-_INTENT_CACHE_TTL = 300  # 5 minutes
-_INTENT_CACHE_MAX_SIZE = 200  # evict oldest when exceeded
+# TTL rationale: parse behavior only changes when prompts/models change,
+# which requires a deploy → restart → this in-memory cache clears anyway.
+# The old 5-minute TTL mostly re-ran identical 4-6s parses for nothing
+# (example-query clicks, repeated API queries).
+_INTENT_CACHE_TTL = 3600  # 1 hour
+_INTENT_CACHE_MAX_SIZE = 500  # evict oldest when exceeded
 
 
 def _intent_cache_key(query: str) -> str:
