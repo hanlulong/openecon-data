@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 import logging
-from typing import Optional, Dict, Any, Type, TypeVar
+from typing import Optional, Dict, Any, Tuple, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,76 @@ def fix_truncated_json(text: str) -> Optional[str]:
         return None
 
 
+def parse_json_response_tracked(
+    content: str,
+    schema: Optional[Type[T]] = None,
+    fix_truncated: bool = True
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Parse JSON from LLM response with automatic fixing, reporting whether the
+    result was obtained ONLY by repairing truncated JSON.
+
+    Direct parsing and JSON-extraction-from-prose are lossless and return
+    was_repaired=False. The truncation-repair path (closing an unterminated
+    string / array / object) is the ONLY branch that can silently change
+    meaning — a value cut mid-token ("United King) is closed into a valid but
+    SHORTER string — so it returns was_repaired=True. Callers that can retry the
+    LLM should prefer a fresh generation over trusting a repaired object.
+
+    Args:
+        content: Raw LLM response content
+        schema: Optional Pydantic model for validation
+        fix_truncated: Whether to attempt fixing truncated JSON
+
+    Returns:
+        (parsed_dict, was_repaired)
+
+    Raises:
+        JSONParseError: If parsing fails after all attempts
+    """
+    if not content:
+        raise JSONParseError("Empty content", "", 0)
+
+    # Attempt 1: Direct parse (lossless)
+    try:
+        parsed = json.loads(content)
+        if schema:
+            schema.model_validate(parsed)
+        return parsed, False
+    except (json.JSONDecodeError, ValidationError):
+        pass
+
+    # Attempt 2: Extract JSON from text (lossless — carves out an intact object)
+    extracted = extract_json_from_text(content)
+    if extracted:
+        try:
+            parsed = json.loads(extracted)
+            if schema:
+                schema.model_validate(parsed)
+            return parsed, False
+        except (json.JSONDecodeError, ValidationError):
+            pass
+
+    # Attempt 3: Fix truncated JSON (LOSSY — flagged so callers can retry)
+    if fix_truncated:
+        fixed = fix_truncated_json(content)
+        if fixed:
+            try:
+                parsed = json.loads(fixed)
+                if schema:
+                    schema.model_validate(parsed)
+                logger.info("Used fixed JSON (truncation repair applied)")
+                return parsed, True
+            except (json.JSONDecodeError, ValidationError):
+                pass
+
+    raise JSONParseError(
+        f"Failed to parse JSON from response",
+        content,
+        3
+    )
+
+
 def parse_json_response(
     content: str,
     schema: Optional[Type[T]] = None,
@@ -212,6 +282,11 @@ def parse_json_response(
 ) -> Dict[str, Any]:
     """
     Parse JSON from LLM response with automatic fixing.
+
+    Backward-compatible wrapper around parse_json_response_tracked that returns
+    only the parsed dictionary. Callers that need to know whether a truncation
+    repair was applied (to retry the LLM instead of trusting a possibly
+    corrupted object) should call parse_json_response_tracked directly.
 
     Args:
         content: Raw LLM response content
@@ -224,47 +299,8 @@ def parse_json_response(
     Raises:
         JSONParseError: If parsing fails after all attempts
     """
-    if not content:
-        raise JSONParseError("Empty content", "", 0)
-
-    # Attempt 1: Direct parse
-    try:
-        parsed = json.loads(content)
-        if schema:
-            schema.model_validate(parsed)
-        return parsed
-    except (json.JSONDecodeError, ValidationError):
-        pass
-
-    # Attempt 2: Extract JSON from text
-    extracted = extract_json_from_text(content)
-    if extracted:
-        try:
-            parsed = json.loads(extracted)
-            if schema:
-                schema.model_validate(parsed)
-            return parsed
-        except (json.JSONDecodeError, ValidationError):
-            pass
-
-    # Attempt 3: Fix truncated JSON
-    if fix_truncated:
-        fixed = fix_truncated_json(content)
-        if fixed:
-            try:
-                parsed = json.loads(fixed)
-                if schema:
-                    schema.model_validate(parsed)
-                logger.info("Used fixed JSON")
-                return parsed
-            except (json.JSONDecodeError, ValidationError):
-                pass
-
-    raise JSONParseError(
-        f"Failed to parse JSON from response",
-        content,
-        3
-    )
+    parsed, _was_repaired = parse_json_response_tracked(content, schema, fix_truncated)
+    return parsed
 
 
 class LLMJSONParser:

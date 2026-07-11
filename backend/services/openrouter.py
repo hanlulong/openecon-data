@@ -15,6 +15,7 @@ Configuration via environment variables:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -30,9 +31,47 @@ from ..models import ParsedIntent
 from ..config import Settings, get_settings
 from .llm import create_llm_provider, BaseLLMProvider
 from .simplified_prompt import SimplifiedPrompt
-from .json_parser import parse_json_response, JSONParseError
+from .json_parser import parse_json_response, parse_json_response_tracked, JSONParseError
 
 logger = logging.getLogger(__name__)
+
+
+# --- Local-provider elapsed-time budget + circuit breaker (T8) --------------
+# A wedged local LLM tunnel (accepts the TCP connection but never responds)
+# makes every parse attempt hang to the full llm_timeout. Left unbounded, the
+# instructor stage AND the manual provider-fallback stage each retry several
+# times, so a single dead tunnel can burn 700s+ before the hosted fallback ever
+# runs — every query 504s despite a healthy hosted fallback. Two structural,
+# provider-agnostic guards prevent that:
+#   1. A shared ELAPSED-TIME budget: all LOCAL attempts for one parse share at
+#      most _LOCAL_ATTEMPT_BUDGET_S wall-clock seconds (enforced with
+#      asyncio.wait_for); once spent we jump straight to the hosted _parse_direct.
+#   2. A process-wide circuit: a hard local timeout trips the circuit, and for
+#      _CIRCUIT_OPEN_SECONDS afterwards new requests skip local unless a cheap
+#      5s health_check() says the tunnel recovered — so requests don't each pay
+#      the full budget to re-discover the same outage.
+# Non-local (openrouter) configs skip both guards entirely: there is no separate
+# hosted fallback to protect and the prior behavior is preserved bit-for-bit.
+_LOCAL_ATTEMPT_BUDGET_S = 25.0
+_CIRCUIT_OPEN_SECONDS = 60.0
+_local_circuit_open_until: float = 0.0
+
+
+def _local_circuit_is_open() -> bool:
+    """True while the local provider is being skipped after a recent timeout."""
+    return time.monotonic() < _local_circuit_open_until
+
+
+def _trip_local_circuit() -> None:
+    """Open the circuit for _CIRCUIT_OPEN_SECONDS after a hard local timeout."""
+    global _local_circuit_open_until
+    _local_circuit_open_until = time.monotonic() + _CIRCUIT_OPEN_SECONDS
+
+
+def _reset_local_circuit() -> None:
+    """Close the circuit (local provider confirmed healthy again)."""
+    global _local_circuit_open_until
+    _local_circuit_open_until = 0.0
 
 
 def _history_role_and_content(entry: Any, index: int) -> Tuple[str, Any]:
@@ -175,6 +214,22 @@ class OpenRouterService:
 
         return True, None
 
+    async def _local_provider_healthy(self) -> bool:
+        """Cheap (~5s) liveness probe for the configured LOCAL provider.
+
+        Used by the circuit breaker to avoid spending the request's time budget
+        on a tunnel that is still wedged. Returns True for any provider lacking
+        a health_check (so it never blocks a path it cannot verify).
+        """
+        provider = self.llm_provider
+        if provider is None or not hasattr(provider, "health_check"):
+            return True
+        try:
+            return bool(await provider.health_check())
+        except Exception as exc:  # health probe must never raise into the cascade
+            logger.warning(f"Local provider health check errored: {exc}")
+            return False
+
     async def parse_query(
         self,
         query: str,
@@ -199,11 +254,66 @@ class OpenRouterService:
         Raises:
             RuntimeError: If LLM fails to return valid format after retries
         """
+        provider_name = (self.settings.llm_provider or "openrouter").lower()
+        is_local = provider_name != "openrouter"
+
+        # T8: bound total time on the LOCAL provider so a wedged tunnel cannot
+        # blow the request deadline. `local_deadline` is the shared budget clock;
+        # `skip_local` short-circuits the remaining local stages once we decide
+        # the tunnel is unusable for this request.
+        local_deadline = time.monotonic() + _LOCAL_ATTEMPT_BUDGET_S
+        skip_local = False
+
+        if is_local and _local_circuit_is_open():
+            # A recent local attempt hard-timed-out. Confirm the tunnel is still
+            # down with a cheap probe before paying the budget again; if it has
+            # recovered, close the circuit and proceed normally.
+            if await self._local_provider_healthy():
+                _reset_local_circuit()
+            else:
+                skip_local = True
+                logger.warning(
+                    "Local LLM circuit open and health check still failing; "
+                    "routing parse straight to hosted fallback %s",
+                    self.settings.llm_fallback_model,
+                )
+
+        def _local_time_left() -> float:
+            return local_deadline - time.monotonic()
+
+        async def _run_local(make_coro):
+            """Run a local-provider parse under the shared elapsed budget.
+
+            Takes a zero-arg coroutine FACTORY so the coroutine is only created
+            when there is budget to run it (avoids an un-awaited coroutine when
+            the budget is already spent). Raises asyncio.TimeoutError when the
+            budget is exhausted — either already spent, or the call itself hangs
+            past the remaining budget — which the caller translates into
+            'trip circuit + fall to hosted'.
+            """
+            remaining = _local_time_left()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            return await asyncio.wait_for(make_coro(), timeout=remaining)
+
         # Primary path: Instructor-based structured output
         intent: Optional[ParsedIntent] = None
-        if self.instructor_client:
+        if self.instructor_client and not skip_local:
+            def _make():
+                return self._parse_with_instructor(query, conversation_history, conversation_context)
             try:
-                intent = await self._parse_with_instructor(query, conversation_history, conversation_context)
+                intent = await (_run_local(_make) if is_local else _make())
+            except asyncio.TimeoutError:
+                # Wedged local tunnel: stop trying local, trip the circuit so
+                # later requests skip it, and fall through to the hosted path.
+                skip_local = True
+                if is_local:
+                    _trip_local_circuit()
+                logger.warning(
+                    "Instructor parse exceeded the %.0fs local budget (wedged tunnel?); "
+                    "tripping local circuit and falling back to hosted",
+                    _LOCAL_ATTEMPT_BUDGET_S,
+                )
             except Exception as e:
                 # InstructorRetryException embeds every failed generation —
                 # including full model reasoning — in str(e); dumping that to
@@ -216,16 +326,27 @@ class OpenRouterService:
                 )
 
         # Fallback: manual JSON parsing against the configured provider
-        if intent is None and self.llm_provider:
+        if intent is None and self.llm_provider and not skip_local:
+            def _make():
+                return self._parse_with_provider(query, conversation_history, conversation_context)
             try:
-                intent = await self._parse_with_provider(query, conversation_history, conversation_context)
+                intent = await (_run_local(_make) if is_local else _make())
+            except asyncio.TimeoutError:
+                skip_local = True
+                if is_local:
+                    _trip_local_circuit()
+                logger.warning(
+                    "Provider-fallback parse exceeded the local budget; tripping "
+                    "circuit and falling back to hosted %s",
+                    self.settings.llm_fallback_model,
+                )
             except Exception as e:
                 # Runtime failure of a non-OpenRouter provider (e.g. the local
                 # vLLM tunnel dropped mid-flight) must degrade COST, not
                 # availability: fall through to the hosted last resort. When
                 # the configured provider IS OpenRouter there is nothing
                 # different to try, so propagate.
-                if (self.settings.llm_provider or "openrouter").lower() == "openrouter":
+                if provider_name == "openrouter":
                     raise
                 logger.error(
                     f"Configured LLM provider '{self.settings.llm_provider}' failed at "
@@ -327,7 +448,13 @@ class OpenRouterService:
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     temperature=0.0,
-                    max_tokens=500,
+                    # Match the instructor path's 1500-token ceiling. The former
+                    # 500 cap truncated reasoning-model output mid-JSON, which
+                    # then either failed parsing (a wasted retry) or got
+                    # auto-repaired into a wrong-but-valid intent (T5).
+                    # max_tokens is an upper bound, so models that stop early
+                    # pay nothing extra for the headroom.
+                    max_tokens=1500,
                     response_format={"type": "json_object"}
                 )
                 llm_elapsed = time.perf_counter() - llm_start
@@ -340,9 +467,12 @@ class OpenRouterService:
                     thinking = result["choices"][0]["message"]["_thinking"]
                     logger.debug(f"Model reasoning ({len(thinking)} chars)")
 
-                # Parse JSON with automatic fixing for truncation/malformed output
+                # Parse JSON with automatic fixing for truncation/malformed output.
+                # `was_repaired` is True only when the parse ONLY succeeded by
+                # closing truncated structures — structurally valid but possibly
+                # semantically wrong (a value cut mid-token parses shorter).
                 try:
-                    parsed = parse_json_response(content, fix_truncated=True)
+                    parsed, was_repaired = parse_json_response_tracked(content, fix_truncated=True)
                 except JSONParseError as exc:
                     last_error = f"Invalid JSON: {str(exc)}"
                     logger.warning(f"Attempt {attempt + 1}: {last_error}")
@@ -355,6 +485,29 @@ class OpenRouterService:
                     last_error = error_msg
                     logger.warning(f"Attempt {attempt + 1}: Format error - {error_msg}")
                     continue
+
+                # T5: a truncation-repaired parse is a SOFT failure — retry the
+                # LLM for a complete response rather than trusting a possibly
+                # corrupted intent. Only accept the repaired object once retries
+                # are exhausted, and then log it loudly.
+                is_last_attempt = attempt == max_retries - 1
+                if was_repaired and not is_last_attempt:
+                    last_error = (
+                        "Your response was truncated mid-JSON and had to be "
+                        "auto-repaired, which can silently corrupt values "
+                        "(e.g. a country name cut short). Return COMPLETE, valid JSON."
+                    )
+                    logger.warning(
+                        f"Attempt {attempt + 1}: parsed only via truncation repair; "
+                        f"retrying for a complete response"
+                    )
+                    continue
+                if was_repaired:
+                    logger.warning(
+                        "Accepting truncation-REPAIRED parse after exhausting retries "
+                        "(attempt %d/%d); intent values may be unreliable (provider=%s)",
+                        attempt + 1, max_retries, parsed.get("apiProvider"),
+                    )
 
                 # Success! Return parsed intent
                 parsed["originalQuery"] = query
@@ -460,7 +613,7 @@ class OpenRouterService:
             content = payload["choices"][0]["message"]["content"]
 
             try:
-                parsed = parse_json_response(content, fix_truncated=True)
+                parsed, was_repaired = parse_json_response_tracked(content, fix_truncated=True)
             except JSONParseError as exc:
                 last_error = f"Invalid JSON response: {str(exc)}"
                 messages.append({"role": "assistant", "content": content})
@@ -480,6 +633,25 @@ class OpenRouterService:
                     "content": f"🚨 FORMAT ERROR: {error_msg}\n\nReview the required JSON format and provide a corrected response following ALL mandatory requirements."
                 })
                 continue
+
+            # T5: treat a truncation-repaired parse as a soft failure and retry
+            # the LLM for a complete response; only accept it once retries are
+            # exhausted (logged loudly), since repaired values may be corrupted.
+            is_last_attempt = attempt == max_retries - 1
+            if was_repaired and not is_last_attempt:
+                last_error = "Response was truncated mid-JSON and had to be auto-repaired."
+                messages.append({"role": "assistant", "content": content})
+                messages.append({
+                    "role": "user",
+                    "content": "🚨 Your JSON was truncated mid-value and had to be auto-repaired, which can corrupt values (e.g. a country name cut short). Return a COMPLETE, valid JSON object with no truncation."
+                })
+                continue
+            if was_repaired:
+                logger.warning(
+                    "Accepting truncation-REPAIRED parse in _parse_direct after "
+                    "exhausting retries (attempt %d/%d); intent values may be unreliable",
+                    attempt + 1, max_retries,
+                )
 
             # Format is valid, return the parsed intent with original query attached
             parsed["originalQuery"] = query

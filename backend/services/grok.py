@@ -10,6 +10,7 @@ data analysis and visualization. Features include:
 
 Updated: 2025-12-25 - Enhanced prompts and visualization support
 """
+import ast
 import logging
 from typing import Dict, Any, Optional, AsyncIterator, List
 import httpx
@@ -19,6 +20,19 @@ import re
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class CodeGenerationError(Exception):
+    """Raised when the model produced no runnable code for a Pro Mode request.
+
+    Two failure modes previously slipped through silently: an EMPTY extraction
+    (ast.parse("") is valid, so an empty body "executes successfully" with no
+    output — a false success), and PROSE returned with no code block (which
+    reaches the executor and surfaces as a misleading "Security violations:
+    Syntax error"). Raising a distinct, user-facing error instead lets callers
+    tell the user that generation failed and to retry/rephrase. The message is
+    written to be self-sufficient so it stays useful wherever it is surfaced.
+    """
 
 # Visualization type templates
 VISUALIZATION_TEMPLATES = {
@@ -776,24 +790,74 @@ Example usage:
 
         return prompt
 
-    def _extract_code_from_markdown(self, text: str) -> str:
-        """Extract Python code from markdown code blocks"""
-        # Check if the response contains markdown code blocks
-        if "```python" in text:
-            # Extract code between ```python and ```
-            start = text.find("```python") + len("```python")
-            end = text.find("```", start)
-            if end != -1:
-                return text[start:end].strip()
-        elif "```" in text:
-            # Generic code block
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            if end != -1:
-                return text[start:end].strip()
+    @staticmethod
+    def _looks_like_python(code: str) -> bool:
+        """Best-effort check that `code` is runnable Python, not prose.
 
-        # Return as-is if no markdown blocks found
-        return text.strip()
+        A parse failure is the signal the executor would otherwise report as a
+        misleading "Security violations: Syntax error"; catching it here lets us
+        raise a clear generation-failure instead. Real code the model returns
+        without fences (the common case, since the prompt asks for code only)
+        parses fine and passes.
+        """
+        try:
+            ast.parse(code)
+            return True
+        except (SyntaxError, ValueError):
+            return False
+
+    def _extract_code_from_markdown(self, text: str) -> str:
+        """Extract Python code from markdown code blocks.
+
+        Raises CodeGenerationError when the model produced no runnable code —
+        either an empty extraction, or (on the no-fence fallback) prose that is
+        not valid Python. Without this, empty code parses as an empty-but-valid
+        AST and "executes successfully" with no output, and prose reaches the
+        executor as a misleading syntax error.
+        """
+        raw = text or ""
+        code: Optional[str] = None
+        had_code_fence = False
+
+        # Check if the response contains markdown code blocks
+        if "```python" in raw:
+            had_code_fence = True
+            # Extract code between ```python and ```
+            start = raw.find("```python") + len("```python")
+            end = raw.find("```", start)
+            if end != -1:
+                code = raw[start:end].strip()
+        elif "```" in raw:
+            had_code_fence = True
+            # Generic code block
+            start = raw.find("```") + 3
+            end = raw.find("```", start)
+            if end != -1:
+                code = raw[start:end].strip()
+
+        if code is None:
+            # No (closed) fenced block found — treat the whole response as bare
+            # code. This is the common happy path since the prompt asks for code
+            # with no explanation.
+            code = raw.strip()
+
+        if not code:
+            raise CodeGenerationError(
+                "Code generation returned an empty response. Please retry, or "
+                "rephrase your request to be more specific."
+            )
+
+        # Only the no-fence fallback risks returning prose. If it does not parse
+        # as Python, the model returned an explanation (or output was cut off)
+        # rather than code — fail clearly instead of shipping prose to the sandbox.
+        if not had_code_fence and not self._looks_like_python(code):
+            raise CodeGenerationError(
+                "Code generation did not return valid runnable Python (the "
+                "response looked like an explanation or was cut off). Please "
+                "retry, or rephrase your request."
+            )
+
+        return code
 
 
 # Singleton instance

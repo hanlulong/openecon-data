@@ -527,6 +527,13 @@ class SecureCodeExecutor:
                 max_output_size
             )
 
+            # Step 4b: Surface captured stderr (pandas/numpy warnings, tracebacks)
+            # to logs AND to the user. The wrapped script records it under a
+            # dedicated "stderr" key, but the CodeExecutor wrapper only forwards
+            # output/error/files — so a bare stderr key would be dropped before
+            # reaching the client. Fold the tail into the surfaced field instead.
+            self._merge_stderr(result, sanitized_session_id)
+
             # Step 5: Add warnings to result if any
             if warnings:
                 result["warnings"] = warnings
@@ -626,6 +633,33 @@ class SecureCodeExecutor:
                 logger.warning(f"Failed to collect file {out_file}: {e}")
 
         return files
+
+    @staticmethod
+    def _merge_stderr(result: Dict[str, Any], session_id: str) -> None:
+        """Fold captured sandbox stderr into logs and the user-facing payload.
+
+        The wrapped script stores stderr under result["stderr"] (already capped
+        to the last 2000 chars). This logs it unconditionally, then appends the
+        tail to the field the downstream CodeExecutor wrapper actually forwards:
+        `output` on success, `error` on failure. No-op when there is no stderr
+        or the result lacks the key (some _run_sandboxed paths don't produce one).
+        """
+        if not isinstance(result, dict):
+            return
+        captured = (result.get("stderr") or "").strip()
+        if not captured:
+            return
+        tail = captured[-2000:]
+        logger.warning("Sandbox stderr (session %s):\n%s", session_id, tail)
+        block = f"[stderr]\n{tail}"
+        if result.get("success"):
+            existing = result.get("output") or ""
+            sep = "\n\n" if existing else ""
+            result["output"] = f"{existing}{sep}{block}"
+        else:
+            existing_err = result.get("error") or ""
+            sep = "\n\n" if existing_err else ""
+            result["error"] = f"{existing_err}{sep}{block}"
 
     def _wrap_code(self, code: str, work_dir: Path, persistent_session_dir: Path, max_output_size: int) -> str:
         """
@@ -797,14 +831,16 @@ try:
     result = {{
         "success": True,
         "output": _output.getvalue()[:{max_output_size}],
-        "error": ""
+        "error": "",
+        "stderr": _errors.getvalue()[-2000:]
     }}
 
 except TimeoutError:
     result = {{
         "success": False,
         "error": "Code execution timed out",
-        "output": _output.getvalue()[:{max_output_size}]
+        "output": _output.getvalue()[:{max_output_size}],
+        "stderr": _errors.getvalue()[-2000:]
     }}
 
 except SystemExit as e:
@@ -814,20 +850,23 @@ except SystemExit as e:
         result = {{
             "success": True,
             "output": output,
-            "error": ""
+            "error": "",
+            "stderr": _errors.getvalue()[-2000:]
         }}
     else:
         result = {{
             "success": False,
             "error": f"Code called exit() - consider using print statements instead. Exit code: {{e.code}}",
-            "output": output
+            "output": output,
+            "stderr": _errors.getvalue()[-2000:]
         }}
 
 except Exception as e:
     result = {{
         "success": False,
         "error": str(e)[:10000],
-        "output": _output.getvalue()[:{max_output_size}]
+        "output": _output.getvalue()[:{max_output_size}],
+        "stderr": _errors.getvalue()[-2000:]
     }}
 
 finally:
