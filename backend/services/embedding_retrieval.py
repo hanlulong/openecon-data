@@ -241,7 +241,9 @@ class EmbeddingRetrieval:
         conn = db._get_connection()
         c = conn.cursor()
 
-        c.execute("SELECT code, name, provider FROM indicators WHERE LENGTH(name) > 3")
+        c.execute(
+            "SELECT code, name, provider, synonyms FROM indicators WHERE LENGTH(name) > 3"
+        )
         rows = c.fetchall()
         logger.info("Building embedding index for %d indicators...", len(rows))
 
@@ -249,30 +251,46 @@ class EmbeddingRetrieval:
         names = [r[1] for r in rows]
         providers = [r[2] for r in rows]
 
+        def _embed_text(name: str, synonyms) -> str:
+            """Name plus user-vocabulary synonyms as the embedded text.
+
+            Names alone miss how users phrase concepts: StatsCan cube titles
+            name the SURVEY ("Labour force characteristics, monthly") while
+            the metric ("unemployment rate") lives in synonyms; WDI's
+            SP.POP.TOTL is titled "Population, total" while users write
+            "world population". Structural aliases (legacy table numbers)
+            add no semantics but little noise at this scale. Capped so one
+            row can't dominate the token budget.
+            """
+            base = str(name or "")[:200]
+            syn = str(synonyms or "").strip()
+            if not syn:
+                return base
+            return f"{base} | {syn[:300]}"
+
+        embed_texts = [_embed_text(r[1], r[3]) for r in rows]
+
         client = self._get_client()
-        all_embeddings = []
+        # Preallocate the float32 matrix: accumulating 330K x 1536 floats as
+        # Python lists needs >12 GB and OOM-kills the build; the array is 2 GB.
+        embeddings = np.zeros((len(embed_texts), EMBEDDING_DIM), dtype=np.float32)
         start = time.time()
 
-        for i in range(0, len(names), batch_size):
-            batch = names[i : i + batch_size]
-            # Truncate very long names
-            batch = [n[:200] for n in batch]
+        for i in range(0, len(embed_texts), batch_size):
+            batch = embed_texts[i : i + batch_size]
             try:
                 resp = client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
-                batch_embs = [d.embedding for d in resp.data]
-                all_embeddings.extend(batch_embs)
+                for j, d in enumerate(resp.data):
+                    embeddings[i + j] = d.embedding
             except Exception as e:
                 logger.error("Embedding batch %d failed: %s", i, e)
-                # Fill with zeros for failed batch
-                all_embeddings.extend([[0.0] * EMBEDDING_DIM] * len(batch))
+                # Leave zeros for the failed batch
 
             if (i + batch_size) % 5000 == 0 or i + batch_size >= len(names):
                 elapsed = time.time() - start
                 logger.info(
                     "  Embedded %d/%d (%.0fs)", min(i + batch_size, len(names)), len(names), elapsed
                 )
-
-        embeddings = np.array(all_embeddings, dtype=np.float32)
 
         # Save to disk
         INDEX_DIR.mkdir(parents=True, exist_ok=True)
@@ -283,10 +301,11 @@ class EmbeddingRetrieval:
         elapsed = time.time() - start
         logger.info("Embedding index built: %d indicators in %.0fs", len(codes), elapsed)
 
-        # Load into memory
+        # Load into memory (normalize IN PLACE — a divided copy doubles peak RSS)
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         norms[norms == 0] = 1
-        self._embeddings = embeddings / norms
+        embeddings /= norms
+        self._embeddings = embeddings
         self._codes = codes
         self._names = names
         self._providers = providers
