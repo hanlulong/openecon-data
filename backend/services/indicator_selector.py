@@ -367,6 +367,66 @@ class IndicatorSelector:
         exclude_codes: Optional[set] = None,
         english_terms: Optional[str] = None,
     ) -> SelectionResult:
+        """Cached wrapper around the full selection pipeline.
+
+        Confident llm_pick results for identical resolution inputs are served
+        from a per-worker TTL cache (the FTS + embedding + LLM pipeline is the
+        dominant per-query latency and the same concept recurs across users).
+        Ambiguous outcomes, rejections, and alternate-retry calls
+        (exclude_codes) always run the full pipeline.
+        """
+        cache_key = None
+        if not exclude_codes:
+            cache_key = (
+                str(provider or "").strip().upper(),
+                str(query or "").strip().lower(),
+                str(country or "").strip().upper(),
+                str(metadata_query or "").strip().lower(),
+                str(english_terms or "").strip().lower(),
+            )
+            cached = _selection_cache_get(cache_key)
+            if cached is not None:
+                logger.info(
+                    "⚡ Selection cache HIT: %r/%s -> %s",
+                    cache_key[1][:60], cache_key[0], cached.get("code"),
+                )
+                return SelectionResult(
+                    code=cached.get("code"),
+                    name=cached.get("name"),
+                    source=cached.get("source", "llm_pick"),
+                )
+
+        result = await self._select_uncached(
+            query,
+            provider,
+            country=country,
+            metadata_query=metadata_query,
+            exclude_codes=exclude_codes,
+            english_terms=english_terms,
+        )
+
+        if (
+            cache_key is not None
+            and result is not None
+            and result.code
+            and result.source == "llm_pick"
+            and not result.needs_user_choice
+        ):
+            _selection_cache_put(
+                cache_key,
+                {"code": result.code, "name": result.name, "source": result.source},
+            )
+        return result
+
+    async def _select_uncached(
+        self,
+        query: str,
+        provider: str,
+        country: Optional[str] = None,
+        metadata_query: Optional[str] = None,
+        exclude_codes: Optional[set] = None,
+        english_terms: Optional[str] = None,
+    ) -> SelectionResult:
         """
         Select the best indicator for a query.
 
@@ -1549,6 +1609,43 @@ class IndicatorSelector:
         if provider.upper() == "BIS" and code.startswith("BIS_"):
             return code[4:]
         return code
+
+
+# ---------------------------------------------------------------------------
+# Selection cache: the (FTS + embedding + LLM adjudication) pipeline is the
+# dominant per-query latency (3-10s) and the SAME concept resolves repeatedly
+# across users ("unemployment rate"/FRED). Confident llm_pick results are
+# cached per-worker with a TTL; anything ambiguous (user-choice, rejections)
+# or an alternate-retry call (exclude_codes set) bypasses the cache, and the
+# post-fetch verification/alternate-retry safety nets still run per query.
+# Cleared on restart (deploys naturally invalidate).
+# ---------------------------------------------------------------------------
+_SELECTION_CACHE: "dict[tuple, tuple[float, dict]]" = {}
+_SELECTION_CACHE_TTL_S = 6 * 3600.0
+_SELECTION_CACHE_MAX = 500
+
+
+def _selection_cache_get(key: tuple):
+    import time as _time
+
+    entry = _SELECTION_CACHE.get(key)
+    if not entry:
+        return None
+    ts, payload = entry
+    if _time.monotonic() - ts > _SELECTION_CACHE_TTL_S:
+        _SELECTION_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _selection_cache_put(key: tuple, payload: dict) -> None:
+    import time as _time
+
+    if len(_SELECTION_CACHE) >= _SELECTION_CACHE_MAX:
+        # Evict the oldest ~10% (insertion-ordered dict).
+        for old_key in list(_SELECTION_CACHE.keys())[: _SELECTION_CACHE_MAX // 10 or 1]:
+            _SELECTION_CACHE.pop(old_key, None)
+    _SELECTION_CACHE[key] = (_time.monotonic(), payload)
 
 
 class SelectionResult:
