@@ -3134,6 +3134,15 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         indicator = region_qualified_indicator_text(intent, single_provider, indicator)
         narrowed_query = f"{indicator}{country_text}"
 
+        # Provenance: this query string is PIPELINE-SYNTHESIZED (indicator +
+        # country text), not user-typed. The exact-title fail-closed contract
+        # applies only to what the user actually wrote — a synthesized string
+        # that happens to look title-shaped ("unemployment rate for United
+        # States") must fall through to the selector on an exact-title miss,
+        # not dead-end the whole sub-fetch (observed live: the unemployment
+        # leg of "US GDP and unemployment rate" failed entirely).
+        params = {**params, "__synthetic_subquery": True}
+
         single_intent = ParsedIntent(
             apiProvider=single_provider,
             indicators=[indicator],

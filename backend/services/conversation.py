@@ -240,11 +240,30 @@ class ConversationManager:
         try:
             client = _get_sync_redis()
             if client is None:
+                self._warn_degraded_continuity("redis unavailable")
                 return
             key = f"{_REDIS_KEY_PREFIX}{ctx.id}"
             client.setex(key, _get_ttl_seconds(), _serialize_context(ctx))
         except Exception as exc:
+            self._warn_degraded_continuity(f"save failed: {exc}")
             logger.debug("Redis save failed for %s: %s", ctx.id, exc)
+
+    def _warn_degraded_continuity(self, reason: str) -> None:
+        """Rate-limited WARNING when conversation persistence degrades to the
+        per-process dict: with 2 workers, follow-ups can land on the other
+        worker and silently lose context (split-brain). The old debug-level
+        log made real outages invisible in production."""
+        import time as _time
+
+        now = _time.monotonic()
+        last = getattr(self, "_last_degraded_warn", 0.0)
+        if now - last >= 60.0:
+            self._last_degraded_warn = now
+            logger.warning(
+                "Conversation continuity DEGRADED to per-process memory (%s): "
+                "multi-worker follow-ups may lose context until Redis recovers.",
+                reason,
+            )
 
     def _redis_load(self, conversation_id: str) -> Optional[ConversationContext]:
         """Try to load a conversation from Redis. Returns None on miss/error."""

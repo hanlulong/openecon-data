@@ -710,7 +710,10 @@ class FREDProvider(BaseProvider):
         if notes:
             # Truncate very long notes and split into sentences
             notes_text = notes[:500] if len(notes) > 500 else notes
-            notes_list = [n.strip() for n in notes_text.split('.') if n.strip()][:3]
+            # Split on sentence boundaries (period + whitespace), not bare
+            # periods — "U.S." was fragmenting into "U"/"S" notes, which the
+            # frontend footnote now renders visibly.
+            notes_list = [n.strip() for n in re.split(r"\.\s+", notes_text) if n.strip()][:3]
 
         # FRED's own labeling convention: foreign/aggregate series name their
         # geography in the title, US-domestic series usually don't. So when the

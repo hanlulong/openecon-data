@@ -2911,7 +2911,13 @@ async def resolve_indicator_for_fetch(
             and not has_explicit_code
             and not is_exact_match_locked(intent.parameters or params)
         )
-        if not provider_locked_natural_language:
+        # Pipeline-synthesized sub-queries (multi-indicator narrowed queries:
+        # indicator + country text) are NOT user-stated titles — the exact-title
+        # fail-closed contract exists to honor what the USER typed, so a
+        # synthetic string that merely looks title-shaped continues through the
+        # selector like provider-locked natural language does.
+        synthetic_subquery = bool((intent.parameters or params or {}).get("__synthetic_subquery"))
+        if not provider_locked_natural_language and not synthetic_subquery:
             params = _apply_indicator_with_semantic_label(indicator_query)
             params["__indicator_selection_status"] = "exact_title_unresolved"
             intent.parameters = params
