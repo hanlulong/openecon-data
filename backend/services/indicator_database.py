@@ -1151,7 +1151,8 @@ class IndicatorLookup:
             if end_date:
                 try:
                     # Check if series has data in the last 2 years
-                    from datetime import datetime
+                    # (datetime imported at module level; a local import here
+                    # shadowed it for the whole function scope)
                     end_year = int(end_date[:4]) if len(end_date) >= 4 else 0
                     current_year = datetime.now().year
                     if end_year >= current_year - 1:
@@ -1248,6 +1249,22 @@ class IndicatorLookup:
                     source_lower = str(source_value).lower()
                     if any(marker in source_lower for marker in _WB_ARCHIVAL_SOURCE_MARKERS):
                         score -= 20  # Strong penalty for archived/discontinued sources
+
+                # Generic freshness: last_updated is backfilled from the source
+                # DATABASE's lastupdated (scripts/backfill_wb_source_freshness).
+                # A database that stopped updating years ago (e.g. a FY2013-17
+                # country program) must not out-rank the continuously-updated
+                # WDI for the same concept. Scaled, uniform, no code lists.
+                last_updated = str(r.get("last_updated") or "")
+                if len(last_updated) >= 4 and last_updated[:4].isdigit():
+                    try:
+                        age_years = datetime.now(timezone.utc).year - int(last_updated[:4])
+                        if age_years >= 8:
+                            score -= 18
+                        elif age_years >= 3:
+                            score -= 10
+                    except ValueError:
+                        pass
 
             r["_score"] = score
             ranked.append(r)
