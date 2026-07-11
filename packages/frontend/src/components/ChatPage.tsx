@@ -87,6 +87,24 @@ function getDisplayContent(message: Message): string {
   return message.content
 }
 
+// Render assistant text: convert `**bold**` runs into <strong> elements while
+// leaving everything else as plain text (newlines are preserved by the
+// bubble's white-space: pre-wrap). Backend catalog and research messages use
+// only `**bold**` + newlines as markup, so a full markdown parser is
+// unnecessary — and returning React text nodes (never dangerouslySetInnerHTML)
+// keeps the output XSS-safe.
+function renderAssistantContent(content: string): React.ReactNode {
+  if (!content.includes('**')) {
+    return content
+  }
+  // The capturing group keeps the inner text, so odd-indexed segments are the
+  // bolded runs and even-indexed segments are the surrounding plain text.
+  const segments = content.split(/\*\*(.+?)\*\*/g)
+  return segments.map((segment, i) =>
+    i % 2 === 1 ? <strong key={i}>{segment}</strong> : segment
+  )
+}
+
 // Example queries — the single source of truth for both the welcome screen
 // (a randomized subset of 4) and the anonymous sidebar (full list). Curated to
 // span providers (FRED, World Bank, Eurostat, Statistics Canada, IMF, BIS, UN
@@ -103,6 +121,28 @@ const EXAMPLE_QUERIES = [
   "US inflation rate",
 ]
 
+// Simplified-Chinese counterparts, one-to-one with EXAMPLE_QUERIES so the
+// welcome chips and anonymous sidebar keep the same provider/difficulty breadth
+// (FRED rate, World Bank comparison, Eurostat, Statistics Canada, IMF, BIS,
+// UN Comtrade, plus a simple no-date starter) for zh-locale visitors.
+const EXAMPLE_QUERIES_ZH = [
+  "美国失业率 2019-2024",
+  "中国、印度、巴西 GDP增长率 2018-2023",
+  "欧元区通胀率 2019-2024",
+  "加拿大失业率 2019-2024",
+  "美国、德国、日本 GDP增长率 来自IMF 2018-2023",
+  "美国、英国、日本 央行政策利率 来自BIS 2019-2024",
+  "美国、中国 出口总额 2018-2023 来自Comtrade",
+  "美国通胀率",
+]
+
+// Pick the example set once from the browser locale (zh → Simplified Chinese).
+// Both the shuffled welcome subset and the full sidebar list read from this.
+const ACTIVE_EXAMPLE_QUERIES =
+  typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('zh')
+    ? EXAMPLE_QUERIES_ZH
+    : EXAMPLE_QUERIES
+
 export function ChatPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -116,7 +156,7 @@ export function ChatPage() {
   // screen, so repeat visitors don't always see the same four chips. The
   // sidebar still shows the full EXAMPLE_QUERIES list.
   const welcomeExamples = useMemo(() => {
-    const shuffled = [...EXAMPLE_QUERIES]
+    const shuffled = [...ACTIVE_EXAMPLE_QUERIES]
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       const tmp = shuffled[i]
@@ -283,7 +323,7 @@ export function ChatPage() {
         content: '', // Empty content - details shown in MessageChart component
         timestamp: new Date(item.timestamp),
         data: item.data,
-        chartType: determineChartType(item.data),
+        chartType: item.intent?.recommendedChartType || determineChartType(item.data),
       }])
     } else {
       // If no data, just show the user's query
@@ -399,26 +439,10 @@ export function ChatPage() {
             return
           }
 
-          if (response.error) {
-            setActiveProcessingSteps([])
-            const errorMessage = response.message || response.error
-            let displayMessage = errorMessage
-            if (response.error === 'data_not_available') {
-              displayMessage = `📊 ${errorMessage}`
-            } else if (response.error === 'processing_error') {
-              displayMessage = `⚠️ ${errorMessage}`
-            }
-
-            setMessages(prev => [...prev, {
-              role: 'assistant',
-              content: displayMessage,
-              timestamp: new Date(),
-              processingSteps: response.processingSteps,
-              processingTimeMs: response.processingTimeMs || elapsed,
-              isError: true,
-            }])
-            return
-          }
+          // NOTE: errors never reach onData — the backend routes any
+          // result.error to the SSE `error` event (main.py stream endpoint),
+          // which is dispatched to onError below. onError is the single error
+          // path; a dead `if (response.error)` branch was removed here.
 
           if (response.clarificationNeeded) {
             setActiveProcessingSteps([])
@@ -1181,7 +1205,7 @@ print(f"\\nData source: ${sourceUrl}")
             !isAuthenticated && messages.length === 0 && (
               <div className="sidebar-examples">
                 <h3>Example Queries</h3>
-                {EXAMPLE_QUERIES.map((ex, i) => (
+                {ACTIVE_EXAMPLE_QUERIES.map((ex, i) => (
                   <button
                     key={i}
                     className="example-btn-sidebar"
@@ -1272,7 +1296,11 @@ print(f"\\nData source: ${sourceUrl}")
               return (
               <div key={i} className={`message-bubble ${msg.role} ${msg.isProMode ? 'pro-mode' : ''} ${msg.isError ? 'error-response' : ''}`}>
                 {displayContent && (
-                  <div className="bubble-content">{displayContent}</div>
+                  msg.role === 'assistant' ? (
+                    <div className="bubble-content" dir="auto">{renderAssistantContent(displayContent)}</div>
+                  ) : (
+                    <div className="bubble-content">{displayContent}</div>
+                  )
                 )}
 
                 {msg.isError && msg.role === 'assistant' && (() => {

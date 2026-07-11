@@ -219,6 +219,83 @@ function makeYAxisTickFormatter(values: number[]): (value: number) => string {
   }
 }
 
+// Dual-axis grouping. A single Y axis flattens series whose scales differ by
+// orders of magnitude (e.g. GDP in trillions plotted next to a 3-5% rate makes
+// the rate an unreadable flat line). computeAxisGroups buckets series by
+// normalized unit + order of magnitude, then caps at two axis groups by merging
+// the closest-magnitude buckets. The component only actually splits onto two
+// axes when the two groups differ by ~100x+ (MAGNITUDE_GAP_FOR_DUAL_AXIS) — a
+// handful of countries' percentage rates (all within an order of magnitude)
+// stay on one shared axis, where comparing them is meaningful.
+const MAGNITUDE_GAP_FOR_DUAL_AXIS = 2
+
+type AxisGroup = {
+  seriesNames: string[]
+  magnitude: number
+}
+
+function seriesMagnitude(series: NormalizedData): number {
+  let maxAbs = 0
+  for (const point of series.data) {
+    if (point.value !== null && Number.isFinite(point.value)) {
+      const abs = Math.abs(point.value)
+      if (abs > maxAbs) maxAbs = abs
+    }
+  }
+  return maxAbs > 0 ? Math.floor(Math.log10(maxAbs)) : 0
+}
+
+// Returns 1 or 2 groups, sorted by magnitude ascending (so a caller that goes
+// dual puts the larger-magnitude group on the right axis). `labels` is the
+// per-series column key used in the chart rows, aligned with `data` by index.
+function computeAxisGroups(data: NormalizedData[], labels: string[]): AxisGroup[] {
+  if (data.length === 0) return []
+
+  // Bucket by normalized unit + order of magnitude.
+  const buckets = new Map<string, AxisGroup>()
+  data.forEach((series, index) => {
+    const name = labels[index]
+    const magnitude = seriesMagnitude(series)
+    const unit = (series.metadata.unit || '').trim().toLowerCase()
+    const key = `${unit}|${magnitude}`
+    const existing = buckets.get(key)
+    if (existing) {
+      existing.seriesNames.push(name)
+      existing.magnitude = Math.max(existing.magnitude, magnitude)
+    } else {
+      buckets.set(key, { seriesNames: [name], magnitude })
+    }
+  })
+
+  let groups = Array.from(buckets.values())
+
+  // Cap at two groups: repeatedly merge the two whose magnitudes are closest.
+  while (groups.length > 2) {
+    let bestI = 0
+    let bestJ = 1
+    let bestDist = Infinity
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const dist = Math.abs(groups[i].magnitude - groups[j].magnitude)
+        if (dist < bestDist) {
+          bestDist = dist
+          bestI = i
+          bestJ = j
+        }
+      }
+    }
+    const merged: AxisGroup = {
+      seriesNames: [...groups[bestI].seriesNames, ...groups[bestJ].seriesNames],
+      magnitude: Math.max(groups[bestI].magnitude, groups[bestJ].magnitude),
+    }
+    groups = groups.filter((_, idx) => idx !== bestI && idx !== bestJ)
+    groups.push(merged)
+  }
+
+  groups.sort((a, b) => a.magnitude - b.magnitude)
+  return groups
+}
+
 function formatXAxisTick(dateStr: string, frequency?: string): string {
   if (!frequency) return dateStr
 
@@ -336,6 +413,39 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
     }
     return makeYAxisTickFormatter(values)
   }, [chartData, seriesNames])
+
+  // When series span two very different scales, split them onto a left and a
+  // right Y axis; otherwise stay null and render exactly one axis (the existing
+  // single-axis path, unchanged).
+  const dualAxis = useMemo(() => {
+    const groups = computeAxisGroups(data, seriesNames)
+    if (groups.length < 2) return null
+    const [left, right] = groups
+    if (right.magnitude - left.magnitude < MAGNITUDE_GAP_FOR_DUAL_AXIS) return null
+
+    const axisIdByName = new Map<string, 'left' | 'right'>()
+    left.seriesNames.forEach((name) => axisIdByName.set(name, 'left'))
+    right.seriesNames.forEach((name) => axisIdByName.set(name, 'right'))
+
+    const valuesFor = (names: string[]) => {
+      const values: number[] = []
+      for (const row of chartData) {
+        for (const name of names) {
+          const v = row[name]
+          if (typeof v === 'number') values.push(v)
+        }
+      }
+      return values
+    }
+
+    return {
+      axisIdByName,
+      leftFormatter: makeYAxisTickFormatter(valuesFor(left.seriesNames)),
+      rightFormatter: makeYAxisTickFormatter(valuesFor(right.seriesNames)),
+    }
+  }, [data, seriesNames, chartData])
+  const isDual = dualAxis !== null
+
   const [showApiUrls, setShowApiUrls] = useState(false)
 
   // Responsive chart height based on viewport width
@@ -465,34 +575,69 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             minTickGap={40}
             dy={8}
           />
-          <YAxis
-            stroke={CHART_STYLE.axis}
-            style={{ fontSize: '11px' }}
-            tickFormatter={yAxisTickFormatter}
-            tickLine={false}
-            axisLine={false}
-            width={60}
-            dx={-5}
-          />
+          {isDual && dualAxis ? (
+            <>
+              <YAxis
+                yAxisId="left"
+                stroke={CHART_STYLE.axis}
+                style={{ fontSize: '11px' }}
+                tickFormatter={dualAxis.leftFormatter}
+                tickLine={false}
+                axisLine={false}
+                width={60}
+                dx={-5}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke={CHART_STYLE.axis}
+                style={{ fontSize: '11px' }}
+                tickFormatter={dualAxis.rightFormatter}
+                tickLine={false}
+                axisLine={false}
+                width={60}
+                dx={5}
+              />
+            </>
+          ) : (
+            <YAxis
+              stroke={CHART_STYLE.axis}
+              style={{ fontSize: '11px' }}
+              tickFormatter={yAxisTickFormatter}
+              tickLine={false}
+              axisLine={false}
+              width={60}
+              dx={-5}
+            />
+          )}
           <Tooltip content={<CustomTooltip />} />
           <Legend
             wrapperStyle={{ paddingTop: '16px', fontSize: '12px' }}
             iconType="circle"
             iconSize={8}
           />
-          {seriesNames.map((name, index) => (
-            <Line
-              key={name}
-              type="monotone"
-              dataKey={name}
-              stroke={CHART_COLORS[index % CHART_COLORS.length]}
-              strokeWidth={2.5}
-              dot={chartData.length > 60 ? false : { r: 4, fill: '#fff', stroke: CHART_COLORS[index % CHART_COLORS.length], strokeWidth: 2 }}
-              activeDot={{ r: 6, fill: CHART_COLORS[index % CHART_COLORS.length], stroke: '#fff', strokeWidth: 2 }}
-              animationDuration={530}
-              animationEasing="ease-out"
-            />
-          ))}
+          {seriesNames.map((name, index) => {
+            const dualProps = isDual && dualAxis
+              ? {
+                  yAxisId: dualAxis.axisIdByName.get(name) ?? 'left',
+                  name: `${name} (${dualAxis.axisIdByName.get(name) === 'right' ? 'R' : 'L'})`,
+                }
+              : {}
+            return (
+              <Line
+                key={name}
+                type="monotone"
+                dataKey={name}
+                {...dualProps}
+                stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                strokeWidth={2.5}
+                dot={chartData.length > 60 ? false : { r: 4, fill: '#fff', stroke: CHART_COLORS[index % CHART_COLORS.length], strokeWidth: 2 }}
+                activeDot={{ r: 6, fill: CHART_COLORS[index % CHART_COLORS.length], stroke: '#fff', strokeWidth: 2 }}
+                animationDuration={530}
+                animationEasing="ease-out"
+              />
+            )
+          })}
         </LineChart>
       )
     }
@@ -515,31 +660,66 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             minTickGap={40}
             dy={8}
           />
-          <YAxis
-            stroke={CHART_STYLE.axis}
-            style={{ fontSize: '11px' }}
-            tickFormatter={yAxisTickFormatter}
-            tickLine={false}
-            axisLine={false}
-            width={60}
-            dx={-5}
-          />
+          {isDual && dualAxis ? (
+            <>
+              <YAxis
+                yAxisId="left"
+                stroke={CHART_STYLE.axis}
+                style={{ fontSize: '11px' }}
+                tickFormatter={dualAxis.leftFormatter}
+                tickLine={false}
+                axisLine={false}
+                width={60}
+                dx={-5}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke={CHART_STYLE.axis}
+                style={{ fontSize: '11px' }}
+                tickFormatter={dualAxis.rightFormatter}
+                tickLine={false}
+                axisLine={false}
+                width={60}
+                dx={5}
+              />
+            </>
+          ) : (
+            <YAxis
+              stroke={CHART_STYLE.axis}
+              style={{ fontSize: '11px' }}
+              tickFormatter={yAxisTickFormatter}
+              tickLine={false}
+              axisLine={false}
+              width={60}
+              dx={-5}
+            />
+          )}
           <Tooltip content={<CustomTooltip />} />
           <Legend
             wrapperStyle={{ paddingTop: '16px', fontSize: '12px' }}
             iconType="rect"
             iconSize={10}
           />
-          {seriesNames.map((name, index) => (
-            <Bar
-              key={name}
-              dataKey={name}
-              fill={CHART_COLORS[index % CHART_COLORS.length]}
-              radius={[6, 6, 0, 0]}
-              animationDuration={400}
-              animationEasing="ease-out"
-            />
-          ))}
+          {seriesNames.map((name, index) => {
+            const dualProps = isDual && dualAxis
+              ? {
+                  yAxisId: dualAxis.axisIdByName.get(name) ?? 'left',
+                  name: `${name} (${dualAxis.axisIdByName.get(name) === 'right' ? 'R' : 'L'})`,
+                }
+              : {}
+            return (
+              <Bar
+                key={name}
+                dataKey={name}
+                {...dualProps}
+                fill={CHART_COLORS[index % CHART_COLORS.length]}
+                radius={[6, 6, 0, 0]}
+                animationDuration={400}
+                animationEasing="ease-out"
+              />
+            )
+          })}
         </BarChart>
       )
     }
@@ -671,6 +851,23 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
           })}
         </ul>
       </div>
+
+      {/* Transparency notes from the backend (coverage-partial, defaulted
+          members, aggregation caveats). Deduped across series, plain text. */}
+      {(() => {
+        const notes = Array.from(new Set(data.flatMap((d) => d.metadata?.notes ?? [])))
+        if (notes.length === 0) return null
+        return (
+          <ul className="chart-notes">
+            {notes.map((note, index) => (
+              <li key={index} className="chart-note">
+                <span className="chart-note-icon" aria-hidden="true">ℹ️</span>
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
+        )
+      })()}
 
       <div className="data-viz-header">
         {!isCategoricalData && (

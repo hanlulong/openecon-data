@@ -1309,6 +1309,31 @@
   margin-bottom: 0;
 }
 
+/* Transparency notes (metadata.notes) shown under the series summary */
+.chart-notes {
+  list-style: none;
+  margin: 0 0 1.5rem 0;
+  padding: 0;
+}
+
+.chart-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #6b7280;
+  margin-bottom: 0.35rem;
+}
+
+.chart-note:last-child {
+  margin-bottom: 0;
+}
+
+.chart-note-icon {
+  flex-shrink: 0;
+}
+
 /* Series header and badges layout */
 .series-header {
   display: inline;

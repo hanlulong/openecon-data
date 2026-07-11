@@ -13,6 +13,29 @@ axios.defaults.timeout = DEFAULT_TIMEOUT;
 const TOKEN_KEY = 'openecon_auth_token';
 const AUTH_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 30;
 
+// Anonymous session token. The backend issues it as an `X-OE-Session` response
+// header on the first anonymous request and expects it echoed back on every
+// subsequent request so the caller keeps a stable server-side identity across
+// page reloads (localStorage survives a reload; the in-memory value did not).
+const ANON_SESSION_KEY = 'oe_anon_session_token';
+
+const anonSession = {
+  get(): string | null {
+    try {
+      return localStorage.getItem(ANON_SESSION_KEY);
+    } catch {
+      return null;
+    }
+  },
+  set(token: string): void {
+    try {
+      localStorage.setItem(ANON_SESSION_KEY, token);
+    } catch {
+      // localStorage unavailable (private mode / disabled) — nothing to persist.
+    }
+  },
+};
+
 export const tokenManager = {
   getToken(): string | null {
     const localToken = localStorage.getItem(TOKEN_KEY);
@@ -57,6 +80,12 @@ axios.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Echo the persisted anonymous session token so the backend keeps a stable
+  // identity for this browser across reloads.
+  const anonToken = anonSession.get();
+  if (anonToken) {
+    config.headers['X-OE-Session'] = anonToken;
+  }
   return config;
 });
 
@@ -69,6 +98,12 @@ axios.interceptors.response.use(
     // stuck and silently masks future expirations.
     if (isLoggingOut) {
       isLoggingOut = false;
+    }
+    // Persist a freshly-issued anonymous session token (axios lowercases
+    // response header keys) so it rides along on subsequent requests.
+    const anonToken = response.headers?.['x-oe-session'];
+    if (typeof anonToken === 'string' && anonToken) {
+      anonSession.set(anonToken);
     }
     return response;
   },
@@ -226,6 +261,12 @@ export const api = {
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
+    // Echo the persisted anonymous session token (fetch bypasses the axios
+    // request interceptor, so attach it here too).
+    const anonToken = anonSession.get();
+    if (anonToken) {
+      headers['X-OE-Session'] = anonToken;
+    }
 
     // Always use standard endpoint — Pro Mode is auto-detected by backend
     const endpoint = `${API_BASE_URL}/query/stream`;
@@ -239,6 +280,13 @@ export const api = {
       body: JSON.stringify({ query, conversationId, sessionId }),
       signal: abortSignal,
     });
+
+    // Persist a freshly-issued anonymous session token so it rides along on
+    // subsequent requests (the backend sets it on the stream response too).
+    const returnedAnonToken = response.headers.get('X-OE-Session');
+    if (returnedAnonToken) {
+      anonSession.set(returnedAnonToken);
+    }
 
     if (!response.ok) {
       // Mirror lib/errors.ts: read error → detail → message in priority order,
