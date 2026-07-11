@@ -42,7 +42,9 @@ class ExportService:
             for point in series.data:
                 writer.writerow(
                     {
-                        "date": point.date,
+                        # Dates are provider-supplied strings — sanitize like
+                        # every other text cell (formula-injection hygiene).
+                        "date": self._csv_safe(point.date),
                         "value": "" if point.value is None else point.value,
                         "indicator": self._csv_safe(series.metadata.indicator),
                         "country": self._csv_safe(series.metadata.country or ""),
@@ -73,7 +75,7 @@ class ExportService:
             writer.writeheader()
 
             for date in all_dates:
-                row = {"date": date}
+                row = {"date": self._csv_safe(date)}
                 for name, mapping in zip(column_names, series_maps):
                     value = mapping.get(date)
                     row[name] = "" if value is None else value
@@ -116,7 +118,7 @@ class ExportService:
             # Build column data
             rows = []
             for date in all_dates:
-                row = {"date": date}
+                row = {"date": self._csv_safe(date)}
                 for series in data:
                     # Create column name from series metadata
                     parts = [

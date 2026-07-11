@@ -188,7 +188,19 @@ class SupabaseAuthService:
             # Most "registration errors" are expected client outcomes (duplicate
             # email, weak password rejected by Supabase) — log without a traceback.
             logger.warning("Registration failed: %s", str(e)[:200])
-            return AuthResponse(success=False, error=str(e))
+            # Only forward messages that are safe, expected user-facing
+            # outcomes; anything else (network faults, config issues) must not
+            # leak internal detail to an unauthenticated caller.
+            raw = str(e).lower()
+            if "already registered" in raw or "already exists" in raw:
+                safe = "An account with this email already exists. Try logging in instead."
+            elif "password" in raw:
+                safe = "Password was rejected. Use a longer password with mixed characters."
+            elif "email" in raw and ("invalid" in raw or "format" in raw):
+                safe = "Please enter a valid email address."
+            else:
+                safe = "Registration failed. Please try again in a moment."
+            return AuthResponse(success=False, error=safe)
 
     async def login(self, request: LoginRequest) -> AuthResponse:
         """Login user with Supabase Auth asynchronously."""

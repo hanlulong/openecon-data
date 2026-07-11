@@ -77,7 +77,10 @@ def fetch_rows(conn, provider: str, min_popularity: int, limit: int, force: bool
         where += " AND category = ?"
         params.append(category)
     else:
-        where += " AND popularity >= ?"
+        # NULL popularity (every provider except FRED) must not exclude rows:
+        # COALESCE lets --min-popularity 0 mean "all rows" for such providers
+        # while FRED keeps its popularity ranking/floor.
+        where += " AND COALESCE(popularity, 0) >= ?"
         params.append(min_popularity)
     if not force:
         where += " AND (synonyms IS NULL OR synonyms = '')"
@@ -158,6 +161,13 @@ def main() -> int:
     ap.add_argument("--min-popularity", type=int, default=60)
     ap.add_argument("--limit", type=int, default=5000)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument(
+        "--append", action="store_true",
+        help="Append generated phrases to EXISTING synonyms instead of "
+             "replacing them (use with --force for providers whose synonyms "
+             "column holds structural aliases, e.g. StatsCan legacy table "
+             "numbers, that must be preserved).",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--category", default=None,
@@ -195,10 +205,21 @@ def main() -> int:
             if args.dry_run:
                 print(f"  {code}: {phrases}")
             else:
-                conn.execute(
-                    "UPDATE indicators SET synonyms = ? WHERE provider = ? AND code = ?",
-                    (phrases, args.provider, code),
-                )
+                if args.append:
+                    conn.execute(
+                        """UPDATE indicators
+                           SET synonyms = CASE
+                               WHEN synonyms IS NULL OR synonyms = '' THEN ?
+                               ELSE synonyms || ', ' || ?
+                           END
+                           WHERE provider = ? AND code = ?""",
+                        (phrases, phrases, args.provider, code),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE indicators SET synonyms = ? WHERE provider = ? AND code = ?",
+                        (phrases, args.provider, code),
+                    )
             updated += 1
         if not args.dry_run:
             conn.commit()
