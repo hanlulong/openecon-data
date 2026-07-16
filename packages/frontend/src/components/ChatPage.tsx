@@ -199,10 +199,6 @@ export function ChatPage() {
   // unmount — otherwise it fires setState on an unmounted component.
   const historyReloadTimerRef = useRef<number | null>(null)
 
-  useEffect(() => {
-    document.title = 'Chat | OpenEcon.ai'
-  }, [])
-
   // Email-confirmation landing: Supabase redirects to /chat?confirmed=1 after
   // the user clicks the link in their inbox. Show a one-time success banner,
   // open the login modal, and strip the param so a refresh doesn't re-show it.

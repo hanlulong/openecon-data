@@ -1255,6 +1255,9 @@ export function LandingPage() {
             <a href="https://github.com/hanlulong/openecon-data" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
               GitHub
             </a>
+            <a href="https://openecon.ai/" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
+              More tools ↗
+            </a>
             <a href="mailto:contact@openecon.ai" className="hover:text-gray-900">
               Contact
             </a>

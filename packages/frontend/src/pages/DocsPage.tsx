@@ -1,12 +1,6 @@
-import { useEffect } from 'react'
-
 const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
 export function DocsPage() {
-  useEffect(() => {
-    document.title = 'Documentation | OpenEcon.ai'
-  }, [])
-
   return (
     <div className="min-h-screen bg-gray-50 py-8 sm:py-12 lg:py-16">
       <div className="mx-auto max-w-4xl px-4 sm:px-6">

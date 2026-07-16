@@ -1,54 +1,41 @@
-# OpenEcon.ai - AI Economic Data Platform
-# https://data.openecon.ai
-# https://data.openecon.ai/chat
-# Source: https://github.com/hanlulong/openecon-data
+# OpenEcon.ai — AI Economic Data Platform
 
-## About
-OpenEcon.ai is an AI-powered economic data aggregation platform that allows users to query economic data using natural language. It provides access to 10+ authoritative data sources including FRED, World Bank, IMF, UN Comtrade, Statistics Canada, Eurostat, OECD, BIS, ExchangeRate-API, and CoinGecko.
+> Free, AI-powered natural-language search over 330,000+ economic indicators from FRED, World Bank, IMF, Eurostat, Statistics Canada, BIS, UN Comtrade, OECD, ExchangeRate-API, and CoinGecko. Ask a question in plain English and get instant charts plus CSV/JSON exports with full source provenance.
 
-## Capabilities
-- Natural language queries for economic data
-- Access to GDP, inflation, unemployment, trade data, interest rates, exchange rates, and more
-- Interactive data visualization with line, bar, and table views
-- Data export in CSV and JSON formats
-- Pro Mode for advanced AI-generated Python analysis
-- MCP (Model Context Protocol) server for programmatic access
+OpenEcon.ai routes each query to the right authoritative provider automatically, resolves the correct indicator, fetches and normalizes the series, and returns a chart, a narrative summary, and the exact source URL. No registration is required for basic queries.
 
-## Data Sources
-1. FRED (Federal Reserve Economic Data) - US economic data with 90,000+ series
-2. World Bank - Global development indicators for 200+ countries
-3. IMF (International Monetary Fund) - International financial statistics
-4. UN Comtrade - International trade data and bilateral trade flows
-5. Statistics Canada - Canadian economic and social data
-6. Eurostat - European Union statistics
-7. OECD - Economic data for OECD member countries
-8. BIS (Bank for International Settlements) - Central bank and financial stability data
-9. ExchangeRate-API - Real-time and historical currency exchange rates
-10. CoinGecko - Cryptocurrency prices and market data
+## How to use
 
-## Example Queries
-- "Show me US GDP growth for the last 10 years"
+- [Web chat](https://data.openecon.ai/chat): Type a natural-language question and get charts + exportable data.
+- [MCP server](https://data.openecon.ai/mcp): Model Context Protocol endpoint over Server-Sent Events (SSE), exposing the `query_data` operation. Install for Claude: `claude mcp add --transport sse openecon-data https://data.openecon.ai/mcp --scope user`
+- [GitHub / pip](https://github.com/hanlulong/openecon-data): Source, installation, and API details.
+
+## Example queries
+
+- "US unemployment rate and inflation 2019–2024"
+- "GDP growth for China, India, and Brazil 2018–2023"
 - "Compare inflation rates between US, UK, and Japan"
-- "What is the unemployment rate in Canada?"
-- "Show me China's total exports for 2020-2024"
 - "EUR to USD exchange rate history"
-- "Bitcoin price for the last year"
 
-## API Access
-OpenEcon.ai provides an MCP (Model Context Protocol) server endpoint at:
-- Endpoint: https://data.openecon.ai/mcp
-- Transport: Server-Sent Events (SSE)
-- Available operation: query_data
+## Data sources
 
-## Contact
-Email: hanlulong@gmail.com
-Website: https://data.openecon.ai
+- FRED (Federal Reserve Economic Data) — US economic data, 90,000+ series
+- World Bank — global development indicators for 200+ countries
+- IMF — international financial statistics
+- UN Comtrade — international and bilateral trade flows
+- Statistics Canada — Canadian economic and social data
+- Eurostat — European Union statistics
+- OECD — data for OECD member countries
+- BIS (Bank for International Settlements) — central bank and financial stability data
+- ExchangeRate-API — currency exchange rates
+- CoinGecko — cryptocurrency prices and market data
 
-## Technical Details
-- Frontend: React/TypeScript with Vite
-- Backend: Python FastAPI
-- Visualization: Recharts
-- Authentication: Supabase
+## Part of OpenEcon.ai
 
-## Usage
-Visit https://data.openecon.ai/chat to start querying economic data. No registration required for basic queries.
+OpenEcon.ai is an open-source toolkit for economics research. All projects live at [github.com/hanlulong](https://github.com/hanlulong).
+
+- [OpenEcon.ai](https://openecon.ai/): Home of the OpenEcon open-source toolkit for economists.
+- [stata-mcp](https://github.com/hanlulong/stata-mcp): MCP server that lets AI assistants run and inspect Stata.
+- [econ-writing-skill](https://github.com/hanlulong/econ-writing-skill): Reusable writing workflows and prompt patterns for economists.
+- [econ-slides-skill](https://github.com/hanlulong/econ-slides-skill): Generate economics presentation slides with AI.
+- [econ-paper-review-skill](https://github.com/hanlulong/econ-paper-review-skill): AI-assisted review of economics papers.

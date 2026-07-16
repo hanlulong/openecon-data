@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom'
-import { useEffect } from 'react'
 
 const LIVE_DATA_APP_URL = 'https://data.openecon.ai/chat'
 
@@ -97,10 +96,6 @@ const exampleCategories: ExampleCategory[] = [
 ]
 
 export function ExamplesPage() {
-  useEffect(() => {
-    document.title = 'Economic Data Query Examples | OpenEcon.ai'
-  }, [])
-
   const buildQueryUrl = (query: string) => `${LIVE_DATA_APP_URL}?query=${encodeURIComponent(query)}`
 
   return (
