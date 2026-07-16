@@ -269,7 +269,14 @@ async def lifespan(app: FastAPI):
             await file_cleanup_task
 
 
-app = FastAPI(title="OpenEcon Data API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="OpenEcon Data API",
+    version="1.0.0",
+    lifespan=lifespan,
+    # Apache proxies only /api/* to the backend, so the generated OpenAPI spec
+    # must live under /api to be reachable (default /openapi.json is not proxied).
+    openapi_url="/api/openapi.json",
+)
 
 # Rate limiting configuration using custom middleware approach
 # This avoids Pydantic/FastAPI compatibility issues with slowapi decorators.
