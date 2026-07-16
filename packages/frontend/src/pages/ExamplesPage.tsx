@@ -197,12 +197,12 @@ export function ExamplesPage() {
             <div className="text-sm">
               © {new Date().getFullYear()} OpenEcon.ai. Query economic data with AI.
             </div>
-            <nav className="flex items-center gap-6 text-sm">
+            <nav className="flex flex-wrap items-center justify-center gap-4 md:gap-6 text-sm">
               <Link to="/" className="hover:text-white">Home</Link>
               <a href={LIVE_DATA_APP_URL} className="hover:text-white">Chat</a>
               <Link to="/docs" className="hover:text-white">Docs</Link>
               <Link to="/examples" className="hover:text-white">Examples</Link>
-              <a href="mailto:hanlulong@gmail.com" className="hover:text-white">Contact</a>
+              <a href="mailto:contact@openecon.ai" className="hover:text-white">Contact</a>
             </nav>
           </div>
         </div>

@@ -81,8 +81,8 @@ export function DocsPage() {
             <p className="mt-2 text-sm text-gray-600 sm:text-base">
               Our full documentation covers SDK usage (Python/TypeScript), infrastructure deployment, and enterprise
               authentication. Reach us at{' '}
-              <a className="text-indigo-600 underline" href="mailto:hanlulong@gmail.com">
-                hanlulong@gmail.com
+              <a className="text-indigo-600 underline" href="mailto:contact@openecon.ai">
+                contact@openecon.ai
               </a>{' '}
               for onboarding assistance.
             </p>

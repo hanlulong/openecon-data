@@ -1,7 +1,7 @@
 # Security Policy for OpenEcon
 # https://data.openecon.ai
 
-Contact: mailto:hanlulong@gmail.com
+Contact: mailto:contact@openecon.ai
 Expires: 2026-12-31T23:59:59.000Z
 Preferred-Languages: en
 Canonical: https://data.openecon.ai/.well-known/security.txt
