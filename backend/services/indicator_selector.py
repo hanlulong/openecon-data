@@ -352,6 +352,43 @@ always ask for a variant. When none are valid, REJECT and provide better SEARCH
 terms."""
 
 
+def build_region_selection_kwargs(
+    region: Optional[str],
+    provider: Optional[str],
+    statscan_provider: Any = None,
+) -> Dict[str, Any]:
+    """Optional region kwargs for ``IndicatorSelector.select``.
+
+    Single construction point for region steering so every select() call site
+    (main resolution, prefetch clarification, option collection) threads the
+    region identically: the region string joins the selection-cache key and the
+    adjudicator prompt; for StatsCan a cache-only Geography coverage probe is
+    attached so candidates are annotated with real membership. The region is
+    NEVER placed into retrieval/selector query text (nationally-titled cubes
+    that contain the province as a member would be wrongly rejected). Returns
+    {} when no region is set, leaving non-region call sites untouched.
+    """
+    region_s = str(region or "").strip()
+    if not region_s:
+        return {}
+    kwargs: Dict[str, Any] = {"region": region_s}
+    if (
+        normalize_provider_name(provider or "") == "STATSCAN"
+        and statscan_provider is not None
+        and hasattr(statscan_provider, "region_coverage_from_cache")
+    ):
+        async def _region_coverage_probe(
+            codes: List[str],
+            _prov=statscan_provider,
+            _reg=region_s,
+        ) -> Dict[str, Optional[bool]]:
+            # Cache-only; no network on the adjudication hot path.
+            return _prov.region_coverage_from_cache(codes, _reg)
+
+        kwargs["region_coverage_probe"] = _region_coverage_probe
+    return kwargs
+
+
 class IndicatorSelector:
     """Hybrid retrieval plus LLM indicator selection."""
 

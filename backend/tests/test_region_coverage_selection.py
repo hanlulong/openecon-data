@@ -458,3 +458,75 @@ def test_post_pick_guard_skipped_for_non_llm_pick() -> None:
     except Exception:  # noqa: BLE001 - dispatch fallthrough is expected here
         pass
     assert prov.calls == []
+
+
+# ---------------------------------------------------------------------------
+# build_region_selection_kwargs — the single construction point every select()
+# call site (resolution, prefetch clarification, option collection) uses.
+# The prefetch sites were region-unaware: an "Ontario ..." query shared a
+# selection-cache entry (and a national pick) with the region-less query.
+# ---------------------------------------------------------------------------
+
+def test_build_region_selection_kwargs_empty_without_region() -> None:
+    from backend.services.indicator_selector import build_region_selection_kwargs
+
+    assert build_region_selection_kwargs(None, "STATSCAN", object()) == {}
+    assert build_region_selection_kwargs("   ", "FRED", None) == {}
+
+
+def test_build_region_selection_kwargs_fred_region_only() -> None:
+    from backend.services.indicator_selector import build_region_selection_kwargs
+
+    kw = build_region_selection_kwargs("California", "FRED", None)
+    assert kw == {"region": "California"}
+
+
+def test_build_region_selection_kwargs_statscan_attaches_cache_only_probe() -> None:
+    from backend.services.indicator_selector import build_region_selection_kwargs
+
+    class _Prov:
+        def __init__(self):
+            self.calls = []
+
+        def region_coverage_from_cache(self, codes, region):
+            self.calls.append((tuple(codes), region))
+            return {c: True for c in codes}
+
+    prov = _Prov()
+    kw = build_region_selection_kwargs("Ontario", "StatsCan", prov)
+    assert kw["region"] == "Ontario"
+    probe = kw["region_coverage_probe"]
+    result = asyncio.run(probe(["14100375"]))
+    assert result == {"14100375": True}
+    assert prov.calls == [(("14100375",), "Ontario")]
+
+
+def test_collect_statscan_selector_choice_options_threads_region_kwargs() -> None:
+    from backend.services import indicator_clarification as ic
+
+    captured = {}
+
+    class _FakeSelector:
+        async def select(self, query, provider, country=None, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(needs_user_choice=False, options=[], code=None)
+
+    class _FakeModule:
+        IndicatorSelector = _FakeSelector
+
+    real_import = ic.collect_statscan_selector_choice_options
+
+    async def _run():
+        import backend.services.indicator_selector as sel_mod
+        orig = sel_mod.IndicatorSelector
+        sel_mod.IndicatorSelector = _FakeSelector
+        try:
+            return await real_import(
+                "Ontario unemployment rate",
+                region_selection_kwargs={"region": "Ontario"},
+            )
+        finally:
+            sel_mod.IndicatorSelector = orig
+
+    asyncio.run(_run())
+    assert captured.get("region") == "Ontario"

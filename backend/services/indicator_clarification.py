@@ -1092,6 +1092,7 @@ def collect_indicator_choice_options(
 async def collect_statscan_selector_choice_options(
     query: str,
     max_options: int = 4,
+    region_selection_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Ask the retrieval+LLM selector for StatsCan clarification options.
 
@@ -1111,6 +1112,7 @@ async def collect_statscan_selector_choice_options(
             selector_query,
             "StatsCan",
             country="CA",
+            **(region_selection_kwargs or {}),
         )
     except Exception as exc:
         logger.debug("StatsCan selector choice fallback failed: %s", exc)
@@ -2495,13 +2497,22 @@ async def build_prefetch_indicator_choice_clarification(
     current_label = f"{provider or 'Unknown provider'} routing guess"
     if not current_indicator:
         try:
-            from .indicator_selector import IndicatorSelector
+            from .indicator_selector import IndicatorSelector, build_region_selection_kwargs
 
             provider_for_selector = "StatsCan" if provider == "STATSCAN" else provider
+            # Region steering must reach EVERY select() call site: this prefetch
+            # site was region-unaware, so an "Ontario …" query shared a cache
+            # entry (and a pick) with the region-less national query.
+            _region_kw = build_region_selection_kwargs(
+                getattr(intent, "subnationalRegion", None),
+                provider_for_selector,
+                getattr(qs, "statscan_provider", None),
+            )
             selection = await IndicatorSelector().select(
                 indicator_query,
                 provider_for_selector,
                 country=target_country,
+                **_region_kw,
             )
         except Exception as exc:
             logger.debug("Prefetch selector unavailable for %s/%s: %s", provider, indicator_query, exc)
@@ -2605,9 +2616,16 @@ async def build_prefetch_indicator_choice_clarification(
                     break
             intent.apiProvider = original_provider
             if not options and normalize_provider_name(provider) == "STATSCAN":
+                from .indicator_selector import build_region_selection_kwargs as _brsk
+
                 options = await collect_statscan_selector_choice_options(
                     indicator_query or query_text,
                     max_options=option_budget,
+                    region_selection_kwargs=_brsk(
+                        getattr(intent, "subnationalRegion", None),
+                        "STATSCAN",
+                        getattr(qs, "statscan_provider", None),
+                    ),
                 )
             if not options:
                 return build_no_reliable_indicator_match_response(
