@@ -123,7 +123,7 @@ def _recovery_qs(candidate: list, region_checks: list):
     return SimpleNamespace(
         # Initial result is "uncertain"; fetched candidates are confident so
         # they WOULD win on score but for the region predicate.
-        _needs_indicator_clarification=lambda q, d, i: d is not None
+        _needs_indicator_clarification=lambda q, d, i, caller="": d is not None
         and str(getattr(d[0].metadata, "source", "")) == "StatsCan",
         _extract_series_provider_and_code=lambda s: ("STATSCAN", "14100375"),
         _collect_target_countries=lambda params: [],

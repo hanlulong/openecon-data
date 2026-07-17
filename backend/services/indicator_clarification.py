@@ -19,6 +19,7 @@ This module provides:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from types import SimpleNamespace
@@ -667,7 +668,7 @@ async def maybe_recover_from_uncertain_match(
         return None
     if _is_exact_match_locked(params):
         return None
-    if not qs._needs_indicator_clarification(query, data, intent):
+    if not qs._needs_indicator_clarification(query, data, intent, caller="recovery_gate"):
         return None
 
     top_series = data[0]
@@ -751,7 +752,7 @@ async def maybe_recover_from_uncertain_match(
             continue
 
         candidate_score = _score_series_relevance(query, candidate_data[0])
-        candidate_uncertain = qs._needs_indicator_clarification(query, candidate_data, attempt_intent)
+        candidate_uncertain = qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="recovery_candidate")
         if (
             (not candidate_uncertain and candidate_score >= (best_score + 0.10))
             or candidate_score >= (best_score + 0.35)
@@ -2356,7 +2357,7 @@ async def filter_viable_indicator_choice_options(
                 continue
             if qs._has_implausible_top_series(query, candidate_data):
                 continue
-            if qs._needs_indicator_clarification(query, candidate_data, attempt_intent):
+            if qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="failed_choice_candidate"):
                 continue
 
             viable_options.append(option_text)
@@ -3006,12 +3007,38 @@ def needs_indicator_clarification(
     query: str,
     data: List[Any],
     intent: Optional[ParsedIntent] = None,
+    caller: str = "",
 ) -> bool:
-    """Determine whether returned data looks semantically uncertain for the query."""
+    """Determine whether returned data looks semantically uncertain for the query.
+
+    ``caller`` tags the invoking stage in the structured telemetry line below —
+    the gate runs at five call sites per request and same-gate-different-outcome
+    bugs (observed live: recovery fan-out after a confident skip) are
+    undiagnosable without knowing WHICH invocation decided what.
+    """
+    def _gate_log(outcome: bool, branch: str) -> bool:
+        try:
+            params_dbg = (intent.parameters or {}) if intent else {}
+            logger.info(
+                "uncertainty_gate %s",
+                json.dumps({
+                    "caller": caller or "untagged",
+                    "outcome": outcome,
+                    "branch": branch,
+                    "indicator_param": str(params_dbg.get("indicator") or ""),
+                    "confidence": getattr(intent, "confidence", None) if intent else None,
+                    "series": len(data or []),
+                    "query": str(query or "")[:60],
+                }),
+            )
+        except Exception:
+            pass
+        return outcome
+
     if not data:
-        return False
+        return _gate_log(False, "no_data")
     if intent and intent.indicators and len(intent.indicators) > 1:
-        return False
+        return _gate_log(False, "multi_indicator")
 
     if intent and intent.confidence and intent.confidence >= 0.90:
         indicator = (intent.parameters or {}).get("indicator", "")
@@ -3026,7 +3053,7 @@ def needs_indicator_clarification(
                 "Skipping uncertainty check -- high-confidence pre-resolved indicator: %s (conf=%.2f)",
                 indicator, intent.confidence,
             )
-            return False
+            return _gate_log(False, "high_confidence_pre_resolved")
 
     scored: List[tuple[float, Any]] = [
         (_score_series_relevance(query, series), series)
@@ -3091,7 +3118,7 @@ def needs_indicator_clarification(
         or score_gap >= 0.45
         or second_score < 0.8
     ):
-        return False
+        return _gate_log(False, "confident_top_score")
 
     top_provider = normalize_provider_name(str(getattr(top_meta, "source", "") or "")) if top_meta else ""
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(query) or "")
@@ -3200,7 +3227,7 @@ def build_uncertain_result_clarification(
         return None
     if intent and intent.indicators and len(intent.indicators) > 1:
         return None
-    if not intent or not qs._needs_indicator_clarification(query, data, intent):
+    if not intent or not qs._needs_indicator_clarification(query, data, intent, caller="uncertain_result_builder"):
         return None
 
     scored = sorted(

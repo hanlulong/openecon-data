@@ -1959,9 +1959,10 @@ class QueryService:
         query: str,
         data: List[Any],
         intent: Optional[ParsedIntent] = None,
+        caller: str = "",
     ) -> bool:
         """Delegates to :func:`indicator_clarification.needs_indicator_clarification`."""
-        return _ic_needs_indicator_clarification(self, query, data, intent)
+        return _ic_needs_indicator_clarification(self, query, data, intent, caller=caller)
 
     def _build_uncertain_result_clarification(
         self,

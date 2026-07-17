@@ -3498,7 +3498,9 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(recovered)
-        needs_clarification.assert_called_once_with(intent.originalQuery, fetched, intent)
+        needs_clarification.assert_called_once_with(
+            intent.originalQuery, fetched, intent, caller="recovery_gate"
+        )
 
     def test_build_no_data_indicator_clarification_returns_options(self) -> None:
         conv_id = conversation_manager.get_or_create("conv-no-data-clar")
