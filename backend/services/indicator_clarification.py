@@ -738,6 +738,18 @@ async def maybe_recover_from_uncertain_match(
         if qs._has_implausible_top_series(query, candidate_data):
             continue
 
+        _recovery_region = str(getattr(intent, "subnationalRegion", "") or "").strip()
+        if _recovery_region and not qs._served_data_references_region(
+            candidate_data, _recovery_region
+        ):
+            # Same hard predicate _enforce_subnational_fail_closed applies at
+            # the response stage. A candidate that does not reference the
+            # requested sub-region is exactly what that stage discards, so it
+            # must never WIN recovery and replace a region-satisfying result
+            # (observed live: OECD national unemployment overrode fetched
+            # StatsCan Ontario data, and the user got an empty fail-closed).
+            continue
+
         candidate_score = _score_series_relevance(query, candidate_data[0])
         candidate_uncertain = qs._needs_indicator_clarification(query, candidate_data, attempt_intent)
         if (
@@ -945,6 +957,19 @@ def collect_indicator_choice_options(
         countries=target_countries,
     )
 
+    # Manual-only providers (provider_strategy.MANUAL_ONLY_PROVIDERS, e.g.
+    # OECD) join the fan-out ONLY when the user explicitly named them: this
+    # list feeds BOTH the clarification menu and the uncertain-match recovery
+    # fetch loop, and auto-fetching/serving OECD burned its 60 req/hr budget
+    # and let its national series override region-correct results.
+    from .provider_strategy import provider_is_auto_routable
+
+    explicit_provider_for_gate = str(
+        qs._detect_explicit_provider(  # pylint: disable=protected-access
+            str(getattr(intent, "originalQuery", "") or "") or raw_query
+        )
+        or ""
+    )
     provider_candidates = []
     for provider_name in [
         primary_provider,
@@ -957,8 +982,11 @@ def collect_indicator_choice_options(
         "FRED",
     ]:
         normalized = normalize_provider_name(provider_name)
-        if normalized and normalized not in provider_candidates:
-            provider_candidates.append(normalized)
+        if not normalized or normalized in provider_candidates:
+            continue
+        if not provider_is_auto_routable(normalized, explicit_provider_for_gate):
+            continue
+        provider_candidates.append(normalized)
 
     from .indicator_selector import IndicatorSelector
 

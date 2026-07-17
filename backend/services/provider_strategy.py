@@ -35,6 +35,26 @@ PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
 # Structural data-model fact per provider, not a semantic rule.
 REGION_AS_SERIES_PROVIDERS = frozenset({"FRED"})
 
+# Providers the pipeline may only auto-FETCH/SERVE when the user explicitly
+# names them. OECD's public SDMX surface is rate-limited (60 req/hr) and its
+# coverage overlaps StatsCan/Eurostat/IMF/WorldBank, so auto-fanning-out to it
+# burns the request budget AND lets a national OECD series override a better
+# provider's result in uncertain-match recovery (observed live: OECD national
+# unemployment beat fetched StatsCan Ontario data, which the subnational
+# fail-closed check then discarded — user got nothing). Capability fact,
+# consulted generically; explicit user requests ("from OECD") still work.
+MANUAL_ONLY_PROVIDERS = frozenset({"OECD"})
+
+
+def provider_is_auto_routable(provider: str, explicit_provider: str = "") -> bool:
+    """False for providers that require an explicit user request (see
+    MANUAL_ONLY_PROVIDERS); True when the user named the provider."""
+    normalized = normalize_provider_name(provider or "")
+    if normalized not in MANUAL_ONLY_PROVIDERS:
+        return True
+    return normalize_provider_name(explicit_provider or "") == normalized
+
+
 # Providers whose series codes are GEOGRAPHY-ENCODED: a single code names a
 # specific country/region (FRED "UNRATE" = US only, "TXUR" = Texas; StatsCan
 # vectors bind a province/country; COMTRADE encodes the reporter; CoinGecko has
