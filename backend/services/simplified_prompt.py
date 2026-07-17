@@ -456,9 +456,13 @@ Additional output fields for follow-ups:
 Provider capabilities (use this to select apiProvider when no explicit provider is requested):
 - FRED: US economic data — GDP, employment, interest rates, housing, inflation, consumer prices,
   money supply, federal funds rate, treasury yields, industrial production (90K+ series).
-  Best for: any US-specific macro/financial data.
+  ALSO carries OECD/IMF-sourced INTERNATIONAL series for major economies (China, Japan,
+  India, Brazil, Korea, Mexico, ...): monthly/quarterly CPI, industrial production,
+  interest rates, exchange rates.
+  Best for: US macro/financial data; MONTHLY/QUARTERLY macro for major non-US economies.
 - WorldBank: Global development data — 190+ countries, GDP, poverty, education, health,
   population, trade, CO2 emissions, life expectancy, inequality (16K+ indicators).
+  Data is ANNUAL for nearly all indicators — it cannot serve monthly/quarterly requests.
   Best for: cross-country comparisons, developing country data, global aggregates.
 - IMF: International macro/financial — debt/GDP, fiscal balance, current account,
   balance of payments, exchange rates, government finance, WEO forecasts.
@@ -508,6 +512,9 @@ Selection rules (apply in this priority order):
 8. If query is about central bank policy rates or property prices → BIS.
 9. For ALL other country-specific data (India, Brazil, South Africa, Japan, China, Mexico,
    Australia, South Korea, etc.) → WorldBank. WorldBank is the default for non-US/EU/CA data.
+   EXCEPTION — frequency: if the user asks for monthly/quarterly data or "last N months"
+   for a major economy, prefer FRED (it carries OECD/IMF-sourced monthly international
+   series); WorldBank is annual-only and would return wrong-frequency data.
    Do NOT use IMF as default — IMF is only for sovereign debt ratios, fiscal balance,
    current account, and WEO forecasts.
 10. For multi-country groups (G7, G20, BRICS, OECD countries) → WorldBank (best global coverage).

@@ -10,8 +10,11 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # Bumped 260 -> 280 for the multilingual additions (English-canonical
     # indicators rule, subnationalRegion extraction, language detection);
     # 280 -> 290 for the FX currency-pair extraction rule (baseCurrency/
-    # targetCurrency from the user's wording in any language).
-    assert len(prompt.splitlines()) < 290
+    # targetCurrency from the user's wording in any language);
+    # 290 -> 295 for frequency-aware provider routing (FRED international
+    # monthly series vs annual-only WorldBank — the WB silent-substitution
+    # class found in 2026-07-16 real-user analytics).
+    assert len(prompt.splitlines()) < 295
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included

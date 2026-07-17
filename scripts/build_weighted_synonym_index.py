@@ -17,9 +17,13 @@ synonym component adds user-vocabulary pull. Rows without synonyms are
 byte-identical to production. Prints the same OLD/NEW A/B as the full
 rebuild harness. DO NOT restart the backend until the A/B looks clean.
 
-Usage: python scripts/build_weighted_synonym_index.py
+Usage:
+    python scripts/build_weighted_synonym_index.py                 # 0.75/0.25, writes artifacts
+    python scripts/build_weighted_synonym_index.py --w-syn 0.30 --ab-only
+        # experiment with other weights WITHOUT touching production artifacts
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -39,8 +43,6 @@ IDX_DIR = ROOT / "backend/data/openai_embeddings"
 BACKUP = IDX_DIR / "backup_pre_synonyms"
 NPZ = IDX_DIR / "indicator_embeddings.npz"
 META = IDX_DIR / "indicator_metadata.json"
-
-W_NAME, W_SYN = 0.75, 0.25
 
 PROBES = [
     ("unemployment rate", "StatsCan"),
@@ -73,6 +75,21 @@ def _top10(embs, codes, providers, qvec, provider):
 def main() -> int:
     import sqlite3
 
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--w-syn", type=float, default=0.25,
+                    help="synonym-vector weight (name weight = 1 - w_syn)")
+    ap.add_argument("--ab-only", action="store_true",
+                    help="print the A/B comparison but do NOT write artifacts "
+                         "(safe while a restart/deploy is pending)")
+    args = ap.parse_args()
+    w_syn = args.w_syn
+    if not 0.0 < w_syn < 0.5:
+        print(f"refusing w_syn={w_syn}: must stay name-dominant (0 < w_syn < 0.5), "
+              "the concatenation experiment showed synonym-dominant vectors crowd "
+              "flagships out")
+        return 1
+    w_name = 1.0 - w_syn
+
     meta = json.loads((BACKUP / "indicator_metadata.json").read_text())
     codes, providers = meta["codes"], meta["providers"]
     name_embs = np.load(BACKUP / "indicator_embeddings.npz")["embeddings"].astype(
@@ -95,7 +112,7 @@ def main() -> int:
         if syn and len(str(syn).strip()) > 8:
             rows_to_embed.append((i, str(syn)[:300]))
     print(f"{len(rows_to_embed)} rows get a synonym vector "
-          f"(weights {W_NAME}/{W_SYN})")
+          f"(weights {w_name}/{w_syn})")
 
     retrieval = EmbeddingRetrieval()
     client = retrieval._get_client()
@@ -109,7 +126,7 @@ def main() -> int:
         for (row_idx, _t), d in zip(chunk, resp.data):
             sv = np.asarray(d.embedding, dtype=np.float32)
             sv /= np.linalg.norm(sv) or 1
-            blended[row_idx] = W_NAME * name_embs[row_idx] + W_SYN * sv
+            blended[row_idx] = w_name * name_embs[row_idx] + w_syn * sv
         if (start // B) % 5 == 0:
             print(f"  embedded {min(start + B, len(rows_to_embed))}/{len(rows_to_embed)}",
                   flush=True)
@@ -130,11 +147,16 @@ def main() -> int:
         print("  OLD:", old[:6])
         print("  NEW:", new[:6])
 
+    if args.ab_only:
+        print("\n--ab-only: no artifacts written.")
+        return 0
+
     # Write artifacts (service picks them up on next restart only)
     np.savez_compressed(NPZ, embeddings=blended)
     META.write_text(json.dumps(meta))
     _write_normalized_npy_atomic(blended)
-    print("\nArtifacts written (npz/meta/npy). Review A/B, then restart to adopt.")
+    print(f"\nArtifacts written (npz/meta/npy, weights {w_name}/{w_syn}). "
+          "Review A/B, then restart to adopt.")
     return 0
 
 
