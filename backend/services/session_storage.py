@@ -1,6 +1,7 @@
 """Session storage for Pro Mode - persist data across executions within a conversation"""
 import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -21,6 +22,45 @@ def get_session_storage_dir() -> Path:
 
     # Default to system temp directory for cross-platform compatibility
     return Path(tempfile.gettempdir()) / "promode_sessions"
+
+
+def force_rmtree(path: Path) -> bool:
+    """Remove a session/work tree even when it contains dirs the backend
+    user cannot READ but may still unlink via the parent.
+
+    The Pro Mode jail leaves its detached tmpfs mountpoint behind: a
+    mode-700 dir owned by the sandbox uid (``.jailroot.*``). Linux's
+    fd-based ``shutil.rmtree`` fails to open it and gives up before ever
+    attempting ``rmdir`` — even though the dir is empty and the parent's
+    owner is allowed to remove it. Every such work dir then leaks and
+    re-warns on every cleanup pass.
+
+    Strategy: normal rmtree first, then a bottom-up sweep that unlinks
+    what it can and ``rmdir``s empty-but-unreadable dirs via the parent.
+
+    Returns True when ``path`` is gone afterwards.
+    """
+    target = Path(path)
+    shutil.rmtree(target, ignore_errors=True)
+    if not target.exists():
+        return True
+    for dirpath, dirnames, filenames in os.walk(target, topdown=False):
+        for name in filenames:
+            try:
+                os.unlink(os.path.join(dirpath, name))
+            except OSError:
+                pass
+        for name in dirnames:
+            child = os.path.join(dirpath, name)
+            try:
+                os.rmdir(child)
+            except OSError:
+                pass
+    try:
+        os.rmdir(target)
+    except OSError:
+        pass
+    return not target.exists()
 
 
 class SessionStorage:
@@ -160,8 +200,10 @@ class SessionStorage:
         try:
             session_dir = self._get_session_dir(session_id)
             if session_dir.exists():
-                shutil.rmtree(session_dir)
-                logger.info(f"Cleared session: {session_id}")
+                if force_rmtree(session_dir):
+                    logger.info(f"Cleared session: {session_id}")
+                else:
+                    logger.warning(f"Could not fully clear session dir: {session_id}")
         except Exception as e:
             logger.error(f"Failed to clear session {session_id}: {e}")
 
@@ -184,12 +226,23 @@ class SessionStorage:
                 return 0
 
             for session_dir in self.base_dir.iterdir():
-                if session_dir.is_dir():
+                # "work" holds per-execution scratch dirs owned by the code
+                # executor, which prunes them on its own (1h) schedule.
+                if not session_dir.is_dir() or session_dir.name == "work":
+                    continue
+                try:
                     age = current_time - session_dir.stat().st_mtime
                     if age > max_age_seconds:
-                        shutil.rmtree(session_dir)
-                        cleaned += 1
-                        logger.info(f"Cleaned up old session: {session_dir.name}")
+                        if force_rmtree(session_dir):
+                            cleaned += 1
+                            logger.info(f"Cleaned up old session: {session_dir.name}")
+                        else:
+                            logger.warning(
+                                f"Could not fully remove old session: {session_dir.name}"
+                            )
+                except OSError as e:
+                    # One undeletable dir must not abort cleanup of the rest.
+                    logger.warning(f"Failed to clean up {session_dir}: {e}")
 
             return cleaned
         except Exception as e:

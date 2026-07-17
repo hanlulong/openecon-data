@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.config import get_settings
-from backend.services.session_storage import get_session_storage_dir
+from backend.services.session_storage import force_rmtree, get_session_storage_dir
 
 logger = logging.getLogger(__name__)
 
@@ -1101,10 +1101,11 @@ finally:
             }
 
         finally:
-            # Clean up work directory
+            # Clean up work directory (force_rmtree: the jail's detached
+            # tmpfs mountpoint is unreadable to us and defeats plain rmtree)
             try:
-                if work_dir.exists():
-                    shutil.rmtree(work_dir, ignore_errors=True)
+                if work_dir.exists() and not force_rmtree(work_dir):
+                    logger.warning(f"Failed to clean up {work_dir}")
             except Exception as e:
                 logger.warning(f"Failed to clean up {work_dir}: {e}")
 
@@ -1392,9 +1393,11 @@ finally:
                             file_age = current_time - exec_dir.stat().st_mtime
                             # Work dirs can be cleaned up after 1 hour (they should be deleted immediately anyway)
                             if file_age > 3600:
-                                shutil.rmtree(exec_dir)
-                                deleted_count += 1
-                                logger.debug(f"Deleted orphaned work directory: {exec_dir.name}")
+                                if force_rmtree(exec_dir):
+                                    deleted_count += 1
+                                    logger.debug(f"Deleted orphaned work directory: {exec_dir.name}")
+                                else:
+                                    logger.warning(f"Failed to delete work dir {exec_dir}")
                         except Exception as e:
                             logger.warning(f"Failed to delete work dir {exec_dir}: {e}")
 
@@ -1404,7 +1407,7 @@ finally:
                     file_age = current_time - session_dir.stat().st_mtime
                     if file_age > max_age_seconds:
                         try:
-                            shutil.rmtree(session_dir)
+                            force_rmtree(session_dir)
                             deleted_count += 1
                             logger.info(f"Deleted old session directory: {session_dir.name}")
                         except Exception as e:
