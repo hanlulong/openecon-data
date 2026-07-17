@@ -646,6 +646,7 @@ async def log_query_to_supabase(
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
     response_status: Optional[str] = None,
+    processing_time_ms: Optional[float] = None,
 ) -> None:
     """
     Log query to Supabase for both authenticated and anonymous users.
@@ -666,6 +667,7 @@ async def log_query_to_supabase(
             ip_address=ip_address,
             user_agent=user_agent,
             response_status=response_status,
+            processing_time_ms=processing_time_ms,
         )
     except Exception as e:
         logger.error(f"Failed to log {'Pro Mode ' if pro_mode else ''}query to Supabase: {e}")
@@ -1408,6 +1410,7 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
         ip_address=gate.ip,
         user_agent=gate.user_agent,
         response_status=derive_response_status(result),
+        processing_time_ms=getattr(result, "processingTimeMs", None),
     )
 
     return result
@@ -1651,6 +1654,7 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 ip_address=gate.ip,
                 user_agent=gate.user_agent,
                 response_status=derive_response_status(result),
+                processing_time_ms=getattr(result, "processingTimeMs", None),
             )
 
             # Send final result
@@ -1936,6 +1940,7 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
             code_execution=execution_result.model_dump() if execution_result else None,
             error_message=execution_result.error if execution_result else None,
             response_status=derive_response_status(response),
+            processing_time_ms=getattr(response, "processingTimeMs", None),
         )
 
         return response
@@ -2394,6 +2399,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
                 code_execution=execution_result.model_dump() if execution_result else None,
                 error_message=execution_result.error if execution_result else None,
                 response_status=derive_response_status(response),
+                processing_time_ms=getattr(response, "processingTimeMs", None),
             )
 
             # Send final result
