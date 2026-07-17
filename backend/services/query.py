@@ -5938,6 +5938,20 @@ class QueryService:
                         )
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
+                    if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
+                        # The user's requested time window contains no
+                        # observations anywhere. Return a BARE empty response:
+                        # the empty-data finalizer stamps the scope-aware,
+                        # localized explanation (incl. the window). Stale cache
+                        # must not be consulted — it would re-serve the same
+                        # out-of-window data; clarification menus can't help.
+                        return QueryResponse(
+                            conversationId=conv_id,
+                            intent=intent,
+                            data=None,
+                            clarificationNeeded=False,
+                            processingSteps=tracker.to_list(),
+                        )
 
             # Last resort: serve stale (expired) cached data rather than returning nothing.
             # A 1-hour-old GDP dataset is better than "No Data Available" during an API outage.
@@ -6023,6 +6037,16 @@ class QueryService:
                         )
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
+                    if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
+                        # See sibling branch above: bare empty response, the
+                        # finalizer explains the window; no stale cache, no menus.
+                        return QueryResponse(
+                            conversationId=conv_id,
+                            intent=intent,
+                            data=None,
+                            clarificationNeeded=False,
+                            processingSteps=tracker.to_list(),
+                        )
 
             # Provider-change follow-up: give explicit message about unavailability
             if "intent" in locals() and intent:

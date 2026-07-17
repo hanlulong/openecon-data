@@ -2525,7 +2525,11 @@ async def build_prefetch_indicator_choice_clarification(
     current_label = f"{provider or 'Unknown provider'} routing guess"
     if not current_indicator:
         try:
-            from .indicator_selector import IndicatorSelector, build_region_selection_kwargs
+            from .indicator_selector import (
+                IndicatorSelector,
+                _extract_requested_frequencies,
+                build_region_selection_kwargs,
+            )
 
             provider_for_selector = "StatsCan" if provider == "STATSCAN" else provider
             # Region steering must reach EVERY select() call site: this prefetch
@@ -2536,10 +2540,22 @@ async def build_prefetch_indicator_choice_clarification(
                 provider_for_selector,
                 getattr(qs, "statscan_provider", None),
             )
+            # Frequency steering likewise: the stripped indicator_query loses
+            # the user's frequency words ("China CPI monthly" resolves via
+            # "CPI inflation"), so pass the fuller text as metadata_query when
+            # it carries frequency tokens the indicator query lost — _llm_pick
+            # then states the FREQUENCY REQUIREMENT. Structural tokens only.
+            _prefetch_constraint_kw: Dict[str, Any] = {}
+            _raw_freqs = _extract_requested_frequencies(query)
+            if _raw_freqs and not (
+                _raw_freqs & _extract_requested_frequencies(indicator_query)
+            ):
+                _prefetch_constraint_kw["metadata_query"] = query
             selection = await IndicatorSelector().select(
                 indicator_query,
                 provider_for_selector,
                 country=target_country,
+                **_prefetch_constraint_kw,
                 **_region_kw,
             )
         except Exception as exc:

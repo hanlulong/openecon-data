@@ -2945,6 +2945,24 @@ async def resolve_indicator_for_fetch(
             and _lost_explicit_frequency_tokens(original_selector_query, indicator_query)
         ):
             metadata_query = original_selector_query
+        if metadata_query is None:
+            # The selector query is a stripped indicator phrase; frequency
+            # words usually live only in the user's RAW text ("China CPI
+            # monthly" resolves through selector query "CPI inflation" with no
+            # frequency signal, so the adjudicator picked the ANNUAL series).
+            # Provider-general: whenever the raw query carries frequency
+            # tokens the selector query lost, pass the raw text as the
+            # constraint query so _llm_pick can state the FREQUENCY
+            # REQUIREMENT. Structural token comparison only.
+            from .indicator_selector import _extract_requested_frequencies
+
+            _raw_user_query = str(getattr(intent, "originalQuery", "") or "")
+            if _raw_user_query and indicator_query:
+                _raw_freqs = _extract_requested_frequencies(_raw_user_query)
+                if _raw_freqs and not (
+                    _raw_freqs & _extract_requested_frequencies(indicator_query)
+                ):
+                    metadata_query = _raw_user_query
         # Same-provider alternate retry: codes already shown to return no data
         # this turn are excluded so the selector re-adjudicates to the next-best
         # EXECUTABLE candidate instead of re-picking the dead code.
