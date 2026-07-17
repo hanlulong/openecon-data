@@ -165,3 +165,43 @@ def test_recovery_still_works_without_region() -> None:
         maybe_recover_from_uncertain_match(qs, "Canada unemployment rate", _intent(None), current)
     )
     assert out == national
+
+
+# ---------------------------------------------------------------------------
+# _statscan_semantic_label — dimension-member matching must never receive a
+# bare product/vector id as its semantic signal (observed live: label was
+# "14100375", so the metric dimension defaulted to member 1 = Population for
+# an "Ontario unemployment rate" query; the uncertainty gate then refused the
+# wrong-member data and the user got a menu instead of the answer).
+# ---------------------------------------------------------------------------
+
+def test_statscan_semantic_label_skips_product_id_shaped_candidates() -> None:
+    from backend.services.data_fetcher import _statscan_semantic_label
+
+    intent = _intent("Ontario")
+    intent.indicators = ["14100375"]  # post-resolution: the code replaced the phrase
+    label = _statscan_semantic_label({}, intent, base="14100375")
+    assert label == "Ontario unemployment rate"  # falls through to originalQuery
+
+
+def test_statscan_semantic_label_prefers_explicit_semantic_params() -> None:
+    from backend.services.data_fetcher import _statscan_semantic_label
+
+    intent = _intent("Ontario")
+    intent.indicators = ["14100375"]
+    label = _statscan_semantic_label(
+        {"__semantic_indicator_label": "unemployment rate"}, intent, base="14100375"
+    )
+    assert label == "unemployment rate"
+
+
+def test_statscan_semantic_label_keeps_real_phrases_and_vector_ids_skipped() -> None:
+    from backend.services.data_fetcher import _statscan_semantic_label
+
+    intent = _intent(None)
+    intent.indicators = ["unemployment rate"]
+    assert _statscan_semantic_label({}, intent) == "unemployment rate"
+
+    intent.indicators = ["v1234567"]  # vector-id shape: no semantic signal
+    intent.originalQuery = "Canada unemployment rate"
+    assert _statscan_semantic_label({}, intent) == "Canada unemployment rate"

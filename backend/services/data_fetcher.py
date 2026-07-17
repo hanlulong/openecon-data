@@ -913,6 +913,37 @@ def materialize_execution_plan(
     return plan
 
 
+def _statscan_semantic_label(params: dict[str, Any], intent: Any, base: str = "") -> str:
+    """Pick the SEMANTIC indicator label for StatsCan dimension-member matching.
+
+    After selection, ``intent.indicators[0]`` frequently holds the resolved
+    PRODUCT/VECTOR ID (e.g. "14100375") — the prefetch-resolution path installs
+    the code without the ``__semantic_indicator_label`` param. A bare id
+    carries zero semantic signal, so member matching for non-geography
+    dimensions silently degraded to the first member (observed live: Ontario
+    "unemployment rate" fetched the Population member because the label was
+    digits). Structural shape check only (id-shaped strings skipped), never a
+    semantic judgment — the label's meaning stays with the LLM layer.
+    """
+    def _is_semantic(text: Any) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+        return not re.fullmatch(r"v?\d{5,10}", value.replace("-", ""))
+
+    candidates = [
+        params.get("__semantic_indicator_label"),
+        params.get("__display_indicator_label"),
+        str(intent.indicators[0]) if getattr(intent, "indicators", None) else "",
+        str(getattr(intent, "originalQuery", "") or ""),
+        base,
+    ]
+    for candidate in candidates:
+        if _is_semantic(candidate):
+            return str(candidate).strip()
+    return str(base or "")
+
+
 def _statscan_periods_from_date_range(params: dict[str, Any], default: int) -> int:
     explicit_periods = params.get("periods")
     if explicit_periods is not None:
@@ -2095,9 +2126,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         # discovers table metadata and builds coordinates dynamically.
         # fetch_categorical_data is only for basic product ID / dimensions combos.
         _base = params.get("__base_indicator") or indicator or ""
-        _indicator_label_for_dim = params.get("__semantic_indicator_label") or params.get("__display_indicator_label") or str(
-            intent.indicators[0] if intent.indicators else _base
-        )
+        _indicator_label_for_dim = _statscan_semantic_label(params, intent, _base)
 
         # Check again for dimension breakdown (multi-province) in case early dispatch missed it
         _breakdown_dim_fb = _is_dimension_breakdown(dimensions)
@@ -2170,6 +2199,7 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         categorical_params = {
             "productId": state_product_id,
             "indicator": indicator or _indicator_label_for_dim,
+            "indicatorLabel": _indicator_label_for_dim,
             "periods": params.get("periods", 20),
             "dimensions": dimensions,
         }
