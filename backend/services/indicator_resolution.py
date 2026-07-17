@@ -3100,6 +3100,32 @@ async def resolve_indicator_for_fetch(
 # ---------------------------------------------------------------------------
 
 def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str:
+    """Region-aware wrapper over the branchy selector-text chooser below.
+
+    EVERY branch's output flows through region_qualified_indicator_text here —
+    the single chokepoint. Traced live: the "looks like a provider code" branch
+    returned the distilled phrase UNQUALIFIED, so a "California state GDP"
+    retry adjudicated over national-only candidates while sibling phrasings
+    (whose branch returned the raw text) got all-California candidates. Only
+    REGION_AS_SERIES_PROVIDERS (FRED) are affected; StatsCan et al. return
+    unchanged text by the helper's own gate.
+    """
+    chosen = _select_indicator_query_for_resolution_unqualified(svc, intent)
+    if not chosen:
+        return chosen
+    from .provider_strategy import region_qualified_indicator_text
+
+    # No is_code guard here: this function's output is RETRIEVAL TEXT by
+    # contract (never a direct code lookup), and the live failure was exactly
+    # a code-shaped fallback ('GDP' is a valid FRED id) escaping unqualified.
+    return region_qualified_indicator_text(
+        intent,
+        _normalize_provider_name(intent.apiProvider or ""),
+        chosen,
+    )
+
+
+def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedIntent) -> str:
     """
     Pick the best query string for indicator resolution.
 

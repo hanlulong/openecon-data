@@ -619,3 +619,41 @@ def test_llm_pick_frequency_requirement_reads_fuller_constraint_query(monkeypatc
     prompt = sink["prompt"]
     assert "FREQUENCY REQUIREMENT" in prompt
     assert "monthly" in prompt
+
+
+def test_selector_query_region_qualified_even_when_indicator_is_code_shaped() -> None:
+    # Traced live ("California state GDP"): the parse emitted indicators=['GDP']
+    # and GDP is a valid FRED series id, so the "looks like a provider code"
+    # branch returned the distilled phrase UNQUALIFIED -> national-only
+    # candidates -> hopeless pick. The wrapper now region-qualifies EVERY
+    # branch's output for REGION_AS_SERIES_PROVIDERS.
+    from types import SimpleNamespace
+
+    from backend.models import ParsedIntent
+    from backend.services.indicator_resolution import select_indicator_query_for_resolution
+
+    svc = SimpleNamespace(
+        _looks_like_provider_indicator_code=lambda p, t: t.isupper() and t.isalpha() and len(t) <= 6
+    )
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["GDP"],
+        parameters={"country": "US"},
+        clarificationNeeded=False,
+        subnationalRegion="California",
+        originalQuery="California state GDP",
+    )
+    chosen = select_indicator_query_for_resolution(svc, intent)
+    assert "california" in chosen.lower(), chosen
+
+    # StatsCan must stay unqualified (dimension-modeled; landmine).
+    intent2 = ParsedIntent(
+        apiProvider="StatsCan",
+        indicators=["unemployment rate"],
+        parameters={"country": "CA"},
+        clarificationNeeded=False,
+        subnationalRegion="Ontario",
+        originalQuery="Ontario unemployment rate",
+    )
+    chosen2 = select_indicator_query_for_resolution(svc, intent2)
+    assert "ontario" not in chosen2.lower(), chosen2
