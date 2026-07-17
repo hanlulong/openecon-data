@@ -469,6 +469,11 @@ class ConversationState(BaseModel):
     # follow-ups keep the annotation; cleared when the indicator or geography
     # changes (a new metric/country invalidates the old sub-region).
     subnational_region: Optional[str] = None
+    # True when THIS turn's parse classified a geographic scope reset
+    # (followUpType=country_change — including sub-region -> whole country).
+    # Gates the subnational_region carry below: the parse deliberately nulled
+    # the region for this turn, so the merge must not resurrect it.
+    scope_reset: Optional[bool] = None
     provider: Optional[str] = None
     provider_locked: bool = False
     start_date: Optional[str] = None
@@ -1306,6 +1311,7 @@ def extract_state_from_intent(intent: ParsedIntent, statscan_provider=None) -> C
         country=country,
         countries=countries,
         subnational_region=(str(intent.subnationalRegion).strip() or None) if intent.subnationalRegion else None,
+        scope_reset=(str(getattr(intent, "followUpType", "") or "") == "country_change") or None,
         language=(str(intent.language).strip() or None) if intent.language else None,
         provider=provider_name,
         provider_locked=bool(params.get("__semantic_provider_locked")),
@@ -1425,6 +1431,12 @@ def merge_new_state_with_previous(
         and previous.subnational_region
         and not indicator_changed
         and not geography_changed
+        # The parse classified this turn as a geographic scope reset
+        # (country_change covers sub-region -> whole country): its null
+        # subnationalRegion is DELIBERATE — resurrecting the previous region
+        # made the fail-closed check discard correct national data (live:
+        # "Ontario unemployment rate" then "加拿大失业率").
+        and not new_state.scope_reset
     ):
         new_state.subnational_region = previous.subnational_region
 

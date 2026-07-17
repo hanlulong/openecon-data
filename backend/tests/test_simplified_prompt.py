@@ -13,8 +13,11 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # targetCurrency from the user's wording in any language);
     # 290 -> 295 for frequency-aware provider routing (FRED international
     # monthly series vs annual-only WorldBank — the WB silent-substitution
-    # class found in 2026-07-16 real-user analytics).
-    assert len(prompt.splitlines()) < 295
+    # class found in 2026-07-16 real-user analytics);
+    # 295 -> 300 for the sub-region->whole-country scope-reset rule (a carried
+    # subnationalRegion discarded correct national data in live browser
+    # testing 2026-07-17: "Ontario unemployment" then "加拿大失业率").
+    assert len(prompt.splitlines()) < 300
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included

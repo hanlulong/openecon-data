@@ -398,6 +398,10 @@ Follow-up examples (previous query: "GDP in Canada from 2020 to 2024"):
   - "show me last 20 years" -> time_change, resolvedQuery="GDP in Canada last 20 years"
   - "use FRED instead" -> provider_change, resolvedQuery="GDP in Canada from 2020 to 2024 from FRED"
   - "show me the same" -> pronoun_reuse, resolvedQuery="GDP in Canada from 2020 to 2024"
+  - Sub-region to WHOLE country is a SCOPE RESET and also country_change: after
+    "Ontario unemployment rate", a turn naming the country itself ("Canada
+    unemployment rate", "加拿大失业率") -> country_change, subnationalRegion null.
+    Never carry a previous sub-region into a turn that names a geography.
 - If the message is NOT a follow-up (i.e., a completely new independent query),
   set isFollowUp=false, followUpType=null, resolvedQuery=null.
 
