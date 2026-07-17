@@ -122,6 +122,54 @@ def test_finalizer_stamps_over_whitespace_error():
     assert "No Data Available" in (out.message or "")
 
 
+# --- model guard: whitespace error can never escape from ANY setter ---------
+
+@pytest.mark.parametrize("blank", [" ", "  ", "\t", "\n", "  \t\n "])
+def test_query_response_normalizes_whitespace_error_to_none(blank):
+    """A whitespace-only error is normalized to None at the model boundary,
+    even when data is non-empty (which the empty-data finalizer skips)."""
+    # empty-data shape
+    r = QueryResponse(conversationId="c", clarificationNeeded=False, error=blank)
+    assert r.error is None
+    # non-empty-data shape — the finalizer early-returns here, so the model
+    # validator is the only guard that runs.
+    r2 = QueryResponse(
+        conversationId="c", clarificationNeeded=False, error=blank, data=[_series()]
+    )
+    assert r2.error is None
+    # a real error is left untouched
+    r3 = QueryResponse(conversationId="c", clarificationNeeded=False, error="no_data_found")
+    assert r3.error == "no_data_found"
+
+
+def test_failed_indicator_choice_response_drops_blank_exception_error():
+    """build_failed_indicator_choice_response must not surface error=str(exc)
+    when the exception message is blank (the observed live whitespace source)."""
+    from backend.services.indicator_clarification import (
+        build_failed_indicator_choice_response,
+    )
+    from backend.services.query import QueryService
+
+    svc = QueryService.__new__(QueryService)
+    intent = ParsedIntent(
+        apiProvider="WORLDBANK",
+        indicators=["GDP"],
+        clarificationNeeded=False,
+        originalQuery="GDP of Tuvalu",
+    )
+    resp = build_failed_indicator_choice_response(
+        qs=svc,
+        conversation_id="c",
+        query="GDP of Tuvalu",
+        intent=intent,
+        options=[],
+        selected_option=None,
+        question_lines=[],
+        error=str(ValueError("   ")),  # blank exception message
+    )
+    assert resp.error is None
+
+
 # --- CoinGecko: frequency from actual point spacing --------------------------
 
 def test_coingecko_frequency_from_spacing():

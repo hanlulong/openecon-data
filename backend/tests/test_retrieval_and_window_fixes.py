@@ -144,3 +144,111 @@ def test_bis_dedup_by_code(monkeypatch):
         seen.add(code)
         out.append(m)
     assert len(out) == 3
+
+
+# --- Clarification options must be executable (IMF dead-end menu) ----------
+#
+# Real-user analytics showed users picking an IMF clarification option and then
+# hitting ``imf_non_weo_public_surface_unsupported`` at dispatch -- a dead-end
+# menu. The option builders never consulted the supportability predicate that
+# fires at dispatch. dedupe_indicator_choice_options is the single seam every
+# builder routes provider+code options through, so filtering unsupportable
+# options there keeps every offered menu executable.
+
+# IMF codes classified by catalog category. NXG_H5_XII_FOB_USD is an
+# INDICATOR-category detailed HS surface with no executable public-SDMX family
+# (dispatch fail-closes on it); PCPI_IX is a CPI aggregate that maps to an
+# executable public-SDMX family; NGDPD is a WEO code. This mirrors the fixtures
+# in test_validation_sampler_supportability.py, but here we drive the same
+# predicate through the clarification option chokepoint.
+_FAKE_IMF_CATALOG = {
+    "NXG_H5_XII_FOB_USD": {
+        "category": "INDICATOR",
+        "name": "National Accounts, External Sector, Exports of Goods, HS Section XII",
+    },
+    "PCPI_IX": {"category": "INDICATOR", "name": "Consumer Price Index"},
+    "NGDPD": {
+        "category": "WEO",
+        "name": "Gross domestic product, current prices, U.S. dollars",
+    },
+}
+
+
+def _patch_imf_catalog(monkeypatch):
+    """Mock the IMF catalog lookup so supportability is deterministic offline."""
+    monkeypatch.setattr(
+        "backend.utils.imf_supportability._catalog_entry_for_code",
+        lambda code: _FAKE_IMF_CATALOG.get(str(code).strip().upper(), {}),
+    )
+
+
+def test_option_supportability_reason_matches_dispatch_predicate(monkeypatch):
+    from backend.utils.option_supportability import option_supportability_reason
+
+    _patch_imf_catalog(monkeypatch)
+
+    # Unsupportable IMF INDICATOR surface -> dispatch reason (drop it).
+    assert (
+        option_supportability_reason(
+            "IMF",
+            "NXG_H5_XII_FOB_USD",
+            "National Accounts, External Sector, Exports of Goods, HS Section XII",
+        )
+        == "imf_non_weo_public_surface_unsupported"
+    )
+    # IMF CPI aggregate and WEO codes are executable -> no reason.
+    assert option_supportability_reason("IMF", "PCPI_IX", "Consumer Price Index") is None
+    assert option_supportability_reason("IMF", "NGDPD", "GDP current USD") is None
+    # Providers with no exact-code predicate are never filtered.
+    assert option_supportability_reason("WORLDBANK", "NY.GDP.MKTP.CD", "GDP") is None
+    assert option_supportability_reason("IMF", "") is None
+
+
+def test_dedupe_drops_unsupportable_imf_option_keeps_the_rest(monkeypatch):
+    from backend.services.indicator_clarification import (
+        dedupe_indicator_choice_options,
+        parse_indicator_option,
+    )
+
+    _patch_imf_catalog(monkeypatch)
+
+    options = [
+        "[IMF] National Accounts, External Sector, Exports of Goods, HS Section XII (NXG_H5_XII_FOB_USD)",
+        "[IMF] Consumer Price Index (PCPI_IX)",
+        "[IMF] Gross domestic product, current prices, U.S. dollars (NGDPD)",
+        "[WorldBank] GDP (current US$) (NY.GDP.MKTP.CD)",
+    ]
+
+    kept = dedupe_indicator_choice_options(SimpleNamespace(), options)
+    kept_codes = {
+        parsed[1].upper()
+        for opt in kept
+        if (parsed := parse_indicator_option(opt))
+    }
+
+    # (a) The unsupportable IMF surface is not offered.
+    assert "NXG_H5_XII_FOB_USD" not in kept_codes, (
+        f"unsupportable IMF option leaked into menu: {kept}"
+    )
+    # (b) Supported options (IMF aggregate, IMF WEO, non-IMF) are unaffected.
+    assert {"PCPI_IX", "NGDPD", "NY.GDP.MKTP.CD"} <= kept_codes
+    assert len(kept) == 3
+
+
+def test_all_unsupportable_options_yield_no_empty_menu(monkeypatch):
+    from backend.services.indicator_clarification import (
+        build_clarification_options,
+        dedupe_indicator_choice_options,
+    )
+
+    _patch_imf_catalog(monkeypatch)
+
+    options = [
+        "[IMF] Exports of Goods, HS Section XII (NXG_H5_XII_FOB_USD)",
+    ]
+
+    # (c) When filtering removes every option, dedupe empties the list and the
+    # structured-option builder returns None instead of an empty menu -- each
+    # builder's "too few options" guard is the no-empty-menu fallthrough.
+    assert dedupe_indicator_choice_options(SimpleNamespace(), options) == []
+    assert build_clarification_options(SimpleNamespace(), options) is None

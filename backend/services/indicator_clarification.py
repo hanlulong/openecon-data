@@ -50,6 +50,7 @@ from ..services.indicator_resolution import (
     is_resolved_indicator_plausible as _is_resolved_indicator_plausible,
 )
 from ..services.provider_strategy import region_qualified_indicator_text
+from ..utils.option_supportability import option_supportability_reason
 from ..utils.processing_steps import (
     ProcessingTracker,
     activate_processing_tracker,
@@ -159,7 +160,15 @@ def dedupe_indicator_choice_options(qs: Any, options: List[str]) -> List[str]:
     Removes:
     - options without parseable provider/code
     - placeholder/non-actionable codes (for example N/A, DYNAMIC)
+    - unsupportable provider codes that dispatch would fail-closed reject
+      (offering them creates a dead-end menu choice)
     - near-duplicate entries from the same provider with equivalent label text
+
+    This is the single chokepoint every clarification builder routes its
+    provider+code options through before offering or storing them, so filtering
+    unsupportable options here keeps every menu executable. When filtering
+    empties the list, each builder's existing "too few options" guard becomes
+    the no-empty-menu fallthrough.
     """
     deduped: List[str] = []
     seen_by_code: set[tuple[str, str]] = set()
@@ -177,6 +186,29 @@ def dedupe_indicator_choice_options(qs: Any, options: List[str]) -> List[str]:
         provider, code = parsed
         code_upper = str(code).strip().upper()
         if _is_placeholder_indicator_code(code_upper):
+            continue
+
+        # A clarification option must be executable. An offered code that
+        # dispatch would fail-closed reject is a dead-end: the user picks it and
+        # the fetch is refused. Judge each concrete option by the same exact
+        # provider-code supportability predicate that fires at dispatch and drop
+        # the ones dispatch would refuse. Exact code + catalog metadata only --
+        # the option label passed as ``name`` is provider metadata, never the
+        # user's query text.
+        option_display_name = _OPTION_TRAILING_PARENS_ALT_RE.sub(
+            "", _OPTION_PROVIDER_PREFIX_RE.sub("", option_text)
+        ).strip()
+        unsupportable_reason = option_supportability_reason(
+            provider, code, option_display_name
+        )
+        if unsupportable_reason:
+            logger.info(
+                "Dropping unsupportable clarification option "
+                "(provider=%s code=%s reason=%s)",
+                provider,
+                code_upper,
+                unsupportable_reason,
+            )
             continue
 
         code_key = (provider, code_upper)
@@ -2319,6 +2351,10 @@ def build_failed_indicator_choice_response(
     error: Optional[str] = None,
 ) -> QueryResponse:
     """Re-prompt after an indicator option fails and drop the dead option."""
+    # ``error`` reaches here as ``str(exc)``; an exception with an empty/blank
+    # message would surface a whitespace-only error. Keep only a meaningful
+    # string so the response contract (error is a real message or None) holds.
+    error = (error or "").strip() or None
     remaining_options = [
         option for option in dedupe_indicator_choice_options(qs, options)
         if option != selected_option

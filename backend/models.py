@@ -252,6 +252,26 @@ class QueryResponse(BaseModel):
     # the guaranteed save in main.py to avoid overwriting the merged state.
     delta_state_saved: bool = Field(default=False, exclude=True)
 
+    @field_validator("error", mode="before")
+    @classmethod
+    def _normalize_blank_error(cls, v):
+        """The error field must be a meaningful code/message or None — never
+        whitespace.
+
+        Several construction paths pass ``error`` a runtime value that can be
+        blank — most notably clarification builders doing ``error=str(exc)``
+        for an exception with an empty message, or ``error=code_exec.get(
+        "error")``. A whitespace-only error carries no information yet is
+        truthy to some consumers and renders as a silent failure in the UI
+        (``error=" "`` was observed live producing a blank result), while
+        polluting telemetry. Normalizing any whitespace-only value to None at
+        the model boundary guarantees no such value can escape from ANY setter,
+        empty-data or not; real errors pass through untouched.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
 
 class StreamEvent(BaseModel):
     """Event sent during streaming query processing"""

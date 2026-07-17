@@ -8667,8 +8667,15 @@ class QueryServiceTests(unittest.TestCase):
             clarificationNeeded=False,
             originalQuery="compare employment rate across G20 member countries",
         )
+        # This test targets the POST-failure drop mechanism (a chosen option
+        # whose fetch fails is removed from the retry list), so every option must
+        # survive the pre-offer supportability filter. IMF LER_PT is an
+        # INDICATOR-category dead-end that dedupe_indicator_choice_options now
+        # drops before it can be offered (see test_retrieval_and_window_fixes
+        # for that coverage); using it here would let "1" resolve to a different
+        # option after filtering. FRED EMRATIO is a supportable employment code.
         options = [
-            "[IMF] Labor Markets, Employment, Employment Rate, Percent (LER_PT)",
+            "[FRED] Employment-Population Ratio (EMRATIO)",
             "[OECD] Employment rate (DSD_LFS@DF_IALFS_EMP_WAP_Q)",
             "[WorldBank] Employment rate, aged 15-24 (% of labor force aged 15-24) (JI.EMP.1564.YG.ZS)",
         ]
