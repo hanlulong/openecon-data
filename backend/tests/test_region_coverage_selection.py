@@ -588,3 +588,34 @@ def test_llm_pick_omits_frequency_requirement_without_frequency(monkeypatch) -> 
     )
 
     assert "FREQUENCY REQUIREMENT" not in sink["prompt"]
+
+
+def test_llm_pick_frequency_requirement_reads_fuller_constraint_query(monkeypatch) -> None:
+    # The resolution layer strips structural qualifiers out of the selector
+    # query ("China CPI monthly" -> "CPI ..."), so the frequency words live
+    # only in the fuller metadata/constraint text — extraction must see it.
+    selector = IndicatorSelector(settings=_selector_settings())
+    monkeypatch.setattr(
+        selector,
+        "_enrich_candidates",
+        lambda candidates, provider: _enriched(*candidates),
+    )
+    sink: dict = {}
+    monkeypatch.setattr(
+        "backend.services.http_pool.get_http_client",
+        lambda: _CapturingClient(sink, pick_line="PICK: 1"),
+    )
+
+    asyncio.run(
+        selector._llm_pick(  # pylint: disable=protected-access
+            "consumer price index china",  # stripped: no frequency words
+            [("CPALTT01CNM659N", "CPI: Total for China, monthly YoY"),
+             ("FPCPITOTLZGCHN", "Inflation, consumer prices for China")],
+            "FRED",
+            constraint_query="China CPI monthly, last 12 months",
+        )
+    )
+
+    prompt = sink["prompt"]
+    assert "FREQUENCY REQUIREMENT" in prompt
+    assert "monthly" in prompt
