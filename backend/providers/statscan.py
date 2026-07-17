@@ -5,6 +5,7 @@ import csv
 import io
 import logging
 import re
+import unicodedata
 import zipfile
 
 import httpx
@@ -550,6 +551,160 @@ class StatsCanProvider(BaseProvider):
                     for m in members
                 ]
         return []
+
+    # ------------------------------------------------------------------
+    # Region-coverage introspection (used by region-coverage-aware cube
+    # selection). These are structural predicates over a cube's Geography
+    # dimension — "does this cube's geography axis actually contain the
+    # requested province/territory?" — NOT a hand-built product→region table.
+    # A cube whose TITLE is national (e.g. "Gross domestic product,
+    # provincial and territorial") legitimately covers Ontario because
+    # Ontario is a Geography MEMBER; these predicates read that membership so
+    # the adjudicator/guard never rejects such a cube on title alone.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _geography_dimension_members(cube_metadata: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return the members of the cube's Geography dimension (or [])."""
+        for dim in (cube_metadata or {}).get("dimension", []) or []:
+            if "geogr" in str(dim.get("dimensionNameEn", "")).lower():
+                return dim.get("member", []) or []
+        return []
+
+    @staticmethod
+    def _region_matches_geography_member(region: str, members: List[Dict[str, Any]]) -> bool:
+        """True iff a Geography member matches *region* (En or Fr name).
+
+        Robust, table-free matching: the region is normalized to its canonical
+        Canadian province/territory name (``canonicalize_canadian_region``
+        handles abbreviations like ON/QC and synonyms; Chinese-origin queries
+        arrive already normalized to the English canonical form), then compared
+        case-insensitively against each member's English AND French names.
+        Comparison is by equality (plus a comma/space-delimited prefix for
+        compound member labels) rather than bare substring, so "Ontario" does
+        not spuriously match "Northern Ontario" — a coarser region the user did
+        not ask for.
+        """
+        region_s = str(region or "").strip()
+        if not region_s:
+            return False
+
+        def _fold(value: str) -> str:
+            # Accent-insensitive fold so "Quebec" matches the French member
+            # name "Québec" (and vice versa) — En/Fr symmetry without tables.
+            decomposed = unicodedata.normalize("NFKD", value)
+            return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+
+        canon = canonicalize_canadian_region(region_s) or region_s
+        targets = {_fold(region_s), _fold(canon)}
+        for member in members or []:
+            for name in (member.get("memberNameEn"), member.get("memberNameFr")):
+                member_name = _fold(str(name or "").strip())
+                if not member_name:
+                    continue
+                # Strip a trailing bracketed classification code, e.g.
+                # "ontario [35]" / "quebec (that province)", so the geographic
+                # name compares cleanly.
+                member_clean = re.sub(r"\s*[\[(][^\])]*[\])]\s*$", "", member_name).strip()
+                for target in targets:
+                    if not target:
+                        continue
+                    if (
+                        member_name == target
+                        or member_clean == target
+                        or member_clean.startswith(f"{target},")
+                    ):
+                        return True
+        return False
+
+    @classmethod
+    def geography_dimension_covers_region(
+        cls, cube_metadata: Optional[Dict[str, Any]], region: str
+    ) -> bool:
+        """True iff *cube_metadata*'s Geography dimension can serve *region*.
+
+        A cube with no Geography dimension returns ``False`` — it has no
+        geographic axis, so it cannot decompose to any sub-national region.
+        Assumes ``cube_metadata`` is present; callers handle the
+        "metadata not available" (unknown) case separately.
+        """
+        if not str(region or "").strip():
+            return False
+        members = cls._geography_dimension_members(cube_metadata)
+        if not members:
+            return False
+        return cls._region_matches_geography_member(region, members)
+
+    def _cube_metadata_from_cache_only(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Cube metadata from in-memory / local-file caches only — no network.
+
+        Used by the pre-adjudication coverage annotation, which must stay off
+        the request hot path: probing 20 candidate cubes over the network would
+        dominate latency. Cubes absent from both caches are reported as
+        "coverage unknown"; the post-pick guard (which uses the live-capable
+        ``_get_cube_metadata``) is the reliable backstop for those.
+        """
+        normalized_pid = self._normalize_metadata_product_id(product_id)
+        if not normalized_pid:
+            return None
+        cached = self._cube_metadata_cache.get(normalized_pid)
+        if cached:
+            return cached
+        local = self._statscan_metadata_service.get_local_cube_metadata(normalized_pid)
+        if local:
+            # Warm the in-memory cache so repeated probes/fetches skip the file.
+            self._cube_metadata_cache[normalized_pid] = local
+            return local
+        return None
+
+    def region_coverage_from_cache(
+        self, product_ids: List[str], region: str
+    ) -> Dict[str, Optional[bool]]:
+        """Cache-only region coverage for a batch of candidate cubes.
+
+        Returns ``{product_id: True | False | None}`` where ``True`` means the
+        cube's Geography dimension contains *region*, ``False`` means it does
+        not (dimension present without a matching member, or no Geography
+        dimension at all), and ``None`` means the cube's metadata is not cached
+        and coverage could not be determined without a network call. No network
+        I/O is performed. Keys are the exact input ``product_ids`` so the caller
+        can annotate its candidate list directly.
+        """
+        region_s = str(region or "").strip()
+        coverage: Dict[str, Optional[bool]] = {}
+        for product_id in product_ids or []:
+            key = str(product_id)
+            if not region_s:
+                coverage[key] = None
+                continue
+            metadata = self._cube_metadata_from_cache_only(product_id)
+            if metadata is None:
+                coverage[key] = None
+            else:
+                coverage[key] = self.geography_dimension_covers_region(metadata, region_s)
+        return coverage
+
+    async def assert_region_supported_or_raise(self, product_id: str, region: str) -> None:
+        """Raise ``DataNotAvailableError`` if *product_id* cannot serve *region*.
+
+        The post-pick region-coverage guard: once a cube has been selected for a
+        query that named a sub-national region, verify (via the live-capable
+        metadata path) that the cube's Geography dimension actually contains that
+        region BEFORE coordinate probing. If it does not, raise early with a
+        machine-consumable marker so the same-provider alternate-code retry
+        re-adjudicates with this cube excluded instead of silently fetching (and
+        then fail-closed discarding) national data. A no-op when *region* is
+        empty; never raises for a cube that genuinely covers the region.
+        """
+        region_s = str(region or "").strip()
+        if not region_s:
+            return
+        metadata = await self._get_cube_metadata(product_id)
+        if not self.geography_dimension_covers_region(metadata, region_s):
+            raise DataNotAvailableError(
+                f"statscan_geography_not_covered: product {product_id} has no "
+                f"Geography member for '{region_s}'; a different cube is required "
+                f"to serve that region."
+            )
 
     @staticmethod
     def _decomposition_axis_keywords(axis_hint: str) -> List[str]:

@@ -2984,16 +2984,45 @@ async def resolve_indicator_for_fetch(
             and english_terms.lower() != str(selector_query or "").strip().lower()
             else {}
         )
+        # Region-coverage-aware selection: when the query names a sub-national
+        # region, tell the selector so it prefers a candidate that actually
+        # covers it. For dimension-member providers (StatsCan cube Geography) we
+        # additionally supply a cache-only coverage probe so each candidate cube
+        # is annotated with real Geography-dimension membership — the region
+        # itself is NEVER injected into the retrieval/selector QUERY text (that
+        # would make the adjudicator reject nationally-titled cubes that in fact
+        # contain the province). Region-titled-series providers (FRED) get the
+        # region as a preference with no probe. Threaded ONLY when a region is
+        # set, so non-region call sites are unaffected.
+        _region = str(getattr(intent, "subnationalRegion", None) or "").strip()
+        _region_kw: Dict[str, Any] = {}
+        if _region:
+            _region_kw["region"] = _region
+            _statscan_provider = getattr(svc, "statscan_provider", None)
+            if (
+                provider in {"STATSCAN", "STATISTICS CANADA"}
+                and _statscan_provider is not None
+                and hasattr(_statscan_provider, "region_coverage_from_cache")
+            ):
+                async def _region_coverage_probe(
+                    codes: List[str],
+                    _prov=_statscan_provider,
+                    _reg=_region,
+                ) -> Dict[str, Optional[bool]]:
+                    # Cache-only; no network on the adjudication hot path.
+                    return _prov.region_coverage_from_cache(codes, _reg)
+
+                _region_kw["region_coverage_probe"] = _region_coverage_probe
         if metadata_query:
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
                 metadata_query=metadata_query, exclude_codes=exclude_codes,
-                **_english_kw,
+                **_english_kw, **_region_kw,
             )
         else:
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
-                exclude_codes=exclude_codes, **_english_kw,
+                exclude_codes=exclude_codes, **_english_kw, **_region_kw,
             )
         selector_source = str(getattr(selection, "source", "") or "")
         selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")

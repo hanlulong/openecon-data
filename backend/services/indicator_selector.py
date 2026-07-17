@@ -17,7 +17,7 @@ import re
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
@@ -366,6 +366,10 @@ class IndicatorSelector:
         metadata_query: Optional[str] = None,
         exclude_codes: Optional[set] = None,
         english_terms: Optional[str] = None,
+        region: Optional[str] = None,
+        region_coverage_probe: Optional[
+            Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
+        ] = None,
     ) -> SelectionResult:
         """Cached wrapper around the full selection pipeline.
 
@@ -374,6 +378,12 @@ class IndicatorSelector:
         dominant per-query latency and the same concept recurs across users).
         Ambiguous outcomes, rejections, and alternate-retry calls
         (exclude_codes) always run the full pipeline.
+
+        ``region`` (intent.subnationalRegion) and ``region_coverage_probe`` steer
+        selection toward a candidate that actually covers the requested
+        sub-national region (see ``_llm_pick``). ``region`` is part of the cache
+        identity because it changes the adjudicated pick — without it a cached
+        "Ontario" pick could be served for a "Quebec" query.
         """
         cache_key = None
         if not exclude_codes:
@@ -383,6 +393,7 @@ class IndicatorSelector:
                 str(country or "").strip().upper(),
                 str(metadata_query or "").strip().lower(),
                 str(english_terms or "").strip().lower(),
+                str(region or "").strip().lower(),
             )
             cached = _selection_cache_get(cache_key)
             if cached is not None:
@@ -403,6 +414,8 @@ class IndicatorSelector:
             metadata_query=metadata_query,
             exclude_codes=exclude_codes,
             english_terms=english_terms,
+            region=region,
+            region_coverage_probe=region_coverage_probe,
         )
 
         if (
@@ -426,6 +439,10 @@ class IndicatorSelector:
         metadata_query: Optional[str] = None,
         exclude_codes: Optional[set] = None,
         english_terms: Optional[str] = None,
+        region: Optional[str] = None,
+        region_coverage_probe: Optional[
+            Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
+        ] = None,
     ) -> SelectionResult:
         """
         Select the best indicator for a query.
@@ -468,6 +485,18 @@ class IndicatorSelector:
                 if str(c[0]).strip().upper() not in _excluded_upper
             ]
             return [c for c, _s in kept], [s for _c, s in kept]
+
+        # Region steering (Proposal: region-coverage-aware selection). Threaded
+        # to _llm_pick ONLY when a sub-national region is actually set, so that
+        # every existing _llm_pick override/fake with the original signature
+        # keeps working unchanged (mirrors the english_query opt-in above).
+        _region_norm = str(region or "").strip()
+        _region_kw: Dict[str, Any] = {}
+        if _region_norm:
+            _region_kw["region"] = _region_norm
+            if region_coverage_probe is not None:
+                _region_kw["region_coverage_probe"] = region_coverage_probe
+
         telemetry_enabled = bool(getattr(self._settings, "indicator_telemetry_enabled", False))
         fusion_mode = str(getattr(self._settings, "indicator_fusion", "legacy") or "legacy").lower()
 
@@ -537,8 +566,8 @@ class IndicatorSelector:
         # (single neutral series fetched per-country downstream) the country is
         # irrelevant to series choice and must not bias the LLM.
         llm_country = country if has_country_match else None
-        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country)
-        result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider)
+        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country, **_region_kw)
+        result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider, **_region_kw)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
         # honor its alternative search terms with one bounded research retry.
@@ -569,6 +598,7 @@ class IndicatorSelector:
                         provider,
                         prefer_ask=retry_ambiguous,
                         country=country if retry_has_country_match else None,
+                        **_region_kw,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
                         return await self._retry_if_metadata_conflict(
@@ -576,6 +606,7 @@ class IndicatorSelector:
                             retry_result,
                             retry_candidates[:20],
                             provider,
+                            **_region_kw,
                         )
                     if self._is_llm_rejection(retry_result):
                         return retry_result
@@ -584,8 +615,8 @@ class IndicatorSelector:
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
-            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country)
-            result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider)
+            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country, **_region_kw)
+            result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider, **_region_kw)
 
         if self._is_llm_rejection(result):
             return result
@@ -1036,6 +1067,10 @@ class IndicatorSelector:
         result: Optional["SelectionResult"],
         candidates: List[tuple[str, str]],
         provider: str,
+        region: Optional[str] = None,
+        region_coverage_probe: Optional[
+            Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
+        ] = None,
     ) -> Optional["SelectionResult"]:
         """Retry LLM selection if a PICK contradicts explicit metadata constraints."""
 
@@ -1056,7 +1091,12 @@ class IndicatorSelector:
         if normalized_selected in compatible_codes:
             return result
 
-        retry_result = await self._llm_pick(query, compatible[:20], provider, prefer_ask=False)
+        _region_kw: Dict[str, Any] = {}
+        if str(region or "").strip():
+            _region_kw["region"] = str(region).strip()
+            if region_coverage_probe is not None:
+                _region_kw["region_coverage_probe"] = region_coverage_probe
+        retry_result = await self._llm_pick(query, compatible[:20], provider, prefer_ask=False, **_region_kw)
         if retry_result and (retry_result.code or retry_result.needs_user_choice):
             return retry_result
 
@@ -1318,6 +1358,10 @@ class IndicatorSelector:
         provider: str,
         prefer_ask: bool = False,
         country: Optional[str] = None,
+        region: Optional[str] = None,
+        region_coverage_probe: Optional[
+            Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
+        ] = None,
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates.
 
@@ -1325,11 +1369,36 @@ class IndicatorSelector:
         specifically about that country (see ``_apply_country_constraint``);
         surfacing it steers the LLM toward the country-matching series instead
         of a generic / different-country series that text similarity would win.
+
+        ``region`` (a sub-national region the user named) plus an optional
+        ``region_coverage_probe`` make the adjudicator region-coverage-aware.
+        When a probe is supplied (providers whose regional data lives as a
+        dimension MEMBER, e.g. StatsCan cube Geography), each candidate is
+        annotated with whether its geography actually contains ``region`` — this
+        is what lets the adjudicator keep a nationally-TITLED cube that in fact
+        contains the province, and reject a cube that does not. Without a probe
+        (providers whose regional data lives in a region-TITLED series, e.g.
+        FRED "…in Texas"), the region is stated as a preference so the
+        region-specific series wins over the national one.
         """
         # Enrich candidates with metadata so the LLM can see frequency,
         # unit, and whether a series is discontinued/obsolete. The sqlite
         # lookup is blocking — keep it off the event loop.
         enriched = await asyncio.to_thread(self._enrich_candidates, candidates, provider)
+
+        region_label = str(region or "").strip()
+        # Ground-truth region coverage per candidate (dimension-member providers
+        # only): {code: True/False/None}. None = coverage unknown (metadata not
+        # cached); the post-pick guard is the live backstop for those.
+        coverage: Dict[str, Optional[bool]] = {}
+        if region_label and region_coverage_probe is not None:
+            try:
+                coverage = await region_coverage_probe(
+                    [str(item["code"]) for item in enriched]
+                ) or {}
+            except Exception as exc:  # never let annotation break selection
+                logger.debug("Region-coverage probe failed (%s); proceeding unannotated", exc)
+                coverage = {}
 
         option_lines = []
         for i, item in enumerate(enriched):
@@ -1354,6 +1423,14 @@ class IndicatorSelector:
                 meta_parts.append("DISCONTINUED")
             if meta_parts:
                 parts.append(f"  ({', '.join(meta_parts)})")
+            if coverage:
+                covered = coverage.get(str(item["code"]))
+                if covered is True:
+                    parts.append(f"  [covers {region_label}]")
+                elif covered is False:
+                    parts.append(f"  [does NOT cover {region_label}]")
+                else:
+                    parts.append(f"  [{region_label} coverage unknown]")
             option_lines.append("".join(parts))
 
         options = "\n".join(option_lines)
@@ -1380,6 +1457,36 @@ class IndicatorSelector:
                 "STRONGLY prefer it over a generic, global, or different-country "
                 "series — even if the generic series has a shorter or more standard "
                 "code. Do not pick a series that names a DIFFERENT country."
+            )
+
+        # Region steering. Two shapes, chosen by whether coverage annotations
+        # were produced (i.e. whether the caller supplied a probe):
+        #  - annotated (dimension-member providers): the [covers …] markers are
+        #    ground truth about the cube's geography dimension, so instruct the
+        #    adjudicator to obey them and NOT to reject a cube because its title
+        #    is national — the marker, not the title, decides coverage.
+        #  - unannotated (region-titled-series providers): a plain preference for
+        #    the region-specific series over the national one.
+        if region_label and coverage:
+            prompt += (
+                f"\n\nREGION COVERAGE REQUIREMENT: The user needs data specifically for "
+                f"{region_label}. Each candidate is annotated with whether its geography "
+                f"actually includes {region_label}. You MUST pick a candidate marked "
+                f"\"[covers {region_label}]\". NEVER pick one marked "
+                f"\"[does NOT cover {region_label}]\". If none is marked "
+                f"\"[covers {region_label}]\", prefer one marked "
+                f"\"[{region_label} coverage unknown]\" over one marked "
+                f"\"[does NOT cover {region_label}]\". The annotation is ground truth "
+                f"about the candidate's geography dimension — a candidate can cover "
+                f"{region_label} even when its title names only the country, so do not "
+                f"reject it on the title alone."
+            )
+        elif region_label:
+            prompt += (
+                f"\n\nThe user is asking specifically about the sub-national region "
+                f"{region_label}. STRONGLY prefer a candidate whose series is specifically "
+                f"about {region_label} (its title or coverage names {region_label}) over a "
+                f"national or aggregate series. Do not pick a series for a DIFFERENT region."
             )
 
         # When candidates are very similar (embedding scores within 0.03),

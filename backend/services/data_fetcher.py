@@ -1789,6 +1789,29 @@ async def _fetch_from_statscan(svc: Any, intent: ParsedIntent, params: dict) -> 
         or _product_id_from_exact_value(indicator)
     )
 
+    # POST-pick region-coverage guard (region-coverage-aware selection,
+    # mechanism b). When the selector picked a cube (llm_pick, retriable) and the
+    # user named a sub-national region, verify the cube's Geography dimension
+    # actually contains that region BEFORE any coordinate probing. If it does
+    # not, raise DataNotAvailableError early so the _fetch_data same-provider
+    # alternate-code retry re-adjudicates with THIS cube excluded — the
+    # pre-adjudication coverage annotation then steers the retry toward a
+    # covering cube — instead of fetching national data the subnational
+    # fail-closed check would only discard. Scoped to llm_pick so exact
+    # user/vector requests keep failing honestly rather than swapping series.
+    _decision_source = str(
+        params.get("__decision_source")
+        or (intent.parameters or {}).get("__decision_source")
+        or ""
+    )
+    if (
+        _region
+        and state_product_id
+        and _decision_source == "llm_pick"
+        and hasattr(svc.statscan_provider, "assert_region_supported_or_raise")
+    ):
+        await svc.statscan_provider.assert_region_supported_or_raise(state_product_id, _region)
+
     # --- Framework fix: detect "breakdown" meta-values in dimensions ---
     # When the LLM delta extractor produces a dimension value like "Province",
     # "province", "all provinces", "by province" etc., this means "show data

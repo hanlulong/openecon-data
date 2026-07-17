@@ -58,6 +58,21 @@ def reset_provider_circuit_breakers():
     yield
 
 
+@pytest.fixture(autouse=True)
+def reset_selection_cache():
+    """Keep selector tests hermetic: _SELECTION_CACHE in indicator_selector.py
+    is module-level (per-worker, 6h TTL in production), so a confident pick
+    cached by one test is served to a later test expecting the LLM to be
+    consulted — an order-dependent flake (observed: two authority-contract
+    tests failing under full-suite ordering, passing in isolation)."""
+    try:
+        from backend.services import indicator_selector as _sel
+        _sel._SELECTION_CACHE.clear()
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture
 def no_supabase_env():
     """Fixture to temporarily disable Supabase environment variables."""
