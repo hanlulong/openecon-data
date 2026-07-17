@@ -205,3 +205,39 @@ def test_statscan_semantic_label_keeps_real_phrases_and_vector_ids_skipped() -> 
     intent.indicators = ["v1234567"]  # vector-id shape: no semantic signal
     intent.originalQuery = "Canada unemployment rate"
     assert _statscan_semantic_label({}, intent) == "Canada unemployment rate"
+
+
+# ---------------------------------------------------------------------------
+# Non-English queries must score via the canonical-English key in recovery —
+# telemetry showed recovery fetching the CORRECT WB candidate for 加拿大失业率
+# and judging it confident, yet it could never WIN: the comparator scored the
+# raw Chinese text against English series metadata (~0 lexical overlap), so
+# every Chinese query fell to a clarification menu (the analytics ② class).
+# ---------------------------------------------------------------------------
+
+def _zh_intent() -> ParsedIntent:
+    intent = ParsedIntent(
+        apiProvider="StatsCan",
+        indicators=["unemployment rate"],
+        parameters={"country": "CA"},
+        clarificationNeeded=False,
+        originalQuery="加拿大失业率",
+    )
+    intent.language = "zh"
+    return intent
+
+
+def test_recovery_scores_chinese_queries_via_english_key() -> None:
+    candidate = [_series("Unemployment rate, total", "Canada", "WorldBank")]
+    region_checks: list = []
+    qs = _recovery_qs(candidate, region_checks)
+
+    out = asyncio.run(
+        maybe_recover_from_uncertain_match(qs, "加拿大失业率", _zh_intent(), [
+            _series("Table 14-10-0375", "Canada", "StatsCan")
+        ])
+    )
+    assert out == candidate, (
+        "the correct English-titled candidate must be able to WIN recovery "
+        "for a Chinese query (scored via the canonical-English key)"
+    )

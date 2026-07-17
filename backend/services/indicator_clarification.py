@@ -663,6 +663,13 @@ async def maybe_recover_from_uncertain_match(
     if intent.indicators and len(intent.indicators) > 1:
         return None
 
+    # The comparator and gate below score lexically against ENGLISH series
+    # text: a non-English raw query zero-scores EVERY candidate, so recovery
+    # could never produce a winner for e.g. Chinese queries — each fetched
+    # (often correct) alternative lost to +0.10, and the flow fell to a menu.
+    # Same canonical-English rendering the other gates already use.
+    query = semantic_scoring_query(query, intent)
+
     params = dict(intent.parameters or {})
     if params.get("_uncertain_recovery_attempted"):
         return None
@@ -3037,6 +3044,10 @@ def needs_indicator_clarification(
 
     if not data:
         return _gate_log(False, "no_data")
+    # Callers are SUPPOSED to pass a scoring-ready query, but the gate must
+    # not depend on that discipline: normalize here too (idempotent — English
+    # text passes through untouched).
+    query = semantic_scoring_query(query, intent)
     if intent and intent.indicators and len(intent.indicators) > 1:
         return _gate_log(False, "multi_indicator")
 
