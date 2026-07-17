@@ -59,7 +59,11 @@ def check(resp, exp):
     if "error_contains" in exp:
         err = (resp.get("error") or "") + " " + (resp.get("message") or "")
         if exp["error_contains"].lower() not in err.lower():
-            problems.append(f"error missing {exp['error_contains']!r}: got {err[:120]!r}")
+            problems.append(
+                f"error missing {exp['error_contains']!r}: "
+                f"error={resp.get('error')!r} message={(resp.get('message') or '')[:80]!r} "
+                f"series={len(data)}"
+            )
     if "min_series" in exp and len(data) < exp["min_series"]:
         problems.append(f"series {len(data)} < {exp['min_series']}")
     if "provider" in exp and data:
