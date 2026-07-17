@@ -262,6 +262,22 @@ def _persisted_resolved_code_is_foreign_namespace(provider: str, code: str) -> b
 
 
 # ---------------------------------------------------------------------------
+# Subnational-discard retry conduit. When the response-level subnational
+# fail-closed check discards served data, process_query re-runs the impl ONCE
+# with the discarded code excluded so selection re-adjudicates (the impl has
+# many intent-acquisition paths — parse cache, pending intents, semantic
+# clarification — so a contextvar consumed at the single _fetch_data seam is
+# the only conduit that reaches all of them). Set/reset strictly around the
+# retry call; empty for every normal request.
+# ---------------------------------------------------------------------------
+import contextvars as _contextvars
+
+_SUBNATIONAL_RETRY_EXCLUDES: "_contextvars.ContextVar[Optional[List[str]]]" = (
+    _contextvars.ContextVar("subnational_retry_excludes", default=None)
+)
+
+
+# ---------------------------------------------------------------------------
 # Intent cache — avoids re-parsing identical queries via LLM (saves 4-6s)
 # ---------------------------------------------------------------------------
 _intent_cache: Dict[str, Tuple[Any, float]] = {}  # hash -> (ParseRouteResult, timestamp)
@@ -4535,10 +4551,61 @@ class QueryService:
             owner_key=owner_key,
             claimable_owner_keys=claimable_owner_keys,
         )
+        # Capture the served series identity BEFORE enforcement discards it —
+        # it is what the one-shot re-adjudication below must exclude.
+        served_provider, served_code = (None, None)
+        if getattr(response, "data", None):
+            try:
+                served_provider, served_code = self._extract_series_provider_and_code(
+                    response.data[0]
+                )
+            except Exception:
+                pass
         # Subnational fail-closed runs before empty-data finalization: it may
         # convert a served-national-data response into an explanation (data=None
         # + message), which finalization then leaves untouched (message set).
         response = self._enforce_subnational_fail_closed(response)
+
+        # One-shot re-adjudication after a subnational discard: the pick that
+        # produced national data for a region query is evicted from the
+        # selection cache (else repeats fast-fail on it for 6h) and the impl
+        # re-runs once with that code excluded — the region-aware annotations
+        # then steer the second adjudication. If the retry ALSO fails the
+        # check (or errors), the first honest fail-closed response stands.
+        if (
+            response is not None
+            and getattr(response, "error", None) == "subnational_data_unavailable"
+            and served_code
+            and _SUBNATIONAL_RETRY_EXCLUDES.get() is None
+        ):
+            try:
+                from .indicator_selector import invalidate_selection_cache_entry
+
+                evicted = invalidate_selection_cache_entry(served_provider or "", served_code)
+                logger.info(
+                    "🔁 Subnational discard: re-adjudicating once with %s/%s excluded "
+                    "(evicted %d cached selection(s))",
+                    served_provider, served_code, evicted,
+                )
+                token = _SUBNATIONAL_RETRY_EXCLUDES.set([served_code])
+                try:
+                    retry_response = await self._process_query_impl(
+                        query,
+                        conversation_id=conversation_id,
+                        auto_pro_mode=auto_pro_mode,
+                        use_orchestrator=use_orchestrator,
+                        allow_orchestrator=allow_orchestrator,
+                        owner_key=owner_key,
+                        claimable_owner_keys=claimable_owner_keys,
+                    )
+                finally:
+                    _SUBNATIONAL_RETRY_EXCLUDES.reset(token)
+                retry_response = self._enforce_subnational_fail_closed(retry_response)
+                if retry_response is not None and getattr(retry_response, "data", None):
+                    response = retry_response
+            except Exception as retry_exc:  # keep the honest first answer
+                logger.warning("Subnational re-adjudication failed: %s", retry_exc)
+
         return self._finalize_empty_data_response(response)
 
     async def _process_query_impl(
@@ -6103,6 +6170,28 @@ class QueryService:
         Scoped to __decision_source == "llm_pick": user-exact and verified
         carried-over codes fail honestly rather than silently swap series.
         """
+        # Subnational-discard retry conduit: process_query re-runs the impl
+        # with the discarded code carried in a contextvar (the only conduit
+        # that reaches every intent-acquisition path). Merge it here at the
+        # single fetch chokepoint so selection re-adjudicates around it.
+        _ctx_excludes = _SUBNATIONAL_RETRY_EXCLUDES.get()
+        if _ctx_excludes:
+            params0 = intent.parameters or {}
+            merged = {str(c).strip() for c in (params0.get("__exclude_indicator_codes") or [])}
+            merged.update(str(c).strip() for c in _ctx_excludes if str(c).strip())
+            params0["__exclude_indicator_codes"] = sorted(merged)
+            merged_upper = {c.upper() for c in merged}
+            # Force re-resolution ONLY when the carried code is a discarded
+            # one — a user-exact code that differs must stay untouched.
+            if str(params0.get("indicator") or "").strip().upper() in merged_upper:
+                for key in (
+                    "indicator", "seriesId", "series_id", "code",
+                    "__semantic_authority", "__decision_source",
+                    "__indicator_selection_source", "__execution_plan_identity",
+                ):
+                    params0.pop(key, None)
+            intent.parameters = params0
+
         excluded: List[str] = []
         plan = execution_plan
         while True:

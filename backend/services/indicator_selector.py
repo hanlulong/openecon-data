@@ -1814,6 +1814,30 @@ def _selection_cache_get(key: tuple):
     return payload
 
 
+def invalidate_selection_cache_entry(provider: str, code: str) -> int:
+    """Evict cached selections that picked *code* under *provider*.
+
+    Used when a response-level hard check (subnational fail-closed) discards
+    served data: the confident pick that produced it would otherwise be
+    replayed from this cache for up to 6h, fast-failing every repeat of the
+    query (observed live: 'California GDP' fast-failed ~1.6s on a cached
+    national pick). Returns the number of entries removed.
+    """
+    provider_norm = str(provider or "").strip().upper()
+    code_norm = str(code or "").strip().upper()
+    if not provider_norm or not code_norm:
+        return 0
+    doomed = [
+        key
+        for key, (_ts, payload) in list(_SELECTION_CACHE.items())
+        if key[0] == provider_norm
+        and str(payload.get("code") or "").strip().upper() == code_norm
+    ]
+    for key in doomed:
+        _SELECTION_CACHE.pop(key, None)
+    return len(doomed)
+
+
 def _selection_cache_put(key: tuple, payload: dict) -> None:
     import time as _time
 
