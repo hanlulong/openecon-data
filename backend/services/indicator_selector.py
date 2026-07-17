@@ -603,7 +603,14 @@ class IndicatorSelector:
         # (single neutral series fetched per-country downstream) the country is
         # irrelevant to series choice and must not bias the LLM.
         llm_country = country if has_country_match else None
-        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country, **_region_kw)
+        # Opt-in kwarg (same pattern as _region_kw): only passed when the
+        # fuller text differs, so test fakes with the old signature keep working.
+        _constraint_kw: Dict[str, Any] = (
+            {"constraint_query": metadata_constraint_query}
+            if metadata_constraint_query and metadata_constraint_query != query
+            else {}
+        )
+        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country, **_constraint_kw, **_region_kw)
         result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider, **_region_kw)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
@@ -652,7 +659,7 @@ class IndicatorSelector:
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
-            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country, **_region_kw)
+            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country, **_constraint_kw, **_region_kw)
             result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider, **_region_kw)
 
         if self._is_llm_rejection(result):
@@ -1399,8 +1406,13 @@ class IndicatorSelector:
         region_coverage_probe: Optional[
             Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
         ] = None,
+        constraint_query: Optional[str] = None,
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates.
+
+        ``constraint_query`` is the FULLER user text (metadata_query) when the
+        resolution layer stripped structural qualifiers like frequency words
+        out of ``query`` — frequency extraction must see the user's wording.
 
         ``country`` is supplied only when the candidate set contains a series
         specifically about that country (see ``_apply_country_constraint``);
@@ -1534,7 +1546,7 @@ class IndicatorSelector:
         # the wrong frequency (observed live: annual "Inflation, consumer
         # prices for China" chosen over the monthly CPI series for a
         # "monthly, last 12 months" query — one useless data point).
-        requested_freqs = _extract_requested_frequencies(query)
+        requested_freqs = _extract_requested_frequencies(constraint_query or query)
         if requested_freqs:
             freq_label = "/".join(sorted(requested_freqs))
             prompt += (

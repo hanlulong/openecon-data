@@ -4129,6 +4129,13 @@ class QueryService:
         """
         primary_provider = normalize_provider_name(intent.apiProvider)
 
+        if "no_data_in_requested_window" in str(primary_error or ""):
+            # The user's time window is the constraint (future start, frozen
+            # series): NO provider has observations in it. Falling back would
+            # burn provider/LLM budget and, worse, could serve a fallback's
+            # out-of-window data. Surface the honest no-data path instead.
+            raise primary_error
+
         explicit_provider_requested = normalize_provider_name(
             self._detect_explicit_provider(str(intent.originalQuery or "")) or ""
         )
@@ -6078,7 +6085,13 @@ class QueryService:
             current_plan = plan
             try:
                 return await _df_fetch_data(self, intent, execution_plan=current_plan)
-            except DataNotAvailableError:
+            except DataNotAvailableError as exc:
+                if "no_data_in_requested_window" in str(exc):
+                    # The user's TIME WINDOW is the constraint, not the code:
+                    # the picked series exists and simply has no observations
+                    # in the window. Re-adjudicating with the code excluded
+                    # can never help and burned 3 fetch+LLM rounds per query.
+                    raise
                 params = intent.parameters or {}
                 failed_code = str(params.get("indicator") or "").strip()
                 decision_source = str(params.get("__decision_source") or "")

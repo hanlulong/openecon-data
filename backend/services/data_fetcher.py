@@ -3144,7 +3144,20 @@ async def fetch_data(
             params = broadened_params
             execution_plan = retry_plan
 
+    _had_observations = bool(
+        result and any(getattr(series, "data", None) for series in result)
+    )
     result = _enforce_user_time_window(params, intent.originalQuery or "", result)
+    if _had_observations and not result:
+        # The provider HAS this series — every observation just falls outside
+        # the user's requested window (future start, frozen series…). Marked
+        # distinctly because NO alternate code and NO fallback provider can
+        # fix a window constraint: retry loops must not burn adjudications on
+        # it, and the finalizer should explain the period, not the indicator.
+        raise DataNotAvailableError(
+            "no_data_in_requested_window: the series exists but has no "
+            "observations inside the user-requested time window."
+        )
 
     if not result or (len(result) == 1 and not result[0].data):
         raise DataNotAvailableError(

@@ -409,7 +409,7 @@ async def test_select_uses_metadata_query_for_lost_frequency_constraints(monkeyp
 
     seen_candidate_sets: list[list[str]] = []
 
-    async def fake_llm_pick(query, candidates, provider, prefer_ask=False, country=None):  # noqa: ANN001, ARG001
+    async def fake_llm_pick(query, candidates, provider, prefer_ask=False, country=None, constraint_query=None):  # noqa: ANN001, ARG001
         seen_candidate_sets.append([code for code, _name in candidates])
         if seen_candidate_sets[-1] == ["BOGZ1FL155035066A", "HOEREPHRE"]:
             return SelectionResult(
