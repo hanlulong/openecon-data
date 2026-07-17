@@ -1567,7 +1567,14 @@ class IndicatorSelector:
                 "use ASK to let the user choose from the top 3-5 most relevant options. "
                 "Do not ASK merely because retrieval scores are close when one option is the "
                 "general/direct count or total and the alternatives are breakdowns, distributions, "
-                "sub-populations, or account tables that the user did not request."
+                "sub-populations, or account tables that the user did not request. "
+                "Likewise do not ASK when the candidates are variants of the SAME "
+                "concept along structural axes the selection rules above already "
+                "resolve — frequency (annual/quarterly/monthly), seasonally "
+                "adjusted vs NSA, real vs nominal, level vs growth rate: apply "
+                "those rules and PICK the standard variant. Asking a user to "
+                "choose among such variants is noise; ASK is for genuinely "
+                "DIFFERENT concepts or scopes."
             )
 
         settings = self._settings
