@@ -913,6 +913,69 @@ def materialize_execution_plan(
     return plan
 
 
+def _enforce_user_time_window(
+    params: dict[str, Any], original_query: str, result: List[NormalizedData]
+) -> List[NormalizedData]:
+    """Honesty filter: when the USER named a time window, never serve
+    observations outside it.
+
+    Observed live: "GDP of Tuvalu since 2030" produced startDate=2030 with a
+    defaulted endDate in the past (inverted range), the provider's date param
+    fell through, and the FULL 56-point history was served as a silent
+    success. Same class: a frozen series (data ends 2019) served for
+    "last 3 months". Filtering is YEAR-granularity on purpose — annual and
+    quarterly observations are dated Jan-1/quarter-start, so a point-level
+    comparison against a mid-year bound would wrongly drop boundary-year
+    observations. Applies ONLY when the user explicitly set the scope
+    (_user_set_time_scope); provider-default windows keep their existing
+    edge behavior. An all-dropped result flows into the standard
+    no-data-for-period path, which the response finalizer explains in the
+    user's language.
+    """
+    if not result or not _user_set_time_scope(params, original_query):
+        return result
+
+    def _year(value: Any) -> Optional[int]:
+        text = str(value or "")[:4]
+        return int(text) if text.isdigit() else None
+
+    start_year = _year(params.get("startDate")) or _year(params.get("start_year"))
+    end_year = _year(params.get("endDate")) or _year(params.get("end_year"))
+    if start_year is None and end_year is None:
+        return result
+
+    filtered: List[NormalizedData] = []
+    dropped_total = 0
+    for series in result:
+        points = list(series.data or [])
+        kept = []
+        for point in points:
+            point_date = (
+                point.get("date") if isinstance(point, dict)
+                else getattr(point, "date", None)
+            )
+            year = _year(point_date)
+            if year is None:
+                kept.append(point)
+                continue
+            if start_year is not None and year < start_year:
+                continue
+            if end_year is not None and year > end_year:
+                continue
+            kept.append(point)
+        dropped_total += len(points) - len(kept)
+        if kept:
+            series.data = kept
+            filtered.append(series)
+    if dropped_total:
+        logger.info(
+            "Time-window honesty filter dropped %d observation(s) outside the "
+            "user-requested window [%s..%s] (%d/%d series kept)",
+            dropped_total, start_year, end_year, len(filtered), len(result),
+        )
+    return filtered
+
+
 def _statscan_semantic_label(params: dict[str, Any], intent: Any, base: str = "") -> str:
     """Pick the SEMANTIC indicator label for StatsCan dimension-member matching.
 
@@ -3080,6 +3143,8 @@ async def fetch_data(
             result = retry_result
             params = broadened_params
             execution_plan = retry_plan
+
+    result = _enforce_user_time_window(params, intent.originalQuery or "", result)
 
     if not result or (len(result) == 1 and not result[0].data):
         raise DataNotAvailableError(

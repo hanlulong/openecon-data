@@ -530,3 +530,61 @@ def test_collect_statscan_selector_choice_options_threads_region_kwargs() -> Non
 
     asyncio.run(_run())
     assert captured.get("region") == "Ontario"
+
+
+# ---------------------------------------------------------------------------
+# FREQUENCY REQUIREMENT — when the user names a reporting frequency, the
+# adjudicator must be told to prefer frequency-matching candidates (observed
+# live: annual "Inflation, consumer prices for China" picked over the monthly
+# CPI series for a "monthly, last 12 months" query — one useless data point).
+# ---------------------------------------------------------------------------
+
+def test_llm_pick_states_frequency_requirement_when_query_names_one(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=_selector_settings())
+    monkeypatch.setattr(
+        selector,
+        "_enrich_candidates",
+        lambda candidates, provider: _enriched(*candidates),
+    )
+    sink: dict = {}
+    monkeypatch.setattr(
+        "backend.services.http_pool.get_http_client",
+        lambda: _CapturingClient(sink, pick_line="PICK: 1"),
+    )
+
+    asyncio.run(
+        selector._llm_pick(  # pylint: disable=protected-access
+            "China CPI monthly, last 12 months",
+            [("CPALTT01CNM659N", "CPI: Total for China, growth rate same period previous year"),
+             ("FPCPITOTLZGCHN", "Inflation, consumer prices for China")],
+            "FRED",
+        )
+    )
+
+    prompt = sink["prompt"]
+    assert "FREQUENCY REQUIREMENT" in prompt
+    assert "monthly" in prompt
+
+
+def test_llm_pick_omits_frequency_requirement_without_frequency(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=_selector_settings())
+    monkeypatch.setattr(
+        selector,
+        "_enrich_candidates",
+        lambda candidates, provider: _enriched(*candidates),
+    )
+    sink: dict = {}
+    monkeypatch.setattr(
+        "backend.services.http_pool.get_http_client",
+        lambda: _CapturingClient(sink, pick_line="PICK: 1"),
+    )
+
+    asyncio.run(
+        selector._llm_pick(  # pylint: disable=protected-access
+            "US GDP",
+            [("GDPC1", "Real Gross Domestic Product"), ("GDPA", "Gross Domestic Product")],
+            "FRED",
+        )
+    )
+
+    assert "FREQUENCY REQUIREMENT" not in sink["prompt"]

@@ -1998,6 +1998,13 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("series_id", fred_params)
 
     def test_fetch_data_preserves_explicit_time_for_exact_fred_dispatch(self) -> None:
+        # Fixture data must fall INSIDE the user window: the time-window
+        # honesty filter now (correctly) drops served points outside a
+        # user-set scope, and this test asserts param FORWARDING, not
+        # window behavior.
+        _in_window_series = sample_series().model_copy(deep=True)
+        for _i, _point in enumerate(_in_window_series.data):
+            _point.date = f"202{2 + _i}-01-01"
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["State Tax Collections: T51 Documentary and Stock Transfer Taxes for New Mexico"],
@@ -2024,7 +2031,7 @@ class QueryServiceTests(unittest.TestCase):
              patch.object(self.service, "_apply_catalog_availability_override", return_value=("FRED", dict(intent.parameters or {}))), \
              patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
              patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
-             patch.object(self.service.fred_provider, "fetch_series", return_value=sample_series()) as fetch_mock:
+             patch.object(self.service.fred_provider, "fetch_series", return_value=_in_window_series) as fetch_mock:
             result = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(len(result), 1)
@@ -9053,7 +9060,11 @@ class QueryServiceTests(unittest.TestCase):
             )
 
         joined = "\n".join(options).upper()
-        self.assertIn("[OECD]", joined)
+        # Contract updated 2026-07-17: OECD is MANUAL_ONLY — it joins the
+        # fan-out only when the user names it (see
+        # test_arbitration_hard_predicates.py), even when routing made it the
+        # primary. This test's subject is the country-coverage filter below.
+        self.assertNotIn("[OECD]", joined)
         self.assertIn("[WORLDBANK]", joined)
         self.assertNotIn("[FRED]", joined)
 
@@ -11030,8 +11041,14 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="solana trading volume over the last 90 days",
         )
 
+        # Fixture points must fall inside the user's "last 90 days" window —
+        # the time-window honesty filter drops out-of-window observations, and
+        # this test asserts coin/metric EXTRACTION, not window behavior.
+        _recent = sample_series().model_copy(deep=True)
+        for _i, _p in enumerate(_recent.data):
+            _p.date = f"2026-0{5 + _i}-01"
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.coingecko_provider, "get_historical_data", return_value=[sample_series()]) as historical_mock:
+             patch.object(self.service.coingecko_provider, "get_historical_data", return_value=[_recent]) as historical_mock:
             run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertTrue(historical_mock.called)

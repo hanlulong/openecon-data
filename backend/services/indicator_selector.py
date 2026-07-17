@@ -1526,6 +1526,26 @@ class IndicatorSelector:
                 f"national or aggregate series. Do not pick a series for a DIFFERENT region."
             )
 
+        # Frequency steering. The user's query names a reporting frequency
+        # ("monthly", "quarterly", "last N months" implies sub-annual…) —
+        # extracted STRUCTURALLY by _extract_requested_frequencies; candidates
+        # already display their catalog frequency in the option line. Without
+        # this instruction the adjudicator picks the best TITLE match even at
+        # the wrong frequency (observed live: annual "Inflation, consumer
+        # prices for China" chosen over the monthly CPI series for a
+        # "monthly, last 12 months" query — one useless data point).
+        requested_freqs = _extract_requested_frequencies(query)
+        if requested_freqs:
+            freq_label = "/".join(sorted(requested_freqs))
+            prompt += (
+                f"\n\nFREQUENCY REQUIREMENT: The user asked for {freq_label} data. "
+                f"Each candidate's reporting frequency is shown in its metadata. "
+                f"STRONGLY prefer a candidate whose frequency matches {freq_label}; "
+                f"pick a different-frequency candidate ONLY when no candidate "
+                f"matches. Never trade a matching frequency for a marginally "
+                f"better title."
+            )
+
         # When candidates are very similar (embedding scores within 0.03),
         # tell the LLM to prefer ASK over PICK to avoid overconfident wrong picks.
         if prefer_ask:
