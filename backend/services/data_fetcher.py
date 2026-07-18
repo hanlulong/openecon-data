@@ -1637,7 +1637,10 @@ async def fetch_from_provider_dispatch(
         else:
             fred_params = {
                 **params,
-                "indicator": fred_request.get("series_id") or params.get("indicator"),
+                # Post-resolution pick beats the pre-resolution plan snapshot
+                # (same staleness class fixed for IMF in 5771155: the snapshot
+                # can carry the semantic label / a stale code).
+                "indicator": params.get("indicator") or fred_request.get("series_id"),
             }
             if fred_params.get("seriesId") and fred_params.get("seriesId") != fred_params.get("indicator"):
                 fred_params.pop("seriesId", None)
@@ -1649,7 +1652,8 @@ async def fetch_from_provider_dispatch(
 
     if provider in {"WORLDBANK", "WORLD BANK"}:
         worldbank_request = dict(execution_plan.provider_request or {})
-        resolved_indicator = worldbank_request.get("indicator") or params.get("indicator")
+        # Post-resolution pick beats the plan snapshot (IMF staleness class).
+        resolved_indicator = params.get("indicator") or worldbank_request.get("indicator")
         request_country = worldbank_request.get("country") or params.get("country")
         request_countries = worldbank_request.get("countries") or params.get("countries")
         allow_semantic_alternatives = bool(
@@ -2436,6 +2440,9 @@ async def _fetch_from_eurostat(
 ) -> List[NormalizedData]:
     """Eurostat provider dispatch."""
     eurostat_request = dict((execution_plan.provider_request or {}) if execution_plan else {})
+    # NOTE: Eurostat is the exception to the params-first rule (IMF staleness
+    # class) — its plan dataset_code is a load-bearing contract (three tests
+    # assert plan-first here) and its own resolution flow expects it.
     indicator = str(
         eurostat_request.get("dataset_code")
         or eurostat_request.get("code")
