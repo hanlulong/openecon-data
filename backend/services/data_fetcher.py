@@ -2310,10 +2310,16 @@ async def _fetch_from_imf(
         or params.get("countries")
         or params.get("country")
     )
+    # params["indicator"] holds the POST-RESOLUTION pick; the execution-plan
+    # snapshot was materialized BEFORE selection and can still carry the
+    # semantic LABEL ("debt to GDP ratio") — letting the snapshot win sent the
+    # label to the provider, whose own catalog lookup re-resolved it to a
+    # different sibling (GGXWDG_GDP, no USA data) while the adjudicated pick
+    # (GGXWDG_NGDP, 31 pts for USA) never reached it. Freshest wins.
     resolved_indicator = str(
-        imf_request.get("indicator")
+        params.get("indicator")
+        or imf_request.get("indicator")
         or imf_request.get("code")
-        or params.get("indicator")
         or ""
     ).strip()
     request_start_year = imf_request.get("start_year")
