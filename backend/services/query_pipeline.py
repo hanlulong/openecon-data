@@ -76,7 +76,17 @@ class QueryPipeline:
         if not provider:
             return
 
-        query_upper = str(query or "").upper()
+        # RESOLVED-QUERY AUTHORITY: on follow-ups the raw turn text carries no
+        # metric ("make it quarterly") — falling back to it poisoned the
+        # selector query, the SELECTION CACHE KEY (a cached pick for the text
+        # 'make it quarterly' replayed ACROSS CONVERSATIONS regardless of the
+        # prior indicator), and the saved state's indicator. The parse already
+        # produced the self-contained resolvedQuery ("US GDP quarterly") —
+        # every fallback below must prefer it.
+        effective_query = (
+            str(getattr(intent, "resolvedQuery", "") or "").strip() or str(query or "")
+        )
+        query_upper = f"{str(query or '').upper()} {effective_query.upper()}"
         params = dict(intent.parameters or {})
         metric_text = self._metric_text_from_query(
             str(params.get("__semantic_indicator_label") or "").strip()
@@ -88,9 +98,9 @@ class QueryPipeline:
                 None,
             )
             if callable(distilled_builder):
-                metric_text = distilled_builder(query)
+                metric_text = distilled_builder(effective_query)
         if not metric_text:
-            metric_text = self._metric_text_from_query(query)
+            metric_text = self._metric_text_from_query(effective_query)
         if not metric_text:
             return
 

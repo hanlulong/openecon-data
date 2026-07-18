@@ -90,3 +90,38 @@ def test_build_continuity_kwargs_opt_in() -> None:
     assert build_continuity_kwargs({"__continuity_series": "GDP [GDPA]"}) == {
         "continuity_series": "GDP [GDPA]"
     }
+
+
+def test_invented_code_drop_uses_resolved_query_not_raw_followup() -> None:
+    # 'make it quarterly' carries no metric; the parse's resolvedQuery does.
+    # Falling back to raw text poisoned the selector query, the SELECTION
+    # CACHE KEY (cross-conversation replay of a cached pick for the literal
+    # text 'make it quarterly'), and saved state. (battery mr3.t2 root cause)
+    from backend.services.query_pipeline import QueryPipeline
+
+    import re as _re
+    from types import SimpleNamespace as _SNS
+
+    pipeline = QueryPipeline.__new__(QueryPipeline)
+    pipeline.query_service = _SNS(
+        _looks_like_provider_indicator_code=lambda prov, text: bool(
+            _re.fullmatch(r"[A-Z0-9]{6,}", str(text or ""))
+        ),
+        _build_distilled_indicator_query=lambda q: "",
+    )
+
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["A191RL1Q225SBEA"],  # parser-invented code, not in query
+        parameters={},
+        clarificationNeeded=False,
+        isFollowUp=True,
+        followUpType="time_change",
+        resolvedQuery="US GDP quarterly",
+        originalQuery="make it quarterly",
+    )
+    pipeline._drop_llm_invented_indicator_codes(intent, "make it quarterly")
+    assert intent.indicators, "indicators must not be empty"
+    joined = " ".join(intent.indicators).lower()
+    assert "make it quarterly" not in joined
+    assert "gdp" in joined
