@@ -406,6 +406,11 @@ Follow-up examples (previous query: "GDP in Canada from 2020 to 2024"):
     "Ontario unemployment rate", a turn naming the country itself ("Canada
     unemployment rate", "加拿大失业率") -> country_change, subnationalRegion null.
     Never carry a previous sub-region into a turn that names a geography.
+  - Frequency/time-only changes KEEP the prior measure exactly: after
+    "US GDP annual", "make it quarterly" -> time_change, resolvedQuery
+    "US nominal GDP quarterly" — preserve the previous series' qualifiers
+    (nominal vs real, seasonally adjusted, index vs level) so re-resolution
+    returns the SAME measure at the new frequency, never a variant switch.
 - If the message is NOT a follow-up (i.e., a completely new independent query),
   set isFollowUp=false, followUpType=null, resolvedQuery=null.
 

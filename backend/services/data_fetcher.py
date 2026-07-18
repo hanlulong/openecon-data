@@ -3147,16 +3147,28 @@ async def fetch_data(
     _had_observations = bool(
         result and any(getattr(series, "data", None) for series in result)
     )
+    _latest_obs = ""
+    if _had_observations:
+        for _series in result:
+            for _point in getattr(_series, "data", None) or []:
+                _pd = str(
+                    _point.get("date") if isinstance(_point, dict)
+                    else getattr(_point, "date", "") or ""
+                )
+                if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > _latest_obs:
+                    _latest_obs = _pd
     result = _enforce_user_time_window(params, intent.originalQuery or "", result)
     if _had_observations and not result:
         # The provider HAS this series — every observation just falls outside
-        # the user's requested window (future start, frozen series…). Marked
-        # distinctly because NO alternate code and NO fallback provider can
-        # fix a window constraint: retry loops must not burn adjudications on
-        # it, and the finalizer should explain the period, not the indicator.
+        # the user's requested window (not-yet-published periods, frozen
+        # series, future starts). Marked distinctly because NO alternate code
+        # and NO fallback provider can fix a window constraint; the
+        # latest-available date lets the response layer tell the user exactly
+        # how far the data goes instead of a generic "no data".
         raise DataNotAvailableError(
             "no_data_in_requested_window: the series exists but has no "
-            "observations inside the user-requested time window."
+            "observations inside the user-requested time window. "
+            f"latest_available={_latest_obs or 'unknown'}"
         )
 
     if not result or (len(result) == 1 and not result[0].data):

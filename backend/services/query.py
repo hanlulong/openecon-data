@@ -4125,6 +4125,44 @@ class QueryService:
             original_indicators, fallback_result, target_countries, original_query,
         )
 
+
+    @staticmethod
+    def _render_window_marker_response(conv_id, intent, tracker, exc_text: str):
+        """Bare empty response for a no_data_in_requested_window failure.
+
+        When the marker carries a usable latest_available date, render the
+        localized "not yet released" explanation directly (finalizer passes
+        message-bearing responses through); otherwise leave the response bare
+        so the finalizer stamps its scope-aware generic explanation.
+        """
+        import re as _re
+
+        from .user_messages import get_message as _um_get
+
+        message = None
+        error = None
+        match = _re.search(r"latest_available=([0-9]{4}[0-9-]*)", str(exc_text or ""))
+        if match:
+            indicator = ", ".join(intent.indicators or []) if intent else ""
+            country = str(((intent.parameters or {}).get("country") or "")) if intent else ""
+            scope = " — ".join(part for part in (indicator, country) if part) or "this series"
+            message = _um_get(
+                "not_yet_released",
+                getattr(intent, "language", None),
+                scope=scope,
+                latest=match.group(1)[:10],
+            )
+            error = "no_data_in_requested_window"
+        return QueryResponse(
+            conversationId=conv_id,
+            intent=intent,
+            data=None,
+            clarificationNeeded=False,
+            message=message,
+            error=error,
+            processingSteps=tracker.to_list(),
+        )
+
     async def _try_with_fallback(self, intent: ParsedIntent, primary_error: Exception):
         """
         Try to fetch data from fallback providers when primary fails.
@@ -6007,18 +6045,13 @@ class QueryService:
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
                     if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
-                        # The user's requested time window contains no
-                        # observations anywhere. Return a BARE empty response:
-                        # the empty-data finalizer stamps the scope-aware,
-                        # localized explanation (incl. the window). Stale cache
-                        # must not be consulted — it would re-serve the same
-                        # out-of-window data; clarification menus can't help.
-                        return QueryResponse(
-                            conversationId=conv_id,
-                            intent=intent,
-                            data=None,
-                            clarificationNeeded=False,
-                            processingSteps=tracker.to_list(),
+                        # Window constraint: no stale cache (same out-of-window
+                        # data), no menus. Renders the localized
+                        # "not yet released — latest available is X" text when
+                        # the marker carries the date; else the finalizer
+                        # stamps its generic scope-aware explanation.
+                        return self._render_window_marker_response(
+                            conv_id, intent, tracker, str(fallback_exc)
                         )
 
             # Last resort: serve stale (expired) cached data rather than returning nothing.
@@ -6106,14 +6139,9 @@ class QueryService:
                 except Exception as fallback_exc:
                     logger.warning("All fallback providers failed: %s", fallback_exc)
                     if "no_data_in_requested_window" in str(fallback_exc) and "intent" in locals() and intent:
-                        # See sibling branch above: bare empty response, the
-                        # finalizer explains the window; no stale cache, no menus.
-                        return QueryResponse(
-                            conversationId=conv_id,
-                            intent=intent,
-                            data=None,
-                            clarificationNeeded=False,
-                            processingSteps=tracker.to_list(),
+                        # See sibling branch above.
+                        return self._render_window_marker_response(
+                            conv_id, intent, tracker, str(fallback_exc)
                         )
 
             # Provider-change follow-up: give explicit message about unavailability

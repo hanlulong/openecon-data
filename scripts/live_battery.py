@@ -114,7 +114,7 @@ SINGLE = [
     ("bis-credit", "total credit to the non-financial sector for Germany", {"nonempty": True}),
     ("ct-veg-oil", "US exports of vegetable oil", {}),  # must NOT be HS27 petroleum; fail-closed OK
     ("eu-ea-hicp", "euro area inflation rate", {"nonempty": True, "value_range": (-1, 9)}),
-    ("wb-empty-note", "GDP of Tuvalu since 2030", {"error_contains": "no data"}),  # silent-empty fix
+    ("wb-empty-note", "GDP of Tuvalu since 2030", {"error_contains": "available"}),  # honest window/not-yet-released message
 ]
 
 # ---------------- multi-round conversations (10, per mandate) ----------------

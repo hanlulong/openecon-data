@@ -121,3 +121,49 @@ def test_cross_provider_fallback_skips_window_errors() -> None:
     marker = DataNotAvailableError("no_data_in_requested_window: out of window")
     with pytest.raises(DataNotAvailableError, match="no_data_in_requested_window"):
         asyncio.run(svc._try_with_fallback(_window_intent(), marker))
+
+
+# ---------------------------------------------------------------------------
+# "Not yet released" disclosure: when the window marker carries the latest
+# available observation date, the user gets a localized explanation naming it
+# (analytics: most zh errors ask for not-yet-published 2026 periods and got a
+# generic data_not_available).
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace as _NS
+
+
+def _tracker():
+    return _NS(to_list=lambda: [])
+
+
+def test_window_marker_renders_latest_available_en() -> None:
+    svc = QueryService.__new__(QueryService)
+    intent = _window_intent()
+    resp = svc._render_window_marker_response(
+        "c1", intent, _tracker(),
+        "no_data_in_requested_window: ... latest_available=2019-08-01",
+    )
+    assert resp.error == "no_data_in_requested_window"
+    assert "2019-08-01" in (resp.message or "")
+    assert "not been published yet" in (resp.message or "")
+
+
+def test_window_marker_renders_zh() -> None:
+    svc = QueryService.__new__(QueryService)
+    intent = _window_intent()
+    intent.language = "zh"
+    resp = svc._render_window_marker_response(
+        "c1", intent, _tracker(),
+        "no_data_in_requested_window: latest_available=2026-06-01",
+    )
+    assert "2026-06-01" in (resp.message or "")
+    assert "尚未发布" in (resp.message or "")
+
+
+def test_window_marker_without_date_stays_bare_for_finalizer() -> None:
+    svc = QueryService.__new__(QueryService)
+    resp = svc._render_window_marker_response(
+        "c1", _window_intent(), _tracker(),
+        "no_data_in_requested_window: latest_available=unknown",
+    )
+    assert resp.message is None and resp.error is None
