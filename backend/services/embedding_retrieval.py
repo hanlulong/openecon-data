@@ -17,6 +17,7 @@ Latency:   ~300ms embedding + ~2s LLM = ~2.3s total
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -32,6 +33,64 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 INDEX_DIR = Path(__file__).parent.parent / "data" / "openai_embeddings"
+
+# --- Recorded query-embedding fixtures (offline test determinism) -----------
+# Only the per-QUERY embedding call hits the network; the index matrix itself
+# is a local mmap and needs no fixtures. The env var OPENECON_EMBED_FIXTURES
+# selects the mode (see EmbeddingRetrieval._embed_query for the full contract):
+#   "replay" -> read the recorded raw vector from QUERY_FIXTURE_FILE
+#   "record" -> call the real API AND append the raw vector to that file
+#   unset    -> live behavior, no fixture I/O
+FIXTURE_ENV_VAR = "OPENECON_EMBED_FIXTURES"
+QUERY_FIXTURE_FILE = (
+    Path(__file__).parent.parent / "tests" / "fixtures" / "embedding_vectors.json"
+)
+# Round recorded vectors so the JSON stays diff-reviewable. 6 dp is far below
+# the precision cosine ranking needs (raw values sit in ~[-0.1, 0.1]).
+_FIXTURE_ROUND_DP = 6
+
+
+def _normalize_fixture_query(query: str) -> str:
+    """Collapse surrounding/internal whitespace so trivially reformatted query
+    text maps to the same fixture key.
+
+    Case is deliberately preserved: 'US GDP' and 'us gdp' embed differently, so
+    folding them together would let one recording silently stand in for the
+    other — exactly the masking this harness must not do.
+    """
+    return " ".join(str(query).split())
+
+
+def _query_fixture_key(model: str, query: str) -> str:
+    """sha256(model + '|' + normalized query text) — the fixture lookup key."""
+    payload = f"{model}|{_normalize_fixture_query(query)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_query_fixtures() -> Dict[str, Any]:
+    if not QUERY_FIXTURE_FILE.exists():
+        return {}
+    with open(QUERY_FIXTURE_FILE) as f:
+        return json.load(f)
+
+
+def _record_query_fixture(model: str, query: str, vector: List[float]) -> None:
+    """Append (or refresh) one recorded query vector.
+
+    Stores the RAW (un-normalized) API vector so the replay path runs the exact
+    same normalization the live path does. Rewrites the whole file sorted +
+    indented so recording order never churns the diff.
+    """
+    fixtures = _load_query_fixtures()
+    fixtures[_query_fixture_key(model, query)] = {
+        "query": _normalize_fixture_query(query),
+        "model": model,
+        "vector": [round(float(x), _FIXTURE_ROUND_DP) for x in vector],
+    }
+    QUERY_FIXTURE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(QUERY_FIXTURE_FILE, "w") as f:
+        json.dump(fixtures, f, indent=2, sort_keys=True)
+        f.write("\n")
 INDEX_FILE = INDEX_DIR / "indicator_embeddings.npz"
 META_FILE = INDEX_DIR / "indicator_metadata.json"
 # Pre-normalized float32 matrix stored as a raw .npy so every process can
@@ -320,6 +379,45 @@ class EmbeddingRetrieval:
         except Exception as e:
             logger.error("Failed to write pre-normalized index %s: %s", INDEX_NPY, e)
 
+    def _embed_query(self, query: str) -> Optional[np.ndarray]:
+        """Return the L2-normalized embedding for a query, or None if it can't
+        be computed from a real API response (zero vector).
+
+        Honors OPENECON_EMBED_FIXTURES so tests run offline and deterministically:
+          "replay" -> read the recorded RAW vector from QUERY_FIXTURE_FILE. A
+                      missing key raises KeyError naming the query — never a
+                      silent zero vector — so an un-recorded query is a
+                      diagnosable failure, not a masked one.
+          "record" -> call the real API AND append the raw vector to the file.
+          unset    -> live behavior: call the real API, no fixture I/O.
+        Normalization runs identically on both the replayed and the live vector.
+        """
+        mode = os.environ.get(FIXTURE_ENV_VAR)
+        if mode == "replay":
+            fixtures = _load_query_fixtures()
+            key = _query_fixture_key(EMBEDDING_MODEL, query)
+            entry = fixtures.get(key)
+            if entry is None:
+                raise KeyError(
+                    f"No recorded embedding fixture for query {query!r} "
+                    f"(model={EMBEDDING_MODEL}, key={key}). Re-record with: "
+                    f"OPENECON_EMBED_FIXTURES=record python -m pytest "
+                    f"backend/tests/test_query_service.py"
+                )
+            raw = entry["vector"]
+        else:
+            client = self._get_client()
+            resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
+            raw = resp.data[0].embedding
+            if mode == "record":
+                _record_query_fixture(EMBEDDING_MODEL, query, raw)
+
+        vec = np.asarray(raw, dtype=np.float32)
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            return None
+        return vec / norm
+
     def search(
         self,
         query: str,
@@ -340,13 +438,17 @@ class EmbeddingRetrieval:
             logger.warning("Embedding index not available. Run build_index() first.")
             return []
 
-        client = self._get_client()
+        # Query embedding — fixture-aware (see _embed_query). In replay mode a
+        # missing fixture raises KeyError, which MUST propagate: a silent []
+        # would mask the gap. Only real-API failures degrade to empty results.
         try:
-            resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
-            query_emb = np.array(resp.data[0].embedding, dtype=np.float32)
-            query_emb = query_emb / np.linalg.norm(query_emb)
+            query_emb = self._embed_query(query)
+        except KeyError:
+            raise
         except Exception as e:
             logger.error("Query embedding failed: %s", e)
+            return []
+        if query_emb is None:
             return []
 
         # Cosine similarity — embeddings are pre-normalized float32

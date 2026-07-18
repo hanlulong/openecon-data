@@ -22,6 +22,12 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-for-testing")
 # backend/ where the repo-root .env is not picked up. Without this, the
 # suite only collects when the shell happens to export a real key.
 os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-key-not-real")
+# Replay recorded query-embedding vectors by default so the suite is offline and
+# deterministic (embedding_retrieval.search would otherwise hit the OpenAI/
+# OpenRouter embeddings endpoint). `record` mode — which writes new fixtures by
+# calling the real API — must be opted into explicitly, so never override it.
+if os.environ.get("OPENECON_EMBED_FIXTURES") != "record":
+    os.environ["OPENECON_EMBED_FIXTURES"] = "replay"
 
 
 # ============================================================================
@@ -39,6 +45,10 @@ def test_environment():
     # tunnel that may or may not be up); empty overrides beat .env values.
     os.environ["SELECTOR_LLM_MODEL"] = ""
     os.environ["SELECTOR_LLM_BASE_URL"] = ""
+    # Replay recorded query embeddings unless a recording pass explicitly asked
+    # for record mode (see the module-level default above).
+    if os.environ.get("OPENECON_EMBED_FIXTURES") != "record":
+        os.environ["OPENECON_EMBED_FIXTURES"] = "replay"
     yield
     os.environ.clear()
     os.environ.update(old_env)
