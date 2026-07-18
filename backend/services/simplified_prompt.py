@@ -147,6 +147,10 @@ Ambiguity policy:
   - "unemployment rate Germany" -> unemployment rate (specific metric named)
   - "trade balance China" -> trade balance (specific metric named)
   - "inflation in France 2020-2023" -> inflation rate (specific + time + country)
+- Colloquial names of HEADLINE data releases have a standard default and are NOT
+  ambiguous: "jobs numbers"/"jobs report" -> nonfarm payrolls; "inflation print"/
+  "inflation numbers" -> inflation rate (CPI); "growth figures" -> GDP growth.
+  Resolve to the standard headline measure instead of asking.
 - Only ask for clarification when the query uses a genuinely broad/underspecified concept
   AND there is no clear default.  Err on the side of fetching data rather than asking.
 

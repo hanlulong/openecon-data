@@ -16,8 +16,10 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # class found in 2026-07-16 real-user analytics);
     # 295 -> 300 for the sub-region->whole-country scope-reset rule (a carried
     # subnationalRegion discarded correct national data in live browser
-    # testing 2026-07-17: "Ontario unemployment" then "加拿大失业率").
-    assert len(prompt.splitlines()) < 300
+    # testing 2026-07-17: "Ontario unemployment" then "加拿大失业率");
+    # 300 -> 305 for the colloquial-headline-release rule ("jobs numbers" is
+    # NOT ambiguous — parse-level clarification hit the battery + real users).
+    assert len(prompt.splitlines()) < 305
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
@@ -52,8 +54,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # adding relative-period date examples "last N months"/YTD; to 355 after
     # the multilingual additions — subnationalRegion + language + English
     # canonical indicators; to 370 after the FX currency-pair rule and the
+    # scope-reset + colloquial-headline rules (2026-07-17); to 380 with them —
     # keep-region-in-indicator subnational examples)
-    assert len(prompt.splitlines()) < 370
+    assert len(prompt.splitlines()) < 380
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

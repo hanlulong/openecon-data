@@ -2968,40 +2968,13 @@ async def resolve_indicator_for_fetch(
         # EXECUTABLE candidate instead of re-picking the dead code.
         _raw_exclude = params.get("__exclude_indicator_codes") or []
         exclude_codes = {str(c).strip() for c in _raw_exclude if str(c).strip()} or None
-        # English canonical retrieval arm (Proposal A): intent.indicators carries
-        # the English canonical metric name(s) the parse LLM produced. When the
-        # selector_query is a non-English original phrasing, this adds lexical
-        # recall for the English catalog. Thread english_terms ONLY when it would
-        # actually activate the arm (non-empty AND different from selector_query,
-        # the same condition select() uses to no-op) — so English-query call
-        # sites keep their exact prior behaviour and signature.
-        english_terms = " ".join(
-            str(term).strip() for term in (intent.indicators or []) if str(term).strip()
-        ).strip()
-        # Mirror what an English query naturally carries: the raw English query
-        # ("Canada unemployment rate") includes the geography, so the English
-        # arm gets it too — otherwise the arm under-specifies vs the English
-        # twin and near-ties trip the clarification gate.
-        _arm_country = str(selector_country or "").strip()
-        if (
-            english_terms
-            and _arm_country
-            and _arm_country.lower() not in english_terms.lower()
-        ):
-            english_terms = f"{english_terms} {_arm_country}"
-        # Gate on the parse LLM's language verdict: for English queries the
-        # selector_query is already English, so the arm would only re-rank the
-        # dominant path with an unvalidated second retrieval (indicators[] is a
-        # subset of the query, so a raw != comparison always differs there).
-        _intent_language = str(getattr(intent, "language", "") or "").strip().lower()
-        _english_kw = (
-            {"english_terms": english_terms}
-            if english_terms
-            and _intent_language
-            and _intent_language != "en"
-            and english_terms.lower() != str(selector_query or "").strip().lower()
-            else {}
-        )
+        # Canonical-English retrieval arm — single construction point shared
+        # with the prefetch call site (see build_canonical_arm_kwargs: covers
+        # both the non-English case and English colloquialisms whose canonical
+        # indicator shares no tokens with the raw text).
+        from .indicator_selector import build_canonical_arm_kwargs
+
+        _english_kw = build_canonical_arm_kwargs(intent, selector_query, selector_country)
         # Region-coverage-aware selection (see
         # indicator_selector.build_region_selection_kwargs — the single
         # construction point shared with the prefetch-clarification call sites,

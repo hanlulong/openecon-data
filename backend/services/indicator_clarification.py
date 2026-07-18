@@ -2536,6 +2536,7 @@ async def build_prefetch_indicator_choice_clarification(
             from .indicator_selector import (
                 IndicatorSelector,
                 _extract_requested_frequencies,
+                build_canonical_arm_kwargs,
                 build_region_selection_kwargs,
             )
 
@@ -2563,6 +2564,7 @@ async def build_prefetch_indicator_choice_clarification(
                 indicator_query,
                 provider_for_selector,
                 country=target_country,
+                **build_canonical_arm_kwargs(intent, indicator_query, target_country),
                 **_prefetch_constraint_kw,
                 **_region_kw,
             )

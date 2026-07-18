@@ -352,6 +352,51 @@ always ask for a variant. When none are valid, REJECT and provide better SEARCH
 terms."""
 
 
+def build_canonical_arm_kwargs(
+    intent: Any,
+    selector_query: str,
+    country: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Optional english_terms kwarg for ``IndicatorSelector.select``.
+
+    intent.indicators carries the parse LLM's canonical-English metric name.
+    Two cases need it fused as an extra RRF retrieval arm:
+    - non-English queries (the original Proposal A arm), and
+    - ENGLISH colloquialisms where the chooser's low-overlap guard fell back
+      to the raw text ("jobs numbers" vs canonical "nonfarm payrolls" share
+      zero tokens BY DESIGN of parse normalization; raw-text retrieval then
+      misses the canonical series entirely — live: Indeed-postings junk while
+      PAYEMS ranks #1-#2 at 2x score under the canonical term).
+    Single construction point so every select() call site threads it
+    identically (the region/constraint kwargs each got added at one seam and
+    missed the other — this ends that class). Returns {} when the arm would
+    be a no-op.
+    """
+    terms = " ".join(
+        str(t).strip() for t in (getattr(intent, "indicators", None) or []) if str(t).strip()
+    ).strip()
+    if not terms:
+        return {}
+    country_s = str(country or "").strip()
+    if country_s and country_s.lower() not in terms.lower():
+        terms = f"{terms} {country_s}"
+    sel_q = str(selector_query or "").strip().lower()
+    if not sel_q or terms.lower() == sel_q:
+        return {}
+    language = str(getattr(intent, "language", "") or "").strip().lower()
+    if language and language != "en":
+        return {"english_terms": terms}
+    # English path: fuse only on ZERO content-token overlap (the colloquial
+    # case). Any shared content token means the raw text already carries the
+    # canonical vocabulary and the dominant path suffices.
+    _stop = {"us", "the", "for", "in", "of", "a", "an", "to", "united", "states"}
+    sel_tokens = set(re.findall(r"[a-z0-9]+", sel_q)) - _stop
+    canon_tokens = set(re.findall(r"[a-z0-9]+", terms.lower())) - _stop
+    if canon_tokens and sel_tokens and not (canon_tokens & sel_tokens):
+        return {"english_terms": terms}
+    return {}
+
+
 def build_region_selection_kwargs(
     region: Optional[str],
     provider: Optional[str],
