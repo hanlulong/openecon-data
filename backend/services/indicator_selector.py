@@ -336,6 +336,9 @@ CRITICAL RULE — Frequency matching:
 Selection rules:
 - NEVER pick a DISCONTINUED series when active alternatives exist
 - Prefer ACTIVE (recent data) over DISCONTINUED/OBSOLETE series
+- When one candidate is marked "MOST-USED series for this concept", pick it
+  for plain-concept asks unless the user explicitly requested a variant
+  (a sub-population, a different adjustment, a specific source).
 - NEVER pick an experimental/research/model-based index (e.g. names containing
   "index", "experimental", "tracker", "nowcast", or a research-team brand) over
   the OFFICIAL headline measure of the same concept when both are candidates —
@@ -1451,7 +1454,7 @@ class IndicatorSelector:
             # Build a lookup map: (provider, code) -> metadata row
             placeholders = ",".join(["?"] * len(codes))
             cur.execute(
-                f"SELECT code, frequency, unit, end_date, category, description, keywords FROM indicators "
+                f"SELECT code, frequency, unit, end_date, category, description, keywords, popularity FROM indicators "
                 f"WHERE provider = ? AND code IN ({placeholders})",
                 [self._catalog_provider_name(provider)] + codes,
             )
@@ -1463,6 +1466,7 @@ class IndicatorSelector:
                     "category": row["category"] or "",
                     "description": row["description"] or "",
                     "keywords": row["keywords"] or "",
+                    "popularity": row["popularity"] or 0,
                 }
         except Exception as e:
             logger.warning("Failed to enrich candidates from DB: %s", e)
@@ -1500,6 +1504,7 @@ class IndicatorSelector:
                 "category": meta.get("category", ""),
                 "description": meta.get("description", ""),
                 "keywords": meta.get("keywords", ""),
+                "popularity": meta.get("popularity", 0),
                 "discontinued": discontinued,
             })
 
@@ -1561,6 +1566,16 @@ class IndicatorSelector:
                 coverage = {}
 
         _requested_freqs_for_marks = _extract_requested_frequencies(constraint_query or query)
+        # OFFICIAL-HEADLINE marker: catalog popularity is the demand signal
+        # for which series a plain-concept ask means. Prose rules ("prefer the
+        # standard version") lose to title similarity on noisy enriched sets
+        # (ADP/federal payroll rotations); per-candidate markers are what the
+        # adjudicator reliably follows (the [covers X] pattern). Data-driven:
+        # argmax popularity in THIS candidate list, ties included, no lists.
+        try:
+            _max_pop = max(int(item.get("popularity") or 0) for item in enriched)
+        except ValueError:
+            _max_pop = 0
         option_lines = []
         for i, item in enumerate(enriched):
             parts = [f"{i + 1}. [{item['code']}] {item['name']}"]
@@ -1590,6 +1605,8 @@ class IndicatorSelector:
                 meta_parts.append(f"evidence: {evidence_text}")
             if item["end_date"]:
                 meta_parts.append(f"last data: {item['end_date'][:10]}")
+            if _max_pop >= 40 and int(item.get("popularity") or 0) == _max_pop:
+                meta_parts.append("MOST-USED series for this concept")
             if item["discontinued"]:
                 meta_parts.append("DISCONTINUED")
             if meta_parts:

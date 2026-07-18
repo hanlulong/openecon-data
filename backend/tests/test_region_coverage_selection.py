@@ -739,3 +739,36 @@ def test_selector_query_country_qualified_for_non_home_fred() -> None:
     assert country_qualified_indicator_text(intent, "FRED", "CPI inflation") == "CPI inflation"
     intent.parameters = {"country": "India"}
     assert country_qualified_indicator_text(intent, "WORLDBANK", "CPI inflation") == "CPI inflation"
+
+
+def test_llm_pick_marks_most_used_series(monkeypatch) -> None:
+    selector = IndicatorSelector(settings=_selector_settings())
+
+    def _enriched_pop(*codes_names):
+        rows = _enriched(*codes_names)
+        rows[0]["popularity"] = 85
+        rows[1]["popularity"] = 40
+        return rows
+
+    monkeypatch.setattr(
+        selector, "_enrich_candidates",
+        lambda candidates, provider: _enriched_pop(*candidates),
+    )
+    sink: dict = {}
+    monkeypatch.setattr(
+        "backend.services.http_pool.get_http_client",
+        lambda: _CapturingClient(sink, pick_line="PICK: 1"),
+    )
+    asyncio.run(
+        selector._llm_pick(  # pylint: disable=protected-access
+            "nonfarm payrolls",
+            [("PAYEMS", "All Employees, Total Nonfarm"),
+             ("ADPMNUSNERSA", "Total Nonfarm Private Payroll Employment")],
+            "FRED",
+        )
+    )
+    prompt = sink["prompt"]
+    # One rule-text mention + exactly one candidate-line marker (on PAYEMS).
+    options_block = prompt.split("INSTRUCTIONS:")[0]
+    assert options_block.count("MOST-USED series for this concept") == 1
+    assert "MOST-USED series" in options_block.split("ADPMNUSNERSA")[0]
