@@ -2709,6 +2709,27 @@ async def resolve_indicator_for_fetch(
                     exc,
                 )
         if catalog_exact_match:
+            # Exclusions BEAT provider-native re-locks: after a code returns
+            # no data, the T4 retry excludes it and re-enters resolution — but
+            # this branch re-locked the SAME code straight from intent params,
+            # creating a dead retry loop (live: IMF GGXWDG_GDP no-data for USA
+            # looped here, then fell back to FRED household debt while the
+            # correct WEO sibling sat unadjudicated). General for every
+            # provider that can re-lock parsed codes.
+            _excluded_here = {
+                str(c).strip().upper()
+                for c in ((intent.parameters or {}).get("__exclude_indicator_codes") or [])
+            }
+            if candidate_indicator.upper() in _excluded_here:
+                logger.info(
+                    "🔒 Provider-native %s code %s is in this turn's exclusion set "
+                    "(already returned no data) — skipping the re-lock so the "
+                    "selector re-adjudicates.",
+                    provider,
+                    candidate_indicator,
+                )
+                catalog_exact_match = False
+        if catalog_exact_match:
             logger.info(
                 "🔒 Using provider-native %s indicator from parsed intent without dynamic resolution: %s",
                 provider,
