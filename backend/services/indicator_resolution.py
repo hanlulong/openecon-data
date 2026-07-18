@@ -695,6 +695,26 @@ def build_exact_indicator_title_intent(
         name,
         list(countries or []),
     )
+    # An exact TITLE match must not lock a provider that cannot COVER the
+    # query's country: "Canada unemployment rate by sex" exactly matches
+    # Eurostat's TEILM020 title, which provider-locked EUROSTAT for a non-EU
+    # country — Eurostat correctly returned no data, the fallback chain
+    # (WB/IMF) never included StatsCan, and the user got data_not_available
+    # while the right provider existed. Same structural coverage predicate the
+    # clarification fan-out uses; on any uncovered country, decline the
+    # shortcut so normal routing picks a covering provider.
+    if countries:
+        from .indicator_clarification import provider_supports_country_for_options
+
+        for _country in countries:
+            _iso2 = str(_country or "").strip().upper()[:2]
+            if _iso2 and not provider_supports_country_for_options(provider, _iso2):
+                logger.info(
+                    "🔎 Exact-title match %s/%s declined: provider does not cover %s; "
+                    "falling through to normal routing.",
+                    provider, code, _country,
+                )
+                return None
     if len(countries) == 1:
         params["country"] = countries[0]
         if provider in {"STATSCAN", "STATISTICS CANADA"}:

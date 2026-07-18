@@ -657,3 +657,32 @@ def test_selector_query_region_qualified_even_when_indicator_is_code_shaped() ->
     )
     chosen2 = select_indicator_query_for_resolution(svc, intent2)
     assert "ontario" not in chosen2.lower(), chosen2
+
+
+def test_exact_title_shortcut_declined_when_provider_cannot_cover_country() -> None:
+    # "Canada unemployment rate by sex" exactly matches Eurostat's TEILM020
+    # title; the shortcut provider-locked EUROSTAT for a non-EU country and
+    # the fallback chain never reached StatsCan (battery mr8.t1). The builder
+    # must decline so normal routing picks a covering provider.
+    from unittest.mock import patch
+
+    from backend.services.indicator_resolution import build_exact_indicator_title_intent
+
+    fake_match = {"provider": "EUROSTAT", "code": "TEILM020", "name": "Unemployment rate by sex"}
+    with patch(
+        "backend.services.indicator_resolution.find_exact_provider_title_match",
+        side_effect=lambda q, p: fake_match if p == "EUROSTAT" else None,
+    ):
+        declined = build_exact_indicator_title_intent(
+            "Canada unemployment rate by sex",
+            countries=["CA"],
+            all_providers=["EUROSTAT", "STATSCAN", "FRED"],
+        )
+        assert declined is None, "Eurostat cannot cover CA — shortcut must decline"
+
+        accepted = build_exact_indicator_title_intent(
+            "Germany unemployment rate by sex",
+            countries=["DE"],
+            all_providers=["EUROSTAT", "STATSCAN", "FRED"],
+        )
+        assert accepted is not None and accepted.apiProvider == "EUROSTAT"
