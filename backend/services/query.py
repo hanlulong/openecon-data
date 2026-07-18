@@ -185,6 +185,7 @@ from ..services.data_fetcher import (
     fetch_historical_exchange_from_fred as _df_fetch_historical_exchange_from_fred,
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
+    _user_set_time_scope as _df_user_set_time_scope,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
     _has_statscan_mechanical_dimension_dispatch_authority as _df_has_statscan_mechanical_dimension_dispatch_authority,
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
@@ -6235,6 +6236,50 @@ class QueryService:
                     # can never help and burned 3 fetch+LLM rounds per query.
                     raise
                 params = intent.parameters or {}
+                # Frozen/lagged-series fast path: providers that raise (or
+                # window server-side) on an empty USER window never reveal the
+                # series EXISTS with older data — the window marker can't fire
+                # at the fetch layer and the pipeline wanders retries/
+                # rejections/fallbacks for ~2 minutes (live: China M2 ends
+                # 2019, "last 3 months"). ONE unwindowed probe of the same
+                # resolved series answers it: observations exist -> raise the
+                # non-retriable marker with latest_available (fast, honest,
+                # localized); truly absent -> normal retry machinery.
+                if (
+                    not excluded  # probe at most once per query
+                    and str(params.get("indicator") or "").strip()
+                    and _df_user_set_time_scope(params, intent.originalQuery or "")
+                    and any(params.get(k) for k in ("startDate", "endDate", "start_year", "end_year"))
+                ):
+                    probe_intent = intent.model_copy(deep=True)
+                    probe_params = dict(probe_intent.parameters or {})
+                    for k in ("startDate", "endDate", "start_year", "end_year"):
+                        probe_params.pop(k, None)
+                    probe_intent.parameters = probe_params
+                    probe_latest = ""
+                    try:
+                        probe_result = await _df_fetch_data(self, probe_intent, execution_plan=None)
+                        for _series in probe_result or []:
+                            for _point in getattr(_series, "data", None) or []:
+                                _pd = str(
+                                    _point.get("date") if isinstance(_point, dict)
+                                    else getattr(_point, "date", "") or ""
+                                )
+                                if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > probe_latest:
+                                    probe_latest = _pd
+                    except Exception:
+                        probe_latest = ""
+                    if probe_latest:
+                        logger.info(
+                            "🧊 Series exists outside the user window (latest %s) — "
+                            "window marker instead of alternate retries.",
+                            probe_latest,
+                        )
+                        raise DataNotAvailableError(
+                            "no_data_in_requested_window: the series exists but has "
+                            "no observations inside the user-requested time window. "
+                            f"latest_available={probe_latest}"
+                        )
                 failed_code = str(params.get("indicator") or "").strip()
                 decision_source = str(params.get("__decision_source") or "")
                 already = {c.upper() for c in excluded}

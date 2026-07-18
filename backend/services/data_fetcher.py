@@ -3172,6 +3172,52 @@ async def fetch_data(
         )
 
     if not result or (len(result) == 1 and not result[0].data):
+        # Providers that filter the window SERVER-SIDE return empty for a
+        # frozen/lagged series without revealing it EXISTS with older data
+        # (live: China M2 ends 2019, user asked "last 3 months" — FRED
+        # returned zero observations, the window marker could not fire, and
+        # the pipeline wandered retries/rejections/fallbacks to the 120s
+        # deadline). One cheap unwindowed re-probe of the SAME resolved series
+        # answers "does it exist at all?": if observations exist, raise the
+        # non-retriable window marker with latest_available (fast, honest,
+        # localized); if truly absent, fall through to the generic error and
+        # the normal retry machinery.
+        if _user_set_time_scope(params, intent.originalQuery or "") and any(
+            params.get(key) for key in ("startDate", "endDate", "start_year", "end_year")
+        ):
+            probe_params = dict(params)
+            for key in ("startDate", "endDate", "start_year", "end_year"):
+                probe_params.pop(key, None)
+            try:
+                probe_plan = materialize_execution_plan(
+                    execution_plan=None,
+                    provider=provider,
+                    intent=intent,
+                    params=probe_params,
+                )
+                probe_result = await fetch_from_provider_dispatch(svc, intent, probe_plan)
+            except Exception:
+                probe_result = None
+            probe_latest = ""
+            for _series in probe_result or []:
+                for _point in getattr(_series, "data", None) or []:
+                    _pd = str(
+                        _point.get("date") if isinstance(_point, dict)
+                        else getattr(_point, "date", "") or ""
+                    )
+                    if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > probe_latest:
+                        probe_latest = _pd
+            if probe_latest:
+                logger.info(
+                    "Series exists outside the user window (latest %s) — raising "
+                    "window marker instead of retrying alternates.",
+                    probe_latest,
+                )
+                raise DataNotAvailableError(
+                    "no_data_in_requested_window: the series exists but has no "
+                    "observations inside the user-requested time window. "
+                    f"latest_available={probe_latest}"
+                )
         raise DataNotAvailableError(
             f"No data available from {execution_plan.provider} for the requested parameters. "
             f"The data may not exist or may not be available for the specified time period or location."
