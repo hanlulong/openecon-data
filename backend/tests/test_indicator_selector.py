@@ -334,7 +334,7 @@ async def test_select_retries_when_llm_pick_conflicts_with_requested_frequency(m
         ("LOANINV", "Bank Credit, All Commercial Banks"),
     ]
 
-    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+    def fake_candidates(query: str, provider: str, constraint_query=None):  # noqa: ARG001
         return all_candidates, [0.90, 0.86]
 
     def fake_enrich(candidates, provider):  # noqa: ANN001, ARG001
@@ -385,7 +385,7 @@ async def test_select_uses_metadata_query_for_lost_frequency_constraints(monkeyp
         ("HOEREPHRE", "Households; Owners' Equity in Real Estate as a Percentage of Household Real Estate, Level"),
     ]
 
-    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+    def fake_candidates(query: str, provider: str, constraint_query=None):  # noqa: ARG001
         return all_candidates, [0.90, 0.88]
 
     def fake_enrich(candidates, provider):  # noqa: ANN001, ARG001
@@ -619,7 +619,7 @@ async def test_select_researches_with_llm_retry_query_when_candidates_are_reject
 async def test_select_refuses_top_candidate_when_llm_is_undecided(monkeypatch) -> None:
     selector = IndicatorSelector(settings=SimpleNamespace())
 
-    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+    def fake_candidates(query: str, provider: str, constraint_query=None):  # noqa: ARG001
         return [
             ("42100012", "Number of children in Canada"),
             ("36100126", "Property income of households, Canada"),
@@ -641,7 +641,7 @@ async def test_select_refuses_top_candidate_when_llm_is_undecided(monkeypatch) -
 async def test_select_single_candidate_still_requires_llm_authority(monkeypatch) -> None:
     selector = IndicatorSelector(settings=SimpleNamespace())
 
-    def fake_candidates(query: str, provider: str):  # noqa: ARG001
+    def fake_candidates(query: str, provider: str, constraint_query=None):  # noqa: ARG001
         return [("17100159", "Estimates of the number of private households by size")], [0.91]
 
     async def undecided_llm(*_args, **_kwargs):

@@ -623,8 +623,17 @@ class IndicatorSelector:
         # overrides/fakes with the original signature keep working and the extra
         # arm stays a strict opt-in.
         _english_kw = {"english_query": english_terms} if english_terms else {}
+        # Fuller user text (frequency/unit qualifiers) steers the metadata
+        # prioritizer inside retrieval — opt-in like every steering kwarg.
+        _retrieval_constraint_kw = (
+            {"constraint_query": metadata_query}
+            if str(metadata_query or "").strip()
+            and str(metadata_query or "").strip().lower() != str(query or "").strip().lower()
+            else {}
+        )
         candidates, scores = await asyncio.to_thread(
-            self._get_candidates_with_scores, query, provider, **_english_kw,
+            self._get_candidates_with_scores, query, provider,
+            **_english_kw, **_retrieval_constraint_kw,
         )
         candidates, scores = _drop_excluded(candidates, scores)
 
@@ -875,6 +884,7 @@ class IndicatorSelector:
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
         english_query: Optional[str] = None,
+        constraint_query: Optional[str] = None,
     ) -> tuple[List[tuple[str, str]], List[float]]:
         """Step 1: Find nearest indicators using hybrid FTS5 + embedding retrieval.
 
@@ -1094,7 +1104,12 @@ class IndicatorSelector:
                 retrieval_provider,
             )
             return self._prioritize_candidates_by_query_metadata(
-                query,
+                # Structural qualifiers (frequency/unit/price-basis) live in
+                # the USER's fuller text; the stripped retrieval query has
+                # none, so this purpose-built prioritizer never fired on
+                # follow-up/colloquial paths ("India CPI by month" adjudicated
+                # over an order with the monthly series buried).
+                constraint_query or query,
                 prioritized_candidates,
                 prioritized_scores,
                 retrieval_provider,
