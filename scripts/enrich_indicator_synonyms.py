@@ -170,6 +170,13 @@ def main() -> int:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
+        "--codes-file", default=None,
+        help="Newline-separated provider codes: restrict enrichment to exactly "
+             "these rows (e.g. the IMF supportability-passing subset — "
+             "enriching unservable codes just polishes menu-filtered "
+             "dead-ends). Combined with the other filters.",
+    )
+    ap.add_argument(
         "--category", default=None,
         help="Scope by indicators.category instead of popularity (for providers "
              "with no popularity signal, e.g. WorldBank 'World Development Indicators').",
@@ -183,6 +190,14 @@ def main() -> int:
     conn.execute("PRAGMA busy_timeout=60000")
     rows = fetch_rows(conn, args.provider, args.min_popularity, args.limit, args.force,
                       category=args.category)
+    if args.codes_file:
+        wanted = {
+            line.strip() for line in Path(args.codes_file).read_text().splitlines()
+            if line.strip()
+        }
+        before = len(rows)
+        rows = [r for r in rows if str(r[0]).strip() in wanted]  # SELECT col 0 = code
+        print(f"--codes-file: {before} -> {len(rows)} rows")
     _scope = (f"category={args.category!r}" if args.category
               else f"popularity >= {args.min_popularity}")
     print(f"{len(rows)} rows to enrich for {args.provider} ({_scope})")
