@@ -1266,6 +1266,19 @@ class IndicatorLookup:
                     except ValueError:
                         pass
 
+            # Popularity: catalog-recorded demand signal (FRED's native
+            # popularity; enrichment backfills elsewhere; NULL→0). Bare-concept
+            # queries produce noisy near-tie candidate sets where research/
+            # experimental series outrank the official headline (live: bare
+            # "GDP" ranked the flagship #9 behind JHGDPBRINDX/USARGDPH, and the
+            # adjudicator flipped between odd picks and asking). Scaled, capped
+            # boost over catalog DATA — never a code list; title/domain
+            # penalties above still dominate when concepts differ.
+            try:
+                score += min(12.0, float(r.get("popularity") or 0) * 0.12)
+            except (TypeError, ValueError):
+                pass
+
             r["_score"] = score
             ranked.append(r)
 

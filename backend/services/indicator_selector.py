@@ -326,6 +326,10 @@ CRITICAL RULE — Frequency matching:
 Selection rules:
 - NEVER pick a DISCONTINUED series when active alternatives exist
 - Prefer ACTIVE (recent data) over DISCONTINUED/OBSOLETE series
+- NEVER pick an experimental/research/model-based index (e.g. names containing
+  "index", "experimental", "tracker", "nowcast", or a research-team brand) over
+  the OFFICIAL headline measure of the same concept when both are candidates —
+  the user asking for a plain concept wants the official statistic.
 - Prefer NATIONAL/AGGREGATE over state/county/MSA/regional variants
 - Prefer TOTAL over demographic subsets (female, male, youth, elderly)
 - For direct count/number/total requests, prefer an indicator that measures the
