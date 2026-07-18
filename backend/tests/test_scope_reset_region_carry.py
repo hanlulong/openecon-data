@@ -56,3 +56,37 @@ def test_extract_stamps_scope_reset_from_country_change() -> None:
 
     intent.followUpType = "time_change"
     assert extract_state_from_intent(intent).scope_reset is None
+
+
+# ---------------------------------------------------------------------------
+# Continuity: a frequency/country change stamps the prior served series so the
+# re-resolution adjudicator keeps the SAME measure (mr1/mr3 flip family).
+# ---------------------------------------------------------------------------
+from backend.services.conversation_state_v2 import FollowUpDelta, merge_state
+from backend.services.indicator_selector import build_continuity_kwargs
+
+
+def test_frequency_change_stamps_continuity() -> None:
+    prev = ConversationState(
+        indicator="GDP", country="US", frequency="annual",
+        resolved_indicator_code="GDPA",
+    )
+    merged = merge_state(prev, FollowUpDelta(changed_frequency="quarterly"))
+    assert merged.resolved_indicator_code is None
+    assert merged.continuity_series == "GDP [GDPA]"
+
+
+def test_indicator_change_clears_continuity() -> None:
+    prev = ConversationState(
+        indicator="GDP", country="US", continuity_series="GDP [GDPA]",
+        resolved_indicator_code="GDPA",
+    )
+    merged = merge_state(prev, FollowUpDelta(changed_indicator="inflation"))
+    assert merged.continuity_series is None
+
+
+def test_build_continuity_kwargs_opt_in() -> None:
+    assert build_continuity_kwargs({}) == {}
+    assert build_continuity_kwargs({"__continuity_series": "GDP [GDPA]"}) == {
+        "continuity_series": "GDP [GDPA]"
+    }

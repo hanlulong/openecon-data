@@ -401,6 +401,23 @@ def build_canonical_arm_kwargs(
     return {}
 
 
+def build_continuity_kwargs(params: Any) -> Dict[str, Any]:
+    """Optional continuity kwarg for ``IndicatorSelector.select``.
+
+    conversation_state_v2 stamps params['__continuity_series'] ("phrase
+    [CODE]") when a frequency/country change invalidates the resolved code:
+    the re-resolution must return the SAME measure with one aspect changed.
+    Near-tie adjudication without this flips variants or asks (battery
+    mr1/mr3). Single construction point, opt-in like every steering kwarg.
+    """
+    value = ""
+    try:
+        value = str((params or {}).get("__continuity_series") or "").strip()
+    except AttributeError:
+        value = ""
+    return {"continuity_series": value} if value else {}
+
+
 def build_region_selection_kwargs(
     region: Optional[str],
     provider: Optional[str],
@@ -456,6 +473,7 @@ class IndicatorSelector:
         region_coverage_probe: Optional[
             Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
         ] = None,
+        continuity_series: Optional[str] = None,
     ) -> SelectionResult:
         """Cached wrapper around the full selection pipeline.
 
@@ -480,6 +498,7 @@ class IndicatorSelector:
                 str(metadata_query or "").strip().lower(),
                 str(english_terms or "").strip().lower(),
                 str(region or "").strip().lower(),
+                str(continuity_series or "").strip().lower(),
             )
             cached = _selection_cache_get(cache_key)
             if cached is not None:
@@ -502,6 +521,7 @@ class IndicatorSelector:
             english_terms=english_terms,
             region=region,
             region_coverage_probe=region_coverage_probe,
+            continuity_series=continuity_series,
         )
 
         if (
@@ -529,6 +549,7 @@ class IndicatorSelector:
         region_coverage_probe: Optional[
             Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
         ] = None,
+        continuity_series: Optional[str] = None,
     ) -> SelectionResult:
         """
         Select the best indicator for a query.
@@ -576,6 +597,11 @@ class IndicatorSelector:
         # to _llm_pick ONLY when a sub-national region is actually set, so that
         # every existing _llm_pick override/fake with the original signature
         # keeps working unchanged (mirrors the english_query opt-in above).
+        _continuity_kw: Dict[str, Any] = (
+            {"continuity_series": str(continuity_series).strip()}
+            if str(continuity_series or "").strip()
+            else {}
+        )
         _region_norm = str(region or "").strip()
         _region_kw: Dict[str, Any] = {}
         if _region_norm:
@@ -659,7 +685,7 @@ class IndicatorSelector:
             if metadata_constraint_query and metadata_constraint_query != query
             else {}
         )
-        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country, **_constraint_kw, **_region_kw)
+        result = await self._llm_pick(query, llm_candidates, provider, prefer_ask=candidates_are_ambiguous, country=llm_country, **_constraint_kw, **_continuity_kw, **_region_kw)
         result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, llm_candidates, provider, **_region_kw)
 
         # Step 2.5: If the LLM says the whole candidate set is off-target,
@@ -708,7 +734,7 @@ class IndicatorSelector:
         # Step 3: If LLM couldn't decide, try with fewer/different candidates
         if not result or (not result.code and not result.needs_user_choice):
             # Retry with top 5 only (simpler for LLM)
-            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country, **_constraint_kw, **_region_kw)
+            result = await self._llm_pick(query, candidates[:5], provider, country=llm_country, **_constraint_kw, **_continuity_kw, **_region_kw)
             result = await self._retry_if_metadata_conflict(metadata_constraint_query, result, candidates[:5], provider, **_region_kw)
 
         if self._is_llm_rejection(result):
@@ -1456,6 +1482,7 @@ class IndicatorSelector:
             Callable[[List[str]], Awaitable[Dict[str, Optional[bool]]]]
         ] = None,
         constraint_query: Optional[str] = None,
+        continuity_series: Optional[str] = None,
     ) -> Optional[SelectionResult]:
         """Step 2: LLM picks the best indicator from candidates.
 
@@ -1585,6 +1612,19 @@ class IndicatorSelector:
                 f"{region_label}. STRONGLY prefer a candidate whose series is specifically "
                 f"about {region_label} (its title or coverage names {region_label}) over a "
                 f"national or aggregate series. Do not pick a series for a DIFFERENT region."
+            )
+
+        # Continuity steering: a follow-up changed ONE aspect (frequency /
+        # country / time) of an already-served series. Without this the
+        # adjudicator near-ties variants of the same concept and flips or asks.
+        if str(continuity_series or "").strip():
+            prompt += (
+                f"\n\nCONTINUITY: the previous turn served {continuity_series}. "
+                f"This follow-up changes ONE aspect (frequency, country, or time "
+                f"range). Pick the candidate that is the SAME measure with that "
+                f"one change — keep real-vs-nominal, seasonal adjustment, and "
+                f"index-vs-level identical to the previous series. Do not switch "
+                f"variants; do not ASK."
             )
 
         # Frequency steering. The user's query names a reporting frequency

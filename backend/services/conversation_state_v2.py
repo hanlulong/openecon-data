@@ -469,6 +469,14 @@ class ConversationState(BaseModel):
     # follow-ups keep the annotation; cleared when the indicator or geography
     # changes (a new metric/country invalidates the old sub-region).
     subnational_region: Optional[str] = None
+    # Prior served series identity ("indicator phrase [CODE]"), stamped when a
+    # frequency/country change invalidates resolved_indicator_code: the
+    # re-resolution should return the SAME measure with one aspect changed,
+    # and near-tie adjudication needs to know what "same" means (mr1/mr3
+    # follow-up flips: annual nominal GDP -> quarterly re-resolution near-tied
+    # nominal-vs-real and asked or picked variants). Cleared on indicator or
+    # provider changes (a new metric/catalog makes prior identity irrelevant).
+    continuity_series: Optional[str] = None
     # True when THIS turn's parse classified a geographic scope reset
     # (followUpType=country_change — including sub-region -> whole country).
     # Gates the subnational_region carry below: the parse deliberately nulled
@@ -687,6 +695,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     if delta.changed_indicator:
         merged.indicator = delta.changed_indicator
         merged.base_indicator = None
+        merged.continuity_series = None
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         merged.coin_ids = None
@@ -765,6 +774,10 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
             merged.provider or merged.routed_provider or ""
         ).upper()
         if _merged_provider in GEOGRAPHY_ENCODED_PROVIDERS:
+            if merged.resolved_indicator_code:
+                merged.continuity_series = (
+                    f"{merged.indicator or ''} [{merged.resolved_indicator_code}]".strip()
+                )
             merged.resolved_indicator_code = None
             merged.last_indicators_resolved = None
 
@@ -827,6 +840,7 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
     if delta.changed_provider:
         merged.provider = delta.changed_provider
         merged.provider_locked = True
+        merged.continuity_series = None
         merged.resolved_indicator_code = None
         merged.last_indicators_resolved = None
         # StatsCan product IDs / cube metadata are provider-namespaced; a
@@ -870,6 +884,10 @@ def merge_state(current: ConversationState, delta: FollowUpDelta) -> Conversatio
         )
         merged.frequency = delta.changed_frequency
         if frequency_changed:
+            if merged.resolved_indicator_code:
+                merged.continuity_series = (
+                    f"{merged.indicator or ''} [{merged.resolved_indicator_code}]".strip()
+                )
             merged.resolved_indicator_code = None
             merged.last_indicators_resolved = None
 
@@ -956,6 +974,8 @@ def materialize_intent(state: ConversationState) -> ParsedIntent:
         parameters["__time_scope_authority"] = state.time_scope_source
     if state.frequency:
         parameters["frequency"] = state.frequency
+    if state.continuity_series:
+        parameters["__continuity_series"] = state.continuity_series
 
     # Trade
     provider_name = (state.provider or state.routed_provider or "").upper()

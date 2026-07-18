@@ -2992,9 +2992,10 @@ async def resolve_indicator_for_fetch(
         # with the prefetch call site (see build_canonical_arm_kwargs: covers
         # both the non-English case and English colloquialisms whose canonical
         # indicator shares no tokens with the raw text).
-        from .indicator_selector import build_canonical_arm_kwargs
+        from .indicator_selector import build_canonical_arm_kwargs, build_continuity_kwargs
 
         _english_kw = build_canonical_arm_kwargs(intent, selector_query, selector_country)
+        _continuity_kw = build_continuity_kwargs(params)
         # Region-coverage-aware selection (see
         # indicator_selector.build_region_selection_kwargs — the single
         # construction point shared with the prefetch-clarification call sites,
@@ -3010,12 +3011,12 @@ async def resolve_indicator_for_fetch(
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
                 metadata_query=metadata_query, exclude_codes=exclude_codes,
-                **_english_kw, **_region_kw,
+                **_english_kw, **_continuity_kw, **_region_kw,
             )
         else:
             selection = await selector.select(
                 selector_query, provider, country=selector_country,
-                exclude_codes=exclude_codes, **_english_kw, **_region_kw,
+                exclude_codes=exclude_codes, **_english_kw, **_continuity_kw, **_region_kw,
             )
         selector_source = str(getattr(selection, "source", "") or "")
         selector_rejection_reason = str(getattr(selection, "rejection_reason", "") or "")
