@@ -35,6 +35,15 @@ PROVIDER_GEO_SCOPE: Dict[str, Optional[set]] = {
 # Structural data-model fact per provider, not a semantic rule.
 REGION_AS_SERIES_PROVIDERS = frozenset({"FRED"})
 
+# Home country per region-as-series provider: series for the HOME country are
+# rarely country-titled (FRED "CPIAUCSL" has no "United States" in common
+# usage), but INTERNATIONAL series are ("Consumer Price Index: Total for
+# India") — so the country belongs in the retrieval text exactly when it is
+# NOT the provider's home ("CPI inflation" + country=IN retrieved zero India
+# series; the monthly Indian CPI ranks #1 once "India" joins the text).
+# Structural data-model fact, same family as the region rule above.
+PROVIDER_HOME_COUNTRY = {"FRED": "US"}
+
 # Providers the pipeline may only auto-FETCH/SERVE when the user explicitly
 # names them. OECD's public SDMX surface is rate-limited (60 req/hr) and its
 # coverage overlaps StatsCan/Eurostat/IMF/WorldBank, so auto-fanning-out to it
@@ -125,6 +134,34 @@ def region_qualified_indicator_text(
         except Exception:
             pass
     return f"{region} {text}"
+
+
+def country_qualified_indicator_text(intent: Any, provider: str, indicator_text: str) -> str:
+    """Append the NON-HOME country to retrieval text for region-as-series
+    providers (see PROVIDER_HOME_COUNTRY): FRED's international series are
+    country-TITLED, so "CPI inflation" with country=India retrieves zero
+    Indian series while "CPI inflation India" ranks the monthly Indian CPI
+    #1. Home-country text is left untouched (home series are not
+    country-titled and adding "United States" would skew US retrieval)."""
+    text = str(indicator_text or "").strip()
+    provider_norm = normalize_provider_name(provider)
+    if not text or provider_norm not in REGION_AS_SERIES_PROVIDERS:
+        return text
+    home = str(PROVIDER_HOME_COUNTRY.get(provider_norm) or "").strip().upper()
+    country = str(
+        (getattr(intent, "parameters", None) or {}).get("country") or ""
+    ).strip()
+    if not country or country.lower() in text.lower():
+        return text
+    try:
+        from ..routing.country_resolver import CountryResolver
+
+        iso2 = str(CountryResolver.normalize(country) or "").strip().upper()
+    except Exception:
+        iso2 = ""
+    if not iso2 or iso2 == home:
+        return text
+    return f"{text} {country}"
 
 
 # ---------------------------------------------------------------------------

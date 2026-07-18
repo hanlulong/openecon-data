@@ -147,6 +147,16 @@ def _normalize_metadata_text(text: str) -> str:
 
 def _extract_requested_frequencies(text: str) -> set[str]:
     normalized = _normalize_metadata_text(text)
+    # Recency WINDOWS are time ranges, not frequency requests: "past year",
+    # "last 3 months", "this quarter" must not fire annual/monthly/quarterly
+    # (observed: "India CPI by month, past year" extracted {monthly, annual},
+    # so the annual WB-mirror ALSO 'matched the requested frequency').
+    normalized = re.sub(
+        r"\b(?:past|last|this|next|previous|recent)\s+(?:\d+\s+)?"
+        r"(?:years?|months?|quarters?|weeks?|days?)\b",
+        " ",
+        normalized,
+    )
     tokens = set(normalized.split())
     found: set[str] = set()
     for canonical, aliases in _FREQUENCY_ALIASES.items():
@@ -1375,11 +1385,21 @@ class IndicatorSelector:
                 return []
 
             def _run(fts_query: str) -> list:
+                # Popularity joins the ORDER at the CUT itself: synonym
+                # enrichment of mid-popularity rows made many series share the
+                # same user vocabulary ("federal nonfarm payrolls" et al.), and
+                # bm25 alone then dropped the FLAGSHIPS out of the top-k before
+                # any downstream boost could act (live: PAYNSA/PAYEMS vanished
+                # from 'nonfarm payrolls' retrieval after a 922-row enrichment
+                # pass). bm25 is smaller-is-better; popularity (0-100 catalog
+                # data) subtracts at a scale that reorders near-ties without
+                # letting popularity beat clearly-better text matches.
                 cur.execute(
                     """SELECT i.code, i.name FROM indicators_fts f
                     JOIN indicators i ON f.rowid = i.id
                     WHERE indicators_fts MATCH ? AND i.provider = ?
                     ORDER BY bm25(indicators_fts, 0, 3.0, 10.0, 1.0, 3.0, 2.0, 2.0)
+                          - (COALESCE(i.popularity, 0) * 0.2)
                     LIMIT ?""",
                     (fts_query, provider, top_k),
                 )
@@ -1540,12 +1560,23 @@ class IndicatorSelector:
                 logger.debug("Region-coverage probe failed (%s); proceeding unannotated", exc)
                 coverage = {}
 
+        _requested_freqs_for_marks = _extract_requested_frequencies(constraint_query or query)
         option_lines = []
         for i, item in enumerate(enriched):
             parts = [f"{i + 1}. [{item['code']}] {item['name']}"]
             meta_parts = []
             if item["frequency"]:
                 meta_parts.append(item["frequency"])
+                # Explicit match markers (the [covers X] pattern): the
+                # adjudicator follows per-candidate annotations far more
+                # reliably than prose rules — the FREQUENCY REQUIREMENT alone
+                # still lost to title similarity (India monthly vs the annual
+                # WB-mirror).
+                if _requested_freqs_for_marks:
+                    if _frequency_matches(_requested_freqs_for_marks, str(item["frequency"])):
+                        meta_parts.append("MATCHES requested frequency")
+                    else:
+                        meta_parts.append("does NOT match requested frequency")
             if item["unit"]:
                 meta_parts.append(item["unit"])
             if item.get("category"):

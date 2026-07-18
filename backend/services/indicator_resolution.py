@@ -3112,11 +3112,11 @@ def select_indicator_query_for_resolution(svc: Any, intent: ParsedIntent) -> str
     # No is_code guard here: this function's output is RETRIEVAL TEXT by
     # contract (never a direct code lookup), and the live failure was exactly
     # a code-shaped fallback ('GDP' is a valid FRED id) escaping unqualified.
-    return region_qualified_indicator_text(
-        intent,
-        _normalize_provider_name(intent.apiProvider or ""),
-        chosen,
-    )
+    from .provider_strategy import country_qualified_indicator_text
+
+    _provider_norm = _normalize_provider_name(intent.apiProvider or "")
+    chosen = region_qualified_indicator_text(intent, _provider_norm, chosen)
+    return country_qualified_indicator_text(intent, _provider_norm, chosen)
 
 
 def _select_indicator_query_for_resolution_unqualified(svc: Any, intent: ParsedIntent) -> str:

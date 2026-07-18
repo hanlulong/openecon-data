@@ -686,3 +686,56 @@ def test_exact_title_shortcut_declined_when_provider_cannot_cover_country() -> N
             all_providers=["EUROSTAT", "STATSCAN", "FRED"],
         )
         assert accepted is not None and accepted.apiProvider == "EUROSTAT"
+
+
+def test_llm_pick_marks_frequency_matches_per_candidate(monkeypatch) -> None:
+    # Prose rules lose to title similarity; per-candidate markers (the
+    # [covers X] pattern) are what the adjudicator reliably follows.
+    selector = IndicatorSelector(settings=_selector_settings())
+
+    def _enriched_freq(*codes_names):
+        rows = _enriched(*codes_names)
+        rows[0]["frequency"] = "Monthly"
+        rows[1]["frequency"] = "Annual"
+        return rows
+
+    monkeypatch.setattr(
+        selector, "_enrich_candidates",
+        lambda candidates, provider: _enriched_freq(*candidates),
+    )
+    sink: dict = {}
+    monkeypatch.setattr(
+        "backend.services.http_pool.get_http_client",
+        lambda: _CapturingClient(sink, pick_line="PICK: 1"),
+    )
+
+    asyncio.run(
+        selector._llm_pick(  # pylint: disable=protected-access
+            "CPI inflation",
+            [("INDCPIALLMINMEI", "CPI Total for India"),
+             ("FPCPITOTLZGIND", "Inflation, consumer prices for India")],
+            "FRED",
+            constraint_query="India CPI by month, past year",
+        )
+    )
+    prompt = sink["prompt"]
+    assert "MATCHES requested frequency" in prompt
+    assert "does NOT match requested frequency" in prompt
+
+
+def test_selector_query_country_qualified_for_non_home_fred() -> None:
+    from types import SimpleNamespace
+
+    from backend.models import ParsedIntent
+    from backend.services.provider_strategy import country_qualified_indicator_text
+
+    intent = ParsedIntent(
+        apiProvider="FRED", indicators=["CPI"], parameters={"country": "India"},
+        clarificationNeeded=False, originalQuery="India CPI by month",
+    )
+    assert country_qualified_indicator_text(intent, "FRED", "CPI inflation") == "CPI inflation India"
+    # Home country untouched; non-region-as-series providers untouched.
+    intent.parameters = {"country": "US"}
+    assert country_qualified_indicator_text(intent, "FRED", "CPI inflation") == "CPI inflation"
+    intent.parameters = {"country": "India"}
+    assert country_qualified_indicator_text(intent, "WORLDBANK", "CPI inflation") == "CPI inflation"
