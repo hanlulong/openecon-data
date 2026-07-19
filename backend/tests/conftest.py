@@ -28,6 +28,13 @@ os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-key-not-real")
 # calling the real API — must be opted into explicitly, so never override it.
 if os.environ.get("OPENECON_EMBED_FIXTURES") != "record":
     os.environ["OPENECON_EMBED_FIXTURES"] = "replay"
+# Same contract for the selector-LLM adjudication seam (indicator_selector's
+# _llm_pick): replay recorded chat-completion responses so the suite is offline
+# and deterministic. A miss raises KeyError with the re-record command rather
+# than silently returning a default. `record` mode — which calls the real LLM
+# and writes new fixtures — must be opted into explicitly, so never override it.
+if os.environ.get("OPENECON_SELECTOR_FIXTURES") != "record":
+    os.environ["OPENECON_SELECTOR_FIXTURES"] = "replay"
 
 
 # ============================================================================
@@ -49,6 +56,9 @@ def test_environment():
     # for record mode (see the module-level default above).
     if os.environ.get("OPENECON_EMBED_FIXTURES") != "record":
         os.environ["OPENECON_EMBED_FIXTURES"] = "replay"
+    # Same for the selector-LLM adjudication seam.
+    if os.environ.get("OPENECON_SELECTOR_FIXTURES") != "record":
+        os.environ["OPENECON_SELECTOR_FIXTURES"] = "replay"
     yield
     os.environ.clear()
     os.environ.update(old_env)

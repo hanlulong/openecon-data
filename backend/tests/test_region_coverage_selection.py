@@ -38,6 +38,16 @@ from backend.services.indicator_selector import (
 from backend.utils.retry import DataNotAvailableError
 
 
+@pytest.fixture(autouse=True)
+def _selector_fixture_replay_off(monkeypatch):
+    """These tests stub the HTTP transport THEMSELVES and assert on the rendered
+    adjudication prompt; the recorded-fixture replay layer (conftest default)
+    would intercept before their stub and KeyError on the un-recorded fake
+    prompts. Transport-stubbing tests run the live code path — offline, because
+    the stub IS the transport."""
+    monkeypatch.setenv("OPENECON_SELECTOR_FIXTURES", "")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------

@@ -56,6 +56,7 @@ from ..providers.bis import BISProvider
 from ..providers.eurostat import EurostatProvider
 from ..providers.oecd import OECDProvider
 from ..providers.coingecko import CoinGeckoProvider
+from ..providers.chinamacro import ChinaMacroProvider
 from ..utils.geographies import CANADIAN_PROVINCES, normalize_canadian_region_list
 from ..utils.imf_supportability import imf_exact_provider_surface_supportability_reason
 from ..utils.providers import ALL_PROVIDERS
@@ -434,6 +435,10 @@ class QueryService:
 
         # CoinGecko: Cryptocurrency prices and market data
         self.coingecko_provider = CoinGeckoProvider(coingecko_key)
+
+        # ChinaMacro: fresh Chinese headline macro (live EastMoney/MOFCOM
+        # extraction with a curated CSV fallback tier). No API key.
+        self.chinamacro_provider = ChinaMacroProvider()
 
         # UnifiedRouter is the single source of routing truth. The legacy
         # SemanticProviderRouter (semantic-router + LiteLLM fallback) and
@@ -3278,6 +3283,11 @@ class QueryService:
             "__indicator_retry_query",
             "__exact_provider_code_match",
             "__semantic_provider_locked",
+            # Request-level selection-authority provenance — a signal for the
+            # later ask-gate, never part of DATA cache identity (two identical
+            # queries, one authoritative and one not, must hit the same entry).
+            "__authoritative_pick_code",
+            "__authoritative_pick_provider",
             # Provenance only — the DATES are identity-bearing, their source
             # is not (same window must hit the same cache entry).
             "__time_scope_authority",
@@ -6218,6 +6228,9 @@ class QueryService:
                     "indicator", "seriesId", "series_id", "code",
                     "__semantic_authority", "__decision_source",
                     "__indicator_selection_source", "__execution_plan_identity",
+                    # The discarded code loses its selection authority; the
+                    # re-adjudication re-mints it only if the new pick earns it.
+                    "__authoritative_pick_code", "__authoritative_pick_provider",
                 ):
                     params0.pop(key, None)
             intent.parameters = params0
@@ -6302,6 +6315,9 @@ class QueryService:
                     "indicator", "seriesId", "series_id", "code",
                     "__semantic_authority", "__decision_source",
                     "__indicator_selection_source", "__execution_plan_identity",
+                    # The dead code loses its selection authority; the re-adjudication
+                    # re-mints it only if the next-best pick earns it.
+                    "__authoritative_pick_code", "__authoritative_pick_provider",
                 ):
                     params.pop(key, None)
                 intent.parameters = params

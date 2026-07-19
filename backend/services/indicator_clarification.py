@@ -792,6 +792,8 @@ def provider_supports_country_for_options(provider: str, country_iso2: Optional[
         return iso2 == "US"
     if provider_upper == "BIS":
         return iso2 in BISProvider.BIS_SUPPORTED_COUNTRIES
+    if provider_upper in {"CHINAMACRO", "CHINA MACRO"}:
+        return iso2 == "CN"
     return True
 
 
@@ -3013,6 +3015,54 @@ def build_low_confidence_intent_response(
 # Post-fetch indicator uncertainty detection
 # ====================================================================
 
+def _selection_authority_holds(
+    qs: Any,
+    intent: Optional[ParsedIntent],
+    top_series: Any,
+) -> Optional[str]:
+    """Request-level selection-authority contract (consumption seam).
+
+    Returns the authoritative picked code when a confident, non-ambiguous LLM
+    PICK's OWN served top series is what the gate is about to re-question on a
+    close-comparator near-tie — i.e. ALL of:
+
+      (a) the selection stage stamped an authoritative pick THIS request
+          (``__authoritative_pick_code`` is minted in
+          indicator_resolution.resolve_indicator_for_fetch ONLY for a
+          SelectionResult.authoritative pick: source=llm_pick, made WITHOUT the
+          prefer_ask score-ambiguity bias);
+      (b) the TOP served series IS that pick — same provider AND provider-native
+          code, so no fallback/substitution replaced it after the pick;
+      (c) the served pick passes the SAME hard predicate the response stage
+          enforces — the subnational/region check is REUSED here (never
+          reimplemented). The user-time-window check is enforced upstream at
+          fetch (out-of-window observations are dropped there), so any non-empty
+          served data already sits inside the window and needs no re-check.
+
+    Returns None (authority ABSENT) whenever ANY condition fails — the gate then
+    behaves byte-for-byte as before. This NEVER suppresses a wrong-data /
+    wrong-member / wrong-region refusal: those fire on earlier HARD branches of
+    the gate, before the single near-tie branch this signal is allowed to relax.
+    """
+    if intent is None or top_series is None:
+        return None
+    params = intent.parameters or {}
+    picked_code = str(params.get("__authoritative_pick_code") or "").strip()
+    picked_provider = str(params.get("__authoritative_pick_provider") or "").strip()
+    if not picked_code or not picked_provider:
+        return None  # (a) no authoritative pick minted this request
+    served_provider, served_code = qs._extract_series_provider_and_code(top_series)
+    if (
+        normalize_provider_name(served_provider) != normalize_provider_name(picked_provider)
+        or str(served_code or "").strip().upper() != picked_code.upper()
+    ):
+        return None  # (b) served top series is not the pick (substitution)
+    region = str(getattr(intent, "subnationalRegion", "") or "").strip()
+    if region and not qs._served_data_references_region([top_series], region):
+        return None  # (c) region hard predicate would discard the served pick
+    return picked_code
+
+
 def needs_indicator_clarification(
     qs: Any,
     query: str,
@@ -3027,21 +3077,21 @@ def needs_indicator_clarification(
     bugs (observed live: recovery fan-out after a confident skip) are
     undiagnosable without knowing WHICH invocation decided what.
     """
-    def _gate_log(outcome: bool, branch: str) -> bool:
+    def _gate_log(outcome: bool, branch: str, extra: Optional[Dict[str, Any]] = None) -> bool:
         try:
             params_dbg = (intent.parameters or {}) if intent else {}
-            logger.info(
-                "uncertainty_gate %s",
-                json.dumps({
-                    "caller": caller or "untagged",
-                    "outcome": outcome,
-                    "branch": branch,
-                    "indicator_param": str(params_dbg.get("indicator") or ""),
-                    "confidence": getattr(intent, "confidence", None) if intent else None,
-                    "series": len(data or []),
-                    "query": str(query or "")[:60],
-                }),
-            )
+            payload = {
+                "caller": caller or "untagged",
+                "outcome": outcome,
+                "branch": branch,
+                "indicator_param": str(params_dbg.get("indicator") or ""),
+                "confidence": getattr(intent, "confidence", None) if intent else None,
+                "series": len(data or []),
+                "query": str(query or "")[:60],
+            }
+            if extra:
+                payload.update(extra)
+            logger.info("uncertainty_gate %s", json.dumps(payload))
         except Exception:
             pass
         return outcome
@@ -3204,6 +3254,22 @@ def needs_indicator_clarification(
                 _series_text_for_relevance(scored[1][1])
             )
             if top_series_cues != second_series_cues:
+                # This is the ONLY soft/close-comparator branch — a genuine
+                # near-tie between the top series and a sibling. Every HARD
+                # mismatch (concept, strict-cue, region, top_score < 0.25) has
+                # already returned above, so a confident, predicate-validated
+                # pick must not be re-questioned here merely because a sibling
+                # scored within the near-tie band: that is exactly the vLLM
+                # re-selection non-determinism that otherwise flips a good served
+                # pick to a clarification menu. Structurally gated to THIS pick's
+                # own served data (see _selection_authority_holds).
+                authority_code = _selection_authority_holds(qs, intent, top_series)
+                if authority_code:
+                    return _gate_log(
+                        False,
+                        "selection_authority_near_tie",
+                        {"picked_code": authority_code},
+                    )
                 return True
 
     return False

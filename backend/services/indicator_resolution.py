@@ -2665,6 +2665,14 @@ async def resolve_indicator_for_fetch(
             ).strip()
 
         merged = {**params, "indicator": indicator_value, **extra}
+        # Request-level selection authority is minted ONLY by the caller that
+        # freshly adjudicated a confident pick (passing it in ``extra``). Every
+        # other resolution branch — a non-authoritative selection, a carried-over
+        # state code, a re-adjudication — must not inherit a stale authority key
+        # from a previous turn's params, or a later gate could wrongly trust it.
+        if "__authoritative_pick_code" not in extra:
+            merged.pop("__authoritative_pick_code", None)
+            merged.pop("__authoritative_pick_provider", None)
         if semantic_label and not _looks_like_provider_indicator_code_local(provider, semantic_label):
             merged["__semantic_indicator_label"] = semantic_label
         # A.3 display carry: preserve the user's ORIGINAL phrasing so display
@@ -3052,12 +3060,30 @@ async def resolve_indicator_for_fetch(
                     "🎯 IndicatorSelector resolved: '%s' → %s [%s]",
                     indicator_query, selection.code, selection.source,
                 )
+                # Request-level selection authority: mint a travel signal ONLY
+                # for a confident, non-ambiguous PICK (SelectionResult.authoritative
+                # — llm_pick, made without the prefer_ask score-ambiguity bias).
+                # It lets the later near-tie ask-gate recognise that THIS served
+                # pick was already confidently adjudicated and validated, and skip
+                # a redundant re-ask (indicator_clarification._selection_authority_holds).
+                # Opt-in like __continuity_series: absent unless earned, so nothing
+                # changes when the pick is not authoritative. Provider + code let
+                # the gate verify structurally that the SERVED series IS this pick.
+                _authority_extra: Dict[str, str] = (
+                    {
+                        "__authoritative_pick_code": str(selection.code).strip(),
+                        "__authoritative_pick_provider": provider,
+                    }
+                    if getattr(selection, "authoritative", False)
+                    else {}
+                )
                 params = _apply_indicator_with_semantic_label(
                     selection.code,
                     __semantic_authority="llm_adjudication",
                     __decision_source="llm_pick",
                     __indicator_selection_source=selection.source,
                     **_statscan_selected_product_extra(selection.code, "llm_adjudication"),
+                    **_authority_extra,
                 )
                 if provider in {"WORLDBANK", "WORLD BANK"} and selected_query_override and len(intent.indicators) > 1:
                     logger.info(

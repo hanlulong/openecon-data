@@ -523,6 +523,11 @@ class IndicatorSelector:
                     code=cached.get("code"),
                     name=cached.get("name"),
                     source=cached.get("source", "llm_pick"),
+                    # Carry the confidence signal across the cache so a repeat
+                    # query keeps (or is denied) request-level authority exactly
+                    # as its first, freshly-adjudicated resolution did — repeats
+                    # are precisely where the flip-flop shows up.
+                    made_under_prefer_ask=bool(cached.get("made_under_prefer_ask", False)),
                 )
 
         result = await self._select_uncached(
@@ -546,7 +551,14 @@ class IndicatorSelector:
         ):
             _selection_cache_put(
                 cache_key,
-                {"code": result.code, "name": result.name, "source": result.source},
+                {
+                    "code": result.code,
+                    "name": result.name,
+                    "source": result.source,
+                    "made_under_prefer_ask": bool(
+                        getattr(result, "made_under_prefer_ask", False)
+                    ),
+                },
             )
         return result
 
@@ -742,12 +754,15 @@ class IndicatorSelector:
                         **_region_kw,
                     )
                     if retry_result and (retry_result.code or retry_result.needs_user_choice):
-                        return await self._retry_if_metadata_conflict(
-                            metadata_constraint_query,
-                            retry_result,
-                            retry_candidates[:20],
-                            provider,
-                            **_region_kw,
+                        return self._mark_prefer_ask(
+                            await self._retry_if_metadata_conflict(
+                                metadata_constraint_query,
+                                retry_result,
+                                retry_candidates[:20],
+                                provider,
+                                **_region_kw,
+                            ),
+                            retry_ambiguous,
                         )
                     if self._is_llm_rejection(retry_result):
                         return retry_result
@@ -763,6 +778,9 @@ class IndicatorSelector:
             return result
 
         if result and (result.code or result.needs_user_choice):
+            # A confident pick is authoritative only if the retrieval that fed it
+            # was NOT ambiguous (see _mark_prefer_ask / SelectionResult.authoritative).
+            self._mark_prefer_ask(result, candidates_are_ambiguous)
             self._emit_telemetry(
                 telemetry_enabled,
                 fusion_mode,
@@ -893,6 +911,22 @@ class IndicatorSelector:
     @staticmethod
     def _is_llm_rejection(result: Optional["SelectionResult"]) -> bool:
         return bool(result and getattr(result, "source", "") == "llm_reject")
+
+    @staticmethod
+    def _mark_prefer_ask(
+        result: Optional["SelectionResult"], ambiguous: bool
+    ) -> Optional["SelectionResult"]:
+        """Record whether a PICK was produced from an AMBIGUOUS candidate field.
+
+        The confidence signal the request-level authority contract reads
+        (SelectionResult.authoritative). Only ever set on a genuine llm_pick; a
+        pick made while retrieval could not separate the candidates (prefer_ask
+        engaged) is deliberately denied authority — the contract trusts only a
+        pick from a clearly-separated field.
+        """
+        if result is not None and getattr(result, "code", None) and getattr(result, "source", "") == "llm_pick":
+            result.made_under_prefer_ask = bool(ambiguous)
+        return result
 
     def _get_candidates_with_scores(
         self, query: str, provider: str, top_k: int = 50,
@@ -1787,6 +1821,37 @@ class IndicatorSelector:
                 )
             )
 
+        # Offline test determinism (OPENECON_SELECTOR_FIXTURES): replay recorded
+        # adjudication responses so the selector seam never touches the network.
+        # Iterate the SAME attempt chain the live path would, keyed per
+        # (model, prompt), so a fallback endpoint's recording satisfies the call
+        # in exactly the order the live fallback would try it. A hard miss (no
+        # recording for ANY attempt's model) raises KeyError naming the query and
+        # the re-record command — never a silent default that would mask the gap.
+        from . import selector_llm_fixtures as _sel_fx
+
+        _fixture_mode = _sel_fx.mode()
+        if _fixture_mode == "replay":
+            _fixtures = _sel_fx.load_fixtures()
+            _found_recording = False
+            for _label, _url, _headers, _model, _max_tokens in attempts:
+                _recorded = _sel_fx.get_recorded_response(_fixtures, _model, prompt)
+                if _recorded is None:
+                    continue  # not recorded for THIS model — try the next attempt
+                _found_recording = True
+                _content = (_recorded or "").strip()
+                if not _content:
+                    continue  # recorded empty → mirror live "try next endpoint"
+                _parsed = self._parse_llm_response(_content, candidates, provider, query)
+                if _parsed is not None:
+                    return _parsed
+                # recorded but no control line → mirror live "try next endpoint"
+            if not _found_recording:
+                raise _sel_fx.missing_fixture_error(
+                    query, provider, [a[3] for a in attempts]
+                )
+            return None
+
         from .http_pool import get_http_client
 
         client = get_http_client()
@@ -1814,6 +1879,14 @@ class IndicatorSelector:
                         attempt_label, provider, query[:40],
                     )
                     continue
+
+                # Record mode: persist the real response this endpoint returned,
+                # keyed by (this attempt's model, prompt), so replay can reproduce
+                # the exact live fallback order. Recorded verbatim — even when it
+                # has no control line — so replay mirrors the "try next endpoint"
+                # path too. See selector_llm_fixtures for the contract.
+                if _fixture_mode == "record":
+                    _sel_fx.record_response(model, prompt, content)
 
                 parsed = self._parse_llm_response(content, candidates, provider, query)
                 if parsed is not None:
@@ -2018,6 +2091,7 @@ class SelectionResult:
         options: Optional[List[Dict[str, str]]] = None,
         rejection_reason: str = "",
         retry_query: str = "",
+        made_under_prefer_ask: bool = False,
     ):
         self.code = code
         self.name = name
@@ -2025,10 +2099,30 @@ class SelectionResult:
         self.options = options
         self.rejection_reason = rejection_reason
         self.retry_query = retry_query
+        # True when the PICK was produced while the score-ambiguity ASK bias
+        # (prefer_ask) was set — the retrieval could not clearly separate the
+        # candidates. Such a pick is deliberately NOT authoritative (see the
+        # `authoritative` property): the request-level authority contract only
+        # trusts a pick made from a clearly-separated candidate field.
+        self.made_under_prefer_ask = bool(made_under_prefer_ask)
 
     @property
     def needs_user_choice(self) -> bool:
         return self.source == "user_choice" and bool(self.options)
+
+    @property
+    def authoritative(self) -> bool:
+        """Confidence signal consumed by the request-level authority contract.
+
+        A confident, self-sufficient LLM PICK: a real provider-native code, an
+        ``llm_pick`` source (never ASK/reject/uncertain), and NOT made under the
+        ``prefer_ask`` score-ambiguity bias. Only such a pick may later suppress
+        a redundant near-tie ask-gate (indicator_clarification), and only when
+        its OWN served data is exactly this pick and passes the hard predicates.
+        It never suppresses refusal of wrong data — that is enforced structurally
+        at the consumption seam.
+        """
+        return bool(self.code) and self.source == "llm_pick" and not self.made_under_prefer_ask
 
     @property
     def rejected_candidates(self) -> bool:
