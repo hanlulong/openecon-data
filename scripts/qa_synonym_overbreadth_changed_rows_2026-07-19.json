@@ -1,0 +1,5431 @@
+{
+  "generated": "2026-07-19",
+  "db_path": "/home/hanlulong/OpenEcon/backend/data/indicators.db",
+  "count": 1356,
+  "rows": [
+    {
+      "provider": "FRED",
+      "code": "DCOILWTICO"
+    },
+    {
+      "provider": "FRED",
+      "code": "DHHNGSP"
+    },
+    {
+      "provider": "FRED",
+      "code": "MHHNGSP"
+    },
+    {
+      "provider": "FRED",
+      "code": "WHHNGSP"
+    },
+    {
+      "provider": "FRED",
+      "code": "FGEXPND"
+    },
+    {
+      "provider": "FRED",
+      "code": "GPDIC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "B235RC1Q027SBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "GNP"
+    },
+    {
+      "provider": "FRED",
+      "code": "PNFI"
+    },
+    {
+      "provider": "FRED",
+      "code": "PNFIC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "GCEC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "PRFIC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "PRFI"
+    },
+    {
+      "provider": "FRED",
+      "code": "LB0000031Q020SBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "A794RX0Q048SBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "A229RC0A052NBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "EXPGSC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "FDEFX"
+    },
+    {
+      "provider": "FRED",
+      "code": "SLEXPND"
+    },
+    {
+      "provider": "FRED",
+      "code": "A229RX0A048NBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "B087RC1Q027SBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "NA000349Q"
+    },
+    {
+      "provider": "FRED",
+      "code": "LNS13023653"
+    },
+    {
+      "provider": "FRED",
+      "code": "T10YIE"
+    },
+    {
+      "provider": "FRED",
+      "code": "STLFSI4"
+    },
+    {
+      "provider": "FRED",
+      "code": "AAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "DBAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "DPRIME"
+    },
+    {
+      "provider": "FRED",
+      "code": "PRIME"
+    },
+    {
+      "provider": "FRED",
+      "code": "DAAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "BAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "IUDSOIA"
+    },
+    {
+      "provider": "FRED",
+      "code": "BAMLHYH0A0HYM2TRIV"
+    },
+    {
+      "provider": "FRED",
+      "code": "MPRIME"
+    },
+    {
+      "provider": "FRED",
+      "code": "WPRIME"
+    },
+    {
+      "provider": "FRED",
+      "code": "BAMLHE00EHYITRIV"
+    },
+    {
+      "provider": "FRED",
+      "code": "AMBSL"
+    },
+    {
+      "provider": "FRED",
+      "code": "STLFSI2"
+    },
+    {
+      "provider": "FRED",
+      "code": "WBAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "CPF3M"
+    },
+    {
+      "provider": "FRED",
+      "code": "WAAA"
+    },
+    {
+      "provider": "FRED",
+      "code": "IORR"
+    },
+    {
+      "provider": "FRED",
+      "code": "HOSSUPUSM673N"
+    },
+    {
+      "provider": "FRED",
+      "code": "COMPUTSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "EXSFHSUSM495S"
+    },
+    {
+      "provider": "FRED",
+      "code": "M09075USM476NNBR"
+    },
+    {
+      "provider": "FRED",
+      "code": "HOUSTNSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "RSAFS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RTWEXBGS"
+    },
+    {
+      "provider": "FRED",
+      "code": "ISRATIO"
+    },
+    {
+      "provider": "FRED",
+      "code": "WHLSLRIRSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "MRTSSM722USS"
+    },
+    {
+      "provider": "FRED",
+      "code": "DGORDER"
+    },
+    {
+      "provider": "FRED",
+      "code": "ADXDNO"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "BM.TRF.PWKR.CD.DT"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "BN.KAC.EOMS.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "BX.TRF.PWKR.CD.DT"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "ER.H2O.INTR.K3"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FB.AST.NPER.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FB.ATM.TOTL.P5"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FS.AST.PRVT.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.TAX.IMPT.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.TAX.IMPT.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.BI.OS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.BL.OS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.LB.P3"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.MC.OS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.MC.P1"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.MC.P2"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.MC.P3"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.TX.P1"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.TX.P2"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.TX.P3"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.US.OS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.US.P1"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.US.P2"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.US.P3"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.TAX.METG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.DEBT.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.ECON.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.FINS.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.FISP.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.GNDR.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.HRES.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.IRAI.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.MACR.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IQ.CPA.PROT.XQ"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IS.AIR.DPRT"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IT.NET.BBND"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IT.NET.BBND.P2"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.DAB.TOTL.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.DAB.TOTL.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.FTOT.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.FTOT.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DCO2.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DCO2.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DFOR.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DFOR.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DMIN.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DMIN.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DNGY.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.DNGY.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.NNAT.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.NNTY.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.NNTY.PC.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.H2O.BASW.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.MMR.RISK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.XPD.CHEX.PC.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.XPD.GHED.PC.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.XPD.GHED.PP.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.XPD.PVTD.CH.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.XPD.PVTD.PC.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SL.FAM.0714.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SL.FAM.WORK.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TM.VAL.MRCH.CD.WT"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TM.VAL.SERV.CD.WT"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TT.PRI.MRCH.XD.WD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.MNF.TECH.ZS.UN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.VAL.MRCH.HI.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.VAL.TECH.CD"
+    },
+    {
+      "provider": "IMF",
+      "code": "PPPEX"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_EHIS_PA8U"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES_AGT35"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EDAT_LFS_9916"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EDAT_LFS_9918"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_EHIS_DE9"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_02"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_03"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_06"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_08"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_09"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ICW_SR_10"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_ATSB03A"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS9_PROC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EC5"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_ECET"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN41"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AC_PEFA04"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "FOR_IRASS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "FOR_IRSPEC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_10A_EMP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_10A_EXP$DV_578"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_10A_EXP$DV_584"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFA$DV_1381"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFM$DV_1383"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFQ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYTPFQ$DV_1382"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYUMACTA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_ASYUMACTM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HBS_EXP_T132"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HBS_EXP_T133"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HBS_STR_T226"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HBS_STR_T226$DV_3211"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_CD_APYLL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_RESLONG"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAIO_10_FGDFE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAIO_10_FGTEX"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAMA_10_FTE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_DPEH090"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_SCP27"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "IRT_H_CGBY_M"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "IRT_H_CGBY_Q"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CISMTN2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_IU"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_IU$DV_628"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_PU"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_PU$DV_509"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IM_I"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IM_I$DV_510"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LVHL13N"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LVHL17"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LVHL17N"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDDD11"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDDD11$DV_655"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EI_LMJV_Q_R2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDDW02"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EI_NA_Q_VTG"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPE_EF_LUS_MAIN"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPE_ENV_WAT_USE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPS_EF_LUS_MAIN"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPS_ENV_WASGENP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPS_GOV_10DDE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPS_LFSA_PGANWS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENPS_NRG_BAL_C1"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW01$DV_2761"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW02"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW05"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW05$DV_2768"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_PW06"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_SCP07$DV_101"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_BIO2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBD20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSFS30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSGO20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "FISH_CA_MAIN_H"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSHO60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSLM60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSNA20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CRIM_HOM_CITY"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_FABORT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_FWEIGHT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_URESPOP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00198"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00199"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES06_47"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES06_48"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES06_49"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES10_ACTRL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_15"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_16"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_17"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_18"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_19"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_21"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_22"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_23"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_24"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_25"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_26"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_27"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_28"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_29"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_31"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_32"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_33"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_34"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_35"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_ACTRL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES14_MCTRL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES18_39"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES18_40"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES18_ACTRL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_25"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_27"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_32"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_33"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_34"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_39"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_41"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_44"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_47"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_48"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_49"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_50"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES22_51"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "AACT_EAA06"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "AEI_PR_GNB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_PA_MOV"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00011"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00021"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00023"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEIBP041"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEIBP060"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEIBP110"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEIBS010"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00123"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESEM170"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI080"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI082"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "RAIL_TF_TRAINMV"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI160"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI161"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI162"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI163"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI164"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI166"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_EQR_SPURP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_EQS_CARHAB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_TERT_GO"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSO_19MTWK19"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSO_19MTWK20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSO_19MTWK21"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SBS_PEN_7E"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_01_20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_01_40"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_04_70"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSQ_EPGAIS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSQ_EPGAN2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SPR_EXP_FTM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SPR_REC_SUMS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_TF"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "IWW_GO_ANAVE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_IND_IDOGAS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_IND_IOC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSA_EPGAIS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSA_EWHUN2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSA_EWHUNA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "RAIL_IF_LVLCROS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSO_05TYPECE"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100025"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100026"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100027"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100032"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100076"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100077"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100095"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100096"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100114"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100121"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100148"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100156"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100002"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100028"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100035"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100038"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100043"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100074"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100079"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100111"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100115"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100119"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100120"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100126"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100133"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100149"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100160"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100197"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100215"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100216"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100217"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100227"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100012"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100124"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100129"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100142"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100012"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100160"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100281"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100285"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100288"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100311"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100385"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100421"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100422"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100507"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100515"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100517"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100557"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100560"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100609"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100612"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100645"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100647"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100651"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100654"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100656"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100681"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100754"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100810"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100828"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100965"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100103"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100203"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100224"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100225"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100269"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100347"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100399"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100425"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100426"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100444"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "15100006"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "15100007"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "15100034"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "15100035"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100022"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100047"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100054"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100061"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100075"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100076"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100238"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100240"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100241"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100244"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100246"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100247"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100249"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100250"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "20100063"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "20100080"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100002"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100007"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100026"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100010"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100137"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100033"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100034"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100039"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100040"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100043"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100139"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100142"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100160"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100162"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100259"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100310"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "24100007"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "24100008"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "24100009"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "24100010"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "24100011"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100022"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100066"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100101"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100104"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100218"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100234"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100274"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100160"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100377"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100431"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100440"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100475"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100558"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100761"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100762"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100764"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100765"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100941"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100965"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33101017"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33101058"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33101083"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100121"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100165"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100024"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100166"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100019"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100020"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100048"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100049"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100053"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100074"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100096"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100097"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100101"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100108"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100154"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100176"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100180"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100184"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100185"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100186"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100197"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100201"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100206"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100284"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100286"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100340"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100357"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100358"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100359"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100360"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100416"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100440"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100448"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100467"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100506"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100509"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100542"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100543"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100551"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100553"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100554"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100555"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100556"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100560"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100562"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100564"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100565"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100567"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100571"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100572"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100581"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100606"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100618"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "37100018"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "37100030"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "37100045"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "37100135"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100003"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100108"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100113"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100171"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100174"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100253"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100254"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100255"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "41100002"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "43100007"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "46100056"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "46100065"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "98100252"
+    },
+    {
+      "provider": "IMF",
+      "code": "DebtA"
+    },
+    {
+      "provider": "IMF",
+      "code": "DebtL"
+    },
+    {
+      "provider": "IMF",
+      "code": "OtherL"
+    },
+    {
+      "provider": "IMF",
+      "code": "FM_ka"
+    },
+    {
+      "provider": "IMF",
+      "code": "Ka_cc"
+    },
+    {
+      "provider": "IMF",
+      "code": "NGDPXO_RPCH"
+    },
+    {
+      "provider": "IMF",
+      "code": "NGDPRPC_PCH"
+    },
+    {
+      "provider": "IMF",
+      "code": "GBXCBG_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GBXCBN_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGXCCB_G01_CA_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGADAFM_T_G01_CA_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGXCCBA_G01_CA_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGR_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGXCNL_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGADLCD_T_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGADLAE_T_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "GGXCNLA_G01_AC_XDC"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_007"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_009"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_014"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_022"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_023"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_024"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_025"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_R_026"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_E_040"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_E_041"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_E_044"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_E_048"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_081"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_082"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_083"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_085"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_086"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_087"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_B_092"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_093"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_B_095"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_B_096"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_003"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_004"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_006"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_023"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_024"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_025"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_026"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_027"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_028"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_033"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_034"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_037"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_R_038"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_E_039"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_E_040"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_E_041"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_E_044"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_E_080"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_081"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_082"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_083"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_086"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_087"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_088"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_091"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_B_092"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_093"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_B_095"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_B_097"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_004"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_005"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_011"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_012"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_R_020"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_003"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_004"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_005"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_006"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_008"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_014"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_015"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_E_017"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_B_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_F_006"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_CID_B_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FID_E_020"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FID_R_022"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FID_R_041"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FID_R_047"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FSM_R_007"
+    },
+    {
+      "provider": "IMF",
+      "code": "NI_FSM_R_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "LS_E_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "LS_E_024"
+    },
+    {
+      "provider": "IMF",
+      "code": "LS_E_036"
+    },
+    {
+      "provider": "IMF",
+      "code": "LS_B_01"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_R_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_004"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_021"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_022"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_027"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_066"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_067"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_068"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_E_069"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_BAL_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_F_014"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_007"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_017"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_019"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_021"
+    },
+    {
+      "provider": "IMF",
+      "code": "ZM_D_030"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_095"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_103"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_104"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_105"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_107"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_B_G01_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_B_G01_002"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_CGO_F_128"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_094"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_095"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_096"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_097"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_098"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_099"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_100"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_101"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_102"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_103"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_106"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_112"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_117"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_122"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_F_123"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_Z_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "HN_GGO_X_G01_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_034"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_035"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_038"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_180"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_181"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_182"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_204"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_258"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_260"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_271"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_279"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_300"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BF_301"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_003"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_004"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_008"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_010"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_011"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_012"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_013"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_015"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_R_017"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_E_001"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_E_003"
+    },
+    {
+      "provider": "IMF",
+      "code": "UG_BRG_NFA_024"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_009"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_016"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_019"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_024"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_029"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_031"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_032"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_034"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_039"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_048"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_049"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_058"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_061"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_066"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_067"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_072"
+    },
+    {
+      "provider": "IMF",
+      "code": "GFB_111"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:BPM6_ITS_A"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:HICPN_INDEX_M"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:SEEA_AEA_A"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:01R"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:1DI"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:90R"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:CGD"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:CGO"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:CPI"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:DOTS"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:DSE"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:EMP"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:EXD"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:EXR"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:GGD_GNA"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:IIP_GBPM6"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:ILV1"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:INR"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:LMI"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:MET"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:NAG"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:OFS"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:POP"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:PPI"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:SBS"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:SPI"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:UEM"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:WOE"
+    },
+    {
+      "provider": "FRED",
+      "code": "BOGZ1FL193034005Q"
+    },
+    {
+      "provider": "FRED",
+      "code": "FRBATLWGT3MMAUMHWGO"
+    },
+    {
+      "provider": "FRED",
+      "code": "FRBATLWGTUMHWG83O"
+    },
+    {
+      "provider": "FRED",
+      "code": "FRBATLWGTUMHWGO"
+    },
+    {
+      "provider": "FRED",
+      "code": "LNU05026642"
+    },
+    {
+      "provider": "FRED",
+      "code": "GFDEBTN"
+    },
+    {
+      "provider": "FRED",
+      "code": "FDHBPIN"
+    },
+    {
+      "provider": "FRED",
+      "code": "A576RC1"
+    },
+    {
+      "provider": "FRED",
+      "code": "A229RC0"
+    },
+    {
+      "provider": "FRED",
+      "code": "NFCI"
+    },
+    {
+      "provider": "FRED",
+      "code": "ANFCI"
+    },
+    {
+      "provider": "FRED",
+      "code": "NFCILEVERAGE"
+    },
+    {
+      "provider": "FRED",
+      "code": "NFCIRISK"
+    },
+    {
+      "provider": "FRED",
+      "code": "HCCSDODNS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBUSBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "TNWMVBSNNCB"
+    },
+    {
+      "provider": "FRED",
+      "code": "MBCURRCIR"
+    },
+    {
+      "provider": "FRED",
+      "code": "ECBMLFR"
+    },
+    {
+      "provider": "FRED",
+      "code": "WRESCRT"
+    },
+    {
+      "provider": "FRED",
+      "code": "SWPT"
+    },
+    {
+      "provider": "FRED",
+      "code": "CFNAI"
+    },
+    {
+      "provider": "FRED",
+      "code": "CFNAIMA3"
+    },
+    {
+      "provider": "FRED",
+      "code": "WCBLSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "WLFN"
+    },
+    {
+      "provider": "FRED",
+      "code": "EONIARATE"
+    },
+    {
+      "provider": "FRED",
+      "code": "CIVPART"
+    },
+    {
+      "provider": "FRED",
+      "code": "PCOPPUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "POILBREUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PCOCOUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PNGASJPUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "POLVOILUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PALUMUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PURANUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "GASDESW"
+    },
+    {
+      "provider": "FRED",
+      "code": "PALLFNFINDEXQ"
+    },
+    {
+      "provider": "FRED",
+      "code": "PNGASEUUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PMETAINDEXM"
+    },
+    {
+      "provider": "FRED",
+      "code": "PRUBBUSDM"
+    },
+    {
+      "provider": "FRED",
+      "code": "GPDI"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDCHN"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDJPN"
+    },
+    {
+      "provider": "FRED",
+      "code": "NGDPRSAXDCTRQ"
+    },
+    {
+      "provider": "FRED",
+      "code": "NETFI"
+    },
+    {
+      "provider": "FRED",
+      "code": "DPI"
+    },
+    {
+      "provider": "FRED",
+      "code": "IGREA"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDWLD"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDIND"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDITA"
+    },
+    {
+      "provider": "FRED",
+      "code": "HDTGPDCAQ163N"
+    },
+    {
+      "provider": "FRED",
+      "code": "B1448C1A027NBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDARG"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDFRA"
+    },
+    {
+      "provider": "FRED",
+      "code": "MKTGDPKRA646NWDB"
+    },
+    {
+      "provider": "FRED",
+      "code": "NYGDPPCAPKDMEX"
+    },
+    {
+      "provider": "FRED",
+      "code": "A084RC1Q027SBEA"
+    },
+    {
+      "provider": "FRED",
+      "code": "CCSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "OHUR"
+    },
+    {
+      "provider": "FRED",
+      "code": "GAUR"
+    },
+    {
+      "provider": "FRED",
+      "code": "AURUKM"
+    },
+    {
+      "provider": "FRED",
+      "code": "ALUR"
+    },
+    {
+      "provider": "FRED",
+      "code": "MAUR"
+    },
+    {
+      "provider": "FRED",
+      "code": "LNU04073413"
+    },
+    {
+      "provider": "FRED",
+      "code": "COUR"
+    },
+    {
+      "provider": "FRED",
+      "code": "ALURN"
+    },
+    {
+      "provider": "FRED",
+      "code": "GAURN"
+    },
+    {
+      "provider": "FRED",
+      "code": "PPIFIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "PPIFID"
+    },
+    {
+      "provider": "FRED",
+      "code": "QCNR628BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "QDER628BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "MEHOINUSNYA672N"
+    },
+    {
+      "provider": "FRED",
+      "code": "QJPR368BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "QCNR368BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "QINR628BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "QPTR628BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "QDER368BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "MEHOINUSOHA672N"
+    },
+    {
+      "provider": "FRED",
+      "code": "QFRR628BIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "MEHOINUSMIA672N"
+    },
+    {
+      "provider": "FRED",
+      "code": "MVMTD027MNFRBDAL"
+    },
+    {
+      "provider": "FRED",
+      "code": "MMTY"
+    },
+    {
+      "provider": "FRED",
+      "code": "MMNDR"
+    },
+    {
+      "provider": "FRED",
+      "code": "TY12MCD"
+    },
+    {
+      "provider": "FRED",
+      "code": "NASDAQCOM"
+    },
+    {
+      "provider": "FRED",
+      "code": "RSXFS"
+    },
+    {
+      "provider": "FRED",
+      "code": "OBFR"
+    },
+    {
+      "provider": "FRED",
+      "code": "RSXFSN"
+    },
+    {
+      "provider": "FRED",
+      "code": "RSAFSNA"
+    },
+    {
+      "provider": "FRED",
+      "code": "ACOGNO"
+    },
+    {
+      "provider": "FRED",
+      "code": "ATCGNO"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "BM.KLT.DINV.WD.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "BX.TRF.PWKR.DT.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "CC.NO.SRC"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "CC.PER.RNK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "DT.DOD.DSTC.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "DT.TDS.DECT.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "EG.ELC.ACCS.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "EG.IMP.CONS.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "EN.HPT.THRD.NO"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FB.BNK.CAPA.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FD.RES.LIQU.AS.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FM.AST.PRVT.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FM.LBL.BMNY.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FP.CPI.TOTL.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "FR.INR.RINR"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.AST.TOTL.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.DOD.TOTL.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.NLD.TOTL.GD.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.TAX.OTHR.RV.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.XPN.COMP.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GC.XPN.INTP.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GE.PER.RNK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "GE.STD.ERR"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.BRE.DR.P2"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.ELC.OUTG.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.BNKL.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.CMPU.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.CORR.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.FEMM.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.FEMO.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "IC.FRM.TRNG.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.STKB.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.STKB.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.TOTL.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.TOTL.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.TOTL.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.TOTL.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.GDI.TOTL.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.IMP.GNFS.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.IMP.GNFS.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NE.IMP.GNFS.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NV.IND.MANF.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NV.IND.MANF.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NV.IND.MANF.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NV.SRV.TOTL.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NV.SRV.TOTL.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.ICTR.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.ADJ.NNAT.GN.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.DEFL.KD.ZG"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.DISC.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.MKTP.CN.AD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.MKTP.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.PCAP.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.PCAP.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.PCAP.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDP.TOTL.RT.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDS.TOTL.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDS.TOTL.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GDY.TOTL.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNP.ATLS.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNP.MKTP.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNP.PCAP.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNP.PCAP.KD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNP.PCAP.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNS.ICTR.CD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GNS.ICTR.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GSR.NFCY.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.GSR.NFCY.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.TAX.NIND.CN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.TAX.NIND.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "NY.TTF.GNFS.KN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "RL.PER.RNK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "RQ.PER.RNK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "RQ.STD.ERR"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.PRM.ENRL.TC.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.ENRL.FE.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.ENRL.GC.FE.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.ENRR.MA"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.NENR"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.NENR.FE"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.NENR.MA"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SE.SEC.PROG.FE.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.HIV.0014"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.MMR.RISK.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.PRV.SMOK"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.STA.FGMS.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SH.STA.ODFC.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SL.TLF.PART.FE.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SL.TLF.PART.MA.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.POP.GROW"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.REG.BRTH.FE.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.REG.BRTH.MA.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.REG.BRTH.RU.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.REG.BRTH.UR.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.REG.BRTH.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "SP.URB.GROW"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TM.TAX.MANF.BC.ZS"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TM.VAL.MMTL.ZS.UN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TM.VAL.MRCH.XD.WD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.QTY.MRCH.XD.WD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.UVI.MRCH.XD.WD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.VAL.ICTG.ZS.UN"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "TX.VAL.MRCH.XD.WD"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "VA.NO.SRC"
+    },
+    {
+      "provider": "WorldBank",
+      "code": "VA.PER.RNK"
+    },
+    {
+      "provider": "IMF",
+      "code": "BCA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES_ANNUAL"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES_HOURLY"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES_MONTHLY"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EARN_SES_MONTHLY$DV_221"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_TDC1"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HLTH_THOSDAY1"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HSW_IJ_NUSE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EC2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EC4"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CBS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EC8"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN22"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN23"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN42"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN47"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_PS312"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_PS32"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_RA5"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MET_LFE3EMP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_10Q_GGFA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_10Q_GGNFA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_EU_FA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "GOV_EU_NFA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "HBS_CAR_T313"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_EMI1CTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_IMM1CTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_IMM2CTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_IMM4CTB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_IMM6CTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_IMM7CTB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_LCT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MIGR_NETMIGR"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAIO_10_CP1610"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAIO_10_CP1620"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAIO_10_CP1630"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAMA_10_LP_ULC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NAMQ_10_LP_ULC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_C412"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EDUC_UOE_PERD03"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LF_FAM_SH"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LSK_BEES"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LSK_MAIN"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS4_EXP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS4_HAM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS4_MO"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS4_PROD"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS6_TYPE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS7_PROD"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_CIS7_TYPE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "INN_PROD"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CBT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_DEV_I"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_FU"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_IFP_FU$DV_281"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_CI_RAS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_IW01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_IW02"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_IW05"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_IW06"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_IW07"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LI21"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LVHL30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LSK_PIGS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LSK_POULTRY"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EF_LSK_SHEEP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_LVPS01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EGI_EM1"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDDW01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EI_MFIR_M"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDHO06B"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDHO06Q"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD06"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD07"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD07$DV_2621"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD08"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD11"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_MDSD11$DV_1994"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AC_CUR"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AC_CURM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ILC_SBJP05"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AC_TAXENER"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AC_TAXENER$DV_3262"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AIR_EMIS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AIR_EMIS$DV_446"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AIR_GGE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_AIR_GGE$DV_447"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_BIO5"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_LANDFP_DOM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_TRDRRM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_WASMUN"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_WASPAC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_WW_CON"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ENV_WW_CON$DV_3267"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIN00074"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "EQ_POP02"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIN00110"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBP10"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBP17"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBP18"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBP47"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSBP48"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSEN10"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "FOR_AREA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSPD10"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "FOR_SWSPEC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TIPSPD20"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_91HNNCH"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_91SBIRTH"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_HNCTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_HNMGA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TOUR_DEM_EXWS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CRIM_JUST_AGE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CRIM_JUST_CTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CRIM_PRIS_OFF"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CRIM_SMU_SCTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TOUR_DEM_TTWS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_FMONTH"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_MARCB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_MEXRT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_MLEXPEC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00005"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00014"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_PJANGROUP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_POPMDCTB"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_POPMDCTZ"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00082"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00083"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00099"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "DEMO_R_MWK3_T"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00204"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00205"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00208"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TPS00215"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRAN_SF_ROADNU"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_AES_100"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_AES_101"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_AES_104"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_ANY1"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_ANY6"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_INF6"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_LFSE_01"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TRNG_LFSE_01$DV_1801"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TTR00001"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "AEI_PESTUSE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "YTH_EMPL_020"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "YTH_EMPL_100"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "YTH_EMPL_140"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EG10"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN2"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "MED_EN62"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "APRO_EC_LSHEN"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "APRO_EC_POULM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "AVIA_IF_ARP_CO"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00025"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00042"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00043"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00044"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00083"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAG00120"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TAI09"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00104"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00105"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00106"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00114"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEC00132"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEIBS020"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_21M"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_21MH"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00006"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00106"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00108"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "CENS_91AAGE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00120"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00121"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00122"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEN00124"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEPSR_WC110"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TEPSR_WC170"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESEM100"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESEM130"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESEM140"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESOV110"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESPM070"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESPM150"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI010"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "RD_E_BERDSIZE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TESSI190"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "TET00037"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_EQR_MOTORS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ROAD_EQS_SPURP"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFSO_14PCITIRK"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SBS_CRE_PCPAY"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SBS_CRE_PCREC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_01_41"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_02_60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_03_30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_04_10A"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_04_60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_05_30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_08_11"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_08_30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_08_30A"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_08_40"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_09_70"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_10_30"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_10_60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_11_32"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_12_41"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_14_60"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SDG_17_40"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SPR_EXP_TYPE"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SPR_NET_GROS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "SPR_REC_SUMT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_IIU_IUXR"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_IT_ICT_GD"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFST_R_LFP2ACT"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_TMI"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ISOC_TMO"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "LFST_R_SLA_GA"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "IWW_AC_NBAC"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "IWW_GO_ADAGO"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_CB_E"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_CB_EIM"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_CB_GAS"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "NRG_IND_DI"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "ORG_APROD"
+    },
+    {
+      "provider": "Eurostat",
+      "code": "PROJ_STP24"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100016"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100075"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "10100118"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100037"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100054"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100166"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "11100225"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100144"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100146"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100163"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "12100164"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100397"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100398"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100402"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100415"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100416"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100419"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100484"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100787"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100836"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100839"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100840"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "13100847"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100078"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100110"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100122"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100303"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100305"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100319"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100410"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100452"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100463"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100466"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "14100472"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "16100016"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "16100100"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "16100101"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100021"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100106"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100122"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100169"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100245"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100251"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100252"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100253"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100254"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100258"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100262"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "18100266"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100036"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100037"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100039"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100040"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100051"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100054"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100091"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100103"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100145"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100192"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100194"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100197"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100201"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100205"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "21100233"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100026"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100040"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100057"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100083"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100090"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100134"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "22100135"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100067"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100202"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "23100308"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100013"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100033"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100039"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100046"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "25100083"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "27100301"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100016"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100023"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100043"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100050"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100053"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100055"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100114"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100122"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100124"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100139"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100208"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100209"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100249"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100260"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100269"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "32100319"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100019"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100023"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100025"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100026"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100027"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100028"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100029"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100030"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100031"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100068"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100214"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100288"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100299"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100300"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "33100496"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100010"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100017"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100018"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100019"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100020"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100023"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100027"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100030"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100032"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100286"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100287"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "34100290"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100041"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100043"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100133"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "35100134"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100109"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100114"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100212"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100230"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100231"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100232"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100348"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100385"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100471"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100472"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100601"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100615"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100617"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100641"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100666"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "36100690"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100006"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100022"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100033"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100034"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100088"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100091"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100093"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100100"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100101"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100122"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100126"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100132"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100137"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100147"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100148"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100161"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100162"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100164"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100182"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100183"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100242"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100244"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100250"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100251"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "38100285"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "39100026"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "39100027"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "39100035"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "39100036"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100048"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100069"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100071"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100073"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100075"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100079"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100081"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100088"
+    },
+    {
+      "provider": "StatsCan",
+      "code": "45100094"
+    },
+    {
+      "provider": "IMF",
+      "code": "rev"
+    },
+    {
+      "provider": "IMF",
+      "code": "prim_exp"
+    },
+    {
+      "provider": "IMF",
+      "code": "pb"
+    },
+    {
+      "provider": "IMF",
+      "code": "NGS_GDP"
+    },
+    {
+      "provider": "IMF",
+      "code": "FDSAOP_GDP"
+    },
+    {
+      "provider": "IMF",
+      "code": "AI_PI"
+    },
+    {
+      "provider": "IMF",
+      "code": "AL"
+    },
+    {
+      "provider": "IMF",
+      "code": "DF:ZZZNL_TEST"
+    },
+    {
+      "provider": "FRED",
+      "code": "TCU"
+    },
+    {
+      "provider": "FRED",
+      "code": "IHLIDXDETPSOFTDEVE"
+    },
+    {
+      "provider": "FRED",
+      "code": "WUIIDN"
+    },
+    {
+      "provider": "FRED",
+      "code": "WUIVNM"
+    },
+    {
+      "provider": "FRED",
+      "code": "MEHOINUSA646N"
+    },
+    {
+      "provider": "FRED",
+      "code": "FRGSHPUSM649NCIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "TRUCKD11"
+    },
+    {
+      "provider": "FRED",
+      "code": "TSIFRGHT"
+    },
+    {
+      "provider": "FRED",
+      "code": "AIRRPMTSID11"
+    },
+    {
+      "provider": "FRED",
+      "code": "FRGEXPUSM649NCIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "TSIFRGHTC"
+    },
+    {
+      "provider": "FRED",
+      "code": "MEHOINUSCAA646N"
+    },
+    {
+      "provider": "FRED",
+      "code": "TOTALSL"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBJPBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBINBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBCNBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBKRBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "TOTALSLAR"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBXMBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBTRBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBIDBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "RBARBIS"
+    },
+    {
+      "provider": "FRED",
+      "code": "REVOLSLAR"
+    },
+    {
+      "provider": "FRED",
+      "code": "JTSJOL"
+    },
+    {
+      "provider": "FRED",
+      "code": "SAUPZPIOILBEGUSD"
+    },
+    {
+      "provider": "FRED",
+      "code": "FXRATEIQA618NUPN"
+    },
+    {
+      "provider": "FRED",
+      "code": "OBFRVOL"
+    },
+    {
+      "provider": "FRED",
+      "code": "TOTBKCRNSA"
+    },
+    {
+      "provider": "FRED",
+      "code": "TLAACBW027SBOG"
+    },
+    {
+      "provider": "FRED",
+      "code": "MDLM"
+    }
+  ]
+}
