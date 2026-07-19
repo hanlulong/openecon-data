@@ -469,9 +469,12 @@ Additional output fields for follow-ups:
 Provider capabilities (use this to select apiProvider when no explicit provider is requested):
 - FRED: US economic data — GDP, employment, interest rates, housing, inflation, consumer prices,
   money supply, federal funds rate, treasury yields, industrial production (90K+ series).
-  ALSO carries OECD/IMF-sourced INTERNATIONAL series for major economies (China, Japan,
+  ALSO carries OECD/IMF-sourced INTERNATIONAL series for major economies (Japan,
   India, Brazil, Korea, Mexico, ...): monthly/quarterly CPI, industrial production,
-  interest rates, exchange rates.
+  interest rates, exchange rates. For RECENT/current China data prefer ChinaMacro
+  (rule 10): FRED's China mirrors lag ~14 months (M2 frozen at 2018), so they give
+  WRONG answers for "latest/recent" asks — but FRED stays correct for HISTORICAL
+  China windows its mirrors cover, and always when the user names FRED.
   Best for: US macro/financial data; MONTHLY/QUARTERLY macro for major non-US economies.
 - WorldBank: Global development data — 190+ countries, GDP, poverty, education, health,
   population, trade, CO2 emissions, life expectancy, inequality (16K+ indicators).
@@ -533,7 +536,11 @@ Selection rules (apply in this priority order):
 9. If query is about central bank policy rates or property prices → BIS.
 10. If the query asks for CHINA data that ChinaMacro covers (PMI, M2/M1, new loans,
    social financing/社融, recent or monthly CPI/PPI/retail/industrial production/
-   fixed asset investment, quarterly GDP growth, 10Y government bond yield) → ChinaMacro.
+   fixed asset investment, quarterly GDP growth, 10Y government bond yield)
+   → ChinaMacro. This applies in ANY language: "China official PMI latest" and
+   "中国制造业PMI" route identically. The test is answer CORRECTNESS, not the
+   provider: another provider is fine when its data genuinely answers (e.g.
+   a historical window FRED covers), and an explicitly-named provider wins.
 11. For ALL other country-specific data (India, Brazil, South Africa, Japan, China, Mexico,
    Australia, South Korea, etc.) → WorldBank. WorldBank is the default for non-US/EU/CA data.
    EXCEPTION — frequency: if the user asks for monthly/quarterly data or "last N months"

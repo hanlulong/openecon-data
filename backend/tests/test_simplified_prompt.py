@@ -73,8 +73,11 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # scope-reset + colloquial-headline rules (2026-07-17); to 380 with them —
     # keep-region-in-indicator subnational examples; to 390 for the ChinaMacro
     # provider matrix entry (2026-07-19 — new provider closing the China
-    # high-frequency coverage gap, user-approved))
-    assert len(prompt.splitlines()) < 390
+    # high-frequency coverage gap, user-approved); to 395 for the
+    # English-China capture lines (analytics 07-19 evening: ~51 China-macro
+    # failures/36h were ENGLISH-phrased and routed FRED/WB — rule 10 is now
+    # language-explicit and FRED's entry hands China off))
+    assert len(prompt.splitlines()) < 395
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

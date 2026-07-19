@@ -71,4 +71,15 @@ def normalize_provider_name(provider: str) -> str:
     if normalized:
         return normalized
 
+    # Providers may annotate their serving label with an attribution suffix —
+    # e.g. "ChinaMacro (NBS via EastMoney datacenter)". The parenthetical is
+    # display metadata, not identity: strip it so label-vs-namespace
+    # comparisons (conversation-state persist, cache identity) see the same
+    # provider the router used. Structural (text shape), not semantic.
+    if "(" in provider:
+        prefix = provider.split("(", 1)[0].strip()
+        if prefix:
+            normalized = PROVIDER_ALIASES.get(prefix.lower())
+            return normalized or prefix.upper()
+
     return provider.upper().strip()
