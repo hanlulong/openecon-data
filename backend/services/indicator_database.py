@@ -478,7 +478,7 @@ class IndicatorDatabase:
         params = [fts_query]
 
         if provider:
-            sql += " AND i.provider = ?"
+            sql += " AND i.provider = ? COLLATE NOCASE"
             params.append(provider)
 
         if category:
@@ -510,7 +510,7 @@ class IndicatorDatabase:
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT * FROM indicators WHERE provider = ? AND code = ?",
+            "SELECT * FROM indicators WHERE provider = ? COLLATE NOCASE AND code = ?",
             (provider, code)
         )
         row = cursor.fetchone()
@@ -643,6 +643,8 @@ class IndicatorLookup:
             "EXCHANGERATE": "ExchangeRate",
             "EXCHANGE RATE": "ExchangeRate",
             "EXCHANGE-RATE": "ExchangeRate",
+            "CHINAMACRO": "ChinaMacro",
+            "CHINA MACRO": "ChinaMacro",
         }
 
     def _normalize_provider(self, provider: Optional[str]) -> Optional[str]:
@@ -746,7 +748,7 @@ class IndicatorLookup:
         raw_sql = f"SELECT * FROM indicators WHERE trim(name) IN ({raw_placeholders})"
         raw_params: list[Any] = list(raw_deduped)
         if normalized_provider:
-            raw_sql += " AND provider = ?"
+            raw_sql += " AND provider = ? COLLATE NOCASE"
             raw_params.append(normalized_provider)
         raw_sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
         raw_params.append(max(1, limit))
@@ -778,7 +780,7 @@ class IndicatorLookup:
         )
         if normalized_provider and len(raw_exact_rows) < limit and needs_unicode_casefold_scan:
             cursor.execute(
-                "SELECT * FROM indicators WHERE provider = ? "
+                "SELECT * FROM indicators WHERE provider = ? COLLATE NOCASE "
                 "ORDER BY COALESCE(popularity, 0) DESC, code",
                 (normalized_provider,),
             )
@@ -804,7 +806,7 @@ class IndicatorLookup:
         sql = f"SELECT * FROM indicators WHERE lower(trim(name)) IN ({placeholders})"
         params: list[Any] = list(deduped)
         if normalized_provider:
-            sql += " AND provider = ?"
+            sql += " AND provider = ? COLLATE NOCASE"
             params.append(normalized_provider)
         sql += " ORDER BY COALESCE(popularity, 0) DESC, code LIMIT ?"
         params.append(max(1, limit))
@@ -827,7 +829,7 @@ class IndicatorLookup:
         fallback_params: list[Any] = []
         conditions: list[str] = []
         if normalized_provider:
-            conditions.append("provider = ?")
+            conditions.append("provider = ? COLLATE NOCASE")
             fallback_params.append(normalized_provider)
         token_clauses = ["lower(name) LIKE ?" for _ in first_tokens]
         conditions.append("(" + " OR ".join(token_clauses) + ")")
@@ -876,7 +878,7 @@ class IndicatorLookup:
                 # through the literal/prefix exact-title paths or clarify.
                 if len(query_tokens) < 5:
                     continue
-                token_sql = "SELECT * FROM indicators WHERE provider = ?"
+                token_sql = "SELECT * FROM indicators WHERE provider = ? COLLATE NOCASE"
                 token_params: list[Any] = [normalized_provider]
                 for token in query_tokens:
                     token_sql += " AND lower(name) LIKE ?"

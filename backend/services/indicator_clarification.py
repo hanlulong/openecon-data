@@ -909,6 +909,7 @@ _PROVIDER_OPTION_LABELS = {
     "EUROSTAT": "Eurostat",
     "STATSCAN": "StatsCan",
     "COMTRADE": "Comtrade",
+    "CHINAMACRO": "ChinaMacro",
 }
 
 
@@ -1613,6 +1614,8 @@ def _extract_provider_from_query(query: str) -> Optional[str]:
         "un comtrade": "Comtrade",
         "coingecko": "CoinGecko",
         "coin gecko": "CoinGecko",
+        "chinamacro": "ChinaMacro",
+        "china macro": "ChinaMacro",
         "exchangerate": "ExchangeRate",
         "exchange rate": "ExchangeRate",
     }

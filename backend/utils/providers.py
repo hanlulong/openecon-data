@@ -38,6 +38,10 @@ PROVIDER_ALIASES = {
     "fred": "FRED",
     "fred (federal reserve)": "FRED",
     "federal reserve": "FRED",
+    # ChinaMacro variations
+    "chinamacro": "CHINAMACRO",
+    "china macro": "CHINAMACRO",
+    "china_macro": "CHINAMACRO",
     # Other providers
     "imf": "IMF",
     "international monetary fund": "IMF",

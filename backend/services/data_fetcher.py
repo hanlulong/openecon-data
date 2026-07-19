@@ -1825,11 +1825,13 @@ async def fetch_from_provider_dispatch(
             params.get("indicator")
             or (intent.indicators[0] if intent.indicators else "")
         )
-        return await svc.chinamacro_provider.fetch_indicator(
-            indicator=indicator,
-            start_date=params.get("startDate"),
-            end_date=params.get("endDate"),
-        )
+        return [
+            await svc.chinamacro_provider.fetch_indicator(
+                indicator=indicator,
+                start_date=params.get("startDate"),
+                end_date=params.get("endDate"),
+            )
+        ]
 
     raise DataNotAvailableError(
         f"Provider {intent.apiProvider} is not yet implemented. Available providers: FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate, BIS, Eurostat, OECD, CoinGecko, ChinaMacro"

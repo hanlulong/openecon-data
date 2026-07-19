@@ -239,4 +239,5 @@ async def test_dispatch_reaches_chinamacro_params_first(monkeypatch):
     result = await fetch_from_provider_dispatch(_FakeSvc(), intent, plan)
     # Params-first precedence: the resolved pick beats the plan snapshot.
     assert calls["indicator"] == "CN_PMI_MFG"
-    assert result.data
+    # Dispatch contract: a LIST of NormalizedData, one entry per series.
+    assert isinstance(result, list) and result[0].data

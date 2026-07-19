@@ -216,14 +216,14 @@ SERIES_REGISTRY: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "CN_SF_INCREMENT",
-        "name_en": "China Social Financing Increment (monthly flow)",
-        "name_zh": "中国社会融资规模增量",
+        "name_en": "China Social Financing — monthly increment (the headline 社融 release figure)",
+        "name_zh": "中国社会融资规模增量（月度社融数据）",
         "unit": "CNY 100 million (亿元)",
         "frequency": "monthly",
         "source": {"kind": "mofcom_shrzgm", "field": "tiosfs"},
         "source_org": "PBoC data via MOFCOM open query",
-        "synonyms": "social financing china, aggregate financing, total social financing, tsf, 社会融资规模, 社融增量, 社融",
-        "notes": "MOFCOM republishes the PBoC series with a ~2-3 month lag; the latest 1-2 months may not be available yet.",
+        "synonyms": "social financing china, aggregate financing to the real economy, total social financing, tsf, new social financing, 社会融资规模, 社融增量, 社融, 新增社融",
+        "notes": "The monthly PBoC 社会融资规模 headline release IS this increment (flow) figure — this is the number reported for '社融' each month. The outstanding STOCK (存量) series is not yet carried (no free live source). MOFCOM republishes with a ~2-3 month lag.",
     },
 )
 

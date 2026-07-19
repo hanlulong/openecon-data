@@ -94,6 +94,8 @@ def provider_covers_country_list(provider: str, countries: Optional[List[str]]) 
             CountryResolver.is_oecd_member(code)
             for code in normalized_iso2
         )
+    if provider_upper in {"CHINAMACRO", "CHINA MACRO"}:
+        return all(code == "CN" for code in normalized_iso2)
     return True
 
 

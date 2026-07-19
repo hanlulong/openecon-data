@@ -1434,7 +1434,7 @@ class IndicatorSelector:
                 cur.execute(
                     """SELECT i.code, i.name FROM indicators_fts f
                     JOIN indicators i ON f.rowid = i.id
-                    WHERE indicators_fts MATCH ? AND i.provider = ?
+                    WHERE indicators_fts MATCH ? AND i.provider = ? COLLATE NOCASE
                     ORDER BY bm25(indicators_fts, 0, 3.0, 10.0, 1.0, 3.0, 2.0, 2.0)
                           - (COALESCE(i.popularity, 0) * 0.2)
                     LIMIT ?""",
@@ -1489,7 +1489,7 @@ class IndicatorSelector:
             placeholders = ",".join(["?"] * len(codes))
             cur.execute(
                 f"SELECT code, frequency, unit, end_date, category, description, keywords, popularity FROM indicators "
-                f"WHERE provider = ? AND code IN ({placeholders})",
+                f"WHERE provider = ? COLLATE NOCASE AND code IN ({placeholders})",
                 [self._catalog_provider_name(provider)] + codes,
             )
             for row in cur.fetchall():
