@@ -89,6 +89,12 @@ For detailed testing guidance, see **[TESTING_PROMPT.md](TESTING_PROMPT.md)**. K
   substituted) + plausible cross-checked values. Multiple different series
   can each be a correct answer to the same query; an expected-id match is
   never the pass criterion, and "unexpected id" is never a failure by itself.
+- **Correctness beats provider preference** (user rule 2026-07-19): provider
+  preferences (routing rules, coverage predicates, arbitration filters,
+  catalog opinions) may steer the FIRST attempt but must NEVER veto, discard,
+  or fail a result whose data correctly answers the question. The only
+  provider-identity failure is ignoring a provider the user EXPLICITLY named
+  — an explicit provider request is part of the intent and wins.
 - Every fix must help at least 5 similar queries (the "5-Query Test")
 
 ### 7. Indicator Discovery - NEVER Hardcode Mappings

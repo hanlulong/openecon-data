@@ -78,6 +78,16 @@ when genuinely needed to identify the intended series (≥2 materially distinct,
 executable options); never guess-and-serve a weak match, never show a
 menu-of-one, never re-ask what the conversation already answered.
 
+**COROLLARY — correctness beats provider preference:** provider-preference
+mechanisms (routing rules, coverage predicates, auto-routability gates,
+catalog "best provider" opinions, arbitration candidate filters) may steer
+the FIRST attempt but must NEVER reject, discard, down-rank, or fail data
+that correctly answers the question merely because it came from a
+non-preferred provider. Routing to FRED or WorldBank is fine when the answer
+is correct. The single provider-identity failure mode is ignoring a provider
+the user EXPLICITLY named — that request is part of the intent and wins.
+Before shipping ANY preference mechanism, audit it against this rule.
+
 ---
 
 ## 🚨 INFRASTRUCTURE FIRST - NON-NEGOTIABLE 🚨
