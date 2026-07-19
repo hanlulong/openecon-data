@@ -76,8 +76,11 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # high-frequency coverage gap, user-approved); to 395 for the
     # English-China capture lines (analytics 07-19 evening: ~51 China-macro
     # failures/36h were ENGLISH-phrased and routed FRED/WB — rule 10 is now
-    # language-explicit and FRED's entry hands China off))
-    assert len(prompt.splitlines()) < 395
+    # language-explicit and FRED's entry hands China off); to 400 for the
+    # correctness-based refinement (user 07-19: the test is answer
+    # correctness, not the provider — FRED stays valid for historical China
+    # windows and explicit requests))
+    assert len(prompt.splitlines()) < 400
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:
