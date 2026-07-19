@@ -247,6 +247,7 @@ const integrations = [
   { name: 'OECD', tag: 'Cross-country', desc: 'Comparable data across 38 OECD member economies.' },
   { name: 'ExchangeRate', tag: 'FX', desc: 'Live and historical currency exchange rates.' },
   { name: 'CoinGecko', tag: 'Crypto', desc: 'Cryptocurrency prices, volume, and market data.' },
+  { name: 'ChinaMacro', tag: 'China', desc: 'Fresh Chinese headline macro — PMI, M2, social financing, CPI/PPI, 10Y yield.' },
 ] as const
 
 const features: Array<{ icon: ReactNode; title: string; desc: string }> = [

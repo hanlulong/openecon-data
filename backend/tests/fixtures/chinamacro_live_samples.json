@@ -1,0 +1,602 @@
+{
+ "MOFCOM_SHRZGM": [
+  {
+   "bibae": 4520,
+   "date": "202604",
+   "entrustloan": -283,
+   "forcloan": 184,
+   "ndbab": -5284,
+   "rmblaon": -4006,
+   "sfinfe": 835,
+   "tiosfs": 6245,
+   "trustloan": -129
+  },
+  {
+   "bibae": 3910,
+   "date": "202603",
+   "entrustloan": -284,
+   "forcloan": 420,
+   "ndbab": 1258,
+   "rmblaon": 31522,
+   "sfinfe": 428,
+   "tiosfs": 52240,
+   "trustloan": -173
+  },
+  {
+   "bibae": 1522,
+   "date": "202602",
+   "entrustloan": -181,
+   "forcloan": -36,
+   "ndbab": -1755,
+   "rmblaon": 8458,
+   "sfinfe": 454,
+   "tiosfs": 23837,
+   "trustloan": 310
+  },
+  {
+   "bibae": 5033,
+   "date": "202601",
+   "entrustloan": -192,
+   "forcloan": 468,
+   "ndbab": 6293,
+   "rmblaon": 49016,
+   "sfinfe": 291,
+   "tiosfs": 72185,
+   "trustloan": -4
+  },
+  {
+   "bibae": 1541,
+   "date": "202512",
+   "entrustloan": 308,
+   "forcloan": -675,
+   "ndbab": -1492,
+   "rmblaon": 9804,
+   "sfinfe": 559,
+   "tiosfs": 22075,
+   "trustloan": 679
+  },
+  {
+   "bibae": 4145,
+   "date": "202511",
+   "entrustloan": -187,
+   "forcloan": -222,
+   "ndbab": 1488,
+   "rmblaon": 4096,
+   "sfinfe": 341,
+   "tiosfs": 24926,
+   "trustloan": 843
+  }
+ ],
+ "RPTA_WEB_TREASURYYIELD": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 9301,
+   "data": [
+    {
+     "EMG00001306": 4.18,
+     "EMG00001308": 4.28,
+     "EMG00001310": 4.55,
+     "EMG00001312": 5.06,
+     "EMG00159635": null,
+     "EMG01339436": 0.37,
+     "EMM00000024": null,
+     "EMM00166462": 1.4466,
+     "EMM00166466": 1.7404,
+     "EMM00166469": 2.2425,
+     "EMM00588704": 1.2645,
+     "EMM01276014": 0.4759,
+     "SOLAR_DATE": "2026-07-17 00:00:00"
+    },
+    {
+     "EMG00001306": 4.16,
+     "EMG00001308": 4.28,
+     "EMG00001310": 4.57,
+     "EMG00001312": 5.09,
+     "EMG00159635": null,
+     "EMG01339436": 0.41,
+     "EMM00000024": null,
+     "EMM00166462": 1.4426,
+     "EMM00166466": 1.7437,
+     "EMM00166469": 2.2515,
+     "EMM00588704": 1.2706,
+     "EMM01276014": 0.4731,
+     "SOLAR_DATE": "2026-07-16 00:00:00"
+    },
+    {
+     "EMG00001306": 4.13,
+     "EMG00001308": 4.26,
+     "EMG00001310": 4.55,
+     "EMG00001312": 5.08,
+     "EMG00159635": null,
+     "EMG01339436": 0.42,
+     "EMM00000024": null,
+     "EMM00166462": 1.4426,
+     "EMM00166466": 1.7406,
+     "EMM00166469": 2.247,
+     "EMM00588704": 1.271,
+     "EMM01276014": 0.4696,
+     "SOLAR_DATE": "2026-07-15 00:00:00"
+    },
+    {
+     "EMG00001306": 4.18,
+     "EMG00001308": 4.31,
+     "EMG00001310": 4.58,
+     "EMG00001312": 5.08,
+     "EMG00159635": null,
+     "EMG01339436": 0.4,
+     "EMM00000024": null,
+     "EMM00166462": 1.4477,
+     "EMM00166466": 1.7402,
+     "EMM00166469": 2.2555,
+     "EMM00588704": 1.2698,
+     "EMM01276014": 0.4704,
+     "SOLAR_DATE": "2026-07-14 00:00:00"
+    }
+   ],
+   "pages": 2326
+  },
+  "success": true,
+  "version": "c743089c05220e1c2b6926e978b94658"
+ },
+ "RPT_ECONOMY_ASSET_INVEST": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 159,
+   "data": [
+    {
+     "BASE": 47858,
+     "BASE_ACCUMULATE": 226370,
+     "BASE_SAME": -15.6,
+     "BASE_SEQUENTIAL": 28.58,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "TIME": "2026年06月份"
+    },
+    {
+     "BASE": 37219,
+     "BASE_ACCUMULATE": 178512,
+     "BASE_SAME": -17.15,
+     "BASE_SEQUENTIAL": -3.54,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "TIME": "2026年05月份"
+    },
+    {
+     "BASE": 38585,
+     "BASE_ACCUMULATE": 141293,
+     "BASE_SAME": -12.01,
+     "BASE_SEQUENTIAL": -22.81,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "TIME": "2026年04月份"
+    },
+    {
+     "BASE": 49987,
+     "BASE_ACCUMULATE": 102708,
+     "BASE_SAME": -1.12,
+     "BASE_SEQUENTIAL": null,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 40
+  },
+  "success": true,
+  "version": "da9a096649d8f1eb53a46f31390fad52"
+ },
+ "RPT_ECONOMY_CPI": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 222,
+   "data": [
+    {
+     "CITY_ACCUMULATE": 101,
+     "CITY_BASE": 101,
+     "CITY_SAME": 1,
+     "CITY_SEQUENTIAL": -0.4,
+     "NATIONAL_ACCUMULATE": 101,
+     "NATIONAL_BASE": 101,
+     "NATIONAL_SAME": 1,
+     "NATIONAL_SEQUENTIAL": -0.3,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "RURAL_ACCUMULATE": 100.8,
+     "RURAL_BASE": 100.8,
+     "RURAL_SAME": 0.8,
+     "RURAL_SEQUENTIAL": -0.3,
+     "TIME": "2026年06月份"
+    },
+    {
+     "CITY_ACCUMULATE": 101,
+     "CITY_BASE": 101.3,
+     "CITY_SAME": 1.3,
+     "CITY_SEQUENTIAL": -0.1,
+     "NATIONAL_ACCUMULATE": 101,
+     "NATIONAL_BASE": 101.2,
+     "NATIONAL_SAME": 1.2,
+     "NATIONAL_SEQUENTIAL": -0.1,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "RURAL_ACCUMULATE": 100.8,
+     "RURAL_BASE": 101.1,
+     "RURAL_SAME": 1.1,
+     "RURAL_SEQUENTIAL": -0.1,
+     "TIME": "2026年05月份"
+    },
+    {
+     "CITY_ACCUMULATE": 101,
+     "CITY_BASE": 101.2,
+     "CITY_SAME": 1.2,
+     "CITY_SEQUENTIAL": 0.3,
+     "NATIONAL_ACCUMULATE": 100.9,
+     "NATIONAL_BASE": 101.2,
+     "NATIONAL_SAME": 1.2,
+     "NATIONAL_SEQUENTIAL": 0.3,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "RURAL_ACCUMULATE": 100.7,
+     "RURAL_BASE": 101,
+     "RURAL_SAME": 1,
+     "RURAL_SEQUENTIAL": 0.1,
+     "TIME": "2026年04月份"
+    },
+    {
+     "CITY_ACCUMULATE": 100.9,
+     "CITY_BASE": 101.1,
+     "CITY_SAME": 1.1,
+     "CITY_SEQUENTIAL": -0.7,
+     "NATIONAL_ACCUMULATE": 100.9,
+     "NATIONAL_BASE": 101,
+     "NATIONAL_SAME": 1,
+     "NATIONAL_SEQUENTIAL": -0.7,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "RURAL_ACCUMULATE": 100.7,
+     "RURAL_BASE": 100.9,
+     "RURAL_SAME": 0.9,
+     "RURAL_SEQUENTIAL": -0.5,
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 56
+  },
+  "success": true,
+  "version": "c5b9e0f62f8a2b7ad8fb928118482a17"
+ },
+ "RPT_ECONOMY_CURRENCY_SUPPLY": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 222,
+   "data": [
+    {
+     "BASIC_CURRENCY": 3567108.43,
+     "BASIC_CURRENCY_SAME": 8,
+     "BASIC_CURRENCY_SEQUENTIAL": 0.86011268,
+     "CURRENCY": 1184775.53,
+     "CURRENCY_SAME": 4,
+     "CURRENCY_SEQUENTIAL": 3.12336916,
+     "FREE_CASH": 147364.79,
+     "FREE_CASH_SAME": 11.8,
+     "FREE_CASH_SEQUENTIAL": 0.34733649,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "TIME": "2026年06月份"
+    },
+    {
+     "BASIC_CURRENCY": 3536688.92,
+     "BASIC_CURRENCY_SAME": 8.6,
+     "BASIC_CURRENCY_SEQUENTIAL": 0.17742084,
+     "CURRENCY": 1148891.41,
+     "CURRENCY_SAME": 5.5,
+     "CURRENCY_SEQUENTIAL": 0.26685198,
+     "FREE_CASH": 146854.71,
+     "FREE_CASH_SAME": 11.9,
+     "FREE_CASH_SEQUENTIAL": -0.4222139,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "TIME": "2026年05月份"
+    },
+    {
+     "BASIC_CURRENCY": 3530425.21,
+     "BASIC_CURRENCY_SAME": 8.6,
+     "BASIC_CURRENCY_SEQUENTIAL": -0.23204757,
+     "CURRENCY": 1145833.73,
+     "CURRENCY_SAME": 5,
+     "CURRENCY_SEQUENTIAL": -3.96992468,
+     "FREE_CASH": 147477.38,
+     "FREE_CASH_SAME": 12.2,
+     "FREE_CASH_SEQUENTIAL": 0.26826384,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "TIME": "2026年04月份"
+    },
+    {
+     "BASIC_CURRENCY": 3538636.53,
+     "BASIC_CURRENCY_SAME": 8.5,
+     "BASIC_CURRENCY_SEQUENTIAL": 1.33088464,
+     "CURRENCY": 1193202.99,
+     "CURRENCY_SAME": 5.1,
+     "CURRENCY_SEQUENTIAL": 2.92809245,
+     "FREE_CASH": 147082.81,
+     "FREE_CASH_SAME": 12.5,
+     "FREE_CASH_SEQUENTIAL": -2.87487005,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 56
+  },
+  "success": true,
+  "version": "5cf1aaeb5cef4096c73cfbb16e37ade1"
+ },
+ "RPT_ECONOMY_GDP": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 82,
+   "data": [
+    {
+     "DOMESTICL_PRODUCT_BASE": 695704,
+     "FIRST_PRODUCT_BASE": 31522,
+     "FIRST_SAME": 3.7,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "SECOND_PRODUCT_BASE": 250473,
+     "SECOND_SAME": 3.9,
+     "SUM_SAME": 4.7,
+     "THIRD_PRODUCT_BASE": 413709,
+     "THIRD_SAME": 5.2,
+     "TIME": "2026年第1-2季度"
+    },
+    {
+     "DOMESTICL_PRODUCT_BASE": 334192.9,
+     "FIRST_PRODUCT_BASE": 11940.8,
+     "FIRST_SAME": 3.8,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "SECOND_PRODUCT_BASE": 116134.9,
+     "SECOND_SAME": 4.9,
+     "SUM_SAME": 5,
+     "THIRD_PRODUCT_BASE": 206117.2,
+     "THIRD_SAME": 5.2,
+     "TIME": "2026年第1季度"
+    },
+    {
+     "DOMESTICL_PRODUCT_BASE": 1401879.2,
+     "FIRST_PRODUCT_BASE": 93346.8,
+     "FIRST_SAME": 3.9,
+     "REPORT_DATE": "2025-12-01 00:00:00",
+     "SECOND_PRODUCT_BASE": 499653,
+     "SECOND_SAME": 4.5,
+     "SUM_SAME": 5,
+     "THIRD_PRODUCT_BASE": 808879.3,
+     "THIRD_SAME": 5.4,
+     "TIME": "2025年第1-4季度"
+    },
+    {
+     "DOMESTICL_PRODUCT_BASE": 1013967.9,
+     "FIRST_PRODUCT_BASE": 58187.1,
+     "FIRST_SAME": 3.8,
+     "REPORT_DATE": "2025-09-01 00:00:00",
+     "SECOND_PRODUCT_BASE": 362849.7,
+     "SECOND_SAME": 4.9,
+     "SUM_SAME": 5.2,
+     "THIRD_PRODUCT_BASE": 592931.1,
+     "THIRD_SAME": 5.4,
+     "TIME": "2025年第1-3季度"
+    }
+   ],
+   "pages": 21
+  },
+  "success": true,
+  "version": "50c7d5b6b00134de3c65ce69ddf98eb2"
+ },
+ "RPT_ECONOMY_INDUS_GROW": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 203,
+   "data": [
+    {
+     "BASE_ACCUMULATE": 5.4,
+     "BASE_SAME": 5.3,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "TIME": "2026年06月份"
+    },
+    {
+     "BASE_ACCUMULATE": 5.4,
+     "BASE_SAME": 4.5,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "TIME": "2026年05月份"
+    },
+    {
+     "BASE_ACCUMULATE": 5.6,
+     "BASE_SAME": 4.1,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "TIME": "2026年04月份"
+    },
+    {
+     "BASE_ACCUMULATE": 6.1,
+     "BASE_SAME": 5.7,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 51
+  },
+  "success": true,
+  "version": "9243acdc1da4f2b1047d17501f0c946f"
+ },
+ "RPT_ECONOMY_PMI": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 222,
+   "data": [
+    {
+     "MAKE_INDEX": 50.3,
+     "MAKE_SAME": 1.20724346,
+     "NMAKE_INDEX": 50.2,
+     "NMAKE_SAME": -0.59405941,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "TIME": "2026年06月份"
+    },
+    {
+     "MAKE_INDEX": 50,
+     "MAKE_SAME": 1.01010101,
+     "NMAKE_INDEX": 50.1,
+     "NMAKE_SAME": -0.39761431,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "TIME": "2026年05月份"
+    },
+    {
+     "MAKE_INDEX": 50.3,
+     "MAKE_SAME": 2.65306122,
+     "NMAKE_INDEX": 49.4,
+     "NMAKE_SAME": -1.98412698,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "TIME": "2026年04月份"
+    },
+    {
+     "MAKE_INDEX": 50.4,
+     "MAKE_SAME": -0.1980198,
+     "NMAKE_INDEX": 50.1,
+     "NMAKE_SAME": -1.37795276,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 56
+  },
+  "success": true,
+  "version": "12a846754084aedc0e45bdb28fceac85"
+ },
+ "RPT_ECONOMY_PPI": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 246,
+   "data": [
+    {
+     "BASE": 104.1,
+     "BASE_ACCUMULATE": 101.5,
+     "BASE_SAME": 4.1,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "TIME": "2026年06月份"
+    },
+    {
+     "BASE": 103.9,
+     "BASE_ACCUMULATE": 101,
+     "BASE_SAME": 3.9,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "TIME": "2026年05月份"
+    },
+    {
+     "BASE": 102.8,
+     "BASE_ACCUMULATE": 100.2,
+     "BASE_SAME": 2.8,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "TIME": "2026年04月份"
+    },
+    {
+     "BASE": 100.5,
+     "BASE_ACCUMULATE": 99.4,
+     "BASE_SAME": 0.5,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 62
+  },
+  "success": true,
+  "version": "37492f7c8cc5ca6233f1e527f30d076e"
+ },
+ "RPT_ECONOMY_RMB_LOAN": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 222,
+   "data": [
+    {
+     "LOAN_ACCUMULATE_SAME": -15.51313961,
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "RMB_LOAN": 17650,
+     "RMB_LOAN_ACCUMULATE": 107605,
+     "RMB_LOAN_SAME": -25.21186441,
+     "RMB_LOAN_SEQUENTIAL": 255.48841893,
+     "TIME": "2026年06月份"
+    },
+    {
+     "LOAN_ACCUMULATE_SAME": -13.30724825,
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "RMB_LOAN": 4965,
+     "RMB_LOAN_ACCUMULATE": 89955,
+     "RMB_LOAN_SAME": -16.17423603,
+     "RMB_LOAN_SEQUENTIAL": 223.93909136,
+     "TIME": "2026年05月份"
+    },
+    {
+     "LOAN_ACCUMULATE_SAME": -13.13368765,
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "RMB_LOAN": -4006,
+     "RMB_LOAN_ACCUMULATE": 84990,
+     "RMB_LOAN_SAME": -553.16742081,
+     "RMB_LOAN_SEQUENTIAL": -112.70858448,
+     "TIME": "2026年04月份"
+    },
+    {
+     "LOAN_ACCUMULATE_SAME": -8.20990965,
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "RMB_LOAN": 31522,
+     "RMB_LOAN_ACCUMULATE": 88996,
+     "RMB_LOAN_SAME": -17.55505571,
+     "RMB_LOAN_SEQUENTIAL": 272.68857886,
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 56
+  },
+  "success": true,
+  "version": "51cf3bea3535b4d052f9fee5004937da"
+ },
+ "RPT_ECONOMY_TOTAL_RETAIL": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 207,
+   "data": [
+    {
+     "REPORT_DATE": "2026-06-01 00:00:00",
+     "RETAIL_ACCUMULATE_SAME": 1.3,
+     "RETAIL_TOTAL": 42691,
+     "RETAIL_TOTAL_ACCUMULATE": 248722,
+     "RETAIL_TOTAL_SAME": 1,
+     "RETAIL_TOTAL_SEQUENTIAL": 3.89632514,
+     "TIME": "2026年06月份"
+    },
+    {
+     "REPORT_DATE": "2026-05-01 00:00:00",
+     "RETAIL_ACCUMULATE_SAME": 1.4,
+     "RETAIL_TOTAL": 41090,
+     "RETAIL_TOTAL_ACCUMULATE": 206031.4,
+     "RETAIL_TOTAL_SAME": -0.6,
+     "RETAIL_TOTAL_SEQUENTIAL": 10.31909038,
+     "TIME": "2026年05月份"
+    },
+    {
+     "REPORT_DATE": "2026-04-01 00:00:00",
+     "RETAIL_ACCUMULATE_SAME": 1.9,
+     "RETAIL_TOTAL": 37246.5,
+     "RETAIL_TOTAL_ACCUMULATE": 164941.5,
+     "RETAIL_TOTAL_SAME": 0.2,
+     "RETAIL_TOTAL_SEQUENTIAL": -10.49956747,
+     "TIME": "2026年04月份"
+    },
+    {
+     "REPORT_DATE": "2026-03-01 00:00:00",
+     "RETAIL_ACCUMULATE_SAME": 2.4,
+     "RETAIL_TOTAL": 41616,
+     "RETAIL_TOTAL_ACCUMULATE": 127694.9,
+     "RETAIL_TOTAL_SAME": 1.7,
+     "RETAIL_TOTAL_SEQUENTIAL": null,
+     "TIME": "2026年03月份"
+    }
+   ],
+   "pages": 52
+  },
+  "success": true,
+  "version": "f0f41f197a918c195032cc45e5a2ea0c"
+ }
+}

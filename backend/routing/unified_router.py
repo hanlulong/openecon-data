@@ -248,6 +248,9 @@ class UnifiedRouter:
         "WORLDBANK": [],
         "EXCHANGERATE": ["FRED"],
         "COINGECKO": ["FRED"],
+        # ChinaMacro live endpoints can drop; FRED carries lagged China
+        # mirrors and WorldBank annual China aggregates as honest fallbacks.
+        "CHINAMACRO": ["FRED", "WorldBank"],
     }
 
     DEFAULT_PROVIDER = "WorldBank"

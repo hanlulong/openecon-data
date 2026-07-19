@@ -274,11 +274,11 @@ See the [API Reference](docs/reference/api.md) for the full endpoint list and re
 |--------|-------|
 | First query | typically a few seconds (first uncached query can take longer) |
 | Repeat query (cached) | ~0.1s |
-| Indicator database | 330,000+ indexed series across 10 providers |
+| Indicator database | 330,000+ indexed series across 11 providers |
 
 ## Data Sources
 
-10 providers, 330K+ indexed indicators:
+11 providers, 330K+ indexed indicators:
 
 | Provider | Coverage | Indicators | API Key |
 |----------|----------|-----------|---------|
@@ -292,6 +292,7 @@ See the [API Reference](docs/reference/api.md) for the full endpoint list and re
 | **OECD** | OECD member country statistics | Extensive | None |
 | **ExchangeRate-API** | 160+ currency pairs, live and historical | Live & historical | Free |
 | **CoinGecko** | Cryptocurrency prices and market data | 10,000+ coins | Free |
+| **ChinaMacro** | Fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield) | 14 curated series | None |
 
 ## Who Is This For?
 

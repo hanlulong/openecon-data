@@ -277,7 +277,7 @@ curl -X POST https://data.openecon.ai/api/query \
 
 ## 数据来源
 
-10 个数据源，33 万+ 已索引指标：
+11 个数据源，33 万+ 已索引指标：
 
 | 数据源 | 覆盖范围 | 指标数 | API 密钥 |
 |--------|----------|--------|----------|
@@ -291,6 +291,7 @@ curl -X POST https://data.openecon.ai/api/query \
 | **OECD** | 经合组织成员国统计 | 大量 | 无需 |
 | **ExchangeRate-API** | 160+ 货币对，实时与历史 | 实时与历史 | 免费 |
 | **CoinGecko** | 加密货币价格与市场数据 | 10,000+ 币种 | 免费 |
+| **ChinaMacro** | 最新中国宏观数据（PMI、M2、社融、CPI/PPI、10年期国债收益率） | 14 个精选序列 | 无需 |
 
 ## 适合谁用
 

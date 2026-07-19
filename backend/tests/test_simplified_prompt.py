@@ -18,14 +18,30 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # subnationalRegion discarded correct national data in live browser
     # testing 2026-07-17: "Ontario unemployment" then "加拿大失业率");
     # 300 -> 305 for the colloquial-headline-release rule ("jobs numbers" is
-    # NOT ambiguous — parse-level clarification hit the battery + real users).
-    assert len(prompt.splitlines()) < 305
+    # NOT ambiguous — parse-level clarification hit the battery + real users);
+    # 305 -> 315 for the ChinaMacro provider entry + China routing rule
+    # (2026-07-19 — new provider closing the China high-frequency gap,
+    # user-approved; the #1 real-user failure class).
+    assert len(prompt.splitlines()) < 315
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
     assert "PROVIDER CAPABILITIES" in prompt
     assert "FRED" in prompt
     assert "WorldBank" in prompt
+
+
+def test_simplified_prompt_routes_government_fiscal_ratios_to_imf() -> None:
+    """Concept-class routing: general-government debt/fiscal ratios are IMF-first for
+    all countries (incl. the US), so "US debt to GDP" resolves to IMF's general
+    government gross debt series rather than FRED's household-debt verbatim matches.
+    FRED is reserved for explicit US federal-specific series or household/private debt."""
+    prompt = SimplifiedPrompt.generate()
+
+    assert "GENERAL-GOVERNMENT DEBT AGGREGATES" in prompt
+    assert "IMF for ALL countries, INCLUDING the US" in prompt
+    assert "federal debt held by the public" in prompt
+    assert "household/private debt" in prompt
 
 
 def test_simplified_prompt_with_conversation_context() -> None:
@@ -55,8 +71,10 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # the multilingual additions — subnationalRegion + language + English
     # canonical indicators; to 370 after the FX currency-pair rule and the
     # scope-reset + colloquial-headline rules (2026-07-17); to 380 with them —
-    # keep-region-in-indicator subnational examples)
-    assert len(prompt.splitlines()) < 380
+    # keep-region-in-indicator subnational examples; to 390 for the ChinaMacro
+    # provider matrix entry (2026-07-19 — new provider closing the China
+    # high-frequency coverage gap, user-approved))
+    assert len(prompt.splitlines()) < 390
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

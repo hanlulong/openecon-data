@@ -1,0 +1,15 @@
+series_id,name_en,name_zh,unit,frequency,source_org,source_kind,notes
+CN_PMI_MFG,"China Manufacturing PMI (NBS, official)",中国制造业采购经理指数,index (50 = neutral),monthly,NBS via EastMoney datacenter,eastmoney_v1,"Official NBS manufacturing PMI, released ~1st of the following month."
+CN_PMI_NONMFG,"China Non-Manufacturing PMI (NBS, official)",中国非制造业商务活动指数,index (50 = neutral),monthly,NBS via EastMoney datacenter,eastmoney_v1,Official NBS non-manufacturing business activity index.
+CN_M2_YOY,China M2 Money Supply YoY Growth,中国M2货币供应量同比增速,% YoY,monthly,PBoC via EastMoney datacenter,eastmoney_v1,PBoC monthly financial statistics. FRED's China M2 mirror is frozen at 2018 — this series is current.
+CN_M2_LEVEL,China M2 Money Supply (level),中国M2货币供应量,CNY 100 million (亿元),monthly,PBoC via EastMoney datacenter,eastmoney_v1,Level in 亿元 (CNY 100M).
+CN_M1_YOY,China M1 Money Supply YoY Growth,中国M1货币供应量同比增速,% YoY,monthly,PBoC via EastMoney datacenter,eastmoney_v1,
+CN_NEW_LOANS,China New RMB Loans (monthly),中国新增人民币贷款,CNY 100 million (亿元),monthly,PBoC via EastMoney datacenter,eastmoney_v1,Monthly new RMB loan issuance.
+CN_CPI_YOY,"China CPI YoY (NBS, fresh monthly)",中国居民消费价格指数同比,% YoY,monthly,NBS via EastMoney datacenter,eastmoney_v1,Fresh NBS release (~9-10th of following month); FRED's OECD-sourced mirror lags ~14 months.
+CN_PPI_YOY,"China PPI YoY (NBS, fresh monthly)",中国工业生产者出厂价格指数同比,% YoY,monthly,NBS via EastMoney datacenter,eastmoney_v1,
+CN_RETAIL_YOY,China Retail Sales YoY,中国社会消费品零售总额同比,% YoY,monthly,NBS via EastMoney datacenter,eastmoney_v1,NBS combines Jan-Feb into one release for this series; no separate January value exists.
+CN_IP_YOY,China Industrial Production YoY (value added),中国规模以上工业增加值同比,% YoY,monthly,NBS via EastMoney datacenter,eastmoney_v1,NBS combines Jan-Feb into one release for this series.
+CN_FAI_YOY,China Fixed Asset Investment YoY,中国固定资产投资同比,% YoY,monthly,NBS via EastMoney datacenter,eastmoney_v1,As published on the EastMoney datacenter monthly row (BASE_SAME); the NBS headline print is the cumulative year-to-date rate — cite accordingly.
+CN_GDP_CUM_YOY,China GDP Cumulative YoY (quarterly releases),中国国内生产总值累计同比,% YoY (cumulative quarters),quarterly,NBS via EastMoney datacenter,eastmoney_v1,"Each release covers cumulative quarters (Q1, Q1-2, Q1-3, full year); the value is the cumulative YoY rate."
+CN_10Y_YIELD,China 10-Year Government Bond Yield,中国10年期国债收益率,% (yield to maturity),daily,ChinaBond via EastMoney datacenter,eastmoney_treasury,ChinaBond CGB yield curve 10Y point; authoritative fixings at yield.chinabond.com.cn (cross-checked within 1bp).
+CN_SF_INCREMENT,China Social Financing Increment (monthly flow),中国社会融资规模增量,CNY 100 million (亿元),monthly,PBoC data via MOFCOM open query,mofcom_shrzgm,MOFCOM republishes the PBoC series with a ~2-3 month lag; the latest 1-2 months may not be available yet.

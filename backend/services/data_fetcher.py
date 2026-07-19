@@ -1818,8 +1818,21 @@ async def fetch_from_provider_dispatch(
     if provider in {"COINGECKO", "COIN GECKO"}:
         return await fetch_from_coingecko(svc.coingecko_provider, intent, params, execution_plan)
 
+    if provider in {"CHINAMACRO", "CHINA MACRO"}:
+        # Params-first indicator precedence (staleness-class convention): the
+        # post-resolution pick beats any pre-resolution snapshot.
+        indicator = str(
+            params.get("indicator")
+            or (intent.indicators[0] if intent.indicators else "")
+        )
+        return await svc.chinamacro_provider.fetch_indicator(
+            indicator=indicator,
+            start_date=params.get("startDate"),
+            end_date=params.get("endDate"),
+        )
+
     raise DataNotAvailableError(
-        f"Provider {intent.apiProvider} is not yet implemented. Available providers: FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate, BIS, Eurostat, OECD, CoinGecko"
+        f"Provider {intent.apiProvider} is not yet implemented. Available providers: FRED, World Bank, Comtrade, StatsCan, IMF, ExchangeRate, BIS, Eurostat, OECD, CoinGecko, ChinaMacro"
     )
 
 

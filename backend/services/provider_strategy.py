@@ -74,7 +74,7 @@ def provider_is_auto_routable(provider: str, explicit_provider: str = "") -> boo
 # code (e.g. "NY.GDP.PCAP.CD", Eurostat "TEC00118") is correct for every
 # country and MUST be preserved across a country switch. Structural provider
 # data-model metadata, not a semantic rule.
-GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGECKO"})
+GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGECKO", "CHINAMACRO"})
 
 # Provider-NATIVE aggregate geography codes for country groups (keys match
 # CountryResolver.detect_regions_in_query outputs). When the routed provider

@@ -124,7 +124,7 @@ econ-data-mcp is an AI-powered economic data aggregation service with a natural 
 
 **Core Features:**
 - Natural language queries via OpenRouter/Ollama/LM-Studio
-- 10+ data sources: FRED, World Bank, UN Comtrade, Statistics Canada, IMF, BIS, Eurostat, OECD, ExchangeRate-API, CoinGecko
+- 11 data sources: FRED, World Bank, UN Comtrade, Statistics Canada, IMF, BIS, Eurostat, OECD, ExchangeRate-API, CoinGecko, ChinaMacro (live EastMoney/MOFCOM extraction + curated fallback)
 - Pro Mode: AI-generated Python code execution for advanced analysis
 - Streaming queries with real-time progress (SSE)
 - RAG-based metadata search for indicator discovery
@@ -358,6 +358,7 @@ Exposes `query_data` operation to MCP clients (Claude Desktop, VS Code). Disable
 | **OECD** | OECD members | No | **LOW PRIORITY** - 60 req/hr limit |
 | **ExchangeRate-API** | Currency rates | Optional | |
 | **CoinGecko** | Crypto prices | Optional | |
+| **ChinaMacro** | Fresh Chinese headline macro (14 series: PMI, M2, 社融, CPI/PPI, 10Y yield…) | No | Live EastMoney/MOFCOM + curated CSV fallback; `scripts/refresh_chinamacro.py` maintains the snapshot |
 
 ---
 

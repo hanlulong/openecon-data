@@ -495,6 +495,12 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
 - CoinGecko: Cryptocurrency — prices, market cap, volume for Bitcoin, Ethereum, and
   thousands of other coins/tokens.
   Best for: crypto prices, market data.
+- ChinaMacro: FRESH official Chinese headline macro (China ONLY) — NBS PMI
+  (manufacturing/non-manufacturing), M2/M1 money supply growth, new RMB loans,
+  social financing (社融), current-month CPI/PPI, retail sales, industrial
+  production, fixed asset investment, quarterly GDP growth, daily 10Y government
+  bond yield. Best for: China monthly/high-frequency data — PREFER over FRED's
+  China mirrors (which lag ~14 months) whenever the user wants recent China data.
 - StatsCan: Canadian statistics — employment, CPI, housing, GDP, trade, population,
   census/demographic counts for Canada/provinces (monthly/quarterly data).
   Best for: Canada-specific data, provincial breakdowns, Canadian CPI/employment.
@@ -512,26 +518,32 @@ Provider capabilities (use this to select apiProvider when no explicit provider 
 
 Selection rules (apply in this priority order):
 1. If user explicitly names a provider ("from FRED", "World Bank data"), use that provider.
-2. If query mentions bilateral trade ("exports from X to Y", "imports", "trade between") → Comtrade.
-3. If query is about a US-specific concept → FRED. US-specific includes: unemployment rate,
+2. GOVERNMENT FISCAL RATIOS & GENERAL-GOVERNMENT DEBT AGGREGATES (debt-to-GDP, fiscal balance/deficit, government expenditure as % of GDP) → IMF for ALL countries, INCLUDING the US;
+   use FRED only when the user explicitly names a US federal-specific series (e.g. "federal debt held by the public") or asks for household/private debt.
+3. If query mentions bilateral trade ("exports from X to Y", "imports", "trade between") → Comtrade.
+4. If query is about a US-specific concept → FRED. US-specific includes: unemployment rate,
    CPI, federal funds rate, treasury yields, GDP, housing starts, money supply, VIX, S&P 500,
    nonfarm payrolls, consumer confidence, retail sales, industrial production, crude oil price,
    personal savings rate, capacity utilization, mortgage rates, jobless claims.
-4. If query mentions Canada → StatsCan (employment, CPI, GDP, housing for Canada/provinces).
-5. If query mentions a European country (Germany, France, Italy, Spain, Netherlands, Belgium,
+5. If query mentions Canada → StatsCan (employment, CPI, GDP, housing for Canada/provinces).
+6. If query mentions a European country (Germany, France, Italy, Spain, Netherlands, Belgium,
    Austria, etc.) → Eurostat (HICP inflation, unemployment, GDP).
-6. If query is about currency conversion → ExchangeRate.
-7. If query is about crypto → CoinGecko.
-8. If query is about central bank policy rates or property prices → BIS.
-9. For ALL other country-specific data (India, Brazil, South Africa, Japan, China, Mexico,
+7. If query is about currency conversion → ExchangeRate.
+8. If query is about crypto → CoinGecko.
+9. If query is about central bank policy rates or property prices → BIS.
+10. If the query asks for CHINA data that ChinaMacro covers (PMI, M2/M1, new loans,
+   social financing/社融, recent or monthly CPI/PPI/retail/industrial production/
+   fixed asset investment, quarterly GDP growth, 10Y government bond yield) → ChinaMacro.
+11. For ALL other country-specific data (India, Brazil, South Africa, Japan, China, Mexico,
    Australia, South Korea, etc.) → WorldBank. WorldBank is the default for non-US/EU/CA data.
    EXCEPTION — frequency: if the user asks for monthly/quarterly data or "last N months"
    for a major economy, prefer FRED (it carries OECD/IMF-sourced monthly international
-   series); WorldBank is annual-only and would return wrong-frequency data.
+   series) — but for CHINA prefer ChinaMacro (rule 10) before FRED's lagged mirrors;
+   WorldBank is annual-only and would return wrong-frequency data.
    Do NOT use IMF as default — IMF is only for sovereign debt ratios, fiscal balance,
    current account, and WEO forecasts.
-10. For multi-country groups (G7, G20, BRICS, OECD countries) → WorldBank (best global coverage).
-11. Default → WorldBank.
+12. For multi-country groups (G7, G20, BRICS, OECD countries) → WorldBank (best global coverage).
+13. Default → WorldBank.
 
 CRITICAL: Do NOT over-use IMF. IMF is ONLY for:
 - Government debt as % of GDP
