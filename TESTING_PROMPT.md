@@ -64,6 +64,20 @@ CLAUDE.md contains critical project-specific instructions including:
 
 **THE GOLDEN RULE:** If your fix only solves the test question, you haven't fixed anything.
 
+**THE CORRECTNESS RULE (user-mandated 2026-07-19): verify INTENT satisfaction,
+never a pinned series identifier.** A result is correct when the returned data
+answers what the user asked — right concept, right country, right frequency
+(or an honest disclosure when substituting), and values that cross-check
+against authoritative sources. Multiple different series can each be a correct
+answer to the same query. Never write a test or audit that passes/fails on
+"served the seriesId I predicted": ids are informational hints. WRONG means
+the data answers a *different question* (household debt for a government-debt
+ask, a share for an index ask, the wrong country, silent wrong frequency) —
+not "an id I didn't expect". The same rule governs clarifications: ask ONLY
+when genuinely needed to identify the intended series (≥2 materially distinct,
+executable options); never guess-and-serve a weak match, never show a
+menu-of-one, never re-ask what the conversation already answered.
+
 ---
 
 ## 🚨 INFRASTRUCTURE FIRST - NON-NEGOTIABLE 🚨

@@ -83,6 +83,12 @@ For detailed testing guidance, see **[TESTING_PROMPT.md](TESTING_PROMPT.md)**. K
 - Always implement general solutions, never hardcoded fixes
 - Validate returned data values against authoritative sources
 - A passing test must return CORRECT data, not just ANY data
+- **Verify INTENT satisfaction, never a pinned series id** (user rule
+  2026-07-19): correctness means the returned data answers what the user
+  asked — concept + country + frequency (+ honest disclosure when
+  substituted) + plausible cross-checked values. Multiple different series
+  can each be a correct answer to the same query; an expected-id match is
+  never the pass criterion, and "unexpected id" is never a failure by itself.
 - Every fix must help at least 5 similar queries (the "5-Query Test")
 
 ### 7. Indicator Discovery - NEVER Hardcode Mappings
