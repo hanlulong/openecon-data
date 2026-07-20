@@ -228,6 +228,10 @@ class AlternativeSeries(BaseModel):
 
 class QueryResponse(BaseModel):
     conversationId: str
+    # Attribution travels in EVERY response (monetization plan step 1,
+    # 2026-07-20): integrators relaying our answers surface who produced
+    # them; the free tier's terms require keeping it intact.
+    attribution: str = "Data by OpenEcon — https://data.openecon.ai"
     intent: Optional[ParsedIntent] = None
     data: Optional[List[NormalizedData]] = None
     clarificationNeeded: bool

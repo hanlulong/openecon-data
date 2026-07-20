@@ -557,8 +557,70 @@ class SecureLoggingASGIMiddleware:
         start_time = time.perf_counter()
 
         request = Request(scope, receive=receive)
-        request_log = SecureLogger.format_request_log(request, request_id)
+        # Client-identification: include SANITIZED headers (auth/cookie values
+        # redacted by SecureLogger.sanitize_headers) for the data-serving
+        # paths. The dominant integration hits us as bare "Go-http-client/2.0"
+        # — Go's stdlib default UA — so Referer/Origin/Accept-Language/custom
+        # X-* headers are the only way to learn WHICH product integrated us.
+        _path = request.url.path or ""
+        _capture_headers = _path.startswith("/api/query") or _path.startswith("/mcp")
+        request_log = SecureLogger.format_request_log(
+            request, request_id, include_headers=_capture_headers
+        )
+        # HTTP version distinguishes client stacks (Go stdlib defaults to h2
+        # over TLS, h1.1 cleartext; curl/browsers vary) — cheap fingerprint bit.
+        request_log["http_version"] = scope.get("http_version", "")
+        # Client-continuity cookie: rotating carrier/cloud IPs defeat IP-based
+        # identity, but any cookie-jar-respecting client (browsers, configured
+        # SDKs) will return oe_cid, giving a stable pseudonymous identity.
+        # Value is random (no user data). Logged when present.
+        _oe_cid = request.cookies.get("oe_cid", "")
+        if _oe_cid:
+            request_log["oe_cid"] = _oe_cid[:36]
         log_secure("info", "Request received", request_log, request_id)
+
+        # MCP client identification: the JSON-RPC "initialize" message carries
+        # params.clientInfo = {name, version} — the connecting PRODUCT's own
+        # self-identification (e.g. "claude-desktop"). Peek the request body
+        # for POST /mcp* (small, single-frame messages), log clientInfo, then
+        # replay the buffered frames to the app untouched.
+        receive_for_app = receive
+        if scope.get("method") == "POST" and _path.startswith("/mcp"):
+            _frames: list = []
+            _body = b""
+            try:
+                while len(_body) < 65536:
+                    _msg = await receive()
+                    _frames.append(_msg)
+                    if _msg["type"] != "http.request":
+                        break
+                    _body += _msg.get("body", b"")
+                    if not _msg.get("more_body", False):
+                        break
+                if _body:
+                    try:
+                        _rpc = json.loads(_body)
+                        if isinstance(_rpc, dict) and _rpc.get("method") == "initialize":
+                            _ci = (_rpc.get("params") or {}).get("clientInfo") or {}
+                            log_secure("info", "MCP client connected", {
+                                "request_id": request_id,
+                                "mcp_client_name": str(_ci.get("name", ""))[:100],
+                                "mcp_client_version": str(_ci.get("version", ""))[:50],
+                                "protocol_version": str(
+                                    (_rpc.get("params") or {}).get("protocolVersion", "")
+                                )[:30],
+                            }, request_id)
+                    except (ValueError, TypeError):
+                        pass
+            except Exception:
+                pass
+
+            async def _replay_receive():
+                if _frames:
+                    return _frames.pop(0)
+                return await receive()
+
+            receive_for_app = _replay_receive
 
         status_code = 500
 
@@ -570,11 +632,24 @@ class SecureLoggingASGIMiddleware:
                 has_request_id = any(k.lower() == b"x-request-id" for k, _ in headers)
                 if not has_request_id:
                     headers.append((b"x-request-id", request_id.encode("utf-8")))
+                # Issue the continuity cookie on data responses when the
+                # client sent none — random value, no user data (see the
+                # oe_cid note above; cookie-jar clients gain a stable
+                # pseudonymous identity across their rotating IPs).
+                if not _oe_cid and _path.startswith("/api/query"):
+                    _new_cid = uuid.uuid4().hex
+                    headers.append((
+                        b"set-cookie",
+                        (
+                            f"oe_cid={_new_cid}; Path=/api; Max-Age=31536000; "
+                            f"HttpOnly; Secure; SameSite=Lax"
+                        ).encode("utf-8"),
+                    ))
                 message = {**message, "headers": headers}
             await send(message)
 
         try:
-            await self.app(scope, receive, send_wrapper)
+            await self.app(scope, receive_for_app, send_wrapper)
             duration_ms = (time.perf_counter() - start_time) * 1000
             response_log = SecureLogger.format_response_log(request_id, status_code, duration_ms)
             log_secure("info", "Request completed", response_log, request_id)
@@ -1396,6 +1471,20 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
     if user is None and gate.limit > 0:
         result.anonymousQueriesUsed = gate.used
         result.anonymousQueryLimit = gate.limit
+
+    # Channel branding (monetization plan, 2026-07-20): responses relayed
+    # through the Coze skill reach end users via a bot's LLM, which echoes a
+    # human-readable source citation from tool output far more reliably than
+    # it surfaces the machine-readable `attribution` field. One clean zh
+    # citation line, data responses only. Detection is structural — Coze's
+    # service mesh names itself in the forwarded headers (x-psm /
+    # x-tlb-server-name), verified against live traffic 2026-07-20.
+    if result.data and (
+        raw_request.headers.get("x-psm", "").startswith("stone.coze.")
+        or raw_request.headers.get("x-tlb-server-name", "") == "data.coze.cn"
+    ):
+        _cite = "数据来源：OpenEcon · data.openecon.ai"
+        result.message = f"{result.message}\n\n{_cite}" if result.message else _cite
 
     # Log query to Supabase (for both authenticated and anonymous users)
     schedule_query_log_to_supabase(
