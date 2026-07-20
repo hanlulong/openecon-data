@@ -115,6 +115,8 @@ curl -X POST https://data.openecon.ai/api/query \
 "近 24 个月欧元/美元汇率"                → ExchangeRate-API，货币对图表
 "2010 年至今美国失业率与 CPI 对照"        → FRED，双轴叠加
 "2020-2024 中国对美出口"                 → UN Comtrade，双边贸易流
+"中国制造业PMI最近一年"                   → ChinaMacro，NBS 官方最新数据
+"中国社会融资规模最近一年"                → ChinaMacro，央行社融数据
 "美国、英国、日本的信贷/GDP 比（来自 BIS）" → BIS，金融稳定数据
 "比特币去年的价格"                       → CoinGecko，加密货币图表
 "FRED 有哪些通胀相关指标？"              → 指标发现，文本回复

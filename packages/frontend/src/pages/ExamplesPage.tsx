@@ -31,6 +31,7 @@ const exampleCategories: ExampleCategory[] = [
       { query: 'Compare inflation US UK Japan Germany', description: 'Multi-country inflation comparison', source: 'IMF' },
       { query: 'Canada CPI inflation monthly', description: 'Canadian Consumer Price Index data', source: 'Statistics Canada' },
       { query: 'Eurozone inflation rate', description: 'Inflation across the Euro area', source: 'Eurostat' },
+      { query: 'China manufacturing PMI this year', description: 'Fresh official NBS activity data for China', source: 'ChinaMacro' },
     ]
   },
   {

@@ -108,6 +108,8 @@ AI agents hallucinate economic data. When you ask an LLM "What is US GDP?", you 
 "EUR/USD exchange rate last 24 months"            → ExchangeRate-API, currency pair chart
 "US unemployment and CPI together since 2010"     → FRED, dual-axis overlay
 "China exports to the US 2020-2024"               → UN Comtrade, bilateral trade flow
+"China manufacturing PMI this year"               → ChinaMacro, fresh official NBS data
+"中国社会融资规模最近一年"                          → ChinaMacro, PBoC social financing
 "Credit to GDP ratio US, UK, Japan from BIS"      → BIS, financial stability data
 "Bitcoin price last year"                         → CoinGecko, crypto chart
 "What inflation indicators does FRED have?"       → Indicator discovery, text response
