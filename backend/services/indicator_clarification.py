@@ -2537,6 +2537,18 @@ async def build_prefetch_indicator_choice_clarification(
 
     params = dict(intent.parameters or {})
     query_text = str(query or "").strip()
+    # A dimension-DECOMPOSITION query whose axis is already resolved has its
+    # indicator bound to the decomposition machinery (e.g. StatsCan "by
+    # gender" → Sex-axis member fan-out on a locked provider). A pre-fetch
+    # cross-provider menu here is structurally incoherent — it second-guesses
+    # a decision the decomposition path owns, and coverage-truth option
+    # candidates from OTHER providers (a US employment series for an Ontario
+    # ask) are never the user's intent on this path.
+    if bool(getattr(intent, "needsDecomposition", False)) and (
+        (intent.parameters or {}).get("__statscan_decomposition_axis")
+    ):
+        return None
+
     indicator_query = await asyncio.to_thread(qs._select_indicator_query_for_resolution, intent)
     if not indicator_query:
         indicator_query = str(intent.indicators[0] if intent.indicators else "").strip()

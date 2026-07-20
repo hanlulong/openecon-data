@@ -32,10 +32,22 @@ def _series(n_points=3):
 # --- T3: single-country routing coverage -----------------------------------
 
 def test_capability_check_rejects_single_country_mismatch():
-    assert provider_covers_country_list("FRED", ["France"]) is False
+    # CATALOG TRUTH (2026-07-19, correctness beats provider preference):
+    # FRED genuinely carries France-titled international mirrors, so
+    # "covers France" is TRUE — the old US-only assertion encoded the false
+    # premise that force-downgraded correct monthly data to annual providers.
+    assert provider_covers_country_list("FRED", ["France"]) is True
     assert provider_covers_country_list("FRED", ["US"]) is True
     assert provider_covers_country_list("STATSCAN", ["Germany"]) is False
     assert provider_covers_country_list("WORLDBANK", ["France"]) is True
+    # The rejection MECHANISM still works when the catalog is truly empty:
+    from unittest.mock import patch
+
+    with patch(
+        "backend.services.provider_fallback._fred_catalog_covers_country",
+        side_effect=lambda code: code == "US",
+    ):
+        assert provider_covers_country_list("FRED", ["France"]) is False
 
 
 def test_routing_gate_no_longer_requires_multiple_countries():

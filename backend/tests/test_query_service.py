@@ -6016,7 +6016,9 @@ class QueryServiceTests(unittest.TestCase):
             self.assertEqual(refined_intent.apiProvider, "WORLDBANK")
             self.assertNotIn("indicator", params)
 
-    def test_process_query_releases_preserved_provider_when_added_country_is_uncovered(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_process_query_releases_preserved_provider_when_added_country_is_uncovered(self, _cov) -> None:
         from backend.services.conversation_state_v2 import ConversationState
 
         conv_id = conversation_manager.get_or_create("conv-add-country-uncovered-provider-release")
@@ -11541,7 +11543,9 @@ class InformationalQueryTests(unittest.TestCase):
         result = run(self.service._preflight_geographic_split(intent))
         self.assertIsNone(result)
 
-    def test_preflight_geographic_split_detects_fred_mismatch(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_preflight_geographic_split_detects_fred_mismatch(self, _cov) -> None:
         """FRED cannot cover Germany -- split should fire."""
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -11620,7 +11624,9 @@ class InformationalQueryTests(unittest.TestCase):
         # All countries → WORLDBANK, no split needed
         self.assertIsNone(result)
 
-    def test_preflight_geographic_split_handles_sub_fetch_failure(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_preflight_geographic_split_handles_sub_fetch_failure(self, _cov) -> None:
         """If one sub-fetch fails, partial results should still be returned."""
         intent = ParsedIntent(
             apiProvider="FRED",
@@ -11671,7 +11677,9 @@ class InformationalQueryTests(unittest.TestCase):
         self.assertEqual(prov, "FRED")
         self.assertEqual(code, "GDP")
 
-    def test_get_provider_for_single_country_falls_back_to_worldbank(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_get_provider_for_single_country_falls_back_to_worldbank(self, _cov) -> None:
         """When catalog returns nothing and provider doesn't cover country, use WorldBank."""
         with patch("backend.services.catalog_service.find_concept_by_term", return_value=None):
             prov, code = self.service._get_provider_for_single_country(
