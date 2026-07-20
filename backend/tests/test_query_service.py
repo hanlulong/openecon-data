@@ -9035,7 +9035,9 @@ class QueryServiceTests(unittest.TestCase):
         self.assertTrue(captured_queries)
         self.assertEqual(captured_queries[0], "gdp to debt ratio in china and uk")
 
-    def test_collect_indicator_choice_options_filters_provider_without_full_country_coverage(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_collect_indicator_choice_options_filters_provider_without_full_country_coverage(self, _cov) -> None:
         intent = ParsedIntent(
             apiProvider="OECD",
             indicators=["producer price inflation"],
@@ -10755,7 +10757,9 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(params.get("baseCurrency"), "USD")
         self.assertEqual(params.get("targetCurrency"), "CHF")
 
-    def test_get_fallback_providers_does_not_use_catalog_semantic_shortcuts(self) -> None:
+    @patch("backend.services.provider_fallback._fred_catalog_covers_country",
+           side_effect=lambda code: code == "US")  # mechanism test: force "uncovered"
+    def test_get_fallback_providers_does_not_use_catalog_semantic_shortcuts(self, _cov) -> None:
         with patch(
             "backend.services.catalog_service.get_fallback_providers",
             side_effect=AssertionError("catalog fallback must not choose fallback providers"),
