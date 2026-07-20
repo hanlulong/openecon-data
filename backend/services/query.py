@@ -1500,9 +1500,12 @@ class QueryService:
         intent: ParsedIntent,
         options: List[str],
         max_options: int = 3,
+        collector: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Delegates to :func:`indicator_clarification.filter_viable_indicator_choice_options`."""
-        return await _ic_filter_viable_indicator_choice_options(self, query, intent, options, max_options)
+        return await _ic_filter_viable_indicator_choice_options(
+            self, query, intent, options, max_options, collector=collector
+        )
 
     def _build_failed_indicator_choice_response(
         self,

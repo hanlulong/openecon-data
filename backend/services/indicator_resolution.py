@@ -2627,6 +2627,38 @@ async def resolve_indicator_for_fetch(
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
 
+    # OPTION-VALIDATION CONTRACT: a viability/validation fetch for a
+    # clarification-menu option must fetch THAT option's code — never
+    # re-resolve. The codes come from our own catalog-derived options (not
+    # LLM inventions), and re-resolution collapses every option onto the
+    # primary pick, making menus offer fictitious "choices" that all serve
+    # identical data (observed live: CORESA/CPTOTSAXN/CPTOTNSXN each
+    # re-resolved to FP.CPI.TOTL) while burning a selector-LLM call per
+    # option. Pin the code with option authority and return: the fetch
+    # either serves this series or fails, which is exactly the viability
+    # signal. Code-SHAPE checks are deliberately absent — many real catalog
+    # codes (WB GEM "CPTOTSAXN") don't match their provider's usual pattern.
+    if params.get("_prefetch_option_validation"):
+        _option_code = str(
+            params.get("indicator")
+            or (intent.indicators[0] if intent.indicators else "")
+            or ""
+        ).strip()
+        if _option_code:
+            logger.info(
+                "🔒 Pinning catalog-derived option code for validation fetch: %s %s",
+                provider,
+                _option_code,
+            )
+            params = {
+                **params,
+                "indicator": _option_code,
+                "__semantic_authority": "exact_user_input",
+                "__decision_source": "option_validation",
+            }
+            intent.parameters = params
+            return params
+
     # Region-as-series providers (see provider_strategy) need the region
     # inside the retrieval text, or the static-map/search/selector paths
     # resolve the NATIONAL series for a state request. The mutation covers

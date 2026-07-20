@@ -158,7 +158,7 @@ async def test_live_success_discles_live_provenance(monkeypatch):
     provider = ChinaMacroProvider()
     rows = FIXTURES["RPT_ECONOMY_PMI"]["result"]["data"]
 
-    async def _fixture_rows(report):
+    async def _fixture_rows(report, **_kw):
         assert report == "RPT_ECONOMY_PMI"
         return rows
 
@@ -174,7 +174,7 @@ async def test_window_filtering_and_empty_window(monkeypatch):
     provider = ChinaMacroProvider()
     rows = FIXTURES["RPT_ECONOMY_PMI"]["result"]["data"]
 
-    async def _fixture_rows(report):
+    async def _fixture_rows(report, **_kw):
         return rows
 
     monkeypatch.setattr(provider, "_rows_eastmoney_v1", _fixture_rows)

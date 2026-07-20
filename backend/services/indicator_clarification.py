@@ -2309,14 +2309,94 @@ def build_structured_semantic_clarification(
 # Viable option filtering
 # ====================================================================
 
+async def _validate_indicator_choice_option(
+    qs: Any,
+    query: str,
+    intent: ParsedIntent,
+    option_text: str,
+) -> tuple[Optional[List[NormalizedData]], str]:
+    """Fetch-validate ONE indicator-choice option.
+
+    Returns ``(validated_data, "viable")`` when the option fetches usable,
+    plausible, gate-confident data — or ``(None, reason)`` where reason
+    classifies WHY it dropped:
+
+      "transient:*"    fetch error / empty fetch — the option might succeed on
+                       another attempt (upstream flake), so it must not be
+                       silently written off when a sole-survivor auto-serve is
+                       at stake (a runner-up must never win because the better
+                       candidate flaked once).
+      "substantive:*"  the fetched data itself disqualified the option
+                       (irrelevant after rerank, implausible, gate-uncertain,
+                       or missing the requested sub-national region).
+
+    The region check mirrors maybe_recover_from_uncertain_match's hard
+    predicate: a national series must never survive validation for a
+    subnational query (the historical OECD-over-Ontario bug class).
+    """
+    parsed = parse_indicator_option(option_text)
+    if not parsed:
+        return None, "substantive:unparseable"
+
+    provider_name, code = parsed
+    attempt_intent = intent.model_copy(deep=True)
+    attempt_intent.apiProvider = provider_name
+    attempt_intent.indicators = [code]
+    if not attempt_intent.originalQuery:
+        attempt_intent.originalQuery = str(query or "").strip()
+
+    attempt_params = dict(attempt_intent.parameters or {})
+    attempt_params["_prefetch_option_validation"] = True
+    attempt_params.pop("seriesId", None)
+    attempt_params.pop("series_id", None)
+    attempt_params.pop("code", None)
+    attempt_params["indicator"] = code
+    attempt_intent.parameters = attempt_params
+
+    try:
+        candidate_data = await retry_async(
+            lambda i=attempt_intent: qs._fetch_data(i),
+            max_attempts=1,
+            initial_delay=0.2,
+        )
+    except Exception:
+        return None, "transient:fetch_error"
+
+    if not candidate_data:
+        return None, "transient:empty_fetch"
+
+    candidate_data = qs._rerank_data_by_query_relevance(query, candidate_data)
+    if qs._is_ranking_query(query):
+        candidate_data = qs._apply_ranking_projection(query, candidate_data)
+    if not candidate_data:
+        return None, "substantive:irrelevant_after_rerank"
+    if qs._has_implausible_top_series(query, candidate_data):
+        return None, "substantive:implausible"
+    region = str(getattr(intent, "subnationalRegion", "") or "").strip()
+    if region and not qs._served_data_references_region(candidate_data, region):
+        return None, "substantive:region_not_covered"
+    if qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="failed_choice_candidate"):
+        return None, "substantive:gate_uncertain"
+
+    return candidate_data, "viable"
+
+
 async def filter_viable_indicator_choice_options(
     qs: Any,
     query: str,
     intent: ParsedIntent,
     options: List[str],
     max_options: int = 3,
+    collector: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
-    """Keep only indicator-choice options that can plausibly fetch usable data."""
+    """Keep only indicator-choice options that can plausibly fetch usable data.
+
+    ``collector`` (opt-in, backward-compatible) is filled with the validation
+    evidence the sole-survivor serve path needs:
+      collector["validated"]: {option_text: List[NormalizedData]} for viable
+      options; collector["dropped"]: {option_text: reason} for the rest.
+    Callers that do not pass it observe the original return-only behavior.
+    """
     clean_options = dedupe_indicator_choice_options(
         qs,
         [str(option) for option in (options or []) if str(option).strip()],
@@ -2325,60 +2405,50 @@ async def filter_viable_indicator_choice_options(
         return clean_options[:max_options]
 
     viable_options: List[str] = []
+    validated: Dict[str, List[NormalizedData]] = {}
+    dropped: Dict[str, str] = {}
     tracker_token = None
     if get_processing_tracker() is not None:
         tracker_token = activate_processing_tracker(None)  # type: ignore[arg-type]
 
     try:
         for option_text in clean_options:
-            parsed = parse_indicator_option(option_text)
-            if not parsed:
+            data, reason = await _validate_indicator_choice_option(
+                qs, query, intent, option_text
+            )
+            if data is None:
+                dropped[option_text] = reason
                 continue
-
-            provider_name, code = parsed
-            attempt_intent = intent.model_copy(deep=True)
-            attempt_intent.apiProvider = provider_name
-            attempt_intent.indicators = [code]
-            if not attempt_intent.originalQuery:
-                attempt_intent.originalQuery = str(query or "").strip()
-
-            attempt_params = dict(attempt_intent.parameters or {})
-            attempt_params["_prefetch_option_validation"] = True
-            attempt_params.pop("seriesId", None)
-            attempt_params.pop("series_id", None)
-            attempt_params.pop("code", None)
-            attempt_params["indicator"] = code
-            attempt_intent.parameters = attempt_params
-
-            try:
-                candidate_data = await retry_async(
-                    lambda i=attempt_intent: qs._fetch_data(i),
-                    max_attempts=1,
-                    initial_delay=0.2,
-                )
-            except Exception:
-                continue
-
-            if not candidate_data:
-                continue
-
-            candidate_data = qs._rerank_data_by_query_relevance(query, candidate_data)
-            if qs._is_ranking_query(query):
-                candidate_data = qs._apply_ranking_projection(query, candidate_data)
-            if not candidate_data:
-                continue
-            if qs._has_implausible_top_series(query, candidate_data):
-                continue
-            if qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="failed_choice_candidate"):
-                continue
-
+            validated[option_text] = data
             viable_options.append(option_text)
             if len(viable_options) >= max_options:
                 break
+
+        # Sole-survivor integrity: a single viable option may be "sole" only
+        # because a competitor FLAKED on its one fetch attempt. Give each
+        # transient-dropped competitor exactly one more chance before the
+        # caller may treat the survivor as the answer — a runner-up must never
+        # auto-serve because the better option hit a transient error.
+        if len(viable_options) == 1:
+            for option_text, reason in list(dropped.items()):
+                if not reason.startswith("transient:"):
+                    continue
+                data, retry_reason = await _validate_indicator_choice_option(
+                    qs, query, intent, option_text
+                )
+                if data is not None:
+                    validated[option_text] = data
+                    viable_options.append(option_text)
+                    dropped.pop(option_text, None)
+                else:
+                    dropped[option_text] = f"{retry_reason} (retried)"
     finally:
         if tracker_token is not None:
             reset_processing_tracker(tracker_token)
 
+    if collector is not None:
+        collector["validated"] = validated
+        collector["dropped"] = dropped
     return viable_options
 
 
@@ -2704,14 +2774,38 @@ async def build_prefetch_indicator_choice_clarification(
     target_countries = qs._collect_target_countries(intent.parameters)
     should_skip_viability_prefetch = len(target_countries) > 8
     if len(options) >= 2 and not should_skip_viability_prefetch:
+        _viability_evidence: Dict[str, Any] = {}
         viable_options = await qs._filter_viable_indicator_choice_options(
             query=query_text or indicator_query,
             intent=intent,
             options=options,
             max_options=option_budget,
+            collector=_viability_evidence,
         )
         if len(viable_options) >= 2:
             options = viable_options
+        elif len(viable_options) == 1 and (
+            (_viability_evidence.get("validated") or {}).get(viable_options[0])
+        ):
+            # SOLE-SURVIVOR SERVE (user principle: a menu is for choosing;
+            # one option is not a choice). Exactly one option fetch-validated
+            # CONFIDENT — plausible, gate-passing, region-covering — and every
+            # competitor dropped for a SUBSTANTIVE reason (transient flakes
+            # were retried once inside the filter before we got here, so a
+            # runner-up can never win off a competitor's one bad fetch).
+            # Apply the option and let the pipeline serve it; the validation
+            # fetch primed the data caches, so the serve is deterministic.
+            sole_option = viable_options[0]
+            if apply_indicator_option_to_intent(intent, sole_option):
+                logger.info(
+                    "sole_survivor_serve %s",
+                    json.dumps({
+                        "option": sole_option[:120],
+                        "dropped": _viability_evidence.get("dropped", {}),
+                        "query": str(query_text or indicator_query or "")[:60],
+                    }, ensure_ascii=False),
+                )
+                return None
 
     top_option = parse_indicator_option(options[0]) if options else None
     top_matches_primary = bool(

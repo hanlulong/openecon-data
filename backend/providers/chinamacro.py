@@ -67,165 +67,25 @@ DAILY_TTL_SECONDS = 3600
 
 # ---------------------------------------------------------------------------
 # Series registry — DATA, the single source of truth for catalog + dispatch.
+# Loaded from backend/data/chinamacro/registry.json (registry-as-data): each
+# entry is a dict with keys id, name_en, name_zh, unit, frequency,
+# source{kind, report, field}, source_org, synonyms, notes.
 # source kinds: eastmoney_v1 (report+field), eastmoney_treasury (field),
-# mofcom_shrzgm (field), csv (curated snapshot only).
+# mofcom_shrzgm (field). Adding a series is a JSON edit — no code change.
 # ---------------------------------------------------------------------------
-SERIES_REGISTRY: Tuple[Dict[str, Any], ...] = (
-    {
-        "id": "CN_PMI_MFG",
-        "name_en": "China Manufacturing PMI (NBS, official)",
-        "name_zh": "中国制造业采购经理指数",
-        "unit": "index (50 = neutral)",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_PMI", "field": "MAKE_INDEX"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "manufacturing pmi, china pmi, official pmi, 制造业PMI, 采购经理指数, PMI指数",
-        "notes": "Official NBS manufacturing PMI, released ~1st of the following month.",
-    },
-    {
-        "id": "CN_PMI_NONMFG",
-        "name_en": "China Non-Manufacturing PMI (NBS, official)",
-        "name_zh": "中国非制造业商务活动指数",
-        "unit": "index (50 = neutral)",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_PMI", "field": "NMAKE_INDEX"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "non-manufacturing pmi, services pmi china, 非制造业PMI, 服务业PMI, 商务活动指数",
-        "notes": "Official NBS non-manufacturing business activity index.",
-    },
-    {
-        "id": "CN_M2_YOY",
-        "name_en": "China M2 Money Supply YoY Growth",
-        "name_zh": "中国M2货币供应量同比增速",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_CURRENCY_SUPPLY", "field": "BASIC_CURRENCY_SAME"},
-        "source_org": "PBoC via EastMoney datacenter",
-        "synonyms": "m2 growth china, money supply growth, M2同比, 货币供应量增速, M2增速",
-        "notes": "PBoC monthly financial statistics. FRED's China M2 mirror is frozen at 2018 — this series is current.",
-    },
-    {
-        "id": "CN_M2_LEVEL",
-        "name_en": "China M2 Money Supply (level)",
-        "name_zh": "中国M2货币供应量",
-        "unit": "CNY 100 million (亿元)",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_CURRENCY_SUPPLY", "field": "BASIC_CURRENCY"},
-        "source_org": "PBoC via EastMoney datacenter",
-        "synonyms": "m2 money supply china, m2 level, M2余额, 货币供应量, 广义货币",
-        "notes": "Level in 亿元 (CNY 100M).",
-    },
-    {
-        "id": "CN_M1_YOY",
-        "name_en": "China M1 Money Supply YoY Growth",
-        "name_zh": "中国M1货币供应量同比增速",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_CURRENCY_SUPPLY", "field": "CURRENCY_SAME"},
-        "source_org": "PBoC via EastMoney datacenter",
-        "synonyms": "m1 growth china, M1同比, M1增速, 狭义货币",
-        "notes": "",
-    },
-    {
-        "id": "CN_NEW_LOANS",
-        "name_en": "China New RMB Loans (monthly)",
-        "name_zh": "中国新增人民币贷款",
-        "unit": "CNY 100 million (亿元)",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_RMB_LOAN", "field": "RMB_LOAN"},
-        "source_org": "PBoC via EastMoney datacenter",
-        "synonyms": "new loans china, rmb loans, bank lending china, 新增贷款, 人民币贷款, 信贷投放",
-        "notes": "Monthly new RMB loan issuance.",
-    },
-    {
-        "id": "CN_CPI_YOY",
-        "name_en": "China CPI YoY (NBS, fresh monthly)",
-        "name_zh": "中国居民消费价格指数同比",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_CPI", "field": "NATIONAL_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "china cpi monthly fresh, cpi inflation china current, CPI同比, 消费价格指数, 通胀率",
-        "notes": "Fresh NBS release (~9-10th of following month); FRED's OECD-sourced mirror lags ~14 months.",
-    },
-    {
-        "id": "CN_PPI_YOY",
-        "name_en": "China PPI YoY (NBS, fresh monthly)",
-        "name_zh": "中国工业生产者出厂价格指数同比",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_PPI", "field": "BASE_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "china ppi monthly, producer prices china, PPI同比, 工业品出厂价格, 生产者价格",
-        "notes": "",
-    },
-    {
-        "id": "CN_RETAIL_YOY",
-        "name_en": "China Retail Sales YoY",
-        "name_zh": "中国社会消费品零售总额同比",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_TOTAL_RETAIL", "field": "RETAIL_TOTAL_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "retail sales china, consumer spending china, 社会消费品零售总额, 零售销售, 消费增速",
-        "notes": "NBS combines Jan-Feb into one release for this series; no separate January value exists.",
-    },
-    {
-        "id": "CN_IP_YOY",
-        "name_en": "China Industrial Production YoY (value added)",
-        "name_zh": "中国规模以上工业增加值同比",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_INDUS_GROW", "field": "BASE_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "industrial production china, industrial output, 工业增加值, 工业生产, 工业产出",
-        "notes": "NBS combines Jan-Feb into one release for this series.",
-    },
-    {
-        "id": "CN_FAI_YOY",
-        "name_en": "China Fixed Asset Investment YoY",
-        "name_zh": "中国固定资产投资同比",
-        "unit": "% YoY",
-        "frequency": "monthly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_ASSET_INVEST", "field": "BASE_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "fixed asset investment china, fai china, capital investment, 固定资产投资, 投资增速",
-        "notes": "As published on the EastMoney datacenter monthly row (BASE_SAME); the NBS headline print is the cumulative year-to-date rate — cite accordingly.",
-    },
-    {
-        "id": "CN_GDP_CUM_YOY",
-        "name_en": "China GDP Cumulative YoY (quarterly releases)",
-        "name_zh": "中国国内生产总值累计同比",
-        "unit": "% YoY (cumulative quarters)",
-        "frequency": "quarterly",
-        "source": {"kind": "eastmoney_v1", "report": "RPT_ECONOMY_GDP", "field": "SUM_SAME"},
-        "source_org": "NBS via EastMoney datacenter",
-        "synonyms": "china gdp growth quarterly, gdp yoy china, GDP增速, 经济增长率, 国内生产总值增速",
-        "notes": "Each release covers cumulative quarters (Q1, Q1-2, Q1-3, full year); the value is the cumulative YoY rate.",
-    },
-    {
-        "id": "CN_10Y_YIELD",
-        "name_en": "China 10-Year Government Bond Yield",
-        "name_zh": "中国10年期国债收益率",
-        "unit": "% (yield to maturity)",
-        "frequency": "daily",
-        "source": {"kind": "eastmoney_treasury", "field": "EMM00166466"},
-        "source_org": "ChinaBond via EastMoney datacenter",
-        "synonyms": "china 10 year yield, cgb yield, chinese government bond, 10年期国债, 国债收益率, 中债收益率",
-        "notes": "ChinaBond CGB yield curve 10Y point; authoritative fixings at yield.chinabond.com.cn (cross-checked within 1bp).",
-    },
-    {
-        "id": "CN_SF_INCREMENT",
-        "name_en": "China Social Financing — monthly increment (the headline 社融 release figure)",
-        "name_zh": "中国社会融资规模增量（月度社融数据）",
-        "unit": "CNY 100 million (亿元)",
-        "frequency": "monthly",
-        "source": {"kind": "mofcom_shrzgm", "field": "tiosfs"},
-        "source_org": "PBoC data via MOFCOM open query",
-        "synonyms": "social financing china, aggregate financing to the real economy, total social financing, tsf, new social financing, 社会融资规模, 社融增量, 社融, 新增社融",
-        "notes": "The monthly PBoC 社会融资规模 headline release IS this increment (flow) figure — this is the number reported for '社融' each month. The outstanding STOCK (存量) series is not yet carried (no free live source). MOFCOM republishes with a ~2-3 month lag.",
-    },
-)
+REGISTRY_PATH = DATA_DIR / "registry.json"
+
+
+def _load_registry() -> Tuple[Dict[str, Any], ...]:
+    """Load the series registry from JSON at import (cached module-level)."""
+    with REGISTRY_PATH.open(encoding="utf-8") as fh:
+        entries = json.load(fh)
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"ChinaMacro registry at {REGISTRY_PATH} is empty or malformed")
+    return tuple(entries)
+
+
+SERIES_REGISTRY: Tuple[Dict[str, Any], ...] = _load_registry()
 
 _REGISTRY_BY_ID: Dict[str, Dict[str, Any]] = {s["id"]: s for s in SERIES_REGISTRY}
 
@@ -307,22 +167,33 @@ class ChinaMacroProvider(BaseProvider):
 
     # -- raw upstream fetches (one per source kind, cached per report) ------
 
-    async def _rows_eastmoney_v1(self, report: str) -> List[Dict[str, Any]]:
-        cache_key = f"em_v1:{report}"
+    async def _rows_eastmoney_v1(
+        self,
+        report: str,
+        sort_column: str = "REPORT_DATE",
+        filter_expr: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        # Cache per (report, filter): the RPT_INDUSTRY_INDEX report serves many
+        # distinct series off ONE reportName, disambiguated by an INDICATOR_ID
+        # filter — so the filter has to be part of the cache identity.
+        cache_key = f"em_v1:{report}:{filter_expr or ''}"
         cached = _live_cache.get(cache_key)
         if cached and cached[0] > time.time():
             return cached[1]
         client = get_http_client()
+        params: Dict[str, Any] = {
+            "reportName": report,
+            "columns": "ALL",
+            "pageSize": 500,
+            "sortColumns": sort_column,
+            "sortTypes": "-1",
+        }
+        if filter_expr:
+            params["filter"] = filter_expr
         response = await self._get_with_retry(
             client,
             EASTMONEY_V1_URL,
-            params={
-                "reportName": report,
-                "columns": "ALL",
-                "pageSize": 500,
-                "sortColumns": "REPORT_DATE",
-                "sortTypes": "-1",
-            },
+            params=params,
             headers={"User-Agent": USER_AGENT},
             timeout=self.timeout,
         )
@@ -397,7 +268,10 @@ class ChinaMacroProvider(BaseProvider):
                 f"{series_id}: expected field '{field}' missing from live payload "
                 f"(have: {sorted(rows[0])[:12]})"
             )
-        points: List[Dict[str, Any]] = []
+        # Dedup by date: the RPT_INDUSTRY_INDEX report sometimes repeats the
+        # newest row verbatim; one observation per date keeps charts clean.
+        # For the single-value-per-date reports this is a no-op.
+        by_date: Dict[str, Any] = {}
         for row in rows:
             raw_date = str(row.get(date_field) or "").strip()
             value = row.get(field)
@@ -407,7 +281,8 @@ class ChinaMacroProvider(BaseProvider):
                 date = f"{raw_date[:4]}-{raw_date[4:]}-01"  # MOFCOM "202604"
             else:
                 date = raw_date[:10]  # "2026-06-01 00:00:00" -> "2026-06-01"
-            points.append({"date": date, "value": value})
+            by_date[date] = value
+        points = [{"date": d, "value": v} for d, v in by_date.items()]
         points.sort(key=lambda p: p["date"])
         return points
 
@@ -415,8 +290,14 @@ class ChinaMacroProvider(BaseProvider):
         src = series["source"]
         kind = src["kind"]
         if kind == "eastmoney_v1":
-            rows = await self._rows_eastmoney_v1(src["report"])
-            return self._parse_rows(rows, src["field"], "REPORT_DATE", series["id"])
+            rows = await self._rows_eastmoney_v1(
+                src["report"],
+                sort_column=src.get("sort_column", "REPORT_DATE"),
+                filter_expr=src.get("filter"),
+            )
+            return self._parse_rows(
+                rows, src["field"], src.get("date_field", "REPORT_DATE"), series["id"]
+            )
         if kind == "eastmoney_treasury":
             rows = await self._rows_eastmoney_treasury()
             return self._parse_rows(rows, src["field"], "SOLAR_DATE", series["id"])
