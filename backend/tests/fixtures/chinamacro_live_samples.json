@@ -67,6 +67,46 @@
    "trustloan": 843
   }
  ],
+ "RPTA_WEB_RATE": {
+  "code": 0,
+  "message": "ok",
+  "result": {
+   "count": 1574,
+   "data": [
+    {
+     "LPR1Y": 3,
+     "LPR5Y": 3.5,
+     "RATE_1": 4.35,
+     "RATE_2": 4.9,
+     "TRADE_DATE": "2026-07-20 00:00:00"
+    },
+    {
+     "LPR1Y": 3,
+     "LPR5Y": 3.5,
+     "RATE_1": 4.35,
+     "RATE_2": 4.9,
+     "TRADE_DATE": "2026-06-22 00:00:00"
+    },
+    {
+     "LPR1Y": 3,
+     "LPR5Y": 3.5,
+     "RATE_1": 4.35,
+     "RATE_2": 4.9,
+     "TRADE_DATE": "2026-05-20 00:00:00"
+    },
+    {
+     "LPR1Y": 3,
+     "LPR5Y": 3.5,
+     "RATE_1": 4.35,
+     "RATE_2": 4.9,
+     "TRADE_DATE": "2026-04-20 00:00:00"
+    }
+   ],
+   "pages": 394
+  },
+  "success": true,
+  "version": "3689891e21d7a8f0cd556a7ac63dbb51"
+ },
  "RPTA_WEB_TREASURYYIELD": {
   "code": 0,
   "message": "ok",

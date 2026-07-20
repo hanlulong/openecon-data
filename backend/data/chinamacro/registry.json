@@ -311,5 +311,39 @@
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "consumer confidence china, consumer sentiment china, 消费者信心指数, 消费者信心",
   "notes": "NBS consumer confidence headline index (~1-2 month publication lag)."
+ },
+ {
+  "id": "CN_LPR_1Y",
+  "name_en": "China Loan Prime Rate 1-Year (LPR)",
+  "name_zh": "中国1年期贷款市场报价利率",
+  "unit": "% per annum",
+  "frequency": "monthly",
+  "source": {
+   "kind": "eastmoney_v1",
+   "report": "RPTA_WEB_RATE",
+   "field": "LPR1Y",
+   "sort_column": "TRADE_DATE",
+   "date_field": "TRADE_DATE"
+  },
+  "source_org": "PBoC/NIFC via EastMoney datacenter",
+  "synonyms": "lpr, loan prime rate, 1 year lpr, lpr 1y, 贷款市场报价利率, LPR利率, 一年期LPR",
+  "notes": "Monthly fixing (~20th). The benchmark lending rate since 2019."
+ },
+ {
+  "id": "CN_LPR_5Y",
+  "name_en": "China Loan Prime Rate 5-Year (LPR)",
+  "name_zh": "中国5年期以上贷款市场报价利率",
+  "unit": "% per annum",
+  "frequency": "monthly",
+  "source": {
+   "kind": "eastmoney_v1",
+   "report": "RPTA_WEB_RATE",
+   "field": "LPR5Y",
+   "sort_column": "TRADE_DATE",
+   "date_field": "TRADE_DATE"
+  },
+  "source_org": "PBoC/NIFC via EastMoney datacenter",
+  "synonyms": "5 year lpr, lpr 5y, mortgage reference rate china, 五年期LPR, 5年期LPR, 房贷利率基准",
+  "notes": "Monthly fixing (~20th); the mortgage-linked tenor."
  }
 ]

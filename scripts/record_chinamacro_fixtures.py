@@ -44,7 +44,10 @@ EASTMONEY_REPORTS = {
     "RPT_ECONOMY_GOLD_CURRENCY": 4,
     "RPT_ECONOMY_CUSTOMS": 4,
     "RPT_ECONOMY_FAITH_INDEX": 4,
+    # (report, sort_column) tuples for non-REPORT_DATE reports
+    "RPTA_WEB_RATE": 4,
 }
+REPORT_SORT_OVERRIDES = {"RPTA_WEB_RATE": "TRADE_DATE"}
 TREASURY_TOKEN = "894050c76af8597a853f5b408b759f5d"  # fixed public token (vendored)
 
 
@@ -73,7 +76,7 @@ def main() -> int:
             "reportName": report,
             "columns": "ALL",
             "pageSize": n,
-            "sortColumns": "REPORT_DATE",
+            "sortColumns": REPORT_SORT_OVERRIDES.get(report, "REPORT_DATE"),
             "sortTypes": "-1",
         })
         raw = _get(f"{EASTMONEY_V1}?{qs}")

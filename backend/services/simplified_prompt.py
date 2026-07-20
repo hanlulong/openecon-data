@@ -537,7 +537,7 @@ Selection rules (apply in this priority order):
 10. If the query asks for CHINA data that ChinaMacro covers (PMI, M2/M1, new loans,
    social financing/社融, recent or monthly CPI/PPI/retail/industrial production/
    fixed asset investment, quarterly GDP growth, government bond yields
-   国债收益率 (10Y is the carried tenor), exports/imports growth 进出口,
+   国债收益率 (10Y is the carried tenor), LPR 贷款市场报价利率 (1Y/5Y), exports/imports growth 进出口,
    FX & gold reserves 外汇储备, consumer confidence)
    → ChinaMacro. This applies in ANY language: "China official PMI latest" and
    "中国制造业PMI" route identically. The test is answer CORRECTNESS, not the

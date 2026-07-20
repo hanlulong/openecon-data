@@ -40,7 +40,10 @@ def test_registry_entries_are_complete():
         kind = series["source"]["kind"]
         assert kind in {"eastmoney_v1", "eastmoney_treasury", "mofcom_shrzgm"}
         if kind == "eastmoney_v1":
-            assert series["source"].get("report", "").startswith("RPT_ECONOMY_")
+            # RPT_ECONOMY_* (economy reports) and RPTA_* (rate/aggregate
+            # reports like RPTA_WEB_RATE for LPR) are both real datacenter
+            # report families.
+            assert series["source"].get("report", "").startswith(("RPT_", "RPTA_"))
         assert series["source"].get("field")
 
 

@@ -20,3 +20,5 @@ CN_IMPORTS_YOY,China Imports YoY (monthly),中国进口同比增速,% YoY,monthl
 CN_EXPORTS_YTD_YOY,China Exports Cumulative YTD YoY,中国出口累计同比,% YoY (cumulative year-to-date),monthly,Customs (海关总署) via EastMoney datacenter,eastmoney_v1,Year-to-date cumulative exports vs same period prior year.
 CN_IMPORTS_YTD_YOY,China Imports Cumulative YTD YoY,中国进口累计同比,% YoY (cumulative year-to-date),monthly,Customs (海关总署) via EastMoney datacenter,eastmoney_v1,Year-to-date cumulative imports vs same period prior year.
 CN_CONSUMER_CONFIDENCE,China Consumer Confidence Index,中国消费者信心指数,index,monthly,NBS via EastMoney datacenter,eastmoney_v1,NBS consumer confidence headline index (~1-2 month publication lag).
+CN_LPR_1Y,China Loan Prime Rate 1-Year (LPR),中国1年期贷款市场报价利率,% per annum,monthly,PBoC/NIFC via EastMoney datacenter,eastmoney_v1,Monthly fixing (~20th). The benchmark lending rate since 2019.
+CN_LPR_5Y,China Loan Prime Rate 5-Year (LPR),中国5年期以上贷款市场报价利率,% per annum,monthly,PBoC/NIFC via EastMoney datacenter,eastmoney_v1,Monthly fixing (~20th); the mortgage-linked tenor.
