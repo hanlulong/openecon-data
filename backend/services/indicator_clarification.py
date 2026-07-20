@@ -789,7 +789,12 @@ def provider_supports_country_for_options(provider: str, country_iso2: Optional[
     if provider_upper in {"STATSCAN", "STATISTICS CANADA"}:
         return iso2 == "CA"
     if provider_upper == "FRED":
-        return iso2 == "US"
+        # Catalog-truth, not US-only: FRED's international mirrors are real
+        # menu candidates (preference audit 2026-07-19 — the US-only shortcut
+        # dropped CORRECT non-US FRED options from clarification menus).
+        from .provider_fallback import _fred_catalog_covers_country
+
+        return _fred_catalog_covers_country(iso2)
     if provider_upper == "BIS":
         return iso2 in BISProvider.BIS_SUPPORTED_COUNTRIES
     if provider_upper in {"CHINAMACRO", "CHINA MACRO"}:
@@ -2786,13 +2791,20 @@ async def build_prefetch_indicator_choice_clarification(
             options = viable_options
         elif len(viable_options) == 1 and (
             (_viability_evidence.get("validated") or {}).get(viable_options[0])
+        ) and not any(
+            str(reason).startswith("transient")
+            for reason in (_viability_evidence.get("dropped") or {}).values()
         ):
             # SOLE-SURVIVOR SERVE (user principle: a menu is for choosing;
             # one option is not a choice). Exactly one option fetch-validated
             # CONFIDENT — plausible, gate-passing, region-covering — and every
-            # competitor dropped for a SUBSTANTIVE reason (transient flakes
-            # were retried once inside the filter before we got here, so a
-            # runner-up can never win off a competitor's one bad fetch).
+            # competitor dropped for a SUBSTANTIVE reason. Competitors still
+            # transient even after their one retry KEEP THE MENU instead (the
+            # any-transient guard above): those options are real choices that
+            # are merely flaky right now, and serving the lone survivor then
+            # is precisely the guess-and-get-wrong the correctness rule
+            # forbids (live regression: an Indeed job-postings series "won"
+            # for "jobs numbers" when the true competitors flaked twice).
             # Apply the option and let the pipeline serve it; the validation
             # fetch primed the data caches, so the serve is deterministic.
             sole_option = viable_options[0]
@@ -3202,7 +3214,21 @@ def needs_indicator_clarification(
     if intent and intent.indicators and len(intent.indicators) > 1:
         return _gate_log(False, "multi_indicator")
 
-    if intent and intent.confidence and intent.confidence >= 0.90:
+    # OPTION-VALIDATION fetches exist to JUDGE a candidate's relevance — no
+    # prior-resolution confidence may exempt them from that judgment. Without
+    # this, the pinned option code + high parse confidence rode the
+    # pre-resolved skip below and every option "validated" regardless of
+    # relevance (observed live: an Indeed job-postings niche series became a
+    # sole survivor for "jobs numbers" when its real competitors flaked —
+    # exactly the guess-and-get-wrong the correctness rule forbids).
+    _is_option_validation = bool(
+        (intent.parameters or {}).get("_prefetch_option_validation")
+    ) if intent else False
+
+    if (
+        not _is_option_validation
+        and intent and intent.confidence and intent.confidence >= 0.90
+    ):
         indicator = (intent.parameters or {}).get("indicator", "")
         provider_upper = normalize_provider_name(intent.apiProvider or "")
         is_pre_resolved = False

@@ -2653,7 +2653,11 @@ async def resolve_indicator_for_fetch(
             params = {
                 **params,
                 "indicator": _option_code,
-                "__semantic_authority": "exact_user_input",
+                # Distinct authority value: pinned for FETCH purposes only.
+                # Never "exact_user_input" — a validation fetch must not
+                # inherit user-final semantics anywhere downstream (the
+                # relevance gate in particular must still judge it).
+                "__semantic_authority": "option_validation",
                 "__decision_source": "option_validation",
             }
             intent.parameters = params

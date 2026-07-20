@@ -176,6 +176,68 @@ async def test_national_series_never_survives_subnational_validation():
     assert data is not None and reason == "viable"
 
 
+def test_option_validation_never_rides_the_pre_resolved_gate_skip(caplog):
+    """A validation fetch's purpose IS relevance judgment: high parse
+    confidence + a code-shaped pinned indicator must not exempt it from the
+    uncertainty gate's real scoring (live regression: an Indeed job-postings
+    series 'validated' for "jobs numbers" via the pre-resolved skip). The
+    comparator itself may still score a token-overlapping series confident —
+    the transient-competitor menu guard covers that case — but the SKIP
+    branch must never fire for a validation fetch."""
+    import logging
+
+    from backend.services.indicator_clarification import needs_indicator_clarification
+
+    class _GateQS:
+        def _extract_series_provider_and_code(self, series):
+            return "FRED", "IHLIDXUSTPBAFI"
+
+        def _detect_explicit_provider(self, query):
+            return None
+
+        def _is_temporal_split_query(self, query):
+            return False
+
+    intent = ParsedIntent(
+        apiProvider="FRED",
+        indicators=["IHLIDXUSTPBAFI"],
+        parameters={
+            "indicator": "IHLIDXUSTPBAFI",
+            "_prefetch_option_validation": True,
+        },
+        clarificationNeeded=False,
+        confidence=0.95,
+    )
+    irrelevant = [_series("Banking and Finance Job Postings on Indeed")]
+    with caplog.at_level(logging.INFO):
+        needs_indicator_clarification(
+            _GateQS(), "jobs numbers for the US", irrelevant, intent,
+            caller="failed_choice_candidate",
+        )
+    assert "high_confidence_pre_resolved" not in caplog.text, (
+        "validation fetches must be judged by real scoring, never the "
+        "pre-resolved confidence skip"
+    )
+
+
+@pytest.mark.asyncio
+async def test_consumer_guard_data_transient_drops_block_sole_survivor():
+    """Contract for the consumer's any-transient guard: the collector's
+    dropped reasons keep their transient prefix even after the retry, so the
+    consumer can refuse to auto-serve past a flaky competitor (it keeps the
+    menu instead — those options are real choices, merely flaky right now)."""
+    qs = _FakeQS(
+        fetch_results={"AAA": [_series("A")], "BBB": RuntimeError("down")},
+    )
+    collector: Dict[str, Any] = {}
+    await filter_viable_indicator_choice_options(
+        qs, "q", _intent(), [OPT_A, OPT_B], collector=collector
+    )
+    assert any(
+        str(r).startswith("transient") for r in collector["dropped"].values()
+    ), "retried-and-still-failing competitors must stay transient-tagged"
+
+
 @pytest.mark.asyncio
 async def test_collector_is_optional_and_return_shape_unchanged():
     qs = _FakeQS(fetch_results={"AAA": [_series("A")], "BBB": [_series("B")]})

@@ -64,6 +64,68 @@ def normalize_country_to_iso2(country: Optional[str]) -> Optional[str]:
     return None
 
 
+_FRED_COVERAGE_CACHE: dict = {}
+
+
+def _fred_catalog_covers_country(iso2: str) -> bool:
+    """Catalog-truth probe: does FRED carry country-TITLED series for iso2?
+
+    FRED is NOT US-only — its OECD/IMF-sourced international mirrors are
+    country-titled series (the country-qualified retrieval in
+    provider_strategy relies on exactly this). Whether FRED "covers" a
+    country is therefore a CATALOG FACT, not a hardcoded assumption: probe
+    the indicator db for FRED rows mentioning the country and cache the
+    answer. The old `US-only` shortcut silently downgraded correct
+    multi-country monthly requests to annual-only providers (preference
+    audit 2026-07-19, user rule: correctness beats provider preference).
+    Errs toward covered on any failure — a false positive keeps the routed
+    provider and the normal fallback chain still guards the fetch.
+    """
+    code = (iso2 or "").upper()
+    if code == "US":
+        return True
+    cached = _FRED_COVERAGE_CACHE.get(code)
+    if cached is not None:
+        return cached
+    covered = True
+    try:
+        from ..routing.country_resolver import CountryResolver
+
+        names = sorted(
+            {
+                alias
+                for alias, mapped in CountryResolver.COUNTRY_ALIASES.items()
+                if mapped == code and len(alias) > 3
+            },
+            key=len,
+        )[:3]
+        if names:
+            import sqlite3
+            from pathlib import Path
+
+            db_path = (
+                Path(__file__).resolve().parent.parent / "data" / "indicators.db"
+            )
+            conn = sqlite3.connect(str(db_path))
+            try:
+                match = " OR ".join(f'"{name}"' for name in names)
+                row = conn.execute(
+                    """SELECT 1 FROM indicators_fts f
+                       JOIN indicators i ON i.id = f.rowid
+                       WHERE indicators_fts MATCH ?
+                         AND i.provider = 'FRED' COLLATE NOCASE
+                       LIMIT 1""",
+                    (match,),
+                ).fetchone()
+                covered = row is not None
+            finally:
+                conn.close()
+    except Exception:
+        covered = True
+    _FRED_COVERAGE_CACHE[code] = covered
+    return covered
+
+
 def provider_covers_country_list(provider: str, countries: Optional[List[str]]) -> bool:
     """Check whether a provider can plausibly cover all requested countries."""
     if not countries:
@@ -83,7 +145,7 @@ def provider_covers_country_list(provider: str, countries: Optional[List[str]]) 
     if provider_upper in {"STATSCAN", "STATISTICS CANADA"}:
         return all(code == "CA" for code in normalized_iso2)
     if provider_upper == "FRED":
-        return all(code == "US" for code in normalized_iso2)
+        return all(_fred_catalog_covers_country(code) for code in normalized_iso2)
     if provider_upper == "EUROSTAT":
         return all(
             code in {"EU", "EA", "EA19", "EA20", "EU27_2020"} or CountryResolver.is_eu_member(code)
