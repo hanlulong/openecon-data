@@ -124,7 +124,7 @@ export function ExamplesPage() {
           <a
             href={LIVE_DATA_APP_URL}
             target="_blank"
-            rel="noopener noreferrer"
+            rel="noopener"
             className="inline-flex mb-4 items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700"
           >
             Live app: data.openecon.ai/chat

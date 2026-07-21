@@ -934,7 +934,7 @@ export function LandingPage() {
                 custom={index}
                 href={tool.href}
                 target="_blank"
-                rel="noopener noreferrer"
+                rel="noopener"
                 className="block"
               >
                 <Card className="h-full rounded-2xl border-gray-200 transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md">
@@ -1253,10 +1253,10 @@ export function LandingPage() {
             <a href="/docs" className="hover:text-gray-900">
               Docs
             </a>
-            <a href="https://github.com/hanlulong/openecon-data" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
+            <a href="https://github.com/hanlulong/openecon-data" target="_blank" rel="noopener" className="hover:text-gray-900">
               GitHub
             </a>
-            <a href="https://openecon.ai/" target="_blank" rel="noopener noreferrer" className="hover:text-gray-900">
+            <a href="https://openecon.ai/" target="_blank" rel="noopener" className="hover:text-gray-900">
               More tools ↗
             </a>
             <a href="mailto:contact@openecon.ai" className="hover:text-gray-900">

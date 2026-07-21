@@ -994,7 +994,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
                           <a
                             href={sourceUrl}
                             target="_blank"
-                            rel="noopener noreferrer"
+                            rel="noopener"
                             className="api-action-btn api-action-verify"
                             title="View on provider website"
                           >
@@ -1041,7 +1041,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
                                   <a
                                     href={verifyUrl}
                                     target="_blank"
-                                    rel="noopener noreferrer"
+                                    rel="noopener"
                                     className="api-action-btn api-action-verify"
                                     title="View on provider website"
                                   >

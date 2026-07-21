@@ -12,7 +12,7 @@ export function DocsPage() {
             className="text-indigo-600 underline"
             href={LIVE_DATA_APP_URL}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener"
           >
             data.openecon.ai/chat
           </a>{' '}
@@ -22,7 +22,7 @@ export function DocsPage() {
             className="text-indigo-600 underline"
             href="https://docs.openecon.ai"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener"
           >
             docs.openecon.ai
           </a>

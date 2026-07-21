@@ -117,7 +117,7 @@ export function ShareModal({ isOpen, onClose, messages, singleQuery }: ShareModa
     // noopener,noreferrer: the share popup must not get a window.opener handle
     // back to this page (reverse-tabnabbing) — an explicit features string
     // otherwise suppresses the browser's default noopener behavior.
-    window.open(shareLink, '_blank', 'noopener,noreferrer,width=600,height=400')
+    window.open(shareLink, '_blank', 'noopener,width=600,height=400')
   }, [shareText, shareUrl])
 
   if (!isOpen) return null
