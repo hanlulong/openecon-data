@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/hanlulong-openecon-data-badge.png)](https://mseep.ai/app/hanlulong-openecon-data)
+
 <p align="center">
   <img src="packages/frontend/public/favicon.svg" width="80" height="80" alt="OpenEcon logo" />
 </p>
