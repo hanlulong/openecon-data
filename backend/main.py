@@ -25,6 +25,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from .config import Settings, get_settings
+from .mcp_stream_limit import MCPStreamLimitMiddleware
+from .mcp_transport import LegacySSETransport, MCPPostBodyLimitMiddleware
 from .utils.logging_security import SecureLogger, log_secure
 from .models import (
     AuthResponse,
@@ -660,16 +662,23 @@ class SecureLoggingASGIMiddleware:
             raise
 
 
+app.add_middleware(RateLimitASGIMiddleware, settings_obj=settings, limiter_obj=limiter)
+app.add_middleware(
+    MCPStreamLimitMiddleware,
+    max_streams=settings.mcp_max_active_streams,
+    max_per_client=settings.mcp_max_streams_per_client,
+    client_ip_resolver=lambda request: resolve_client_ip(request),
+)
+app.add_middleware(SecureLoggingASGIMiddleware)
+app.add_middleware(MCPPostBodyLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.effective_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-    expose_headers=["X-OE-Session"],
+    expose_headers=["X-OE-Session", "Retry-After"],
 )
-app.add_middleware(RateLimitASGIMiddleware, settings_obj=settings, limiter_obj=limiter)
-app.add_middleware(SecureLoggingASGIMiddleware)
 
 
 # ====================
@@ -2718,5 +2727,6 @@ if not settings.disable_mcp:
     )
 
     # Mount the MCP server - this adds the /mcp endpoint for SSE transport
-    mcp.mount()
+    mcp_transport = LegacySSETransport(mcp.server)
+    mcp_transport.mount(app)
     logger.info("✅ MCP server mounted at /mcp endpoint")

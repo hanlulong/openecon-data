@@ -86,6 +86,8 @@ class Settings(BaseSettings):
         description="Strip thinking tags from reasoning model outputs"
     )
     disable_mcp: bool = Field(default=False, alias="DISABLE_MCP")
+    mcp_max_active_streams: int = Field(default=40, ge=1, alias="MCP_MAX_ACTIVE_STREAMS")
+    mcp_max_streams_per_client: int = Field(default=20, ge=1, alias="MCP_MAX_STREAMS_PER_CLIENT")
     disable_background_jobs: bool = Field(default=False, alias="DISABLE_BACKGROUND_JOBS")
     use_langchain_orchestrator: bool = Field(
         default=True,  # Enabled by default for intelligent query routing
@@ -289,6 +291,12 @@ class Settings(BaseSettings):
                 "OPENAI_API_KEY is required when EMBEDDING_MODEL uses an "
                 "OpenAI embedding model."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_mcp_stream_limits(self):
+        if self.mcp_max_streams_per_client > self.mcp_max_active_streams:
+            raise ValueError("MCP_MAX_STREAMS_PER_CLIENT must not exceed MCP_MAX_ACTIVE_STREAMS")
         return self
 
     @property
