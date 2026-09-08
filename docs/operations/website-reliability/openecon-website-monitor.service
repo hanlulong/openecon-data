@@ -1,0 +1,22 @@
+[Unit]
+Description=Public website and MCP availability checks
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hanlulong
+Group=hanlulong
+ExecStart=/home/hanlulong/OpenEcon/backend/.venv/bin/python /usr/local/lib/openecon-website-monitor/monitor.py --output /var/lib/openecon-website-monitor/latest.json
+StateDirectory=openecon-website-monitor
+StateDirectoryMode=0750
+TimeoutStartSec=300
+TimeoutStopSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/openecon-website-monitor
+Nice=10

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Shared certificates terminate at Nginx and are also used by loopback Apache.
+set -eu
+/bin/systemctl is-active --quiet nginx.service
+/bin/systemctl is-active --quiet apache2.service
+# Validate BOTH before reloading either; never start a stopped web server here.
+/usr/sbin/nginx -t
+/usr/sbin/apachectl configtest
+/bin/systemctl reload nginx.service
+/bin/systemctl reload apache2.service

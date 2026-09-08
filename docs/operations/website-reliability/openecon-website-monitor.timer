@@ -1,0 +1,11 @@
+[Unit]
+Description=Check website and MCP availability every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=15s
+Unit=openecon-website-monitor.service
+
+[Install]
+WantedBy=timers.target
