@@ -261,10 +261,8 @@ class RedisCacheService:
                 logger.warning(f"Redis get error: {e}. Falling back to in-memory cache.")
                 self._connected = False  # Mark as disconnected for reconnection attempt
 
-        # Fallback to in-memory cache. Read-side copy is owned here:
-        # CacheService.get() returns the stored object itself, so deep-copy
-        # before handing it to callers that may mutate it in place.
-        data = CacheService._copy_data(self.fallback_cache.get(key))
+        # CacheService owns the read-side copy, including nested metadata.
+        data = self.fallback_cache.get(key)
         if data:
             logger.debug(f"💾 In-memory cache hit for {provider}: {query[:50]}...")
         return data

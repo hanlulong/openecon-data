@@ -27,6 +27,8 @@ import json
 import logging
 import time
 import hashlib
+import tempfile
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
@@ -109,6 +111,8 @@ class FAISSVectorSearch:
         embedding_dim: int = 384,
         embedding_dimensions: Optional[int] = None,
         default_batch_size: int = 128,
+        *,
+        embedding_model: Any = None,
     ):
         """
         Initialize FAISS vector search.
@@ -120,6 +124,7 @@ class FAISSVectorSearch:
             embedding_dim: Fallback embedding dimension for local models
             embedding_dimensions: Optional OpenAI embedding dimension override
             default_batch_size: Default batch size for embedding generation (default: 128)
+            embedding_model: Existing model/client to share with a calling wrapper.
         """
         # Initialize all attributes first
         normalized_model_name = normalize_embedding_model_name(model_name)
@@ -139,11 +144,15 @@ class FAISSVectorSearch:
         self.embedding_dimensions = resolved_dimensions
         self.embedding_dim = resolved_dimensions or embedding_dim
         self.default_batch_size = default_batch_size
-        self.model = None
+        self.model = embedding_model
         self.index = None
         self.metadata_list = []  # List of metadata dicts in index order
         self.id_to_idx = {}  # Map from indicator code to FAISS index position
         self.embedding_cache = {}  # Cache embeddings to avoid recomputation (text_hash -> embedding)
+        # Persisted build vectors are eligible only after index validation.
+        self._embedding_cache_loaded = True
+        self._embedding_cache_invalidated = True
+        self._embedding_cache_lock = threading.RLock()
         self.cache_stats = {"hits": 0, "misses": 0, "duplicates_skipped": 0}  # Cache performance tracking
 
         if not FAISS_AVAILABLE:
@@ -167,7 +176,8 @@ class FAISSVectorSearch:
         logger.info(f"   - Default batch size: {default_batch_size}")
 
         # Load embedding model
-        self._load_model()
+        if self.model is None:
+            self._load_model()
 
         # Load or initialize index
         self._load_or_init_index()
@@ -226,6 +236,9 @@ class FAISSVectorSearch:
                         "Rebuild required before vector search can be used."
                     )
                     self.embedding_cache = {}
+                    # Do not lazily reload vectors from an incompatible index.
+                    self._embedding_cache_loaded = True
+                    self._embedding_cache_invalidated = True
                     self._create_empty_index()
                     return
 
@@ -251,16 +264,8 @@ class FAISSVectorSearch:
                             logger.warning(f"   ⚠️ Could not load old pickle ID map: {e}")
                             self.id_to_idx = {}
 
-                # Load embedding cache if available
-                if self.embedding_cache_path.exists():
-                    try:
-                        with open(self.embedding_cache_path, 'r') as f:
-                            self.embedding_cache = json.load(f)
-                            logger.info(f"   - Loaded {len(self.embedding_cache)} cached embeddings")
-                    except Exception as e:
-                        logger.warning(f"   ⚠️ Could not load embedding cache: {e}")
-                        self.embedding_cache = {}
-
+                self._embedding_cache_loaded = False
+                self._embedding_cache_invalidated = False
                 elapsed = time.time() - start
                 logger.info(f"✅ Index loaded in {elapsed:.2f}s")
                 logger.info(f"   - Index size: {self.index.ntotal} vectors")
@@ -272,6 +277,9 @@ class FAISSVectorSearch:
         except Exception as e:
             logger.error(f"❌ Failed to load index: {e}", exc_info=True)
             logger.info("Creating new empty index...")
+            self.embedding_cache = {}
+            self._embedding_cache_loaded = True
+            self._embedding_cache_invalidated = True
             self._create_empty_index()
 
     def _create_empty_index(self):
@@ -373,6 +381,23 @@ class FAISSVectorSearch:
         """Generate hash of text for caching (SHA256)."""
         return hashlib.sha256(text.encode()).hexdigest()
 
+    def _load_embedding_cache(self):
+        """Load build-only vectors once; caller holds the cache lock."""
+        if self._embedding_cache_loaded:
+            return
+        try:
+            if self.embedding_cache_path.exists():
+                with open(self.embedding_cache_path, 'r') as f:
+                    cached = json.load(f)
+                if not isinstance(cached, dict):
+                    raise ValueError("Embedding cache must be an object")
+                self.embedding_cache = cached
+                logger.info("Loaded %d cached build embeddings", len(cached))
+        except Exception as e:
+            logger.warning("Could not load embedding cache: %s", e)
+            self.embedding_cache = {}
+        self._embedding_cache_loaded = True
+
     def embed_batch(self, texts: List[str], batch_size: Optional[int] = None) -> List[List[float]]:
         """
         Generate embeddings for multiple texts efficiently with caching.
@@ -391,6 +416,11 @@ class FAISSVectorSearch:
             logger.warning("⚠️  Model not loaded, returning zero vectors")
             return [[0.0] * self.embedding_dim for _ in texts]
 
+        with self._embedding_cache_lock:
+            self._load_embedding_cache()
+            return self._embed_batch_cached(texts, batch_size)
+
+    def _embed_batch_cached(self, texts: List[str], batch_size: Optional[int]) -> List[List[float]]:
         if batch_size is None:
             batch_size = self.default_batch_size
 
@@ -654,23 +684,52 @@ class FAISSVectorSearch:
         except Exception as e:
             logger.error(f"❌ Failed to save ID map: {e}", exc_info=True)
 
-    def _save_manifest(self):
+    def _save_manifest(self) -> bool:
         """Persist index configuration so incompatible indexes can be rejected safely."""
         try:
             with open(self.manifest_path, 'w') as f:
                 json.dump(self._desired_index_manifest(), f, indent=2)
+            return True
         except Exception as e:
             logger.error(f"❌ Failed to save FAISS manifest: {e}", exc_info=True)
+            return False
 
-    def _save_embedding_cache(self):
-        """Save embedding cache to JSON file for reuse."""
-        try:
-            if self.embedding_cache:
-                with open(self.embedding_cache_path, 'w') as f:
-                    json.dump(self.embedding_cache, f)
-                logger.debug(f"   - Saved {len(self.embedding_cache)} cached embeddings")
-        except Exception as e:
-            logger.warning(f"⚠️  Could not save embedding cache: {e}")
+    def _save_embedding_cache(self) -> bool:
+        """Atomically save a loaded cache, preserving untouched build artifacts."""
+        with self._embedding_cache_lock:
+            if not self._embedding_cache_loaded:
+                return True
+            return self._write_embedding_cache(self.embedding_cache)
+
+    def _write_embedding_cache(self, payload: Dict[str, Any]) -> bool:
+        """Replace one complete cache file without changing in-memory vectors."""
+        with self._embedding_cache_lock:
+            temporary = None
+            try:
+                fd, temporary = tempfile.mkstemp(
+                    dir=self.index_dir,
+                    prefix=self.embedding_cache_path.name + ".",
+                    suffix=".tmp",
+                )
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(payload, f)
+                mode = (
+                    self.embedding_cache_path.stat().st_mode & 0o777
+                    if self.embedding_cache_path.exists() else 0o644
+                )
+                os.chmod(temporary, mode)
+                os.replace(temporary, self.embedding_cache_path)
+                logger.debug("Saved %d cached embeddings", len(payload))
+                return True
+            except Exception as e:
+                logger.warning("Could not save embedding cache: %s", e)
+                return False
+            finally:
+                if temporary is not None:
+                    try:
+                        os.unlink(temporary)
+                    except FileNotFoundError:
+                        pass
 
     def _save_index(self):
         """Save index and metadata to disk."""
@@ -680,6 +739,12 @@ class FAISSVectorSearch:
                 return
 
             logger.info(f"💾 Saving FAISS index to {self.index_path}")
+
+            # A failed replacement must not pair an old index with populated
+            # vectors from a new model. Publish only an empty invalidation first.
+            if self._embedding_cache_invalidated and not self._write_embedding_cache({}):
+                logger.error("Index save aborted because the build cache could not be saved")
+                return
 
             # Save FAISS index
             faiss.write_index(self.index, str(self.index_path))
@@ -692,9 +757,11 @@ class FAISSVectorSearch:
             self._save_id_map()
 
             # Save index manifest for compatibility checks
-            self._save_manifest()
+            if not self._save_manifest():
+                return
+            self._embedding_cache_invalidated = False
 
-            # Save embedding cache
+            # Populated vectors follow the index and its compatible manifest.
             self._save_embedding_cache()
 
             logger.info(f"✅ Index saved successfully")

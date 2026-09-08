@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import threading
 
 import numpy as np
 import pytest
@@ -167,6 +168,8 @@ def test_embed_batch_uses_openai_embeddings_for_openai_models():
     searcher.default_batch_size = 128
     searcher.model = _FakeOpenAIClient()
     searcher.embedding_cache = {}
+    searcher._embedding_cache_loaded = True
+    searcher._embedding_cache_lock = threading.RLock()
     searcher.cache_stats = {"hits": 0, "misses": 0, "duplicates_skipped": 0}
 
     results = searcher.embed_batch(["inflation", "gdp"])
@@ -191,6 +194,8 @@ def test_embed_batch_caches_results():
     searcher.default_batch_size = 128
     searcher.model = _FakeOpenAIClient()
     searcher.embedding_cache = {}
+    searcher._embedding_cache_loaded = True
+    searcher._embedding_cache_lock = threading.RLock()
     searcher.cache_stats = {"hits": 0, "misses": 0, "duplicates_skipped": 0}
 
     # First call: cache miss
@@ -212,6 +217,8 @@ def test_embed_batch_deduplicates_inputs():
     client = _FakeOpenAIClient()
     searcher.model = client
     searcher.embedding_cache = {}
+    searcher._embedding_cache_loaded = True
+    searcher._embedding_cache_lock = threading.RLock()
     searcher.cache_stats = {"hits": 0, "misses": 0, "duplicates_skipped": 0}
 
     # Both texts are the same, should only call API once per unique text

@@ -12,6 +12,7 @@ Backend Selection:
 __all__ = ['VectorSearchService', 'VectorSearchResult', 'VECTOR_SEARCH_AVAILABLE']
 
 import logging
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -136,6 +137,7 @@ class VectorSearchService:
         self.backend = None  # For FAISS
         self.use_faiss = use_faiss
         self._initialized = False  # Track lazy initialization
+        self._init_lock = threading.Lock()
 
         # Check if vector search dependencies are available
         if not VECTOR_SEARCH_AVAILABLE:
@@ -155,16 +157,17 @@ class VectorSearchService:
         if not VECTOR_SEARCH_AVAILABLE:
             raise RuntimeError("Vector search dependencies not available")
 
-        logger.info(f"⏳ Performing lazy initialization of VectorSearchService...")
-
-        # Load embedding model
-        self._load_model()
-
-        # Initialize backend
-        self._init_backend()
-
-        self._initialized = True
-        logger.info(f"✅ VectorSearchService lazy initialization complete")
+        with self._init_lock:
+            if self._initialized:
+                return
+            logger.info("⏳ Performing lazy initialization of VectorSearchService...")
+            if self.model is None:
+                self._load_model()
+            if self.model is None:
+                raise RuntimeError("Embedding model unavailable")
+            self._init_backend()
+            self._initialized = True
+            logger.info("✅ VectorSearchService lazy initialization complete")
 
     def _load_model(self):
         try:
@@ -205,6 +208,7 @@ class VectorSearchService:
                     model_name=self.model_name,
                     embedding_dim=self.embedding_dimensions or 384,
                     embedding_dimensions=self.embedding_dimensions,
+                    embedding_model=self.model,
                 )
                 logger.info(f"✅ FAISS backend initialized")
                 return
@@ -354,11 +358,14 @@ class VectorSearchService:
 
 # Singleton instance
 _vector_search_service: Optional[VectorSearchService] = None
+_vector_search_lock = threading.Lock()
 
 
 def get_vector_search_service() -> VectorSearchService:
     """Get or create the singleton VectorSearchService instance."""
     global _vector_search_service
     if _vector_search_service is None:
-        _vector_search_service = VectorSearchService()
+        with _vector_search_lock:
+            if _vector_search_service is None:
+                _vector_search_service = VectorSearchService()
     return _vector_search_service

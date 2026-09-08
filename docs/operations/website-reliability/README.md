@@ -11,6 +11,8 @@ flowchart LR
 
 The original outage exhausted Apache's 150 workers with persistent MCP streams. This routing removes those streams from that worker pool. It preserves existing API authentication, WSGI, static-site rules and WebSocket handling on Apache.
 
+See [backend memory management](backend-memory.md) for model sharing, build-cache loading, result-cache limits, and measurement caveats.
+
 ## Application protections
 
 - `backend/mcp_stream_limit.py` admits at most 40 streams globally and 20 per client by default, immediately returning an overload response at capacity. Message POSTs remain outside the stream allowance. Settings validate positive limits and per-client <= global.
