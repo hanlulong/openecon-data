@@ -303,30 +303,51 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["oil price"],
-            parameters={"country": "1W"},
+            parameters={},
             clarificationNeeded=False,
             originalQuery="oil price",
         )
 
-        def fake_fetch(resolved_intent: ParsedIntent):
-            self.assertEqual(resolved_intent.apiProvider, "FRED")
-            return [sample_series_with(
-                indicator="Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma",
-                series_id="DCOILWTICO",
-                source="FRED",
-                unit="Dollars per Barrel",
-            )]
+        oil_series = NormalizedData.model_validate({
+            "metadata": {
+                "source": "FRED", "seriesId": "DCOILWTICO",
+                "indicator": "Crude Oil Prices: West Texas Intermediate (WTI) - Cushing, Oklahoma",
+                "country": "US", "frequency": "daily", "unit": "Dollars per Barrel",
+                "lastUpdated": "2024-01-04", "apiUrl": "https://example.com/oil-fixture",
+            },
+            "data": [
+                {"date": "2024-01-02", "value": 70.3},
+                {"date": "2024-01-03", "value": 72.65},
+            ],
+        })
+        selection = SelectionResult(
+            code=oil_series.metadata.seriesId, name=oil_series.metadata.indicator,
+            source="llm_pick",
+        )
+
+        async def fake_fetch(params: dict[str, Any]):
+            self.assertEqual(params.get("indicator"), "DCOILWTICO")
+            return oil_series.model_copy(deep=True)
 
         with patch.object(self.service.openrouter, "parse_query", return_value=intent), \
+             patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as select_mock, \
              patch("backend.services.query.ParameterValidator.validate_intent", return_value=(True, None, None)), \
              patch("backend.services.query.ParameterValidator.check_confidence", return_value=(True, None)), \
              patch("backend.services.query.QueryComplexityAnalyzer.detect_complexity", return_value={"pro_mode_required": False, "complexity_factors": []}), \
-             patch.object(self.service, "_fetch_data", side_effect=fake_fetch):
+             patch.object(self.service.fred_provider, "fetch_series", side_effect=fake_fetch) as fetch_mock:
             response = run(self.service.process_query("oil price"))
 
         self.assertFalse(response.clarificationNeeded)
         self.assertEqual(response.intent.apiProvider, "FRED")
         self.assertEqual(response.data[0].metadata.seriesId, "DCOILWTICO")
+        self.assertEqual(response.data[0].metadata.indicator, oil_series.metadata.indicator)
+        self.assertEqual(response.data[0].metadata.unit, "Dollars per Barrel")
+        self.assertEqual(response.data[0].metadata.frequency, "daily")
+        self.assertEqual(response.data[0].data, oil_series.data)
+        self.assertEqual(select_mock.await_args.args[:2], ("oil price", "FRED"))
+        self.assertIsNone(select_mock.await_args.kwargs.get("country"))
+        self.assertNotIn("frequency", select_mock.await_args.kwargs)
+        self.assertEqual(fetch_mock.call_count, 1)
 
     def test_process_query_brent_oil_price_uses_llm_selected_fred_provider(self) -> None:
         intent = ParsedIntent(
@@ -2846,11 +2867,11 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(result.intent.indicators, ["total private households in Canada"])
         self.assertNotIn("indicator", result.intent.parameters)
 
-    def test_apply_country_overrides_replaces_single_country_with_explicit_multi_country(self) -> None:
+    def test_apply_country_overrides_fills_default_country_with_explicit_multi_country(self) -> None:
         intent = ParsedIntent(
             apiProvider="StatsCan",
             indicators=["house prices"],
-            parameters={"country": "CA"},
+            parameters={"country": "US"},
             clarificationNeeded=False,
             originalQuery="Compare house price growth across Canada, Australia, and the UK since 2015",
         )
@@ -2863,7 +2884,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertNotIn("country", intent.parameters)
         self.assertEqual(intent.parameters.get("countries"), ["CA", "AU", "GB"])
 
-    def test_apply_country_overrides_expands_region_group_for_economies_phrase(self) -> None:
+    def test_apply_country_overrides_does_not_invent_member_scope_for_economies_phrase(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["trade openness"],
@@ -2877,16 +2898,13 @@ class QueryServiceTests(unittest.TestCase):
             intent.originalQuery,
         )
 
-        countries = intent.parameters.get("countries") or []
-        self.assertGreaterEqual(len(countries), 5)
-        self.assertIn("SG", countries)
+        self.assertEqual(intent.parameters, {})
 
-    def test_apply_country_overrides_expands_g20_without_comparative_markers(self) -> None:
-        """Region expansion must fire even without words like 'compare' or 'countries'."""
+    def test_apply_country_overrides_preserves_parsed_group_entity(self) -> None:
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["employment rate"],
-            parameters={"country": "US"},
+            parameters={"country": "G20"},
             clarificationNeeded=False,
             originalQuery="employment in G20",
         )
@@ -2896,12 +2914,7 @@ class QueryServiceTests(unittest.TestCase):
             intent.originalQuery,
         )
 
-        countries = intent.parameters.get("countries") or []
-        self.assertEqual(len(countries), 19)
-        self.assertIn("CN", countries)
-        self.assertIn("BR", countries)
-        self.assertIn("IN", countries)
-        self.assertNotIn("country", intent.parameters)
+        self.assertEqual(intent.parameters, {"country": "G20"})
 
     def test_apply_country_overrides_does_not_expand_oecd_provider_into_region(self) -> None:
         intent = ParsedIntent(
@@ -2954,7 +2967,7 @@ class QueryServiceTests(unittest.TestCase):
         )
         self.assertTrue(result)
 
-    def test_maybe_resolve_region_clarification_expands_known_groups(self) -> None:
+    def test_maybe_resolve_region_clarification_preserves_known_group_question(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["current account balance"],
@@ -2972,9 +2985,10 @@ class QueryServiceTests(unittest.TestCase):
             intent,
         )
 
-        self.assertTrue(resolved)
-        self.assertFalse(intent.clarificationNeeded)
-        self.assertTrue(len(intent.parameters.get("countries", [])) >= 2)
+        self.assertFalse(resolved)
+        self.assertTrue(intent.clarificationNeeded)
+        self.assertEqual(intent.parameters, {})
+        self.assertEqual(len(intent.clarificationQuestions), 2)
 
     def test_maybe_resolve_temporal_comparison_clarification_for_before_after_query(self) -> None:
         intent = ParsedIntent(
@@ -3025,11 +3039,11 @@ class QueryServiceTests(unittest.TestCase):
         self.assertGreaterEqual(len(expanded), 5)
         self.assertIn("SG", expanded)
 
-    def test_detect_regions_in_query_recognizes_plain_europe(self) -> None:
+    def test_detect_regions_in_query_does_not_equate_europe_with_eu(self) -> None:
         regions = CountryResolver.detect_regions_in_query("GDP in Europe")
-        self.assertIn("EU", regions)
+        self.assertNotIn("EU", regions)
         expanded = CountryResolver.expand_regions_in_query("GDP in Europe")
-        self.assertEqual(set(expanded), set(CountryResolver.EU_MEMBERS))
+        self.assertEqual(expanded, [])
 
     def test_expand_regions_in_query_returns_all_g20_members(self) -> None:
         expanded = CountryResolver.expand_regions_in_query(
@@ -3045,9 +3059,9 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="BIS",
             indicators=["policy rates and inflation"],
-            parameters={"countries": ["US", "GB", "DE"]},
-            clarificationNeeded=True,
-            clarificationQuestions=["Please clarify indicators"],
+            parameters={"countries": ["US", "GB", "Euro area"]},
+            clarificationNeeded=False,
+            clarificationQuestions=[],
             originalQuery="Compare policy rates and inflation for US, UK, and euro area since 2010",
         )
 
@@ -3058,6 +3072,7 @@ class QueryServiceTests(unittest.TestCase):
 
         self.assertTrue(expanded)
         self.assertFalse(intent.clarificationNeeded)
+        self.assertEqual(intent.parameters["countries"], ["US", "GB", "Euro area"])
         self.assertGreaterEqual(len(intent.indicators), 2)
         self.assertIn("policy rate", " | ".join(intent.indicators).lower())
         self.assertIn("inflation", " | ".join(intent.indicators).lower())
@@ -3287,12 +3302,14 @@ class QueryServiceTests(unittest.TestCase):
         )
 
     def test_build_uncertain_result_clarification_returns_ranked_options(self) -> None:
+        conv_id = conversation_manager.get_or_create("conv-ranked-clarification-format")
+        conversation_manager.clear_pending_indicator_options(conv_id)
         intent = ParsedIntent(
             apiProvider="BIS",
-            indicators=["GDP to Debt Ratio"],
+            indicators=["debt to GDP ratio"],
             parameters={"country": "CN"},
             clarificationNeeded=False,
-            originalQuery="gdp to debt ratio in china",
+            originalQuery="debt to GDP ratio in China",
         )
         uncertain_data = [
             NormalizedData.model_validate(
@@ -3313,10 +3330,14 @@ class QueryServiceTests(unittest.TestCase):
             )
         ]
 
-        with patch.object(self.service, "_get_fallback_providers", return_value=["IMF", "WORLDBANK"]):
+        ranked_options = [
+            "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
+            "[IMF] Government Debt (% of GDP) (GGXWDG_GDP)",
+        ]
+        with patch.object(self.service, "_collect_indicator_choice_options", return_value=ranked_options) as collect:
             clarification = self.service._build_uncertain_result_clarification(  # pylint: disable=protected-access
-                conversation_id="conv-1",
-                query="gdp to debt ratio in china",
+                conversation_id=conv_id,
+                query=intent.originalQuery,
                 intent=intent,
                 data=uncertain_data,
                 processing_steps=None,
@@ -3326,13 +3347,19 @@ class QueryServiceTests(unittest.TestCase):
         assert clarification is not None
         self.assertTrue(clarification.clarificationNeeded)
         joined = "\n".join(clarification.clarificationQuestions or [])
-        # At least WorldBank should be included; IMF may be filtered by country coverage
-        self.assertIn("WorldBank", joined)
+        self.assertLess(joined.index(ranked_options[0]), joined.index(ranked_options[1]))
         self.assertIsNotNone(clarification.clarificationOptions)
         options = clarification.clarificationOptions or []
-        self.assertGreaterEqual(len(options), 2)
-        self.assertTrue(all(option.id and option.value for option in options))
-        self.assertIn("WORLDBANK", {option.provider for option in options})
+        self.assertEqual([option.id for option in options], ["1", "2"])
+        self.assertEqual([option.value for option in options], ranked_options)
+        self.assertEqual([(option.provider, option.code) for option in options], [
+            ("WORLDBANK", "GC.DOD.TOTL.GD.ZS"), ("IMF", "GGXWDG_GDP"),
+        ])
+        collect.assert_called_once_with(intent.originalQuery, intent)
+        pending = conversation_manager.get_pending_indicator_options(conv_id)
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["options"], ranked_options)
+        self.assertEqual(pending["intent"]["parameters"]["country"], "CN")
 
     def test_build_uncertain_result_clarification_requests_explicit_indicator_when_only_match_is_incompatible(self) -> None:
         intent = ParsedIntent(
@@ -3634,7 +3661,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="IMF",
             indicators=["economic data"],
-            parameters={"countries": ["AR", "AU", "BR"]},
+            parameters={},
             clarificationNeeded=False,
             originalQuery="economic data for G20",
         )
@@ -3664,18 +3691,23 @@ class QueryServiceTests(unittest.TestCase):
         pending = conversation_manager.get_pending_semantic_clarification(conv_id)
         self.assertIsNotNone(pending)
 
-    def test_build_group_scope_clarification_for_plain_europe_query(self) -> None:
-        """Plain Europe is a regional scope and should ask member-vs-group clarification."""
+    def test_plain_europe_preserves_parser_geography_clarification(self) -> None:
+        """An unresolved continent must not overwrite the parser's scope question."""
         conv_id = conversation_manager.get_or_create("conv-group-scope-europe")
         conversation_manager.clear_pending_semantic_clarification(conv_id)
         intent = ParsedIntent(
             apiProvider="WorldBank",
             indicators=["NY.GDP.MKTP.CD"],
-            parameters={"countries": ["European Union"]},
-            clarificationNeeded=False,
+            parameters={"country": "Europe"},
+            clarificationNeeded=True,
+            clarificationQuestions=["Which geographic definition and member countries do you mean?"],
             originalQuery="GDP in Europe",
         )
 
+        original = intent.model_copy(deep=True)
+        resolved = self.service._maybe_resolve_region_clarification("GDP in Europe", intent)
+        self.assertFalse(resolved)
+        self.assertEqual(intent, original)
         clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
             conversation_id=conv_id,
             query="GDP in Europe",
@@ -3684,13 +3716,8 @@ class QueryServiceTests(unittest.TestCase):
             processing_steps=None,
         )
 
-        self.assertIsNotNone(clarification)
-        assert clarification is not None
-        self.assertTrue(clarification.clarificationNeeded)
-        self.assertIn("European Union", " ".join(clarification.clarificationQuestions or []))
-        options = clarification.clarificationOptions or []
-        self.assertEqual(options[0].value, "GDP across European Union member countries")
-        self.assertEqual(options[1].value, "GDP for the European Union group as a whole")
+        self.assertIsNone(clarification)
+        self.assertEqual(intent, original)
 
     def test_build_group_scope_clarification_skips_explicit_comparison_query(self) -> None:
         clarification = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
@@ -5382,7 +5409,7 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(calls[0]["indicator"], "enpe_ext_intro")
         self.assertEqual(calls[0]["country"], "__ALL__")
 
-    def test_fetch_data_does_not_retry_eurostat_when_time_scope_is_explicit(self) -> None:
+    def test_fetch_data_preserves_explicit_eurostat_window_with_one_diagnostic(self) -> None:
         intent = ParsedIntent(
             apiProvider="EUROSTAT",
             indicators=["TRNG_CVT_20S"],
@@ -5406,10 +5433,15 @@ class QueryServiceTests(unittest.TestCase):
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
              patch.object(self.service.eurostat_provider, "fetch_indicator", new_callable=AsyncMock, side_effect=_fake_fetch_indicator):
-            with self.assertRaises(DataNotAvailableError):
+            with self.assertRaises(DataNotAvailableError) as failure:
                 run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
-        self.assertEqual(calls, [("trng_cvt_20s", "IT", 2021, 2024)])
+        self.assertEqual(calls, [("trng_cvt_20s", "IT", 2021, 2024), ("trng_cvt_20s", "IT", None, None)])
+        self.assertNotIn("no_data_in_requested_window", str(failure.exception))
+        self.assertEqual(intent.parameters["startDate"], "2021-01-01")
+        self.assertEqual(intent.parameters["endDate"], "2024-12-31")
+        self.assertEqual(intent.parameters["country"], "IT")
+        self.assertEqual(intent.parameters["indicator"].lower(), "trng_cvt_20s")
 
     def test_fetch_data_retries_exact_provider_no_data_without_default_window(self) -> None:
         intent = ParsedIntent(
@@ -7951,7 +7983,7 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="WORLDBANK",
             indicators=["imports as % of GDP"],
-            parameters={"countries": ["US", "DE", "JP"]},
+            parameters={},
             clarificationNeeded=False,
             originalQuery="imports share of gdp in G20",
         )
@@ -9264,41 +9296,42 @@ class QueryServiceTests(unittest.TestCase):
     def test_fetch_data_allows_llm_adjudicated_imf_selector_pick_without_rule_veto(self) -> None:
         intent = ParsedIntent(
             apiProvider="IMF",
-            indicators=[
-                "current account",
-                "primary income",
-                "investment income",
-                "reserve assets",
-                "balance of payments",
-            ],
+            indicators=["current account balance as percent of GDP"],
             parameters={"country": "Germany", "__semantic_provider_locked": True},
             clarificationNeeded=False,
-            originalQuery="Germany Current Account Primary Income Investment income Reserve assets Balance of Payments from IMF",
+            originalQuery="Germany current account balance as percent of GDP from IMF",
         )
-
-        fake_indicator_selector = types.ModuleType("backend.services.indicator_selector")
-
-        class _Selector:
-            async def select(self, *args, **kwargs):
-                from backend.services.indicator_selector import SelectionResult
-
-                return SelectionResult(
-                    code="BCA_NGDPD",
-                    name="Current account balance, percent of GDP",
-                    source="llm_pick",
-                )
-
-        fake_indicator_selector.IndicatorSelector = _Selector
-        from backend.services.indicator_selector import SelectionResult as _SelectionResult
-        fake_indicator_selector.SelectionResult = _SelectionResult
-
-        with patch.dict(sys.modules, {"backend.services.indicator_selector": fake_indicator_selector}), \
+        selection = SelectionResult(
+            code="BCA_NGDPD", name="Current account balance, percent of GDP", source="llm_pick",
+        )
+        returned = sample_series_with(
+            source="IMF", indicator=selection.name, country="Germany",
+            series_id=selection.code, unit="Percent of GDP",
+        )
+        returned.metadata.frequency = "annual"
+        returned.data = [
+            returned.data[0].model_copy(update={"date": date, "value": value})
+            for date, value in [("2022-01-01", 7.2), ("2023-01-01", 7.0)]
+        ]
+        with patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=selection)) as select, \
              patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[sample_series()]) as fetch_mock:
-            run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+             patch.object(self.service.imf_provider, "fetch_batch_indicator", new_callable=AsyncMock, return_value=[returned]) as fetch_mock:
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
+        self.assertEqual(select.await_count, 1)
+        self.assertIn("current account", select.await_args.args[0].lower())
+        self.assertIn("gdp", select.await_args.args[0].lower())
+        self.assertEqual(select.await_args.args[1], "IMF")
+        self.assertEqual(CountryResolver.normalize(select.await_args.kwargs["country"]), "DE")
         self.assertEqual(fetch_mock.await_count, 1)
         self.assertEqual(fetch_mock.await_args.kwargs.get("indicator"), "BCA_NGDPD")
+        self.assertEqual(data, [returned])
+        self.assertEqual(data[0].metadata.country, "Germany")
+        self.assertEqual(data[0].metadata.unit, "Percent of GDP")
+        self.assertEqual(data[0].metadata.frequency, "annual")
+        self.assertEqual([(point.date, point.value) for point in data[0].data], [
+            ("2022-01-01", 7.2), ("2023-01-01", 7.0),
+        ])
 
     def test_fetch_data_fails_closed_for_unsupported_imf_fiscal_public_surface(self) -> None:
         intent = ParsedIntent(
@@ -9663,16 +9696,6 @@ class QueryServiceTests(unittest.TestCase):
             originalQuery="Ontario employment by gender",
         )
 
-        class _FakeSelector:
-            async def select(self, query: str, provider: str, country=None, metadata_query=None, exclude_codes=None):
-                assert query == "employment"
-                assert provider == "STATSCAN"
-                return SelectionResult(
-                    code="14100375",
-                    name="Employment and unemployment rate, annual",
-                    source="llm_pick",
-                )
-
         cube_metadata = {
             "dimension": [
                 {
@@ -9698,22 +9721,37 @@ class QueryServiceTests(unittest.TestCase):
                 indicator="employment - Ontario, Men+",
                 country="Ontario",
                 series_id="14100375:7.2",
+                unit="Persons",
             ),
             sample_series_with(
                 source="Statistics Canada",
                 indicator="employment - Ontario, Women+",
                 country="Ontario",
                 series_id="14100375:7.3",
+                unit="Persons",
             ),
         ]
+        for series, value in zip(returned, [125.0, 100.0]):
+            series.metadata.frequency = "annual"
+            series.data = [series.data[0].model_copy(update={"date": "2023-01-01", "value": value})]
 
         with patch.object(self.service, "_get_from_cache", return_value=None), \
-             patch.dict("sys.modules", {"backend.services.indicator_selector": SimpleNamespace(IndicatorSelector=lambda: _FakeSelector())}), \
+             patch("backend.services.indicator_selector.IndicatorSelector.select", new=AsyncMock(return_value=SelectionResult(
+                 code="14100375", name="Employment and unemployment rate, annual", source="llm_pick",
+             ))) as select, \
              patch.object(self.service.statscan_provider, "_get_cube_metadata", new_callable=AsyncMock, return_value=cube_metadata), \
              patch.object(self.service.statscan_provider, "fetch_multi_dimension_data", new_callable=AsyncMock, return_value=returned) as fetch_multi_dim:
             data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
 
         self.assertEqual(data, returned)
+        self.assertEqual(select.await_count, 1)
+        self.assertEqual(select.await_args.args[:2], ("employment", "STATSCAN"))
+        self.assertEqual(CountryResolver.normalize(select.await_args.kwargs["country"]), "CA")
+        self.assertEqual([series.metadata.country for series in data], ["Ontario", "Ontario"])
+        self.assertEqual([series.metadata.unit for series in data], ["Persons", "Persons"])
+        self.assertEqual([[(point.date, point.value) for point in series.data] for series in data], [
+            [("2023-01-01", 125.0)], [("2023-01-01", 100.0)],
+        ])
         self.assertEqual(fetch_multi_dim.await_count, 1)
         params = fetch_multi_dim.await_args.args[0]
         self.assertEqual(params["productId"], "14100375")
@@ -10666,7 +10704,10 @@ class QueryServiceTests(unittest.TestCase):
         intent = ParsedIntent(
             apiProvider="FRED",
             indicators=["gdp growth"],
-            parameters={"country": "FR"},
+            parameters={
+                "country": "FR", "indicator": "FRED_OLD", "seriesId": "FRED_OLD",
+                "series_id": "FRED_OLD", "code": "FRED_OLD",
+            },
             clarificationNeeded=False,
             originalQuery="gdp growth in France",
         )
@@ -10674,14 +10715,15 @@ class QueryServiceTests(unittest.TestCase):
 
         async def fake_fetch_data(fallback_intent: ParsedIntent) -> list[NormalizedData]:
             observed["fallback_intent"] = fallback_intent
-            return [
-                sample_series_with(
-                    source="World Bank",
-                    indicator="GDP growth (annual %)",
-                    series_id="NY.GDP.MKTP.KD.ZG",
-                    country="FR",
-                )
+            series = sample_series_with(
+                source="World Bank", indicator="GDP growth (annual %)",
+                series_id="NY.GDP.MKTP.KD.ZG", country="FR", unit="Percent",
+            )
+            series.metadata.frequency = "annual"
+            series.data = [
+                series.data[0].model_copy(update={"date": "2023-01-01", "value": 0.9}),
             ]
+            return [series]
 
         with patch.object(
             self.service,
@@ -10706,7 +10748,16 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(observed["fallback_intent"].apiProvider, "WORLDBANK")
         self.assertNotIn("NY.GDP", observed["fallback_intent"].indicators[0])
-        self.assertEqual(observed["fallback_intent"].indicators[0], "gdp growth")
+        self.assertIn("gdp growth", observed["fallback_intent"].indicators[0].lower())
+        self.assertEqual(observed["fallback_intent"].parameters["country"], "FR")
+        self.assertEqual(observed["fallback_intent"].originalQuery, intent.originalQuery)
+        for key in ("indicator", "seriesId", "series_id", "code"):
+            self.assertNotIn(key, observed["fallback_intent"].parameters)
+        self.assertEqual(result[0].metadata.country, "FR")
+        self.assertEqual(result[0].metadata.indicator, "GDP growth (annual %)")
+        self.assertEqual(result[0].metadata.frequency, "annual")
+        self.assertEqual(result[0].metadata.unit, "Percent")
+        self.assertEqual([(point.date, point.value) for point in result[0].data], [("2023-01-01", 0.9)])
 
     def test_select_indicator_query_prefers_original_query_over_provider_code(self) -> None:
         """_select_indicator_query_for_resolution should not return provider codes."""

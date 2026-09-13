@@ -90,10 +90,8 @@ class WorldBankProvider(BaseProvider):
         "AFRICA": "AFR",
         "AFRICAN": "AFR",
         "AFRICAN COUNTRIES": "AFR",
-        "EUROPEAN": "ECS",
-        "EUROPE": "ECS",
-        "EUROPEAN UNION": "ECS",
-        "EU": "ECS",
+        "EUROPEAN UNION": "EUU",
+        "EU": "EUU",
         "WORLD": "WLD",
         "GLOBAL": "WLD",
         "GLOBALLY": "WLD",
@@ -177,18 +175,6 @@ class WorldBankProvider(BaseProvider):
         "TOP_10_EMITTERS": ["CHN", "USA", "IND", "RUS", "JPN", "DEU", "IRN", "KOR", "SAU", "IDN"],
         "TOP_EMITTERS": ["CHN", "USA", "IND", "RUS", "JPN", "DEU", "IRN", "KOR", "SAU", "IDN"],
         "TOP 10 EMITTERS": ["CHN", "USA", "IND", "RUS", "JPN", "DEU", "IRN", "KOR", "SAU", "IDN"],
-
-        # European Union (major members)
-        "EU": ["DEU", "FRA", "ITA", "ESP", "NLD", "POL", "BEL", "SWE", "AUT", "GRC",
-               "PRT", "CZE", "ROU", "HUN", "DNK", "FIN", "IRL"],
-        "EUROPEAN_UNION": ["DEU", "FRA", "ITA", "ESP", "NLD", "POL", "BEL", "SWE", "AUT", "GRC",
-                          "PRT", "CZE", "ROU", "HUN", "DNK", "FIN", "IRL"],
-        "EUROPEAN UNION": ["DEU", "FRA", "ITA", "ESP", "NLD", "POL", "BEL", "SWE", "AUT", "GRC",
-                          "PRT", "CZE", "ROU", "HUN", "DNK", "FIN", "IRL"],
-        "EUROPEAN_COUNTRIES": ["DEU", "FRA", "ITA", "ESP", "GBR", "NLD", "POL", "BEL", "SWE", "AUT",
-                               "GRC", "PRT", "CHE", "NOR", "DNK", "FIN", "IRL"],  # Includes non-EU GBR, CHE, NOR
-        "EUROPEAN COUNTRIES": ["DEU", "FRA", "ITA", "ESP", "GBR", "NLD", "POL", "BEL", "SWE", "AUT",
-                               "GRC", "PRT", "CHE", "NOR", "DNK", "FIN", "IRL"],
 
         # G20 (major economies)
         "G20": ["USA", "CHN", "JPN", "DEU", "IND", "GBR", "FRA", "ITA", "BRA", "CAN",
@@ -355,7 +341,7 @@ class WorldBankProvider(BaseProvider):
         Returns:
             WorldBank region code if term is regional, None otherwise
         """
-        term_upper = term.upper().strip()
+        term_upper = re.sub(r"[_\s]+", " ", term.upper()).strip()
 
         # CRITICAL: First check if this is a known country name or country CODE
         # Countries like "South Africa", "South Korea" should NOT be treated as regions
@@ -365,26 +351,21 @@ class WorldBankProvider(BaseProvider):
             logger.debug(f"'{term}' is a country (code: {self.COUNTRY_MAPPINGS[term_key]}), not a region")
             return None
 
-        # Check if it's an ISO country code (2 or 3 letters)
-        # ISO codes should NEVER be treated as regional terms
-        if len(term_upper) <= 3 and term_upper.isalpha():
-            # This looks like a country code (e.g., "DEU", "USA", "GB")
-            # Don't try to match partial regional terms within it
-            logger.debug(f"'{term}' looks like an ISO country code, not treating as region")
-            return None
-
-        # Direct lookup for exact regional term matches
+        # Exact aggregate aliases (including EU) precede the short-code escape.
         if term_upper in self.REGIONAL_TERM_MAPPINGS:
             region_code = self.REGIONAL_TERM_MAPPINGS[term_upper]
             logger.info(f"🌍 Mapped regional term '{term}' → WorldBank region code '{region_code}'")
             return region_code
 
-        # Partial match (e.g., "countries in South Asia" → "SAS")
-        # But only if the term is clearly about a region, not a country
-        # AND the term is longer than a typical country code (> 3 chars)
+        # Other short codes must not participate in phrase matching.
+        if len(term_upper) <= 3 and term_upper.isalpha():
+            return None
+
+        # The complete regional phrase must occur in the input; a short alias
+        # cannot consume part of a longer token or provider-native identifier.
         if len(term_upper) > 3:
             for regional_term, region_code in self.REGIONAL_TERM_MAPPINGS.items():
-                if regional_term in term_upper:
+                if re.search(rf"(?<!\w){re.escape(regional_term)}(?!\w)", term_upper):
                     # Additional safety: don't match partial region names within country names
                     # e.g., don't match "AFRICA" in "SOUTH AFRICA" or "ASIA" in "SOUTH KOREA"
                     # Check if the term starts with a known country prefix
@@ -415,7 +396,7 @@ class WorldBankProvider(BaseProvider):
         """
         from ..routing.country_resolver import CountryResolver
 
-        key = country.upper().replace(" ", "_")
+        key = re.sub(r"[_\s]+", "_", country.upper()).strip("_")
 
         # Guardrail: if this already resolves to a concrete country code (e.g., US/USA),
         # do NOT attempt fuzzy group expansion.
@@ -441,14 +422,15 @@ class WorldBankProvider(BaseProvider):
             logger.info(f"🌍 Expanded country group '{country}' via WorldBank mappings → {len(countries)} countries: {', '.join(countries)}")
             return countries
 
-        # Check for partial matches in WorldBank-specific groups.
-        # Only allow this for longer tokens to avoid false positives
-        # like "US" matching "BRICS_PLUS".
+        # Match a complete group phrase within a longer request, never a prefix
+        # of the group name or a substring of an unrelated token.
         if len(key) < 4:
             return None
 
+        phrase = key.replace("_", " ")
         for group_key, countries in self.COUNTRY_GROUP_EXPANSIONS.items():
-            if group_key in key or key in group_key:
+            group_phrase = group_key.replace("_", " ")
+            if re.search(rf"(?<!\w){re.escape(group_phrase)}(?!\w)", phrase):
                 logger.info(f"🌍 Matched country group '{group_key}' in '{country}' → {len(countries)} countries: {', '.join(countries)}")
                 return countries
 

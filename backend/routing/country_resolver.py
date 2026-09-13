@@ -840,8 +840,6 @@ class CountryResolver:
             "EU_COUNTRIES": cls.EU_MEMBERS,
             "EU_MEMBERS": cls.EU_MEMBERS,
             "EUROPEAN_UNION": cls.EU_MEMBERS,
-            "EUROPE": cls.EU_MEMBERS,
-            "EUROPEAN": cls.EU_MEMBERS,
             "EU_MEMBER_STATES": cls.EU_MEMBERS,
             "EU27": cls.EU_MEMBERS,
             "EU27_2020": cls.EU_MEMBERS,
@@ -1061,8 +1059,6 @@ class CountryResolver:
         region_patterns = [
             # Multi-word first (more specific)
             ("european union", "EU"),
-            ("european countries", "EU"),
-            ("european economies", "EU"),
             ("euro area", "EUROZONE"),
             ("euro zone", "EUROZONE"),
             ("nordic countries", "NORDIC"),
@@ -1104,8 +1100,6 @@ class CountryResolver:
             ("south east asia", "SOUTHEAST_ASIA"),
             ("southeast asian", "SOUTHEAST_ASIA"),
             # Single words (less specific, check last)
-            ("europe", "EU"),
-            ("european", "EU"),
             ("eurozone", "EUROZONE"),
             ("scandinavia", "NORDIC"),
             ("scandinavian", "NORDIC"),

@@ -16,8 +16,10 @@ This module provides:
 from __future__ import annotations
 
 import asyncio
+import copy
 from datetime import datetime
 import logging
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -28,6 +30,8 @@ from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
 from ..services.provider_strategy import (
     REGION_AS_SERIES_PROVIDERS,
+    canonical_aggregate_region,
+    normalize_aggregate_geography,
     region_qualified_indicator_text,
 )
 from ..services.user_messages import get_message as _localized_message
@@ -484,6 +488,8 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
             normalized = _normalize_known_country_to_iso2(country)
             if normalized is not None:
                 normalized_scope.append(normalized)
+            elif canonical_aggregate_region(country):
+                normalized_scope.append(str(country))
         country_scope = normalized_scope
 
     start_year, end_year = _years_from_params(params)
@@ -897,8 +903,16 @@ def materialize_execution_plan(
         expected_shape={},
         verification_checks=[],
     )
-    code = _execution_plan_candidate_code(intent, params)
     provider_norm = _normalize_provider_name(provider) or "UNKNOWN"
+    if not intent.clarificationNeeded:
+        params = normalize_aggregate_geography(provider_norm, params)
+        expected = dict(plan.expected_shape or {})
+        if "requested_countries" in expected:
+            expected["requested_countries"] = normalize_aggregate_geography(
+                provider_norm, {"countries": expected["requested_countries"]},
+            )["countries"]
+            plan.expected_shape = expected
+    code = _execution_plan_candidate_code(intent, params)
     plan.provider = provider_norm
     plan.candidate_id = f"{provider_norm}:{str(code or '').strip().upper() or 'UNKNOWN'}"
     plan.fetch_strategy = fetch_strategy
@@ -974,6 +988,61 @@ def _enforce_user_time_window(
             dropped_total, start_year, end_year, len(filtered), len(result),
         )
     return filtered
+
+
+def _classify_time_window_probe(
+    params: dict[str, Any], result: List[NormalizedData],
+) -> tuple[List[NormalizedData], str]:
+    """Copy provable in-window observations and classify known outside-only data.
+
+    Unknown dates/nonfinite values cannot establish absence. Null values are
+    missing observations. Keep the existing year-level window convention.
+    """
+    from ..providers._sdmx.periods import period_to_iso_date
+
+    def year(value):
+        text = str(value or "")[:4]
+        return int(text) if text.isdigit() else None
+
+    def observation_date(value):
+        normalized = period_to_iso_date(value)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[Tt ].+)?", normalized):
+            return None
+        try:
+            return datetime.fromisoformat(normalized).date()
+        except ValueError:
+            return None
+
+    start = year(params.get("startDate")) or year(params.get("start_year"))
+    end = year(params.get("endDate")) or year(params.get("end_year"))
+    if start is None and end is None:
+        return [], ""
+    recovered = []
+    latest = ""
+    inconclusive = False
+    for original in result or []:
+        series = original.model_copy(deep=True)
+        kept = []
+        for point in series.data or []:
+            value = point.get("value") if isinstance(point, dict) else point.value
+            if value is None:
+                continue
+            date = observation_date(point.get("date", "") if isinstance(point, dict) else point.date)
+            try:
+                finite = math.isfinite(value)
+            except (TypeError, ValueError, OverflowError):
+                finite = False
+            if date is None or not finite:
+                inconclusive = True
+                continue
+            point_year = date.year
+            latest = max(latest, date.isoformat())
+            if (start is None or point_year >= start) and (end is None or point_year <= end):
+                kept.append(point)
+        if kept:
+            series.data = kept
+            recovered.append(series)
+    return recovered, "" if inconclusive else latest
 
 
 def _statscan_semantic_label(params: dict[str, Any], intent: Any, base: str = "") -> str:
@@ -2765,6 +2834,9 @@ async def fetch_data(
             data=[],
         )]
     params = intent.parameters or {}
+    if not intent.clarificationNeeded:
+        params = normalize_aggregate_geography(provider, params)
+        intent.parameters = params
 
     # Pre-flight geographic split
     if not params.get("__geo_split_child"):
@@ -3035,6 +3107,10 @@ async def fetch_data(
             params = prepared_params
             intent.parameters = params
 
+    if not intent.clarificationNeeded:
+        params = normalize_aggregate_geography(provider, params)
+        intent.parameters = params
+
     execution_plan = materialize_execution_plan(
         execution_plan,
         provider=provider,
@@ -3078,11 +3154,51 @@ async def fetch_data(
         and not _user_set_time_scope(params, intent.originalQuery or "")
     )
 
+    window_probe_attempted = False
+
+    async def _probe_user_time_window() -> Optional[List[NormalizedData]]:
+        nonlocal window_probe_attempted
+        if (
+            window_probe_attempted
+            or not _user_set_time_scope(params, intent.originalQuery or "")
+            or not any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
+        ):
+            return None
+        window_probe_attempted = True
+        probe_intent = intent.model_copy(deep=True)
+        probe_params = copy.deepcopy(params)
+        for key in ("startDate", "endDate", "start_year", "end_year"):
+            probe_params.pop(key, None)
+        probe_intent.parameters = probe_params
+        probe_plan = materialize_execution_plan(
+            execution_plan=execution_plan.model_copy(deep=True),
+            provider=provider, intent=probe_intent, params=probe_params,
+        )
+        try:
+            probe_result = await fetch_from_provider_dispatch(svc, probe_intent, probe_plan)
+        except Exception:
+            return None  # A failed diagnostic establishes no window/coverage fact.
+        recovered, latest = _classify_time_window_probe(params, probe_result)
+        if recovered:
+            return recovered
+        if latest:
+            raise DataNotAvailableError(
+                "no_data_in_requested_window: the selected series has no "
+                "observations inside the user-requested time window. "
+                f"latest_available={latest}"
+            )
+        return None
+
     async def _dispatch_with_exact_window_retry() -> List[NormalizedData]:
         nonlocal execution_plan, params
         try:
             return await fetch_from_provider_dispatch(svc, intent, execution_plan)
-        except DataNotAvailableError:
+        except DataNotAvailableError as exc:
+            if "no_data_in_requested_window" in str(exc):
+                raise
+            recovered = await _probe_user_time_window()
+            if recovered:
+                return recovered
             if not (
                 exact_query_without_time_scope
                 and any(params.get(key) for key in ("startDate", "endDate", "start_year", "end_year"))
@@ -3172,6 +3288,11 @@ async def fetch_data(
             params = broadened_params
             execution_plan = retry_plan
 
+    if not result or not any(series.data for series in result):
+        recovered = await _probe_user_time_window()
+        if recovered:
+            result = recovered
+
     _had_observations = bool(
         result and any(getattr(series, "data", None) for series in result)
     )
@@ -3200,52 +3321,6 @@ async def fetch_data(
         )
 
     if not result or (len(result) == 1 and not result[0].data):
-        # Providers that filter the window SERVER-SIDE return empty for a
-        # frozen/lagged series without revealing it EXISTS with older data
-        # (live: China M2 ends 2019, user asked "last 3 months" — FRED
-        # returned zero observations, the window marker could not fire, and
-        # the pipeline wandered retries/rejections/fallbacks to the 120s
-        # deadline). One cheap unwindowed re-probe of the SAME resolved series
-        # answers "does it exist at all?": if observations exist, raise the
-        # non-retriable window marker with latest_available (fast, honest,
-        # localized); if truly absent, fall through to the generic error and
-        # the normal retry machinery.
-        if _user_set_time_scope(params, intent.originalQuery or "") and any(
-            params.get(key) for key in ("startDate", "endDate", "start_year", "end_year")
-        ):
-            probe_params = dict(params)
-            for key in ("startDate", "endDate", "start_year", "end_year"):
-                probe_params.pop(key, None)
-            try:
-                probe_plan = materialize_execution_plan(
-                    execution_plan=None,
-                    provider=provider,
-                    intent=intent,
-                    params=probe_params,
-                )
-                probe_result = await fetch_from_provider_dispatch(svc, intent, probe_plan)
-            except Exception:
-                probe_result = None
-            probe_latest = ""
-            for _series in probe_result or []:
-                for _point in getattr(_series, "data", None) or []:
-                    _pd = str(
-                        _point.get("date") if isinstance(_point, dict)
-                        else getattr(_point, "date", "") or ""
-                    )
-                    if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > probe_latest:
-                        probe_latest = _pd
-            if probe_latest:
-                logger.info(
-                    "Series exists outside the user window (latest %s) — raising "
-                    "window marker instead of retrying alternates.",
-                    probe_latest,
-                )
-                raise DataNotAvailableError(
-                    "no_data_in_requested_window: the series exists but has no "
-                    "observations inside the user-requested time window. "
-                    f"latest_available={probe_latest}"
-                )
         raise DataNotAvailableError(
             f"No data available from {execution_plan.provider} for the requested parameters. "
             f"The data may not exist or may not be available for the specified time period or location."

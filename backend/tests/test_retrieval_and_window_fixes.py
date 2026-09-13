@@ -102,32 +102,19 @@ def test_uncertain_clarification_suppressed_for_exact_user_input():
 
 # --- Country-group geography merge + dedup ---------------------------------
 
-def test_region_merge_keeps_named_country():
-    """'US vs Eurozone' must keep the US alongside the expanded members."""
+def test_region_comparison_preserves_parsed_entities():
+    """'US vs Eurozone' keeps the country and aggregate as two requested entities."""
     from backend.models import ParsedIntent
     from backend.services.query_helpers import apply_country_overrides
 
-    class _Svc:
-        def _detect_explicit_provider(self, q):
-            return None
-
-        def _normalize_country_to_iso2(self, c):
-            m = {"united states": "US", "us": "US", "usa": "US", "germany": "DE",
-                 "france": "FR", "italy": "IT", "spain": "ES"}
-            return m.get(str(c).strip().lower())
-
     intent = ParsedIntent(
         apiProvider="WORLDBANK", indicators=["inflation"], clarificationNeeded=False,
-        parameters={"country": "US"},
+        parameters={"countries": ["US", "Eurozone"]},
         originalQuery="inflation in US vs Eurozone",
     )
-    apply_country_overrides(_Svc(), intent, intent.originalQuery)
-    countries = intent.parameters.get("countries") or []
-    norm = {_Svc()._normalize_country_to_iso2(c) or str(c).upper() for c in countries}
-    assert "US" in norm, f"US dropped from comparison: {countries}"
-    assert len(countries) > 1
-    # No duplicate normalized codes.
-    assert len(norm) == len(countries) or len(set(map(str, countries))) == len(countries)
+    apply_country_overrides(SimpleNamespace(), intent, intent.originalQuery)
+    assert intent.parameters["countries"] == ["US", "Eurozone"]
+    assert "country" not in intent.parameters
 
 
 def test_bis_dedup_by_code(monkeypatch):

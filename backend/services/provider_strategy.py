@@ -76,14 +76,9 @@ def provider_is_auto_routable(provider: str, explicit_provider: str = "") -> boo
 # data-model metadata, not a semantic rule.
 GEOGRAPHY_ENCODED_PROVIDERS = frozenset({"FRED", "STATSCAN", "COMTRADE", "COINGECKO", "CHINAMACRO"})
 
-# Provider-NATIVE aggregate geography codes for country groups (keys match
-# CountryResolver.detect_regions_in_query outputs). When the routed provider
-# publishes an official aggregate for the requested group, the pipeline serves
-# it directly instead of asking "compare members or one value?" — the official
-# series is population/PPP-weighted by the source (correct), while member
-# averaging is not. Groups absent here (G7/G20/BRICS: no official aggregate
-# series at these providers) keep the clarification. Structural reference
-# data, consulted generically.
+# Provider-native identifiers for already parsed aggregate entities. These
+# structural identities do not decide whether a query requests group totals
+# or individual members, and do not authorize averaging member observations.
 PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
     "EUROSTAT": {
         "EUROZONE": "EA20",
@@ -99,6 +94,61 @@ PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
         "EUROZONE": "EA",
     },
 }
+
+
+def humanize_region_name(region: str) -> str:
+    """Convert normalized region keys into user-facing labels."""
+    text = str(region or "").strip()
+    if not text:
+        return text
+
+    replacements = {
+        "BRICS_PLUS": "BRICS+",
+        "EU": "European Union",
+        "EUROZONE": "euro area",
+        "LATAM": "Latin America",
+        "MENA": "Middle East and North Africa",
+        "SSA": "Sub-Saharan Africa",
+        "EAST_ASIA": "East Asia",
+        "SOUTH_ASIA": "South Asia",
+        "SOUTHEAST_ASIA": "Southeast Asia",
+    }
+    if text in replacements:
+        return replacements[text]
+    if text.isupper():
+        return text.replace("_", " ")
+    return text.replace("_", " ").title()
+
+
+def canonical_aggregate_region(value: Any) -> Optional[str]:
+    """Identify an exact established aggregate entity, without expanding members."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    key = re.sub(r"[_\s]+", " ", value.strip()).casefold()
+    matches = set()
+    for mapping in PROVIDER_GROUP_AGGREGATES.values():
+        for region, native_code in mapping.items():
+            for alias in (region, native_code, humanize_region_name(region)):
+                if key == re.sub(r"[_\s]+", " ", alias.strip()).casefold():
+                    matches.add(region)
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def normalize_aggregate_geography(provider: str, params: dict) -> dict:
+    """Use the selected provider's native ID, or retain the established entity label."""
+    mapping = PROVIDER_GROUP_AGGREGATES.get(normalize_provider_name(provider), {})
+    normalized = dict(params)
+    def normalize_entity(value: Any) -> Any:
+        region = canonical_aggregate_region(value)
+        if region is None:
+            return value
+        return mapping.get(region, humanize_region_name(region))
+
+    if "country" in normalized:
+        normalized["country"] = normalize_entity(normalized["country"])
+    if isinstance(normalized.get("countries"), list):
+        normalized["countries"] = [normalize_entity(value) for value in normalized["countries"]]
+    return normalized
 
 
 def region_qualified_indicator_text(

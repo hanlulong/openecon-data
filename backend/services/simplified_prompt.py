@@ -151,7 +151,7 @@ Ambiguity policy:
   ambiguous: "jobs numbers"/"jobs report" -> nonfarm payrolls; "inflation print"/
   "inflation numbers" -> inflation rate (CPI); "growth figures" -> GDP growth.
   Resolve to the standard headline measure instead of asking.
-- Only ask for clarification when the query uses a genuinely broad/underspecified concept
+- Only ask for clarification when the concept or geographic scope is genuinely underspecified
   AND there is no clear default.  Err on the side of fetching data rather than asking.
 
 Date handling:
@@ -168,9 +168,9 @@ Date handling:
 - Do not assume defaults in prompt logic. Backend applies provider-specific defaults.
 
 Geography extraction:
-- For one country: set parameters.country.
-- For multiple countries: set parameters.countries as an ordered list.
-- Keep user-stated order in multi-country queries.
+- Preserve the requested geographic entity and extent; a continent is not interchangeable with a political union.
+- An available narrower aggregate does not justify substitution. If distinct geographic interpretations remain unresolved, ask for clarification rather than inventing membership.
+- Set parameters.country for one geographic entity, including a group aggregate; use parameters.countries for distinct requested entities in order, preserving aggregate entities in comparisons. Enumerate member countries only when the user requests member comparisons.
 - subnationalRegion: when the user asks about a sub-country region (a state,
   province, prefecture, municipality, city, etc.), set subnationalRegion to that
   region's name AND still set country to the PARENT country. Set null when the

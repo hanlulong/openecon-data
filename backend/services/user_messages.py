@@ -79,21 +79,20 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "仅能获取部分所请求国家/地区的数据。缺失：{missing}。"
         ),
     },
-    # (3b) Time-window honesty: the series EXISTS but every observation falls
-    # before the user's requested window (not-yet-published periods, frozen
-    # series). Distinct from generic no-data: we can tell the user exactly how
-    # far the data goes. {scope} = indicator/country fragment, {latest} = date.
-    "not_yet_released": {
+    # (3b) Observed series coverage does not establish a publication schedule.
+    # {scope} = indicator/country fragment, {latest} = observed date.
+    "no_observations_in_window": {
         "en": (
-            "⚠️ **Requested period not yet available**\n\n"
+            "⚠️ **No observations in the requested period**\n\n"
             "The latest available observation for {scope} is **{latest}**. "
-            "Data for the requested period has not been published yet — try "
-            "again after the next release, or ask for the latest available data."
+            "No observations were found for this series in the requested period. "
+            "You can ask for a different period or the latest available data."
         ),
         "zh": (
-            "⚠️ **所请求时段的数据尚未发布**\n\n"
+            "⚠️ **所请求时段内没有观测数据**\n\n"
             "{scope} 目前最新的数据点为 **{latest}**。"
-            "所请求时段的数据尚未发布——请在下次发布后再试，或查询最新可用数据。"
+            "未找到该序列在所请求时段内的观测数据。"
+            "您可以查询其他时段或最新可用数据。"
         ),
     },
     # (4) Multi-indicator partial-failure note (data_fetcher.fetch_multi_indicator_data).

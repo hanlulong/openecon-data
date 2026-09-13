@@ -90,9 +90,6 @@ class EurostatProvider(BaseProvider):
         "EUROPEAN UNION": "EU27_2020",
         "EURO AREA": "EA20",  # Updated: EA19→EA20 (20 countries from 2023)
         "EUROZONE": "EA20",   # Updated: EA19→EA20 (20 countries from 2023)
-        # CRITICAL FIX: Common alternative terms for EU/Europe that LLM might use
-        "EUROPE": "EU27_2020",  # Generic "Europe" should map to EU27
-        "EUROPEAN": "EU27_2020",
         "EU_27": "EU27_2020",
         "EU27": "EU27_2020",
         "EA": "EA20",  # Euro Area shorthand
@@ -205,11 +202,12 @@ class EurostatProvider(BaseProvider):
         2. CountryResolver for individual countries - unified ISO alpha-2 codes
         3. Fallback to uppercase original
         """
-        key = country.upper().replace(" ", "_")
+        key = re.sub(r"[_\s]+", " ", country.upper()).strip()
 
         # Check Eurostat-specific aggregates first (EU, Euro Area, etc.)
-        if key in self.COUNTRY_MAPPINGS:
-            return self.COUNTRY_MAPPINGS[key]
+        for alias in (key, key.replace(" ", "_")):
+            if alias in self.COUNTRY_MAPPINGS:
+                return self.COUNTRY_MAPPINGS[alias]
 
         # PHASE C: Use CountryResolver for individual country normalization
         try:

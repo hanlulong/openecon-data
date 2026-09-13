@@ -145,7 +145,8 @@ def test_window_marker_renders_latest_available_en() -> None:
     )
     assert resp.error == "no_data_in_requested_window"
     assert "2019-08-01" in (resp.message or "")
-    assert "not been published yet" in (resp.message or "")
+    assert "No observations were found" in (resp.message or "")
+    assert "published" not in (resp.message or "")
 
 
 def test_window_marker_renders_zh() -> None:
@@ -157,7 +158,8 @@ def test_window_marker_renders_zh() -> None:
         "no_data_in_requested_window: latest_available=2026-06-01",
     )
     assert "2026-06-01" in (resp.message or "")
-    assert "尚未发布" in (resp.message or "")
+    assert "未找到" in (resp.message or "")
+    assert "发布" not in (resp.message or "")
 
 
 def test_window_marker_without_date_stays_bare_for_finalizer() -> None:

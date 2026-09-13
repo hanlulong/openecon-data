@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from ..models import NormalizedData, ParsedIntent
 from .provider_fallback import normalize_country_to_iso2
-from .provider_strategy import collect_target_countries
+from .provider_strategy import canonical_aggregate_region, collect_target_countries
 from .user_messages import get_message as _localized_message
 
 logger = logging.getLogger(__name__)
@@ -24,26 +24,27 @@ def assess_country_coverage(
     data: Optional[List[NormalizedData]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Assess whether a multi-country request is fully represented in result data.
+    Assess whether requested country/aggregate entities are present in results.
 
     Returns None when coverage checks do not apply (for example single-country
-    queries), otherwise returns a dict with coverage details.
+    queries without an aggregate), otherwise returns a dict with coverage details.
     """
     if not intent or not data:
         return None
 
     requested_countries = collect_target_countries(intent.parameters)
-    if len(requested_countries) < 2:
+    has_aggregate = any(canonical_aggregate_region(country) for country in requested_countries)
+    if len(requested_countries) < 2 and not has_aggregate:
         return None
 
     requested_map: "OrderedDict[str, str]" = OrderedDict()
     for raw_country in requested_countries:
-        normalized_iso2 = normalize_country_to_iso2(raw_country)
+        normalized_iso2 = canonical_aggregate_region(raw_country) or normalize_country_to_iso2(raw_country)
         if not normalized_iso2:
             continue
         requested_map.setdefault(normalized_iso2, str(raw_country))
 
-    if len(requested_map) < 2:
+    if len(requested_map) < 2 and not has_aggregate:
         return None
 
     returned_map: "OrderedDict[str, str]" = OrderedDict()
@@ -52,7 +53,7 @@ def assess_country_coverage(
         if not metadata:
             continue
         result_country = getattr(metadata, "country", None)
-        normalized_iso2 = normalize_country_to_iso2(result_country)
+        normalized_iso2 = canonical_aggregate_region(result_country) or normalize_country_to_iso2(result_country)
         if not normalized_iso2:
             continue
         returned_map.setdefault(normalized_iso2, str(result_country))

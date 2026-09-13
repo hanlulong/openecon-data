@@ -50,7 +50,11 @@ from ..services.indicator_resolution import (
     is_placeholder_indicator_code as _is_placeholder_indicator_code,
     is_resolved_indicator_plausible as _is_resolved_indicator_plausible,
 )
-from ..services.provider_strategy import region_qualified_indicator_text
+from ..services.provider_strategy import (
+    canonical_aggregate_region,
+    humanize_region_name,
+    region_qualified_indicator_text,
+)
 from ..utils.option_supportability import option_supportability_reason
 from ..utils.processing_steps import (
     ProcessingTracker,
@@ -1040,6 +1044,20 @@ def collect_indicator_choice_options(
             )
             continue
 
+        if len(target_countries) == 1 and len(target_iso2) == 1:
+            # Keep the collector's existing missing-score and malformed-row
+            # behavior while sharing the selector's geographic constraint.
+            paired = [
+                (candidate, scores[idx] if idx < len(scores) else 0.0)
+                for idx, candidate in enumerate(candidates) if len(candidate) >= 2
+            ]
+            candidates, scores, all_conflict, _ = selector._apply_country_constraint(
+                target_iso2[0], [candidate for candidate, _ in paired],
+                [score for _, score in paired],
+            )
+            if all_conflict:
+                continue
+
         for idx, candidate in enumerate(candidates[: max(max_options * 2, 6)]):
             if len(candidate) < 2:
                 continue
@@ -1869,28 +1887,6 @@ def verify_semantic_discriminators(
 # Region / group scope helpers
 # ====================================================================
 
-def humanize_region_name(region: str) -> str:
-    """Convert normalized region keys into user-facing labels."""
-    text = str(region or "").strip()
-    if not text:
-        return text
-
-    replacements = {
-        "BRICS_PLUS": "BRICS+",
-        "EU": "European Union",
-        "EUROZONE": "euro area",
-        "LATAM": "Latin America",
-        "MENA": "Middle East and North Africa",
-        "SSA": "Sub-Saharan Africa",
-        "EAST_ASIA": "East Asia",
-        "SOUTH_ASIA": "South Asia",
-        "SOUTHEAST_ASIA": "Southeast Asia",
-    }
-    if text in replacements:
-        return replacements[text]
-    if text.isupper():
-        return text.replace("_", " ")
-    return text.replace("_", " ").title()
 
 
 def has_explicit_group_scope(qs: Any, query: str) -> bool:
@@ -1948,16 +1944,6 @@ def rewrite_group_scope_query(
     if region_upper and region_upper != region_label:
         region_patterns.append(re.escape(region_upper.replace("_", " ")))
     region_patterns.append(re.escape(region_upper))
-    if region_upper == "EU":
-        region_patterns.extend(
-            re.escape(alias)
-            for alias in (
-                "Europe",
-                "European",
-                "European countries",
-                "European economies",
-            )
-        )
     region_regex = "|".join(pattern for pattern in region_patterns if pattern)
 
     rewritten = query_text
@@ -2010,6 +1996,15 @@ def build_group_scope_clarification(
     processing_steps: Optional[List[Any]] = None,
 ) -> Optional[QueryResponse]:
     """Ask whether a group query means member-country comparison or one group value."""
+    if intent:
+        if intent.clarificationNeeded:
+            return None
+        params = intent.parameters or {}
+        country = params.get("country")
+        if params.get("countries") or (
+            country and (canonical_aggregate_region(country) or CountryResolver.normalize(country))
+        ):
+            return None
     if is_multi_indicator:
         return None
     if intent and intent.indicators and len(intent.indicators) > 1:
@@ -2030,27 +2025,6 @@ def build_group_scope_clarification(
     if not expanded or len(expanded) < 2:
         return None
     if has_explicit_group_scope(qs, query):
-        return None
-
-    # When the routed provider publishes an OFFICIAL aggregate for this group
-    # (Eurostat EA20/EU27_2020, WB EMU/EUU/WLD — see provider_strategy), serve
-    # it directly instead of asking: the source's aggregate is the correct
-    # single-value answer, and "compare member countries" remains one natural
-    # follow-up away. Previously EVERY "euro area X" query stopped at this
-    # clarification despite the native series existing.
-    from .provider_strategy import PROVIDER_GROUP_AGGREGATES
-
-    provider_norm = normalize_provider_name(getattr(intent, "apiProvider", "") or "") if intent else ""
-    aggregate_code = PROVIDER_GROUP_AGGREGATES.get(provider_norm, {}).get(region)
-    if aggregate_code and intent is not None:
-        params = dict(intent.parameters or {})
-        params["country"] = aggregate_code
-        params.pop("countries", None)
-        intent.parameters = params
-        logger.info(
-            "🌍 Group scope resolved to provider-native aggregate: %s/%s -> %s",
-            provider_norm, region, aggregate_code,
-        )
         return None
 
     region_label = humanize_region_name(region)

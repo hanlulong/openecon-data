@@ -12,6 +12,7 @@ from typing import Any
 
 from ..models import ExecutionPlan, ParsedIntent
 from ..utils.providers import normalize_provider_name
+from .provider_strategy import normalize_aggregate_geography
 
 
 def _candidate_code(intent: ParsedIntent) -> str:
@@ -80,6 +81,9 @@ def build_minimal_execution_plan(query: str, intent: ParsedIntent) -> ExecutionP
 
     provider = normalize_provider_name(intent.apiProvider or "") or "UNKNOWN"
     params = dict(intent.parameters or {})
+    if not intent.clarificationNeeded:
+        params = normalize_aggregate_geography(provider, params)
+        intent = intent.model_copy(update={"parameters": params})
     code = _candidate_code(intent)
     query_text = _execution_query_text(query, intent)
     requested_countries = _requested_countries(intent)

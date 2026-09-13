@@ -186,13 +186,13 @@ from ..services.data_fetcher import (
     fetch_historical_exchange_from_fred as _df_fetch_historical_exchange_from_fred,
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
-    _user_set_time_scope as _df_user_set_time_scope,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
     _has_statscan_mechanical_dimension_dispatch_authority as _df_has_statscan_mechanical_dimension_dispatch_authority,
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
 )
 from ..services.provider_strategy import (
     GEOGRAPHY_ENCODED_PROVIDERS,
+    canonical_aggregate_region,
     collect_target_countries as _ps_collect_target_countries,
     get_provider_for_single_country as _ps_get_provider_for_single_country,
     provider_supports_requested_scope as _ps_provider_supports_requested_scope,
@@ -2080,7 +2080,7 @@ class QueryService:
             country_text = str(getattr(metadata, "country", "") or "").strip()
             if not country_text:
                 continue
-            normalized = self._normalize_country_to_iso2(country_text) or country_text.upper()
+            normalized = canonical_aggregate_region(country_text) or self._normalize_country_to_iso2(country_text) or country_text.upper()
             if normalized not in countries:
                 countries.append(normalized)
         return countries
@@ -2105,9 +2105,11 @@ class QueryService:
             return "Expected a decomposition result with multiple populated members, but the result collapsed to a single member."
 
         if "country_scope" in verification_checks:
-            requested_countries = self._normalize_country_targets(
-                list(expected_shape.get("requested_countries") or [])
-            )
+            requested_countries = list(dict.fromkeys(
+                canonical_aggregate_region(country) or self._normalize_country_to_iso2(country) or str(country).upper()
+                for country in (expected_shape.get("requested_countries") or [])
+                if str(country or "").strip()
+            ))
             returned_countries = self._returned_country_scope(data)
             if requested_countries and not returned_countries:
                 return (
@@ -3171,43 +3173,8 @@ class QueryService:
         return _qd_maybe_expand_ranking_country_scope(query, provider, params)
 
     def _maybe_resolve_region_clarification(self, query: str, intent: ParsedIntent) -> bool:
-        """
-        Resolve parser-issued geography clarification when query already names known regions.
-
-        Example:
-        - "energy importers versus exporters" -> expand both groups to countries
-        """
-        if not intent or not intent.clarificationNeeded:
-            return False
-
-        expanded_countries = CountryResolver.expand_regions_in_query(query)
-        if len(expanded_countries) < 2:
-            return False
-
-        params = dict(intent.parameters or {})
-        params.pop("country", None)
-        params["countries"] = expanded_countries
-        intent.parameters = params
-
-        if not intent.indicators:
-            distilled = self._build_distilled_indicator_query(query)
-            if distilled:
-                intent.indicators = [distilled]
-        else:
-            query_cues = self._extract_indicator_cues(query)
-            if "current_account" in query_cues:
-                intent.indicators = ["current account balance (% of GDP)"]
-                params.pop("indicator", None)
-                intent.parameters = params
-
-        intent.clarificationNeeded = False
-        intent.clarificationQuestions = []
-
-        logger.info(
-            "🌍 Resolved region-based clarification using expanded countries: %s",
-            expanded_countries,
-        )
-        return True
+        """Preserve parser scope questions; group membership cannot resolve intent."""
+        return False
 
     def _maybe_resolve_temporal_comparison_clarification(self, query: str, intent: ParsedIntent) -> bool:
         """
@@ -3855,8 +3822,11 @@ class QueryService:
         iso2_map: "OrderedDict[str, str]" = OrderedDict()
         for raw in raw_countries:
             iso2 = self._normalize_country_to_iso2(raw)
-            if iso2:
-                iso2_map.setdefault(iso2, raw)
+            if not iso2:
+                # This splitter models individual countries only; partitioning
+                # a subset would silently discard aggregate/unknown entities.
+                return None
+            iso2_map.setdefault(iso2, raw)
         if len(iso2_map) < 2:
             return None
 
@@ -4145,7 +4115,7 @@ class QueryService:
         """Bare empty response for a no_data_in_requested_window failure.
 
         When the marker carries a usable latest_available date, render the
-        localized "not yet released" explanation directly (finalizer passes
+        localized observed-coverage explanation directly (finalizer passes
         message-bearing responses through); otherwise leave the response bare
         so the finalizer stamps its scope-aware generic explanation.
         """
@@ -4161,7 +4131,7 @@ class QueryService:
             country = str(((intent.parameters or {}).get("country") or "")) if intent else ""
             scope = " — ".join(part for part in (indicator, country) if part) or "this series"
             message = _um_get(
-                "not_yet_released",
+                "no_observations_in_window",
                 getattr(intent, "language", None),
                 scope=scope,
                 latest=match.group(1)[:10],
@@ -6252,50 +6222,6 @@ class QueryService:
                     # can never help and burned 3 fetch+LLM rounds per query.
                     raise
                 params = intent.parameters or {}
-                # Frozen/lagged-series fast path: providers that raise (or
-                # window server-side) on an empty USER window never reveal the
-                # series EXISTS with older data — the window marker can't fire
-                # at the fetch layer and the pipeline wanders retries/
-                # rejections/fallbacks for ~2 minutes (live: China M2 ends
-                # 2019, "last 3 months"). ONE unwindowed probe of the same
-                # resolved series answers it: observations exist -> raise the
-                # non-retriable marker with latest_available (fast, honest,
-                # localized); truly absent -> normal retry machinery.
-                if (
-                    not excluded  # probe at most once per query
-                    and str(params.get("indicator") or "").strip()
-                    and _df_user_set_time_scope(params, intent.originalQuery or "")
-                    and any(params.get(k) for k in ("startDate", "endDate", "start_year", "end_year"))
-                ):
-                    probe_intent = intent.model_copy(deep=True)
-                    probe_params = dict(probe_intent.parameters or {})
-                    for k in ("startDate", "endDate", "start_year", "end_year"):
-                        probe_params.pop(k, None)
-                    probe_intent.parameters = probe_params
-                    probe_latest = ""
-                    try:
-                        probe_result = await _df_fetch_data(self, probe_intent, execution_plan=None)
-                        for _series in probe_result or []:
-                            for _point in getattr(_series, "data", None) or []:
-                                _pd = str(
-                                    _point.get("date") if isinstance(_point, dict)
-                                    else getattr(_point, "date", "") or ""
-                                )
-                                if len(_pd) >= 4 and _pd[:4].isdigit() and _pd > probe_latest:
-                                    probe_latest = _pd
-                    except Exception:
-                        probe_latest = ""
-                    if probe_latest:
-                        logger.info(
-                            "🧊 Series exists outside the user window (latest %s) — "
-                            "window marker instead of alternate retries.",
-                            probe_latest,
-                        )
-                        raise DataNotAvailableError(
-                            "no_data_in_requested_window: the series exists but has "
-                            "no observations inside the user-requested time window. "
-                            f"latest_available={probe_latest}"
-                        )
                 failed_code = str(params.get("indicator") or "").strip()
                 decision_source = str(params.get("__decision_source") or "")
                 already = {c.upper() for c in excluded}

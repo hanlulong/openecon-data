@@ -15,6 +15,7 @@ from ..models import ParsedIntent
 from .parameter_validator import ParameterValidator
 from ..routing.unified_router import validate_routing as unified_validate_routing
 from ..utils.providers import normalize_provider_name
+from .provider_strategy import normalize_aggregate_geography
 
 if TYPE_CHECKING:
     from .query import QueryService
@@ -184,7 +185,7 @@ class QueryPipeline:
         parsed_intent.originalQuery = query
         self._drop_llm_invented_indicator_codes(parsed_intent, query)
 
-        # Geography override is deterministic and should always be applied post-parse.
+        # Fill only missing/default country context; preserve parsed entities.
         self.query_service._apply_country_overrides(parsed_intent, query)
 
         explicit_provider_raw = self.query_service._detect_explicit_provider(query)
@@ -214,6 +215,11 @@ class QueryPipeline:
                     routed_provider,
                 )
                 parsed_intent.apiProvider = routed_provider
+
+        if not parsed_intent.clarificationNeeded:
+            parsed_intent.parameters = normalize_aggregate_geography(
+                routed_provider, parsed_intent.parameters or {},
+            )
 
         validation_warning = unified_validate_routing(routed_provider, query, parsed_intent)
         if validation_warning:

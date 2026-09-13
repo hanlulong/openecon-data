@@ -64,29 +64,18 @@ def extract_countries_from_query(query: str) -> List[str]:
 def apply_country_overrides(
     svc: "QueryService", intent: ParsedIntent, query: str
 ) -> None:
-    """Apply geography overrides when query text clearly specifies country
-    context but LLM output defaults to US/no country.
-
-    Rules:
-    - If query names 1 non-US country and intent defaults to US/no country -> set `country`.
-    - If query names multiple countries and intent defaults to US/no country -> set `countries`.
-    """
+    """Fill concrete-country context only when the parser left it empty/default-US."""
+    if intent.clarificationNeeded:
+        return
     if intent.parameters is None:
         intent.parameters = {}
 
-    extracted_countries = extract_countries_from_query(query)
-    expanded_region_countries = CountryResolver.expand_regions_in_query(query)
-    explicit_provider_requested = normalize_provider_name(
-        svc._detect_explicit_provider(query) or ""
-    )
-    if not extracted_countries and not expanded_region_countries:
-        return
-
     current_country = str(intent.parameters.get("country", "") or "")
     current_countries_raw = intent.parameters.get("countries")
-    current_countries = []
-    if isinstance(current_countries_raw, list):
-        current_countries = [str(c) for c in current_countries_raw if c is not None]
+    current_countries = (
+        [str(country) for country in current_countries_raw if country is not None]
+        if isinstance(current_countries_raw, list) else []
+    )
 
     def _is_us(value: str) -> bool:
         return value.strip().lower() in {"us", "usa", "united states", "america"}
@@ -96,109 +85,16 @@ def apply_country_overrides(
         or (_is_us(current_country) and not current_countries)
         or (len(current_countries) == 1 and _is_us(current_countries[0]))
     )
-
-    # Region-based multi-country override: when query mentions a known
-    # country group (G7, G20, BRICS, EU, ASEAN, etc.), always expand to
-    # the full member list regardless of comparative language.
-    if len(expanded_region_countries) > 1:
-        # Provider names like "from OECD" or "from Eurostat" can look like
-        # region/group cues, but they should not override an explicitly named
-        # concrete country in the same query.
-        if explicit_provider_requested and extracted_countries:
-            logger.info(
-                "🌍 Region Override skipped: explicit provider '%s' with concrete country %s",
-                explicit_provider_requested,
-                extracted_countries,
-            )
-            expanded_region_countries = []
-
-    if len(expanded_region_countries) > 1:
-        current_geo = current_countries[:] if current_countries else (
-            [current_country] if current_country else []
-        )
-        normalized_current = [
-            svc._normalize_country_to_iso2(country) or str(country).upper()
-            for country in current_geo
-            if country
-        ]
-        # UNION explicitly named countries with the group members — replacing
-        # the whole geography with only the group silently dropped the other
-        # comparators ("inflation US vs Eurozone" lost the US entirely).
-        # Explicit countries lead; members follow; dedup by normalized ISO2.
-        combined_target: list[str] = []
-        seen_norm: set[str] = set()
-        for country in list(extracted_countries) + list(expanded_region_countries):
-            norm = svc._normalize_country_to_iso2(country) or str(country).upper()
-            if norm in seen_norm:
-                continue
-            seen_norm.add(norm)
-            combined_target.append(country)
-        normalized_target = [
-            svc._normalize_country_to_iso2(country) or str(country).upper()
-            for country in combined_target
-        ]
-        if normalized_current != normalized_target:
-            previous = current_country or (
-                ",".join(current_countries) if current_countries else ""
-            )
-            intent.parameters.pop("country", None)
-            intent.parameters["countries"] = combined_target
-            logger.info(
-                "🌍 Region Override: '%s' -> %s (query specifies a country group)",
-                previous,
-                combined_target,
-            )
-            return
-
-    # Multi-country override should apply whenever query explicitly names
-    # multiple countries, even if parser already selected one non-US country.
-    if len(extracted_countries) > 1:
-        normalized_current = [
-            svc._normalize_country_to_iso2(country) or str(country).upper()
-            for country in current_countries
-            if country
-        ]
-        if current_country:
-            normalized_current.append(
-                svc._normalize_country_to_iso2(current_country) or str(current_country).upper()
-            )
-        normalized_current = list(dict.fromkeys(normalized_current))
-
-        normalized_extracted = [
-            svc._normalize_country_to_iso2(country) or str(country).upper()
-            for country in extracted_countries
-        ]
-        normalized_extracted = list(dict.fromkeys(normalized_extracted))
-
-        if normalized_current != normalized_extracted:
-            previous = current_country or (
-                ",".join(current_countries) if current_countries else ""
-            )
-            intent.parameters.pop("country", None)
-            intent.parameters["countries"] = extracted_countries
-            logger.info(
-                "🌍 Country Override (multi): '%s' -> %s (query explicitly names multiple countries)",
-                previous,
-                extracted_countries,
-            )
-        return
-
     if not defaulted_to_us_or_empty:
         return
 
-    # Single-country override
-    if not extracted_countries:
-        return
-    extracted_country = extracted_countries[0]
-    if extracted_country.upper() != "US":
-        previous = current_country or (current_countries[0] if current_countries else "")
-        intent.parameters["country"] = extracted_country
+    extracted_countries = extract_countries_from_query(query)
+    if len(extracted_countries) > 1:
+        intent.parameters.pop("country", None)
+        intent.parameters["countries"] = extracted_countries
+    elif extracted_countries and extracted_countries[0].upper() != "US":
+        intent.parameters["country"] = extracted_countries[0]
         intent.parameters.pop("countries", None)
-        logger.info(
-            "🌍 Country Override: '%s' -> '%s' (query explicitly mentions non-US country)",
-            previous,
-            extracted_country,
-        )
 
 
 def build_alternative_series(intent: ParsedIntent, data: Any) -> Optional[list]:
@@ -408,7 +304,7 @@ async def maybe_recover_from_empty_data(
     - Expand region/group queries to explicit country lists.
     - Re-route provider for the recovered intent and retry once.
     """
-    if not intent:
+    if not intent or intent.clarificationNeeded:
         return None
 
     params = dict(intent.parameters or {})
@@ -434,7 +330,7 @@ async def maybe_recover_from_empty_data(
         recovered_params.pop("code", None)
         recovered_params["indicator"] = distilled_indicator
 
-    if ranking_or_comparison:
+    if ranking_or_comparison and not svc._collect_target_countries(recovered_params):
         target_countries = svc._collect_target_countries(recovered_params)
         if len(target_countries) < 2:
             expanded_regions = CountryResolver.expand_regions_in_query(query)
@@ -739,7 +635,7 @@ def maybe_expand_multi_concept_intent(
     This reduces unnecessary clarification loops for queries like
     "compare unemployment and inflation for G7 countries".
     """
-    if not intent:
+    if not intent or intent.clarificationNeeded:
         return False
     if intent.indicators and len(intent.indicators) > 1:
         return False
@@ -751,7 +647,7 @@ def maybe_expand_multi_concept_intent(
         return False
 
     target_countries = svc._collect_target_countries(intent.parameters)
-    if len(target_countries) < 2:
+    if not target_countries:
         extracted = svc._extract_countries_from_query(query)
         expanded = CountryResolver.expand_regions_in_query(query)
         target_countries = extracted or expanded or target_countries

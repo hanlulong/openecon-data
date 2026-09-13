@@ -153,24 +153,13 @@ def maybe_expand_ranking_country_scope(
         return params
 
     existing_targets = collect_target_countries(params)
-    if len(existing_targets) >= 2:
+    if existing_targets:
         return params
 
-    expanded_countries: List[str] = []
-
-    if len(existing_targets) == 1:
-        region_expansion = CountryResolver.expand_region(existing_targets[0])
-        if region_expansion and len(region_expansion) >= 2:
-            expanded_countries = region_expansion
-        else:
-            return params
-    else:
-        expanded_countries = CountryResolver.expand_regions_in_query(query_text)
-        # If region expansion didn't yield countries for a ranking query,
-        # default to G20 — the LLM should provide specific countries, but
-        # for ranking queries we need a sensible default set.
-        if len(expanded_countries) < 2:
-            expanded_countries = sorted(CountryResolver.G20_MEMBERS)
+    expanded_countries = CountryResolver.expand_regions_in_query(query_text)
+    # Retain the existing fallback only when no entities were parsed.
+    if len(expanded_countries) < 2:
+        expanded_countries = sorted(CountryResolver.G20_MEMBERS)
 
     if len(expanded_countries) < 2:
         return params
