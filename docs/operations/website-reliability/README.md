@@ -20,7 +20,15 @@ See [backend memory management](backend-memory.md) for model sharing, build-cach
 - Before request logging buffers MCP POSTs, the body guard enforces a 1 MiB byte ceiling, a 10-second total receive deadline and 32 concurrent POST requests. Slots remain held until the inner ASGI request completes. CORS wraps overload/error responses.
 - Existing query deadlines and request-rate policies remain in place. Tools and provider selection were not changed.
 
-These are conservative operating limits, not a capacity benchmark. Application counters are per process; Nginx stream limits use shared zones. The POST allowance does not bound tool tasks and request metadata retained after HTTP 202. Initialized idle clients can occupy the stream allowance; strong fairness/account quotas require a separate policy. Future authentication configuration must explicitly wire transport dependencies and any OAuth setup.
+These are conservative operating limits, not a capacity benchmark. Application counters are per process; Nginx stream limits use shared zones. The POST allowance does not bound tool tasks and request metadata retained after HTTP 202. Sessions must successfully initialize within 30 seconds. After initialization, sessions with no pending RPC expire after 300 seconds without a valid JSON-RPC message delivered to the protocol server or a completed response. These defaults are configurable with `MCP_INITIALIZE_TIMEOUT_SECONDS` and `MCP_IDLE_TIMEOUT_SECONDS`. Server heartbeat comments do not renew the lease. Pending tool calls retain their session until a matching response/error is sent, then receive a fresh idle interval. Expiry normally ends SSE cleanly; blocked response sends have a bounded five-second cleanup grace. Continuously active clients or permanently pending calls can still occupy the finite stream allowance; strong fairness/account quotas require a separate policy. Future authentication configuration must explicitly wire transport dependencies and any OAuth setup.
+
+Idle MCP clients must close and recreate their SSE and client-session contexts after expiry. The installed legacy SDK does not reconnect inside an existing closed context. Reinitialize and rediscover tools on the fresh connection; an old message URL returns 404. Treat overload 503/Retry-After as admission failure and retry with a new session after the stated delay. Do not automatically replay a tool request whose outcome is unknown.
+
+## Search index integrity
+
+The retrieval loader validates all codes/names/providers as equal-length lists of nonblank strings before opening the matrix. It requires a float32 matrix with one row per identity and 1536 columns. Invalid existing mmap artifacts fail without loading a second large NPZ; the legacy NPZ fallback remains available when mmap is absent. Loaded state is published only after validation and provider masks are ready.
+
+The September 13 repair restores 514 missing live names and 521 missing names in the active name-vector build base using each artifact's exact existing provider/code order and unique database matches. Existing prefix names, identity arrays and all vectors stay unchanged. Dated historical backups remain unchanged. The append writer now appends all three metadata arrays, validates inputs before paid calls, and checks response count/index coverage and vector shape before writing. The weighted builder applies the same input/output guards. Individual artifact writes do not constitute a multi-file transaction; preserve backups and stage/review a full generation before future adoption.
 
 ## Server configuration snapshots
 
@@ -57,7 +65,7 @@ journalctl -u openecon-website-monitor.service --since today
 /home/hanlulong/OpenEcon/backend/.venv/bin/python /usr/local/lib/openecon-website-monitor/monitor.py --status --output /var/lib/openecon-website-monitor/latest.json
 ```
 
-The status command rejects incomplete, contradictory or older-than-ten-minute results. Monitoring originates on this server and provides local detection, not external outage notifications. It does not certify authenticated user workflows, every WebSocket client or economic-query correctness.
+The status command returns a fresh, complete FAILED report with its actual failed checks and a nonzero exit. MCP failures include allowlisted stage/method/error codes, HTTP status and numeric Retry-After where available; raw exception messages, bodies and session URLs are excluded. Missing, stale, in-progress and invalid reports remain distinct failures. The status command rejects incomplete, contradictory or older-than-ten-minute results. Monitoring originates on this server and provides local detection, not external outage notifications. It does not certify authenticated user workflows, every WebSocket client or economic-query correctness.
 
 ## Verification and remaining work
 
@@ -66,7 +74,7 @@ The repair passed 78 transport/admission/rate/wiring tests, including the instal
 Run the focused backend tests from `backend/` with the installed environment:
 
 ```bash
-env -i PATH=/usr/local/bin:/usr/bin:/bin PYTHONPATH="$(dirname "$PWD")" NODE_ENV=test OPENROUTER_API_KEY=test-only-key JWT_SECRET=test-only-secret DISABLE_MCP=1 DISABLE_BACKGROUND_JOBS=1 ENABLE_METADATA_LOADING=false OPENECON_EMBED_FIXTURES=replay OPENECON_SELECTOR_FIXTURES=replay .venv/bin/python -m pytest --noconftest tests/test_mcp_transport.py tests/test_mcp_stream_limit.py tests/test_mcp_rate_limit_middleware.py tests/test_mcp_stream_wiring.py -q
+env -i PATH=/usr/local/bin:/usr/bin:/bin PYTHONPATH="$(dirname "$PWD")" NODE_ENV=test OPENROUTER_API_KEY=test-only-key JWT_SECRET=test-only-secret DISABLE_MCP=1 DISABLE_BACKGROUND_JOBS=1 ENABLE_METADATA_LOADING=false OPENECON_EMBED_FIXTURES=replay OPENECON_SELECTOR_FIXTURES=replay .venv/bin/python -m pytest --noconftest tests/test_mcp_transport.py tests/test_mcp_session_lease.py tests/test_embedding_index_integrity.py tests/test_mcp_stream_limit.py tests/test_mcp_rate_limit_middleware.py tests/test_mcp_stream_wiring.py -q
 ```
 
 Two separate application endpoints remain unavailable: port 8080's saved SSH origin refuses connections, while port 7788 has no identified project/startup service. Restore the intended origin/project before replacing these 503 responses. API streaming, Jupyter and n8n still share Apache workers; migrating them directly requires preserving their authentication and WebSocket behavior. CPU, memory and host availability remain shared.

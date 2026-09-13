@@ -16,10 +16,69 @@ import anyio
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.shared.exceptions import McpError
 
 
 class VerificationFailure(Exception):
     """A fixed diagnostic code that cannot contain session IDs or response data."""
+
+    def __init__(self, code, *, http_status=None):
+        super().__init__(code)
+        self.http_status = http_status
+
+
+def failure_diagnostic(error: BaseException) -> dict:
+    """Describe bounded exception leaves without exposing their messages/URLs."""
+    pending = [error]
+    leaves = []
+    seen = set()
+    while pending and len(seen) < 64:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions[:64 - len(seen)])
+        else:
+            leaves.append(current)
+
+    for current in leaves:
+        if isinstance(current, httpx.HTTPStatusError):
+            request, response = current.request, current.response
+            method = request.method
+            stage = "session"
+            if method == "HEAD":
+                stage = "head"
+            elif method == "GET" and request.url.path.rstrip("/") == "/mcp":
+                stage = "admission"
+            elif method == "POST" and request.url.path.startswith("/mcp/messages"):
+                stage = "messages"
+            result = {
+                "code": "capacity_rejected" if stage == "admission" and response.status_code in (429, 503) else "http_error",
+                "stage": stage, "http_status": response.status_code,
+            }
+            if method in ("HEAD", "GET", "POST"):
+                result["method"] = method
+            retry = response.headers.get("retry-after", "").strip()
+            if retry.isascii() and retry.isdecimal() and len(retry) <= 5 and int(retry) <= 86400:
+                result["retry_after_seconds"] = int(retry)
+            return result
+    for current in leaves:
+        if isinstance(current, VerificationFailure):
+            if str(current) == "head_did_not_return_405":
+                result = {"code": "head_did_not_return_405", "stage": "head", "method": "HEAD"}
+                if type(current.http_status) is int and 100 <= current.http_status <= 599:
+                    result["http_status"] = current.http_status
+                return result
+            if str(current) == "query_data_missing":
+                return {"code": "query_data_missing", "stage": "discovery", "method": "POST"}
+        if isinstance(current, (TimeoutError, httpx.TimeoutException)):
+            return {"code": "verification_timeout", "stage": "session"}
+        if isinstance(current, httpx.TransportError):
+            return {"code": "transport_error", "stage": "session"}
+        if isinstance(current, McpError):
+            return {"code": "protocol_error", "stage": "session"}
+    return {"code": "unexpected_error", "stage": "session"}
 
 
 def endpoint(value: str) -> str:
@@ -44,7 +103,7 @@ async def verify(url: str) -> dict:
             response = await client.head(url)
             result["head_status"] = response.status_code
             if response.status_code != 405:
-                raise VerificationFailure("head_did_not_return_405")
+                raise VerificationFailure("head_did_not_return_405", http_status=response.status_code)
 
         def client_factory(headers=None, timeout=None, auth=None):
             return httpx.AsyncClient(
@@ -85,15 +144,8 @@ def main() -> int:
     logging.disable(logging.CRITICAL)
     try:
         result = anyio.run(verify, args.url)
-    except VerificationFailure as error:
-        print(json.dumps({"ok": False, "error": str(error)}))
-        return 1
-    except TimeoutError:
-        print(json.dumps({"ok": False, "error": "verification_timeout"}))
-        return 1
     except Exception as error:
-        # Deliberately omit exception text, traceback, URLs, and response bodies.
-        print(json.dumps({"ok": False, "error_type": type(error).__name__}))
+        print(json.dumps({"ok": False, "diagnostic": failure_diagnostic(error)}))
         return 1
     print(json.dumps({"ok": True, **result}))
     return 0

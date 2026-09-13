@@ -2727,6 +2727,10 @@ if not settings.disable_mcp:
     )
 
     # Mount the MCP server - this adds the /mcp endpoint for SSE transport
-    mcp_transport = LegacySSETransport(mcp.server)
+    mcp_transport = LegacySSETransport(
+        mcp.server,
+        initialize_timeout=settings.mcp_initialize_timeout_seconds,
+        idle_timeout=settings.mcp_idle_timeout_seconds,
+    )
     mcp_transport.mount(app)
     logger.info("✅ MCP server mounted at /mcp endpoint")

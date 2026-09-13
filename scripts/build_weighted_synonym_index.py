@@ -37,6 +37,8 @@ from backend.services.embedding_retrieval import (  # noqa: E402
     EMBEDDING_MODEL,
     EmbeddingRetrieval,
     _write_normalized_npy_atomic,
+    validate_embedding_matrix,
+    validate_index_metadata,
 )
 
 IDX_DIR = ROOT / "backend/data/openai_embeddings"
@@ -91,10 +93,11 @@ def main() -> int:
     w_name = 1.0 - w_syn
 
     meta = json.loads((BACKUP / "indicator_metadata.json").read_text())
+    rows = validate_index_metadata(meta)
     codes, providers = meta["codes"], meta["providers"]
-    name_embs = np.load(BACKUP / "indicator_embeddings.npz")["embeddings"].astype(
-        np.float32, copy=False
-    )
+    with np.load(BACKUP / "indicator_embeddings.npz") as data:
+        name_embs = data["embeddings"]
+    validate_embedding_matrix(name_embs, rows)
     name_embs = _norm_rows(name_embs)
     print(f"name matrix: {name_embs.shape}")
 
@@ -106,6 +109,7 @@ def main() -> int:
             "WHERE synonyms IS NOT NULL AND LENGTH(synonyms) > 8"
         )
     }
+    conn.close()
     rows_to_embed = []
     for i, (c, p) in enumerate(zip(codes, providers)):
         syn = syn_by_key.get((p, c))
@@ -123,9 +127,19 @@ def main() -> int:
         resp = client.embeddings.create(
             model=EMBEDDING_MODEL, input=[t for _i, t in chunk]
         )
-        for (row_idx, _t), d in zip(chunk, resp.data):
+        if (
+            len(resp.data) != len(chunk)
+            or any(type(d.index) is not int for d in resp.data)
+            or sorted(d.index for d in resp.data) != list(range(len(chunk)))
+        ):
+            raise ValueError("Embedding response indices do not match input rows")
+        for d in resp.data:
+            row_idx, _t = chunk[d.index]
             sv = np.asarray(d.embedding, dtype=np.float32)
-            sv /= np.linalg.norm(sv) or 1
+            norm = np.linalg.norm(sv)
+            if sv.shape != (name_embs.shape[1],) or not np.isfinite(sv).all() or not np.isfinite(norm) or norm <= 0:
+                raise ValueError("Embedding response has invalid vector dimensions or values")
+            sv /= norm
             blended[row_idx] = w_name * name_embs[row_idx] + w_syn * sv
         if (start // B) % 5 == 0:
             print(f"  embedded {min(start + B, len(rows_to_embed))}/{len(rows_to_embed)}",
@@ -152,6 +166,7 @@ def main() -> int:
         return 0
 
     # Write artifacts (service picks them up on next restart only)
+    validate_embedding_matrix(blended, validate_index_metadata(meta))
     np.savez_compressed(NPZ, embeddings=blended)
     META.write_text(json.dumps(meta))
     _write_normalized_npy_atomic(blended)

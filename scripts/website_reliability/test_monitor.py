@@ -290,8 +290,195 @@ def test_timeout_kills_only_the_probe_process_group_including_its_child(tmp_path
     process_status = Path(f"/proc/{child_pid}/status")
     deadline = time.monotonic() + 1
     while process_status.exists() and time.monotonic() < deadline:
-        if any(line.startswith("State:") and ("Z" in line or "X" in line) for line in process_status.read_text().splitlines()):
+        try:
+            status_lines = process_status.read_text().splitlines()
+        except (FileNotFoundError, ProcessLookupError):
+            break  # The process exited between the existence check and read.
+        if any(line.startswith("State:") and ("Z" in line or "X" in line) for line in status_lines):
             break  # A terminated orphan may await reaping by the host's PID1.
         time.sleep(0.01)
     else:
         assert not process_status.exists(), "Probe descendant survived process-group timeout cleanup"
+
+
+def failed_mcp_report():
+    report = complete_saved_report(degraded=True)
+    report.update(status="FAILED", failed_checks=["mcp"])
+    report["checks"]["mcp"] = {
+        "ok": False, "timed_out": False,
+        "reason": "mcp_handshake_or_discovery_failed",
+        "diagnostic": {"code": "capacity_rejected", "stage": "admission",
+                       "method": "GET", "http_status": 503, "retry_after_seconds": 30},
+    }
+    return report
+
+
+def test_fresh_complete_failed_status_reports_real_check_and_safe_diagnostic(tmp_path):
+    target = tmp_path / "latest.json"
+    report = failed_mcp_report()
+    report["checks"]["mcp"]["diagnostic"]["url"] = "https://example/mcp?session_id=SECRET"
+    report["checks"]["mcp"]["response_body"] = "SECRET"
+    target.write_text(json.dumps(report))
+    result = monitor.saved_status(target)
+    assert result["status"] == "FAILED"
+    assert result["reason"] == "checks_failed"
+    assert result["failed_checks"] == ["mcp"]
+    assert result["checked_at"] == report["checked_at"]
+    assert result["failure_details"]["mcp"]["diagnostic"] == {
+        "code": "capacity_rejected", "stage": "admission", "method": "GET",
+        "http_status": 503, "retry_after_seconds": 30,
+    }
+    assert "SECRET" not in json.dumps(result)
+
+
+def test_status_cli_keeps_nonzero_exit_for_fresh_capacity_failure(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "latest.json"
+    target.write_text(json.dumps(failed_mcp_report()))
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--status", "--output", str(target)])
+    assert monitor.main() == 1
+    assert json.loads(capsys.readouterr().out)["failed_checks"] == ["mcp"]
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("missing", "missing_report"), ("malformed", "invalid_report"),
+    ("stale", "stale_report"), ("running", "incomplete_report"),
+])
+def test_unavailable_saved_states_have_distinct_safe_reasons(tmp_path, kind, expected):
+    target = tmp_path / "latest.json"
+    if kind == "malformed":
+        target.write_text("SECRET not json")
+    elif kind == "stale":
+        target.write_text(json.dumps(complete_saved_report(age=601)))
+    elif kind == "running":
+        target.write_text(json.dumps({"schema_version": 1, "status": "RUNNING", "checks": {}}))
+    result = monitor.saved_status(target)
+    assert result == {"status": "FAILED", "reason": expected}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda report: report.update(failed_checks=[]),
+    lambda report: report.update(failed_checks=["websites"]),
+    lambda report: report.update(failed_checks=["mcp", "mcp"]),
+    lambda report: report["checks"]["mcp"].update(ok=True),
+    lambda report: report["checks"].pop("backends"),
+    lambda report: report["checks"]["websites"]["results"].pop(),
+    lambda report: report["checks"]["backends"]["checks"].pop(),
+    lambda report: report.update(known_degraded=["unexpected.example"]),
+])
+def test_failed_report_does_not_bypass_consistency_or_positive_checks(tmp_path, mutate):
+    target = tmp_path / "latest.json"
+    report = failed_mcp_report()
+    mutate(report)
+    target.write_text(json.dumps(report))
+    assert monitor.saved_status(target) == {"status": "FAILED", "reason": "invalid_report"}
+
+
+def test_mcp_child_capacity_failure_is_retained_with_only_allowed_fields(monkeypatch):
+    body = {"ok": False, "diagnostic": {
+        "code": "capacity_rejected", "stage": "admission", "method": "GET",
+        "http_status": 503, "retry_after_seconds": 30,
+        "message": "SECRET", "url": "https://example/?session_id=SECRET",
+    }}
+    monkeypatch.setattr(monitor, "run_probe", lambda *args: {
+        "exit_code": 1, "output": json.dumps(body), "timed_out": False,
+    })
+    result = monitor.check_mcp()
+    assert result["ok"] is False
+    assert result["diagnostic"]["http_status"] == 503
+    assert result["diagnostic"]["code"] == "capacity_rejected"
+    assert "SECRET" not in json.dumps(result)
+
+
+def test_untrusted_mcp_child_diagnostic_values_are_not_echoed(monkeypatch):
+    body = {"ok": False, "diagnostic": {
+        "code": "SECRET", "stage": "SECRET", "method": "SECRET",
+        "http_status": "SECRET", "retry_after_seconds": "SECRET", "error_type": "SECRET",
+    }}
+    monkeypatch.setattr(monitor, "run_probe", lambda *args: {
+        "exit_code": 1, "output": json.dumps(body), "timed_out": False,
+    })
+    result = monitor.check_mcp()
+    assert result["ok"] is False
+    assert result["diagnostic"] == {"code": "probe_failed"}
+    assert "SECRET" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("retry,expected", [("30", 30), (" 30 ", 30), ("-1", None), ("SECRET", None), ("999999999", None)])
+def test_nested_sdk_http_errors_report_capacity_without_sensitive_values(retry, expected):
+    import httpx
+    sdk_probe = load_module("website_reliability_sdk_probe", "check_mcp_session.py")
+    request = httpx.Request("GET", "https://data.openecon.ai/mcp?session_id=SECRET", headers={"Authorization": "SECRET"})
+    response = httpx.Response(503, headers={"Retry-After": retry}, content=b"SECRET", request=request)
+    error = ExceptionGroup("SECRET", [ExceptionGroup("SECRET", [
+        httpx.HTTPStatusError("SECRET", request=request, response=response),
+    ])])
+    result = sdk_probe.failure_diagnostic(error)
+    assert result["code"] == "capacity_rejected"
+    assert result["stage"] == "admission"
+    assert result["method"] == "GET"
+    assert result["http_status"] == 503
+    assert result.get("retry_after_seconds") == expected
+    assert "SECRET" not in json.dumps(result)
+
+
+def test_unexpected_sdk_exception_text_is_never_used_as_diagnostic():
+    sdk_probe = load_module("website_reliability_sdk_probe", "check_mcp_session.py")
+    result = sdk_probe.failure_diagnostic(ExceptionGroup("SECRET", [ValueError("SECRET")]))
+    assert result == {"code": "unexpected_error", "stage": "session"}
+
+
+def test_sdk_cli_serializes_nested_failure_without_exception_text(monkeypatch, capsys):
+    sdk_probe = load_module("website_reliability_sdk_probe", "check_mcp_session.py")
+
+    def fail(*args):
+        raise ExceptionGroup("SECRET", [TimeoutError("SECRET")])
+
+    monkeypatch.setattr(sdk_probe.anyio, "run", fail)
+    monkeypatch.setattr(sys, "argv", ["check_mcp_session.py", "https://data.openecon.ai/mcp"])
+    assert sdk_probe.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"ok": False, "diagnostic": {"code": "verification_timeout", "stage": "session"}}
+
+
+@pytest.mark.parametrize("failed_check", ["websites", "backends", "website_timeout"])
+def test_fresh_non_mcp_failures_retain_their_real_failure_names(tmp_path, failed_check):
+    report = complete_saved_report()
+    name = "websites" if failed_check == "website_timeout" else failed_check
+    report.update(status="FAILED", failed_checks=[name])
+    if failed_check == "websites":
+        report["checks"][name]["ok"] = False
+        report["checks"][name]["results"][0]["http_status"] = 500
+    elif failed_check == "backends":
+        report["checks"][name]["ok"] = False
+        report["checks"][name]["checks"][1]["ok"] = False
+        report["checks"][name]["checks"][1]["error_type"] = "SECRET"
+    else:
+        report["checks"][name] = {"ok": False, "complete": False, "reason": "website_probe_timeout"}
+    target = tmp_path / "latest.json"
+    target.write_text(json.dumps(report))
+    result = monitor.saved_status(target)
+    assert result["reason"] == "checks_failed"
+    assert result["failed_checks"] == [name]
+    assert name in result["failure_details"]
+    assert "SECRET" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("contradiction", ["timeout", "error"])
+def test_mcp_success_flags_cannot_override_timeout_or_error_diagnostic(monkeypatch, contradiction):
+    body = {"ok": True, "head_status": 405, "initialized": True, "tools_listed": True,
+            "query_data_available": True, "session_closed": True}
+    if contradiction == "error":
+        body["diagnostic"] = {"code": "capacity_rejected", "http_status": 503}
+    monkeypatch.setattr(monitor, "run_probe", lambda *args: {
+        "exit_code": 0, "output": json.dumps(body), "timed_out": contradiction == "timeout",
+    })
+    assert monitor.check_mcp()["ok"] is False
+
+
+def test_unmodified_complete_mcp_success_contract_still_passes(monkeypatch):
+    body = {"ok": True, "head_status": 405, "initialized": True, "tools_listed": True,
+            "query_data_available": True, "session_closed": True}
+    monkeypatch.setattr(monitor, "run_probe", lambda *args: {
+        "exit_code": 0, "output": json.dumps(body), "timed_out": False,
+    })
+    assert monitor.check_mcp() == {"ok": True, "reason": "verified", "timed_out": False}

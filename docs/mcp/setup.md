@@ -67,3 +67,9 @@ curl http://localhost:3001/mcp
 - If the tool is missing, remove and re-add the MCP server in your client.
 - If local MCP fails, confirm backend is running on port `3001`.
 - If hosted MCP fails, verify network/firewall rules and endpoint reachability.
+
+## Hosted session lifetime
+
+The hosted SSE service allows 30 seconds for successful initialization and closes initialized sessions after 300 seconds of inactivity when no RPC is pending. Server heartbeat comments do not count as client activity. A running tool call keeps its session until its response/error is sent, followed by a fresh idle interval.
+
+After an idle session closes, create a new SSE connection and client session, then initialize again. The legacy Python `sse_client` does not reconnect automatically inside its existing context. Messages sent to an expired session return 404. Admission at capacity returns 503 with Retry-After; wait before opening a new connection. Do not automatically replay tool calls whose outcome is unknown.

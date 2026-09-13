@@ -100,6 +100,30 @@ META_FILE = INDEX_DIR / "indicator_metadata.json"
 INDEX_NPY = INDEX_DIR / "indicator_embeddings_normalized.npy"
 
 
+def validate_index_metadata(meta: Any) -> int:
+    """Reject incomplete parallel arrays before opening the large matrix."""
+    if not isinstance(meta, dict):
+        raise ValueError("Index metadata must be an object")
+    for field in ("codes", "names", "providers"):
+        values = meta.get(field)
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise ValueError(f"Index metadata {field} must be a list of nonblank strings")
+    rows = len(meta["codes"])
+    if len(meta["names"]) != rows or len(meta["providers"]) != rows:
+        raise ValueError("Index metadata codes/names/providers lengths differ; repair metadata before loading")
+    return rows
+
+
+def validate_embedding_matrix(matrix: np.ndarray, rows: int) -> None:
+    if matrix.shape != (rows, EMBEDDING_DIM) or matrix.dtype != np.float32:
+        raise ValueError(
+            f"Index matrix must be float32 shape ({rows}, {EMBEDDING_DIM}); "
+            f"got {matrix.dtype} {matrix.shape}"
+        )
+
+
 def _write_normalized_npy_atomic(embeddings: np.ndarray) -> None:
     """Atomically write the pre-normalized float32 matrix to INDEX_NPY.
 
@@ -230,50 +254,45 @@ class EmbeddingRetrieval:
         try:
             with open(META_FILE) as f:
                 meta = json.load(f)
-            self._codes = meta["codes"]
-            self._names = meta["names"]
-            self._providers = meta["providers"]
+            rows = validate_index_metadata(meta)
 
-            embeddings = None
             mmap_loaded = False
             if INDEX_NPY.exists():
                 candidate = np.load(INDEX_NPY, mmap_mode="r")
-                # Guard against a stale/foreign .npy: row count must match the
-                # metadata and dtype must be float32 (search assumes both).
-                if candidate.dtype == np.float32 and candidate.shape[0] == len(self._codes):
-                    embeddings = candidate  # pre-normalized, read-only memmap
-                    mmap_loaded = True
-                else:
-                    logger.warning(
-                        "Ignoring %s (dtype=%s, rows=%d, metadata rows=%d) — "
-                        "stale or invalid; falling back to npz. Re-run "
-                        "`python -m backend.services.embedding_retrieval` to rebuild it.",
-                        INDEX_NPY, candidate.dtype, candidate.shape[0], len(self._codes),
-                    )
-
-            if embeddings is None:
+                # A malformed mmap is an artifact error; allocating another
+                # ~2GB matrix per worker cannot repair its metadata/alignment.
+                validate_embedding_matrix(candidate, rows)
+                embeddings = candidate
+                mmap_loaded = True
+            else:
                 logger.warning(
-                    "Pre-normalized index %s not usable — loading %s fully into RAM "
+                    "Pre-normalized index %s absent — loading %s fully into RAM "
                     "(~2GB per process). Run "
                     "`python -m backend.services.embedding_retrieval` once to enable "
                     "the memory-mapped shared index.",
                     INDEX_NPY.name, INDEX_FILE.name,
                 )
-                data = np.load(INDEX_FILE)
+                with np.load(INDEX_FILE) as data:
+                    emb_f32 = data["embeddings"]
+                validate_embedding_matrix(emb_f32, rows)
                 # Normalize for cosine similarity and keep as float32 in memory.
-                emb_f32 = data["embeddings"].astype(np.float32)
                 norms = np.linalg.norm(emb_f32, axis=1, keepdims=True)
                 norms[norms == 0] = 1
-                embeddings = emb_f32 / norms
+                emb_f32 /= norms
+                embeddings = emb_f32
 
-            self._embeddings = embeddings
             # Pre-compute per-provider masks for fast filtering
-            self._provider_masks: dict[str, np.ndarray] = {}
-            providers_upper = [p.upper() for p in self._providers]
+            provider_masks: dict[str, np.ndarray] = {}
+            providers_upper = [p.upper() for p in meta["providers"]]
             for prov in set(providers_upper):
-                self._provider_masks[prov] = np.array(
+                provider_masks[prov] = np.array(
                     [p == prov for p in providers_upper], dtype=bool
                 )
+            self._codes = meta["codes"]
+            self._names = meta["names"]
+            self._providers = meta["providers"]
+            self._embeddings = embeddings
+            self._provider_masks = provider_masks
             self._loaded = True
             if mmap_loaded:
                 logger.info(
