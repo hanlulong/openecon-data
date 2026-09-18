@@ -155,6 +155,7 @@ class _Session:
     last_activity: float
     initialized: bool = False
     expired: bool = False
+    expiry_reason: str | None = None
     pending: dict = field(default_factory=dict)
     changed: anyio.Event = field(default_factory=anyio.Event)
 
@@ -189,15 +190,22 @@ class LegacySSETransport:
     def __init__(
         self, server, *, post_send_timeout: float = 5.0,
         initialize_timeout: float = 30.0, idle_timeout: float = 300.0,
+        initialize_retry_milliseconds: int = 300000,
     ) -> None:
         if any(not math.isfinite(value) or value <= 0 for value in (
             post_send_timeout, initialize_timeout, idle_timeout,
         )):
             raise ValueError("MCP timeouts must be finite and positive")
+        if (
+            type(initialize_retry_milliseconds) is not int
+            or not 1000 <= initialize_retry_milliseconds <= 3600000
+        ):
+            raise ValueError("MCP initialization retry must be an integer from 1000 to 3600000 milliseconds")
         self.server = server
         self.post_send_timeout = post_send_timeout
         self.initialize_timeout = initialize_timeout
         self.idle_timeout = idle_timeout
+        self.initialize_retry_milliseconds = initialize_retry_milliseconds
         self._sessions = {}
 
     @property
@@ -245,6 +253,9 @@ class LegacySSETransport:
                             session.initialized = True
                         session.last_activity = anyio.current_time()
                         session.changed.set()
+                if session.expiry_reason == "initialize_timeout":
+                    # A named control event avoids an empty JSON-RPC message in Python clients.
+                    yield {"event": "mcp-retry", "retry": self.initialize_retry_milliseconds}
 
             async with anyio.create_task_group() as group:
                 response_finished = anyio.Event()
@@ -286,6 +297,7 @@ class LegacySSETransport:
                         remaining = None if deadline is None else deadline - anyio.current_time()
                         if remaining is not None and remaining <= 0:
                             session.expired = True
+                            session.expiry_reason = reason
                             self._sessions.pop(session_id, None)
                             logger.info("MCP session expired reason=%s active=%d", reason, self.active_sessions)
                             # Finish SSE normally before cancelling the protocol task.

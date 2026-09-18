@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     mcp_idle_timeout_seconds: float = Field(
         default=300.0, gt=0, allow_inf_nan=False, alias="MCP_IDLE_TIMEOUT_SECONDS",
     )
+    mcp_initialize_retry_milliseconds: int = Field(
+        default=300000, ge=1000, le=3600000, alias="MCP_INITIALIZE_RETRY_MILLISECONDS",
+    )
     disable_background_jobs: bool = Field(default=False, alias="DISABLE_BACKGROUND_JOBS")
     use_langchain_orchestrator: bool = Field(
         default=True,  # Enabled by default for intelligent query routing

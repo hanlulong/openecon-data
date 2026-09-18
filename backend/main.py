@@ -2731,6 +2731,7 @@ if not settings.disable_mcp:
         mcp.server,
         initialize_timeout=settings.mcp_initialize_timeout_seconds,
         idle_timeout=settings.mcp_idle_timeout_seconds,
+        initialize_retry_milliseconds=settings.mcp_initialize_retry_milliseconds,
     )
     mcp_transport.mount(app)
     logger.info("✅ MCP server mounted at /mcp endpoint")
