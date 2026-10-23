@@ -772,8 +772,7 @@ class ComtradeProvider(BaseProvider):
             "format": "json",
         }
 
-        if self.api_key:
-            params["subscription-key"] = self.api_key
+        headers = {"Ocp-Apim-Subscription-Key": self.api_key} if self.api_key else {}
 
         # Use correct URL path based on frequency
         url_path = f"{self.base_url}/C/{freq_code}/HS"
@@ -799,6 +798,9 @@ class ComtradeProvider(BaseProvider):
                     url_path,
                     raise_on_status=False,
                     params=params,
+                    headers=headers,
+                    # Never forward the subscription header to a redirect target.
+                    follow_redirects=False,
                     timeout=REQUEST_TIMEOUT,
                 )
             except DataNotAvailableError as e:
@@ -808,7 +810,7 @@ class ComtradeProvider(BaseProvider):
                 ) from e
 
             status_code = response.status_code
-            if status_code >= 400:
+            if status_code >= 300:
                 # Non-2xx returned for inspection (429/5xx were already
                 # retried and raised terminally inside _get_with_retry).
                 response_text = (response.text or "").strip()[:300]
@@ -917,9 +919,6 @@ class ComtradeProvider(BaseProvider):
             api_url = str(url_with_params)
         except Exception:
             api_url = str(response.request.url)
-
-        if "subscription-key" in params:
-            api_url = api_url.replace(params["subscription-key"], "YOUR_KEY")
 
         # Build results for this reporter
         results = []
