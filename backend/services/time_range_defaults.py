@@ -15,7 +15,7 @@ def apply_default_time_range(provider: str, routing: Dict[str, Any]) -> Dict[str
 
     Rules:
     - Respect explicit user dates.
-    - Comtrade defaults to last 10 years (and overrides likely LLM 5-year defaults).
+    - Comtrade uses last 10 years for absent or explicitly framework-default dates.
     - CoinGecko defaults to last 30 days.
     - ExchangeRate keeps no date default (current rate behavior).
     """
@@ -26,22 +26,10 @@ def apply_default_time_range(provider: str, routing: Dict[str, Any]) -> Dict[str
     end_date = routing.get("endDate")
 
     if provider_upper == "COMTRADE":
-        should_apply_default = False
-
-        if not start_date and not end_date:
-            should_apply_default = True
-        elif start_date:
-            try:
-                start_year = int(str(start_date)[:4])
-                years_ago = today.year - start_year
-                if 4 <= years_ago <= 6:
-                    logger.info(
-                        "Detected likely LLM %s-year Comtrade default; overriding to 10 years",
-                        years_ago,
-                    )
-                    should_apply_default = True
-            except (TypeError, ValueError):
-                pass
+        should_apply_default = (
+            (not start_date and not end_date)
+            or routing.get("__time_scope_authority") == "default"
+        )
 
         if should_apply_default:
             start_year_int = today.year - 10
