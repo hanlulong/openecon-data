@@ -158,6 +158,7 @@ class _Session:
     expiry_reason: str | None = None
     pending: dict = field(default_factory=dict)
     changed: anyio.Event = field(default_factory=anyio.Event)
+    initialized_at: float | None = None
 
 
 class _DeliveryReader(ObjectReceiveStream[SessionMessage]):
@@ -250,6 +251,8 @@ class LegacySSETransport:
                     if pending is not None and session.pending.get(message.id) is pending:
                         session.pending.pop(message.id)
                         if isinstance(message, JSONRPCResponse) and pending.item.message.root.method == "initialize":
+                            if session.initialized_at is None:
+                                session.initialized_at = anyio.current_time()
                             session.initialized = True
                         session.last_activity = anyio.current_time()
                         session.changed.set()
@@ -321,7 +324,18 @@ class LegacySSETransport:
             # Synchronous closes work even inside an already-cancelled scope.
             for stream in (incoming_writer, incoming_reader, outgoing_writer, outgoing_reader):
                 stream.close()
-            logger.info("MCP session closed active=%d", self.active_sessions)
+            logger.info(
+                "MCP session closed active=%d initialized=%s pending_count=%d "
+                "lifetime_ms=%d initialization_ms=%d reason=%s",
+                self.active_sessions,
+                session.initialized,
+                len(session.pending),
+                int((anyio.current_time() - session.opened_at) * 1000),
+                -1 if session.initialized_at is None else int(
+                    (session.initialized_at - session.opened_at) * 1000
+                ),
+                session.expiry_reason or "other",
+            )
 
     async def post_message(self, request: Request) -> Response:
         value = request.query_params.get("session_id")
