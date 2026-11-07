@@ -1286,11 +1286,14 @@ class ComtradeProvider(BaseProvider):
         else:
             freq_code = "A"  # Annual is default
 
-        # Guardrail: Comtrade often lags by ~1 year (or more for annual data).
-        # Avoid invalid future periods that trigger HTTP 400 and fallback misrouting.
+        # Cap only STRUCTURALLY impossible periods: an annual total cannot
+        # exist for the year still in progress, a quarter cannot lie beyond
+        # the current year. Reporting lag is NOT a structural bound -- it
+        # varies by reporter (UN Comtrade had US-China 2025 annual rows in
+        # Nov 2026) and an unfiled period returns 200 with zero rows rather
+        # than a 400, so lagging reporters fall through to the no-data /
+        # time-window honesty path and _disclose_unreported_trailing_years.
         if freq_code == "A":
-            max_supported_year = now.year - 2
-        elif freq_code == "Q":
             max_supported_year = now.year - 1
         else:
             max_supported_year = now.year
@@ -1490,7 +1493,85 @@ class ComtradeProvider(BaseProvider):
                 f"period {start}-{end}."
             )
 
-        return self._merge_series_segments(all_results)
+        merged_results = self._merge_series_segments(all_results)
+        # A sub-request that raised (429 / cooldown / timeout / 5xx) leaves its
+        # periods unanswered; absent rows then prove nothing about filing.
+        fetch_complete = last_error is None and cooling_down is None
+        self._disclose_unreported_trailing_years(
+            merged_results, start, end, freq_code, fetch_complete=fetch_complete
+        )
+        return merged_results
+
+    @staticmethod
+    def _disclose_unreported_trailing_years(
+        series_list: List[NormalizedData],
+        start: int,
+        end: int,
+        freq_code: str,
+        fetch_complete: bool = True,
+    ) -> None:
+        """Note requested trailing years for which a series returned no rows.
+
+        Reporters file with different lags (and HS subheadings get
+        discontinued), so a requested window can end after a series' latest
+        returned period. Without a note the answer silently stops short and
+        reads as if it covered the request. Structural: compares the requested
+        year window with the observation dates actually returned, per series.
+
+        The wording calls rows unreported only when every sub-request
+        answered: when one raised (rate limit / cooldown / timeout / any
+        error) the note says the periods may exist instead. Series sharing the
+        same gap get one identical note naming all of them, so a many-member
+        reporter group reads as one disclosure, not one per member.
+        """
+        label = {"A": "annual", "Q": "quarterly", "M": "monthly"}.get(freq_code, "")
+
+        def period_label(date_text: str) -> str:
+            if freq_code == "A":
+                return date_text[:4]
+            if freq_code == "Q" and re.match(r"\d{4}-\d{2}", date_text):
+                return f"{date_text[:4]}-Q{(int(date_text[5:7]) - 1) // 3 + 1}"
+            return date_text[:7]
+
+        gaps: Dict[Tuple[str, str], List[NormalizedData]] = {}
+        for series in series_list or []:
+            dates = [
+                str(point.date)
+                for point in series.data or []
+                if point.value is not None and str(point.date)[:4].isdigit()
+            ]
+            if not dates:
+                continue
+            latest_date = max(dates)
+            latest_year = int(latest_date[:4])
+            if latest_year >= end:
+                continue
+            first_missing = max(latest_year + 1, start)
+            if first_missing > end:
+                continue
+            missing = str(end) if first_missing == end else f"{first_missing}-{end}"
+            gaps.setdefault((missing, period_label(latest_date)), []).append(series)
+
+        for (missing, latest_period), members in gaps.items():
+            names = list(dict.fromkeys(
+                str(series.metadata.country) for series in members if series.metadata.country
+            ))
+            scope = f" from {', '.join(names)}" if names else ""
+            if fetch_complete:
+                note = (
+                    f"UN Comtrade returned no {label} rows for {missing}{scope} "
+                    "(not yet reported, or not available for this selection); "
+                    f"latest period returned: {latest_period}."
+                )
+            else:
+                note = (
+                    f"No {label} rows were retrieved for {missing}{scope}: at least "
+                    "one UN Comtrade sub-request in this fetch failed (e.g. rate "
+                    "limit or timeout), so those periods may exist; latest period "
+                    f"returned: {latest_period}."
+                )
+            for series in members:
+                series.metadata.notes = (series.metadata.notes or []) + [note]
 
     @staticmethod
     def _region_expansion_count(name: Optional[str]) -> Optional[int]:
