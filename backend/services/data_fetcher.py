@@ -1524,12 +1524,106 @@ async def fetch_historical_exchange_from_fred(
             "startDate": params.get("startDate"),
             "endDate": params.get("endDate"),
         })
-        series.metadata.indicator = f"{base_upper} to {target_upper} Exchange Rate"
-        series.metadata.source = "FRED (Federal Reserve)"
-        return [series]
     except Exception as e:
         logger.warning(f"FRED exchange rate fallback failed: {e}")
         return None
+    # The table above only says WHICH currency a series covers, never its quote
+    # direction (FRED mixes "U.S. Dollars to One Euro" with "Swiss Francs to One
+    # U.S. Dollar"). Orientation is read from the served series' own units text.
+    return [orient_fx_series(series, base_upper, target_upper)]
+
+
+# ---------------------------------------------------------------------------
+# FX quote orientation (structural: derived from the served series' units text)
+# ---------------------------------------------------------------------------
+
+# FRED FX units are uniformly "<NUMERATOR> to One <DENOMINATOR>", i.e. the value
+# is NUMERATOR units per one DENOMINATOR unit.
+_FX_UNITS_QUOTE_RE = re.compile(r"^\s*(?P<num>.+?)\s+to\s+one\s+(?P<den>.+?)\s*$", re.IGNORECASE)
+
+
+def _is_us_dollar_leg(text: str) -> bool:
+    """Exact match of a units-text leg against the U.S. dollar.
+
+    Exact (not substring) on purpose: "Hong Kong Dollars", "Canadian Dollars",
+    "Singapore Dollars", "Taiwan Dollars", "Australian Dollar" all contain
+    "Dollar" and must NOT read as the USD leg.
+    """
+    norm = re.sub(r"\s+", " ", (text or "").replace(".", "")).strip().lower()
+    return norm in {"us dollar", "us dollars"}
+
+
+def parse_fx_quote_orientation(units: Optional[str]) -> Optional[str]:
+    """Return ``"usd_per_foreign"``, ``"foreign_per_usd"`` or None (unparseable).
+
+    None means the units text does not state a single USD leg in the
+    "<A> to One <B>" form — callers must then NOT assert a direction.
+    """
+    match = _FX_UNITS_QUOTE_RE.match(str(units or ""))
+    if not match:
+        return None
+    num_is_usd = _is_us_dollar_leg(match.group("num"))
+    den_is_usd = _is_us_dollar_leg(match.group("den"))
+    if num_is_usd == den_is_usd:
+        return None
+    return "usd_per_foreign" if num_is_usd else "foreign_per_usd"
+
+
+def orient_fx_series(series: Any, base: str, target: str) -> Any:
+    """Return ``series`` expressed as ``target`` units per 1 ``base`` (one leg USD).
+
+    The served object is never mutated (a deep copy is returned) so a cached or
+    shared fetch result cannot be re-oriented twice. Behaviour by the native
+    quote parsed from ``metadata.unit``:
+
+    - matches base->target: relabel ``"<base> to <target> Exchange Rate"``;
+    - opposite: invert every point (1/v; None and 0 become None, dates kept),
+      unit ``"<target> per 1 <base>"``, note naming the FRED id + native units;
+    - unparseable: keep FRED's native title and unit, add a disclosure note —
+      never assert a direction that was not verified.
+    """
+    base = str(base or "").upper()
+    target = str(target or "").upper()
+    if hasattr(series, "model_copy"):
+        oriented = series.model_copy(deep=True)
+    else:
+        oriented = copy.deepcopy(series)
+    metadata = oriented.metadata
+    metadata.source = "FRED (Federal Reserve)"
+    native_units = str(getattr(metadata, "unit", "") or "")
+    series_id = getattr(metadata, "seriesId", None) or "series"
+    notes = list(getattr(metadata, "notes", None) or [])
+
+    if base == "USD" and target != "USD":
+        wanted = "foreign_per_usd"
+    elif target == "USD" and base != "USD":
+        wanted = "usd_per_foreign"
+    else:
+        wanted = None
+    native = parse_fx_quote_orientation(native_units)
+
+    if wanted is None or native is None:
+        notes.append(
+            f"Quote direction of FRED {series_id} could not be verified from its units "
+            f"({native_units or 'none'}); shown in FRED's native quote, not as {base} to {target}."
+        )
+        metadata.notes = notes
+        return oriented
+
+    metadata.indicator = f"{base} to {target} Exchange Rate"
+    if native == wanted:
+        return oriented
+
+    for point in oriented.data:
+        value = getattr(point, "value", None)
+        try:
+            point.value = (1.0 / float(value)) if value not in (None, 0) else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            point.value = None
+    metadata.unit = f"{target} per 1 {base}"
+    notes.append(f"Inverted (1/x) from FRED {series_id} ({native_units}).")
+    metadata.notes = notes
+    return oriented
 
 
 # ---------------------------------------------------------------------------
