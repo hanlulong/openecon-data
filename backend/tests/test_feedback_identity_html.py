@@ -97,6 +97,8 @@ def _fill(model_cls: type[BaseModel], tag: str) -> dict:
 
 def _fill_annotation(annotation, tag):
     origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        return _fill_annotation(typing.get_args(annotation)[0], tag)
     args = [a for a in typing.get_args(annotation) if a is not type(None)]
     if origin is typing.Union or (origin is not None and str(origin) == "<class 'types.UnionType'>"):
         return _fill_annotation(args[0], tag)

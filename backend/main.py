@@ -826,6 +826,17 @@ app.add_middleware(
 )
 app.add_middleware(SecureLoggingASGIMiddleware)
 app.add_middleware(MCPPostBodyLimitMiddleware)
+# Bound non-MCP request bodies before the app buffers them (Apache leaves
+# LimitRequestBody unlimited here). Inside CORS so a 413 stays readable.
+# /api/feedback: anonymous, persisted to disk and emailed to the owner; its
+# context fields are truncated in the model, so legitimate reports stay far
+# below this cap. Other body-taking endpoints can opt in here.
+from .utils.request_body_limit import RequestBodyLimitMiddleware  # noqa: E402
+
+REQUEST_BODY_LIMITS = {
+    "/api/feedback": 2 * 1024 * 1024,
+}
+app.add_middleware(RequestBodyLimitMiddleware, limits=REQUEST_BODY_LIMITS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.effective_cors_origins,

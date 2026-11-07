@@ -404,22 +404,57 @@ class HealthResponse(BaseModel):
     promodeEnabled: bool = False
 
 
+# --- Feedback context bounds -------------------------------------------------
+# Session/conversation context is auto-collected by the client and is useful
+# but not essential, so oversized context is TRUNCATED server-side (never a
+# 422 that would lose the user's report). The request body as a whole is also
+# capped at the ASGI layer (RequestBodyLimitMiddleware on /api/feedback).
+from typing import Annotated  # noqa: E402  (kept local to the feedback models)
+
+from pydantic import BeforeValidator  # noqa: E402
+
+FEEDBACK_TRUNCATION_MARKER = "...[truncated]"
+FEEDBACK_MAX_CONTEXT_FIELD_CHARS = 2_000     # each sessionInfo / short message field
+FEEDBACK_MAX_MESSAGES_CHARS = 50_000         # formatted conversation transcript
+FEEDBACK_MAX_RAW_MESSAGES = 100              # most recent rawMessages kept
+FEEDBACK_MAX_RAW_MESSAGE_CHARS = 5_000       # each rawMessages[].content
+
+
+def _feedback_clip(max_chars: int, keep: str = "head") -> BeforeValidator:
+    """Truncate an over-long string to max_chars (marker included).
+
+    keep="tail" keeps the END (most recent turns of a transcript)."""
+    room = max_chars - len(FEEDBACK_TRUNCATION_MARKER)
+
+    def _clip(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > max_chars:
+            if keep == "tail":
+                return FEEDBACK_TRUNCATION_MARKER + value[-room:]
+            return value[:room] + FEEDBACK_TRUNCATION_MARKER
+        return value
+
+    return BeforeValidator(_clip)
+
+
+_FeedbackContextStr = Annotated[str, _feedback_clip(FEEDBACK_MAX_CONTEXT_FIELD_CHARS)]
+
+
 class FeedbackSessionInfo(BaseModel):
     """Session information collected with feedback"""
-    url: str
-    userAgent: str
-    timestamp: str
-    screenSize: str
-    language: str
-    timezone: str
-    referrer: str
+    url: _FeedbackContextStr
+    userAgent: _FeedbackContextStr
+    timestamp: _FeedbackContextStr
+    screenSize: _FeedbackContextStr
+    language: _FeedbackContextStr
+    timezone: _FeedbackContextStr
+    referrer: _FeedbackContextStr
 
 
 class FeedbackConversationMessage(BaseModel):
     """Simplified message info for feedback"""
-    role: str
-    content: str
-    timestamp: str
+    role: _FeedbackContextStr
+    content: Annotated[str, _feedback_clip(FEEDBACK_MAX_RAW_MESSAGE_CHARS)]
+    timestamp: _FeedbackContextStr
     hasData: bool
     dataCount: int
     isProMode: Optional[bool] = None
@@ -427,10 +462,18 @@ class FeedbackConversationMessage(BaseModel):
 
 class FeedbackConversation(BaseModel):
     """Conversation data included with feedback"""
-    messages: str  # Formatted string of messages
+    # Formatted string of messages; keep the most recent turns when clipped.
+    messages: Annotated[str, _feedback_clip(FEEDBACK_MAX_MESSAGES_CHARS, keep="tail")]
     messageCount: int
-    conversationId: Optional[str] = None
+    conversationId: Optional[_FeedbackContextStr] = None
     rawMessages: Optional[List[FeedbackConversationMessage]] = None
+
+    @field_validator("rawMessages", mode="before")
+    @classmethod
+    def _keep_recent_raw_messages(cls, value: Any) -> Any:
+        if isinstance(value, list) and len(value) > FEEDBACK_MAX_RAW_MESSAGES:
+            return value[-FEEDBACK_MAX_RAW_MESSAGES:]
+        return value
 
 
 class FeedbackRequest(BaseModel):
