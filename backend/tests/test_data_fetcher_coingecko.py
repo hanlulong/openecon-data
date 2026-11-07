@@ -143,9 +143,12 @@ def test_fetch_from_coingecko_respects_explicit_date_params_without_default_mark
 
 def test_fetch_from_coingecko_treats_snapshot_cues_as_current_price() -> None:
     provider = _FakeCoinGeckoProvider()
+    # The measure comes from the parse's structured ``metric`` enum (raw text is
+    # never read for it); this test is about the snapshot cue.
     params = {
         "coinIds": ["bitcoin"],
         "vsCurrency": "right",
+        "metric": "market_cap",
         "startDate": "2026-03-27",
         "endDate": "2026-04-26",
         "__default_time_range_applied": "coingecko_30d",
@@ -257,7 +260,10 @@ def test_fetch_from_coingecko_preserves_explicit_change_metric() -> None:
         "Bitcoin price change from CoinGecko",
     ]:
         provider = _FakeCoinGeckoProvider()
-        params = {"coinIds": ["bitcoin"], "vsCurrency": "usd"}
+        # The parse LLM carries the change request in the ``metric`` enum (the
+        # raw-text change regex was removed); enum ``price_change`` maps to
+        # CoinGecko's ``24h_change``.
+        params = {"coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": "price_change"}
         intent = ParsedIntent(
             apiProvider="CoinGecko",
             indicators=["bitcoin"],

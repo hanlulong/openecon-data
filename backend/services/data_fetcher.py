@@ -335,6 +335,55 @@ def _restore_semantic_indicator_label_for_generic_metadata(
             metadata.indicator = semantic_label
 
 
+def _attach_requested_series_disclosure(
+    result: List[NormalizedData],
+    params: dict,
+    intent: Optional[ParsedIntent],
+) -> List[NormalizedData]:
+    """Disclose when the code the USER named is not the code being served.
+
+    Resolution stamps ``__requested_series_id`` only for a seriesId that was
+    literally in the current turn's text but could not be locked (not found,
+    unverifiable, already dead this turn, or a protected prior decision). Every
+    seriesId drop downstream (FRED dispatch, exact-lock cleanup, country-scope
+    discovery) is therefore covered by this ONE per-request seam instead of
+    being silent. Structural comparison of provider codes only. Runs on fresh
+    AND cache-hit results and decorates COPIES, so a request-specific note is
+    never written into a shared cache entry.
+    """
+    requested = str((params or {}).get("__requested_series_id") or "").strip()
+    if not requested or not result:
+        return result
+    served_codes = [
+        str(getattr(getattr(series, "metadata", None), "seriesId", "") or "").strip()
+        for series in result
+    ]
+    if any(code.split(":", 1)[0].upper() == requested.upper() for code in served_codes if code):
+        return result
+    served_label = next((code for code in served_codes if code), "") or str(
+        getattr(getattr(result[0], "metadata", None), "indicator", "") or ""
+    )
+    status = str(params.get("__requested_series_id_status") or "").strip()
+    message_id = "requested_series_not_found" if status == "not_found" else "requested_series_substituted"
+    note = _localized_message(
+        message_id,
+        getattr(intent, "language", None),
+        requested=requested,
+        served=served_label or "the closest available series",
+    )
+    if not note:
+        return result
+    decorated: List[NormalizedData] = []
+    for index, series in enumerate(result):
+        metadata = getattr(series, "metadata", None)
+        if index != 0 or metadata is None or note in (metadata.notes or []):
+            decorated.append(series)
+            continue
+        new_metadata = metadata.model_copy(update={"notes": [note] + list(metadata.notes or [])})
+        decorated.append(series.model_copy(update={"metadata": new_metadata}))
+    return decorated
+
+
 def _years_from_params(params: dict) -> tuple[Optional[int], Optional[int]]:
     start_year = params.get("start_year")
     end_year = params.get("end_year")
@@ -423,6 +472,56 @@ def _coingecko_contract_vs_currency(params: dict[str, Any]) -> str:
         "historical",
     }
     return raw_vs if raw_vs not in invalid_tokens and re.fullmatch(r"[a-z]{3,10}", raw_vs) else "usd"
+
+
+# CoinGecko measure: parse-schema enum value -> CoinGecko provider metric.
+# The parse LLM fills ``parameters.metric`` (closed enum, any language, any
+# negation); this table only RENAMES enum values to the provider vocabulary.
+_COINGECKO_METRIC_ENUM: Dict[str, str] = {
+    "price": "price",
+    "market_cap": "market_cap",
+    "volume": "volume",
+    "price_change": "24h_change",
+}
+# Historical endpoints (market_chart / range) expose only these series.
+_COINGECKO_HISTORICAL_METRICS = frozenset({"price", "market_cap", "volume"})
+
+
+def _coingecko_enum_member(value: Any) -> Optional[str]:
+    """Exact (normalized) membership of ``value`` in the metric enum.
+
+    Structural normalization only — lowercase, collapse spaces/underscores/
+    hyphens, an optional plural "s" — then EQUALITY with an enum value (or the
+    provider's own ``24h_change`` spelling). Never substring search, so a
+    label like "price not market cap" matches nothing.
+    """
+    compact = re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+    if not compact:
+        return None
+    for enum_value, provider_metric in _COINGECKO_METRIC_ENUM.items():
+        forms = {enum_value.replace("_", ""), provider_metric.replace("_", "")}
+        if compact in forms or (compact.endswith("s") and compact[:-1] in forms):
+            return enum_value
+    return None
+
+
+def _coingecko_requested_metric(intent: Optional[ParsedIntent], params: dict[str, Any]) -> str:
+    """The ONE CoinGecko metric decision, shared by the cache contract and fetch.
+
+    Order: the parse's ``parameters.metric`` enum -> the LLM-normalized
+    ``intent.indicators`` labels by exact enum equality -> "price". The raw
+    query text is never read: a substring rule over it served market caps for
+    "prices not market caps" and could not see 市值/成交量 at all. Returns the
+    ENUM value (price | market_cap | volume | price_change).
+    """
+    enum_value = _coingecko_enum_member((params or {}).get("metric"))
+    if enum_value:
+        return enum_value
+    for label in (getattr(intent, "indicators", None) or []):
+        enum_value = _coingecko_enum_member(label)
+        if enum_value:
+            return enum_value
+    return "price"
 
 
 def _coingecko_has_historical_time_scope(query: str) -> bool:
@@ -604,6 +703,11 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
     if provider_norm == "COINGECKO":
         contract["coin_ids"] = _coingecko_contract_coin_ids(params)
         contract["vs_currency"] = _coingecko_contract_vs_currency(params)
+        # ALWAYS present (default "price" included): price and market-cap
+        # requests for the same coin/window share ``code`` (indicators[0]), so
+        # without the metric they collided in _cache_identity, and every
+        # pre-fix key was poisoned with market-cap payloads served as "price".
+        contract["metric"] = _coingecko_requested_metric(intent, params)
         contract["days"] = params.get("days")
         contract["start_date"] = params.get("startDate")
         contract["end_date"] = params.get("endDate")
@@ -1380,16 +1484,15 @@ async def fetch_from_coingecko(
 
     logger.info(f"   - Resolved coins: {coin_ids}, vs={vs_currency}")
 
-    indicator_lower = " ".join(intent.indicators).lower() if intent.indicators else ""
-    metric_text = f"{indicator_lower} {query_lower}".strip()
+    # The measure (price / market cap / volume / change) comes ONLY from the
+    # shared structured decision (parse enum -> LLM indicator labels -> price),
+    # the same one the provider_request contract keys the cache on.
+    requested_metric = _coingecko_requested_metric(intent, params)
+    provider_metric = _COINGECKO_METRIC_ENUM[requested_metric]
 
     # Historical data request
     if params.get("startDate") or params.get("endDate") or params.get("days"):
-        hist_metric = "price"
-        if any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
-            hist_metric = "market_cap"
-        elif any(t in metric_text for t in ["volume", "trading volume", "24h volume"]):
-            hist_metric = "volume"
+        hist_metric = provider_metric if provider_metric in _COINGECKO_HISTORICAL_METRICS else "price"
 
         if params.get("startDate") and params.get("endDate"):
             series_list = []
@@ -1400,7 +1503,6 @@ async def fetch_from_coingecko(
                     metric=hist_metric,
                 )
                 series_list.extend(data)
-            return series_list
         else:
             days = params.get("days", 30)
             series_list = []
@@ -1410,18 +1512,32 @@ async def fetch_from_coingecko(
                     metric=hist_metric, days=days,
                 )
                 series_list.extend(data)
-            return series_list
+        if hist_metric != provider_metric:
+            # CoinGecko has no historical change series: disclose the
+            # price substitution instead of silently ignoring the request.
+            for series in series_list or []:
+                meta = getattr(series, "metadata", None)
+                if meta is not None:
+                    meta.notes = (meta.notes or []) + [
+                        "CoinGecko publishes no historical price-change series; "
+                        "showing the price history for the requested window instead."
+                    ]
+        return series_list
 
-    # Current data
+    # Current data. The ranking TRIGGER is the pre-existing cue check (kept
+    # unchanged); it never decides the MEASURE — that is the enum above, so a
+    # ranking by market cap or by volume uses CoinGecko's native order.
+    indicator_lower = " ".join(intent.indicators).lower() if intent.indicators else ""
+    ranking_cue_text = f"{indicator_lower} {query_lower}".strip()
     ranking_keywords = ["top", "top 10", "top 5", "top 20", "ranking", "rankings", "largest", "biggest"]
-    is_ranking = any(t in metric_text for t in ranking_keywords)
+    is_ranking = any(t in ranking_cue_text for t in ranking_keywords)
 
-    if is_ranking and "market cap" in metric_text:
+    if is_ranking and requested_metric in {"market_cap", "volume"}:
         top_n_match = _TOP_N_RE.search(query_lower)
         requested_n = int(top_n_match.group(1)) if top_n_match else 10
         per_page = max(1, min(250, requested_n))
         result = await coingecko_provider.get_market_data(
-            vs_currency=vs_currency, order="market_cap_desc", per_page=per_page,
+            vs_currency=vs_currency, order=f"{requested_metric}_desc", per_page=per_page,
         )
         if requested_n > per_page:
             # Disclose the API's page cap instead of silently serving fewer
@@ -1436,21 +1552,8 @@ async def fetch_from_coingecko(
                     meta.notes = (meta.notes or []) + [note]
         return result
 
-    metric = "price"
-    if any(t in metric_text for t in ["volume", "trading volume", "24h volume", "24-hour volume"]):
-        metric = "volume"
-    elif any(t in metric_text for t in ["market cap", "market capitalization", "marketcap"]):
-        metric = "market_cap"
-    elif re.search(
-        r"(?<![a-z0-9])(?:24h|24-hour|24 hour)\s+(?:price\s+)?change(?![a-z0-9])"
-        r"|(?<![a-z0-9])price\s+change(?![a-z0-9])"
-        r"|(?<![a-z0-9])(?:percent|percentage|%)\s+change(?![a-z0-9])",
-        metric_text,
-    ):
-        metric = "24h_change"
-
     return await coingecko_provider.get_simple_price(
-        coin_ids=coin_ids, vs_currency=vs_currency, metric=metric,
+        coin_ids=coin_ids, vs_currency=vs_currency, metric=provider_metric,
     )
 
 
@@ -1957,10 +2060,17 @@ async def fetch_from_provider_dispatch(
                 # can carry the semantic label / a stale code).
                 "indicator": params.get("indicator") or fred_request.get("series_id"),
             }
-            if fred_params.get("seriesId") and fred_params.get("seriesId") != fred_params.get("indicator"):
-                fred_params.pop("seriesId", None)
-            if fred_params.get("series_id") and fred_params.get("series_id") != fred_params.get("indicator"):
-                fred_params.pop("series_id", None)
+            # FredProvider gives seriesId precedence over indicator, so a
+            # seriesId that differs from the resolved pick must still be
+            # dropped here (else it silently overrides every resolution). The
+            # drop is no longer SILENT for a code the user typed: resolution
+            # stamps __requested_series_id and fetch_data discloses via
+            # _attach_requested_series_disclosure. Compare the BASE code so a
+            # ":pc1"-style transform on the locked code survives.
+            for _sid_key in ("seriesId", "series_id"):
+                _sid = str(fred_params.get(_sid_key) or "").strip()
+                if _sid and _sid.split(":", 1)[0] != str(fred_params.get("indicator") or "").strip():
+                    fred_params.pop(_sid_key, None)
             series = await svc.fred_provider.fetch_series(fred_params)
             _validate_fred_country_scope_result([series], fred_request, fred_params)
             return [series]
@@ -3563,6 +3673,7 @@ async def fetch_data(
         result_list = cached if isinstance(cached, list) else [cached]
         svc._normalize_bis_metadata_labels(result_list)
         _restore_semantic_indicator_label_for_generic_metadata(result_list, params)
+        result_list = _attach_requested_series_disclosure(result_list, params, intent)
         if tracker:
             with tracker.track(
                 "cache_hit",
@@ -3786,7 +3897,7 @@ async def fetch_data(
         execution_plan.params,
         result if len(result) > 1 else result[0],
     )
-    return result
+    return _attach_requested_series_disclosure(result, params, intent)
 
 
 async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[NormalizedData]:

@@ -444,6 +444,22 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         ),
         "zh": "**查询不明确**\n{reason}\n\n请提供更多细节，或使用 Pro Mode 以获得更好的结果。",
     },
+    # (6) Explicit series-code honesty (data_fetcher._attach_requested_series_
+    # disclosure): the user typed a provider code that is not what is served.
+    "requested_series_not_found": {
+        "en": (
+            "The series code you named, {requested}, was not found at the provider; "
+            "showing the closest available series, {served}, instead."
+        ),
+        "zh": "未找到您指定的序列代码 {requested}；以下显示最接近的可用序列 {served}。",
+    },
+    "requested_series_substituted": {
+        "en": (
+            "You asked for series {requested}, but it could not be served for this "
+            "request; showing {served} instead."
+        ),
+        "zh": "您指定的序列 {requested} 无法用于本次请求；以下显示的是 {served}。",
+    },
 }
 
 _DEFAULT_LANG = "en"

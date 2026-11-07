@@ -26,7 +26,10 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # example (euro area / 欧元区 / 欧盟 as ONE entity): the local parser left
     # parameters.country null in ~4/5 "euro area X" parses, which produced
     # redundant scope asks and silent EU27 provider defaults.
-    assert len(prompt.splitlines()) < 317
+    # 317 -> 322 (2026-11-07) for the explicit seriesId slot rule (user-named
+    # codes were parsed then ignored/described) + the CoinGecko `metric` enum
+    # (raw-text measure rules served market caps for "prices not market caps").
+    assert len(prompt.splitlines()) < 322
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included
@@ -83,8 +86,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # language-explicit and FRED's entry hands China off); to 400 for the
     # correctness-based refinement (user 07-19: the test is answer
     # correctness, not the provider — FRED stays valid for historical China
-    # windows and explicit requests))
-    assert len(prompt.splitlines()) < 400
+    # windows and explicit requests); to 405 for the seriesId-verbatim rule +
+    # CoinGecko `metric` enum (2026-11-07 user-reported defects))
+    assert len(prompt.splitlines()) < 405
 
 
 def test_simplified_prompt_without_context_has_no_follow_up_section() -> None:

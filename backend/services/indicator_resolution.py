@@ -20,7 +20,7 @@ import logging
 import json
 import re
 from collections import Counter
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from ..models import NormalizedData, ParsedIntent
 from ..routing.country_resolver import CountryResolver
@@ -2222,6 +2222,186 @@ def _exact_provider_code_literal_present(code: str, *texts: str) -> bool:
     return any(pattern.search(str(text or "")) for text in texts if text)
 
 
+# Provider capability declaration: providers whose provider-native code names
+# ONE executable series, so a code the user literally typed can be locked
+# as-is. Dataset-code providers (Eurostat, StatsCan, BIS, OECD) need dimension
+# resolution on top of the code and are deliberately absent until a
+# dataset-lock path exists. Values are the indicator-catalog provider names.
+_SINGLE_SERIES_CODE_PROVIDERS: Dict[str, str] = {
+    "FRED": "FRED",
+    "WORLDBANK": "WorldBank",
+    "WORLD BANK": "WorldBank",
+    "IMF": "IMF",
+}
+
+# Decisions a parsed seriesId must never override: an explicit clarification
+# choice / exact user lock, a verified prior-turn code, a post-fetch judge
+# re-resolution, or an option-validation pin. A plain selector pick
+# (``llm_adjudication``, e.g. minted by the prefetch stage) and an
+# authority-less parser value ARE overridable — the user's own literal code
+# outranks the component that guessed.
+_SERIES_ID_PROTECTED_AUTHORITIES = frozenset({
+    "exact_user_input",
+    "verified_conversation_state",
+    "post_fetch_semantic_judge",
+    "option_validation",
+})
+
+REQUESTED_SERIES_ID_KEY = "__requested_series_id"
+REQUESTED_SERIES_ID_STATUS_KEY = "__requested_series_id_status"
+
+
+def _parsed_series_id_code(params: dict) -> str:
+    """Base provider code of the parse's dedicated seriesId slot.
+
+    A ``:transform`` suffix (FRED ``CPIAUCSL:pc1``) is a fetch option, not part
+    of the identifier; the suffix stays on ``params["seriesId"]`` for the
+    provider passthrough.
+    """
+    raw = str((params or {}).get("seriesId") or (params or {}).get("series_id") or "").strip()
+    return raw.split(":", 1)[0].strip()
+
+
+def _catalog_series_entry(catalog_provider: str, code: str) -> Optional[Dict[str, Any]]:
+    try:
+        from .indicator_database import get_indicator_lookup
+
+        lookup = get_indicator_lookup()
+        return lookup.get(catalog_provider, code) or (
+            lookup.get(catalog_provider, code.upper()) if code.upper() != code else None
+        )
+    except Exception as exc:
+        logger.debug("seriesId catalog check skipped for %s/%s: %s", catalog_provider, code, exc)
+        return None
+
+
+async def _named_series_code_existence(
+    svc: Any, provider: str, catalog_provider: str, code: str,
+) -> Tuple[str, str, Optional[Dict[str, Any]]]:
+    """Return (status, canonical_code, metadata) for a user-named code.
+
+    status is ``found`` / ``not_found`` / ``unverified``. Catalog first; FRED
+    codes absent from the (subset) catalog are checked against FRED's own
+    /series endpoint, which answers definitively. Any non-definitive outcome is
+    ``unverified`` — never lock, never claim "not found" on a transport error.
+    """
+    entry = _catalog_series_entry(catalog_provider, code)
+    if entry:
+        if provider == "IMF" and not _imf_catalog_entry_supports_exact_code(code, entry):
+            return "unverified", code, None
+        return "found", str(entry.get("code") or code), entry
+    if provider == "FRED":
+        lookup = getattr(getattr(svc, "fred_provider", None), "lookup_series_info", None)
+        if callable(lookup):
+            try:
+                status, info = await lookup(code)
+            except Exception as exc:
+                logger.debug("FRED series-existence check failed for %s: %s", code, exc)
+                return "unverified", code, None
+            if status == "found" and info:
+                return "found", str(info.get("id") or code.upper()), info
+            if status == "not_found":
+                return "not_found", code, None
+    return "unverified", code, None
+
+
+def _requested_frequency_for_named_fred_code(
+    original_query: str, series_metadata: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Single requested frequency that differs from the named code's native one.
+
+    Reuses the selector's structural frequency extractor (the same one this
+    module already applies to raw user text) — no new keyword list. Returns
+    None when zero or several frequencies are requested, or when the request
+    already matches the native frequency (cache identity stays unchanged).
+    """
+    try:
+        from .indicator_selector import _extract_requested_frequencies, _frequency_matches
+    except Exception:
+        return None
+    requested = _extract_requested_frequencies(original_query or "")
+    if len(requested) != 1:
+        return None
+    native = str((series_metadata or {}).get("frequency") or "").strip()
+    if native and _frequency_matches(requested, native):
+        return None
+    return next(iter(requested))
+
+
+def _clear_stale_requested_series_stamp(params: dict, intent: ParsedIntent) -> None:
+    """Drop a carried requested-seriesId stamp the CURRENT turn did not type."""
+    stamped = str(params.get(REQUESTED_SERIES_ID_KEY) or "").strip()
+    if stamped and not _exact_provider_code_literal_present(stamped, str(intent.originalQuery or "")):
+        params.pop(REQUESTED_SERIES_ID_KEY, None)
+        params.pop(REQUESTED_SERIES_ID_STATUS_KEY, None)
+
+
+async def _literal_series_id_request(
+    svc: Any, provider: str, intent: ParsedIntent, params: dict,
+) -> Optional[Dict[str, Any]]:
+    """Evaluate the parse's seriesId slot as an explicit user code request.
+
+    STRUCTURAL identifier match only: the parse LLM decided WHICH code the user
+    wants (its dedicated seriesId slot; rejected codes never go there); this
+    only checks that the code is code-shaped, literally present in the CURRENT
+    turn's raw text (never a carried resolvedQuery/session value), not already
+    proven dead this turn, and exists. Returns None when the slot is not an
+    explicit user request at all; otherwise a dict with ``code``, ``status``
+    (lock / not_found / unverified / excluded / protected) and ``metadata``.
+    """
+    catalog_provider = _SINGLE_SERIES_CODE_PROVIDERS.get(provider)
+    if not catalog_provider:
+        return None
+    # Pipeline-synthesized sub-queries and indicator-change deltas rewrite
+    # originalQuery, so it is no longer the user's literal text.
+    if params.get("__synthetic_subquery") or params.get("__delta_indicator_changed"):
+        return None
+    # One series per request only: multi-indicator requests fan out per
+    # indicator and must not have every leg collapse onto one code.
+    if len(intent.indicators or []) > 1:
+        return None
+    code = _parsed_series_id_code(params)
+    if not code or is_placeholder_indicator_code(code):
+        return None
+    if not svc._looks_like_provider_indicator_code(provider, code):
+        return None
+    if not _exact_provider_code_literal_present(code, str(intent.originalQuery or "")):
+        return None
+
+    request: Dict[str, Any] = {"code": code, "metadata": None}
+    excluded = {
+        str(c).strip().upper()
+        for c in (params.get("__exclude_indicator_codes") or [])
+        if str(c).strip()
+    }
+    if code.upper() in excluded:
+        # Exclusions beat re-locks (dead-retry-loop lesson, see the IMF
+        # parsed-code branch): this code already returned no data this turn.
+        request["status"] = "excluded"
+        return request
+
+    existing_indicator = str(params.get("indicator") or "").strip()
+    existing_authority = str(params.get("__semantic_authority") or "").strip()
+    if (
+        existing_indicator
+        and existing_indicator.upper() != code.upper()
+        and (existing_authority in _SERIES_ID_PROTECTED_AUTHORITIES or is_exact_match_locked(params))
+    ):
+        request["status"] = "protected"
+        return request
+
+    status, canonical_code, metadata = await _named_series_code_existence(
+        svc, provider, catalog_provider, code,
+    )
+    request["metadata"] = metadata
+    if status == "found":
+        request["code"] = canonical_code
+        request["status"] = "lock"
+    else:
+        request["status"] = status
+    return request
+
+
 def indicator_resolution_threshold(indicator_query: str, resolved_source: str) -> float:
     """
     Dynamic acceptance threshold for resolver output.
@@ -2637,6 +2817,10 @@ async def resolve_indicator_for_fetch(
     Mutates intent.parameters and potentially intent.indicators (for
     WorldBank multi-indicator collapse). Returns the updated params dict.
     """
+    # A requested-code disclosure stamp is per TURN: drop one carried in from a
+    # previous turn's params before any early return (it would otherwise
+    # disclose a substitution the current request never asked about).
+    _clear_stale_requested_series_stamp(params, intent)
     if provider not in {"STATSCAN", "STATISTICS CANADA", "FRED", "IMF", "WORLDBANK", "EUROSTAT", "OECD", "BIS"}:
         return params
 
@@ -2745,6 +2929,51 @@ async def resolve_indicator_for_fetch(
             "__statscan_product_id": product_id,
             "__statscan_product_authority": authority,
         }
+
+    # EXPLICIT-CODE AUTHORITY for the parse's dedicated seriesId slot. The
+    # literal-code path below only ever read params["indicator"], so a code the
+    # user typed ("FRED series T10YIE", "NY.GDP.MKTP.CN") landed in seriesId,
+    # was ignored, the selector llm_picked a neighbour (DFII10 / ...MKTP.CD),
+    # and dispatch silently dropped the differing seriesId. Same lock values as
+    # the existing literal path (exact_user_input / exact_code) — no new
+    # authority. Structural identifier match; see _literal_series_id_request.
+    _series_request = await _literal_series_id_request(svc, provider, intent, params)
+    if _series_request and _series_request.get("status") == "lock":
+        _locked_code = str(_series_request["code"])
+        logger.info(
+            "🔒 Locking user-named %s seriesId (literal in this turn's text): %s",
+            provider,
+            _locked_code,
+        )
+        _lock_extra: Dict[str, Any] = {}
+        if provider == "FRED":
+            _freq = _requested_frequency_for_named_fred_code(
+                str(intent.originalQuery or ""), _series_request.get("metadata"),
+            )
+            if _freq:
+                # Provider-native aggregation of the NAMED code (FRED's own
+                # frequency/aggregation_method; FRED's default method is avg)
+                # instead of handing the decision back to the selector that
+                # mis-picked. Both keys enter the provider_request contract,
+                # so the cache identity distinguishes daily vs aggregated.
+                _lock_extra = {"frequency": _freq, "aggregation_method": "avg"}
+        params = _apply_indicator_with_semantic_label(
+            _locked_code,
+            __semantic_authority="exact_user_input",
+            __decision_source="exact_code",
+            **_lock_extra,
+        )
+        params.pop(REQUESTED_SERIES_ID_KEY, None)
+        params.pop(REQUESTED_SERIES_ID_STATUS_KEY, None)
+        intent.parameters = params
+        return params
+    if _series_request:
+        # Not lockable (not found / unverifiable / already dead this turn /
+        # a protected prior decision): resolution continues below, and the
+        # fetch layer discloses if the served code differs from the request.
+        params[REQUESTED_SERIES_ID_KEY] = str(_series_request["code"])
+        params[REQUESTED_SERIES_ID_STATUS_KEY] = str(_series_request.get("status") or "")
+        intent.parameters = params
 
     existing_indicator = str(params.get("indicator") or "").strip()
     if provider == "IMF" and not existing_indicator and len(intent.indicators or []) == 1:

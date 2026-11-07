@@ -1,0 +1,137 @@
+"""CoinGecko measure selection comes from the parse's ``metric`` enum, never
+raw query text.
+
+User-reported defect (169+ real queries): "return prices time series not
+market caps" was served MARKET CAPS because a substring rule over the raw text
+saw "market caps". The same rule could not see 市值/成交量 at all (≈90% of the
+user base writes Chinese). The measure is semantic — it belongs to the parse
+LLM's closed enum; the fetch layer only renames enum values to the provider's
+vocabulary, and the cache contract keys on the SAME decision.
+"""
+from __future__ import annotations
+
+import pytest
+
+from backend.models import ParsedIntent
+from backend.services.data_fetcher import (
+    _coingecko_requested_metric,
+    _provider_request_contract,
+    fetch_from_coingecko,
+)
+from backend.tests.test_data_fetcher_coingecko import _FakeCoinGeckoProvider
+from backend.tests.utils import run
+
+
+def _intent(query: str, indicators, params: dict) -> ParsedIntent:
+    return ParsedIntent(
+        apiProvider="CoinGecko",
+        indicators=list(indicators),
+        parameters=dict(params),
+        clarificationNeeded=False,
+        originalQuery=query,
+    )
+
+
+# (query, LLM metric enum, LLM indicators, expected provider metric). The raw
+# text deliberately contains the NEGATED measure word in several rows.
+_NEGATED_AND_MULTILINGUAL = [
+    ("return bitcoin prices not market caps", "price", ["price"], "price"),
+    ("bitcoin market caps, not prices", "market_cap", ["market cap"], "market_cap"),
+    ("ethereum trading volume not price", "volume", ["volume"], "volume"),
+    ("比特币市值", "market_cap", ["market cap"], "market_cap"),
+    ("以太坊成交量", "volume", ["trading volume"], "volume"),
+    ("比特币价格，不要市值", "price", ["price"], "price"),
+    ("bitcoin 24h change, not the price", "price_change", ["price change"], "24h_change"),
+]
+
+
+@pytest.mark.parametrize("query,metric,indicators,expected", _NEGATED_AND_MULTILINGUAL)
+def test_current_metric_follows_enum_not_raw_text(query, metric, indicators, expected) -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {"coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": metric}
+    run(fetch_from_coingecko(provider, _intent(query, indicators, params), params))
+    assert provider.simple_calls == [{"coin_ids": ["bitcoin"], "vs_currency": "usd", "metric": expected}]
+
+
+@pytest.mark.parametrize("query,metric,indicators,expected", _NEGATED_AND_MULTILINGUAL[:5])
+def test_historical_metric_follows_enum_not_raw_text(query, metric, indicators, expected) -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {
+        "coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": metric,
+        "startDate": "2026-01-01", "endDate": "2026-03-31",
+    }
+    run(fetch_from_coingecko(provider, _intent(query, indicators, params), params))
+    calls = provider.range_calls + provider.history_calls
+    assert [call["metric"] for call in calls] == [expected]
+
+
+def test_indicator_label_fallback_is_exact_equality_never_substring() -> None:
+    # No enum value (pre-schema intent): the LLM-normalized label decides...
+    assert _coingecko_requested_metric(_intent("q", ["Market_Cap"], {}), {}) == "market_cap"
+    assert _coingecko_requested_metric(_intent("q", ["prices"], {}), {}) == "price"
+    # ...but only by exact normalized equality: a free-text label never matches.
+    assert _coingecko_requested_metric(_intent("q", ["price not market cap"], {}), {}) == "price"
+    assert _coingecko_requested_metric(_intent("q", ["bitcoin market cap"], {}), {}) == "price"
+    # Invalid enum values fall through to the labels, then to price.
+    assert _coingecko_requested_metric(_intent("q", ["volume"], {}), {"metric": "tvl"}) == "volume"
+    assert _coingecko_requested_metric(_intent("q", ["bitcoin"], {}), {"metric": None}) == "price"
+    # Known limitation (documented): a multi-measure request serves the first
+    # listed measure deterministically instead of "market cap always wins".
+    assert _coingecko_requested_metric(_intent("q", ["price", "market cap"], {}), {}) == "price"
+
+
+def test_raw_text_alone_never_selects_the_measure() -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {"coinIds": ["bitcoin"], "vsCurrency": "usd"}
+    run(fetch_from_coingecko(provider, _intent("bitcoin market cap and volume", ["bitcoin"], params), params))
+    assert provider.simple_calls[0]["metric"] == "price"
+
+
+@pytest.mark.parametrize(
+    "query,metric,order",
+    [
+        ("top 10 coins by market cap", "market_cap", "market_cap_desc"),
+        ("top 10 coins by 24h volume", "volume", "volume_desc"),
+        ("市值前十的加密货币 top 10", "market_cap", "market_cap_desc"),
+    ],
+)
+def test_ranking_uses_enum_measure_with_native_order(query, metric, order) -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {"vsCurrency": "usd", "metric": metric}
+    run(fetch_from_coingecko(provider, _intent(query, ["cryptocurrency ranking"], params), params))
+    assert provider.market_calls == [{"vs_currency": "usd", "order": order, "per_page": 10}]
+    assert provider.simple_calls == []
+
+
+def test_historical_price_change_falls_back_to_price_with_disclosure() -> None:
+    provider = _FakeCoinGeckoProvider()
+    params = {
+        "coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": "price_change",
+        "startDate": "2026-01-01", "endDate": "2026-03-31",
+    }
+    result = run(fetch_from_coingecko(provider, _intent("bitcoin change history", ["price change"], params), params))
+    assert [c["metric"] for c in provider.range_calls + provider.history_calls] == ["price"]
+    assert any("no historical price-change" in note for note in result[0].metadata.notes)
+
+
+def test_cache_contract_always_carries_the_served_metric() -> None:
+    base = {"coinIds": ["bitcoin"], "vsCurrency": "usd", "startDate": "2026-01-01", "endDate": "2026-03-31"}
+    # Same indicators[0] ("price") — the poisoned-cache case: these MUST differ.
+    price = _provider_request_contract("COINGECKO", _intent("q", ["price"], base), {**base, "metric": "price"})
+    mcap = _provider_request_contract("COINGECKO", _intent("q", ["price"], base), {**base, "metric": "market_cap"})
+    default = _provider_request_contract("COINGECKO", _intent("q", ["price"], base), dict(base))
+
+    assert price["metric"] == "price" and default["metric"] == "price"
+    assert mcap["metric"] == "market_cap"
+    assert price != mcap
+
+
+def test_exact_user_phrasing_prices_time_series_not_market_caps_serves_prices() -> None:
+    """Verbatim real-user complaint shape: a historical cue plus a NEGATED
+    measure word. The LLM's enum says price; raw "market caps" is ignored."""
+    provider = _FakeCoinGeckoProvider()
+    params = {"coinIds": ["bitcoin"], "vsCurrency": "usd", "metric": "price"}
+    query = "bitcoin last 90 days, return prices time series not market caps"
+    run(fetch_from_coingecko(provider, _intent(query, ["price"], params), params))
+    assert [c["metric"] for c in provider.range_calls + provider.history_calls] == ["price"]
+    assert provider.history_calls[0]["days"] == 90
