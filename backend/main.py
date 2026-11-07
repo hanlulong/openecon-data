@@ -66,6 +66,17 @@ from .services.grok import CodeGenerationError
 from .services.query import QueryService
 from .services.user_store import user_store
 from .utils.dependencies import require_promode
+from .utils.processing_steps import (
+    ProcessingTracker,
+    activate_processing_tracker,
+    emit_query_timing,
+    reset_processing_tracker,
+)
+from .utils.request_channel import (
+    derive_channel_for_request,
+    install_mcp_channel_tagging,
+    is_coze_request,
+)
 
 logger = logging.getLogger("openecon")
 logging.basicConfig(level=logging.INFO)
@@ -176,6 +187,9 @@ def _conversation_turn_lock(conversation_id: Optional[str]):
 # Module-level so it can be tuned (and tests can shorten it) without touching
 # the generator body.
 _SSE_KEEPALIVE_INTERVAL = 15.0
+# Overall deadline for one /api/query/stream query (module-level for the same
+# reason: tests force the timeout branch without waiting 5 minutes).
+_SSE_STREAM_TIMEOUT_SECONDS = 300
 
 
 settings: Settings = get_settings()
@@ -872,6 +886,8 @@ async def log_query_to_supabase(
     user_agent: Optional[str] = None,
     response_status: Optional[str] = None,
     processing_time_ms: Optional[float] = None,
+    channel: Optional[str] = None,
+    client_name: Optional[str] = None,
 ) -> None:
     """
     Log query to Supabase for both authenticated and anonymous users.
@@ -880,6 +896,8 @@ async def log_query_to_supabase(
     try:
         supabase_service = get_supabase_service()
         await supabase_service.log_query(
+            channel=channel,
+            client_name=client_name,
             query=query,
             user_id=user.id if user else None,
             session_id=session_id,
@@ -1092,6 +1110,32 @@ def schedule_query_log_to_supabase(**kwargs) -> None:
     task = asyncio.create_task(log_query_to_supabase(**kwargs))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+
+
+def query_log_request_context(raw_request, gate: Optional["_AnonGate"] = None) -> dict:
+    """Per-request fields every query-log row carries, shared by /api/query,
+    /api/query/stream and the Pro endpoints so attribution can't drift
+    between them: client IP + UA (from the anon gate when it already resolved
+    them) and the STRUCTURAL request channel (see utils/request_channel)."""
+    ctx = derive_channel_for_request(raw_request)
+    if gate is not None:
+        ip, ua = gate.ip, gate.user_agent
+    else:
+        ip = _client_ip(raw_request) if raw_request is not None else None
+        try:
+            ua = raw_request.headers.get("user-agent") if raw_request is not None else None
+        except Exception:
+            ua = None
+    return {
+        "ip_address": ip,
+        "user_agent": ua,
+        "channel": ctx.get("channel"),
+        "client_name": ctx.get("client_name"),
+    }
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 1)
 
 
 def get_request_conversation_id(request: QueryRequest, user: Optional[User]) -> Optional[str]:
@@ -1564,6 +1608,15 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
     # indefinitely on slow provider responses, blocking the event loop and
     # exposing the service to resource exhaustion.
     owner_key, claimable_keys = get_conversation_owner(request, user)
+    # Every exit below logs exactly ONE query row (timeouts and 500s
+    # included — previously they returned before logging and were invisible
+    # in Supabase) and emits exactly ONE query_timing line.
+    log_ctx = query_log_request_context(raw_request, gate)
+    log_session_id = None if user else request.sessionId
+    # Own the processing tracker here (process_query reuses an active one) so
+    # latency stays attributable even when the deadline cancels the query.
+    tracker = ProcessingTracker()
+    tracker_token = activate_processing_tracker(tracker)
     try:
         # Serialize concurrent turns on the same conversation (no-op for
         # one-shot anonymous queries with no conversationId). The query
@@ -1581,12 +1634,26 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
             )
     except asyncio.TimeoutError:
         timeout_conversation_id = conversation_id or str(uuid.uuid4())
+        timeout_ms = _elapsed_ms(query_start)
         logger.warning(
             "Query timed out after %ss: %s (conversation=%s)",
             settings.query_timeout_seconds,
             request.query[:120],
             timeout_conversation_id,
         )
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=log_session_id,
+            conversation_id=timeout_conversation_id,
+            pro_mode=False,
+            error_message="request_timeout",
+            response_status="timeout",
+            processing_time_ms=timeout_ms,
+            **log_ctx,
+        )
+        emit_query_timing(tracker, endpoint="/api/query", outcome="timeout",
+                          total_ms=timeout_ms, channel=log_ctx["channel"])
         return JSONResponse(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             content=QueryResponse(
@@ -1597,9 +1664,29 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
                     f"Query exceeded the {settings.query_timeout_seconds}s server deadline. "
                     "Try the streaming endpoint /api/query/stream for long-running queries."
                 ),
-                processingTimeMs=round((time.perf_counter() - query_start) * 1000, 1),
+                processingTimeMs=timeout_ms,
             ).model_dump(),
         )
+    except Exception:
+        # Unhandled processing failure → the global handler answers 500;
+        # record the row before propagating.
+        failed_ms = _elapsed_ms(query_start)
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=log_session_id,
+            conversation_id=conversation_id or str(uuid.uuid4()),
+            pro_mode=False,
+            error_message="processing_error",
+            response_status="server_error",
+            processing_time_ms=failed_ms,
+            **log_ctx,
+        )
+        emit_query_timing(tracker, endpoint="/api/query", outcome="server_error",
+                          total_ms=failed_ms, channel=log_ctx["channel"])
+        raise
+    finally:
+        reset_processing_tracker(tracker_token)
 
     # Guaranteed post-query conversation state save.
     # This ensures the v2 ConversationState is ALWAYS saved after a successful
@@ -1649,6 +1736,20 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
     # Don't treat "data_not_available" as a server error - return 200 with error message
     # Only return 500 for actual processing errors
     if result.error == "processing_error":
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=log_session_id,
+            conversation_id=result.conversationId,
+            pro_mode=False,
+            intent=result.intent.model_dump() if result.intent else None,
+            error_message=result.error,
+            response_status="server_error",
+            processing_time_ms=result.processingTimeMs,
+            **log_ctx,
+        )
+        emit_query_timing(tracker, endpoint="/api/query", outcome="server_error",
+                          total_ms=result.processingTimeMs, channel=log_ctx["channel"])
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=result.model_dump())
 
     # Save to user history if authenticated
@@ -1667,28 +1768,27 @@ async def query_endpoint(request: QueryRequest, raw_request: Request, response: 
     # citation line, data responses only. Detection is structural — Coze's
     # service mesh names itself in the forwarded headers (x-psm /
     # x-tlb-server-name), verified against live traffic 2026-07-20.
-    if result.data and (
-        raw_request.headers.get("x-psm", "").startswith("stone.coze.")
-        or raw_request.headers.get("x-tlb-server-name", "") == "data.coze.cn"
-    ):
+    if result.data and is_coze_request(raw_request.headers):
         _cite = "数据来源：OpenEcon · data.openecon.ai"
         result.message = f"{result.message}\n\n{_cite}" if result.message else _cite
 
     # Log query to Supabase (for both authenticated and anonymous users)
+    response_status = derive_response_status(result)
     schedule_query_log_to_supabase(
         query=request.query,
         user=user,
-        session_id=None if user else request.sessionId,
+        session_id=log_session_id,
         conversation_id=result.conversationId,
         pro_mode=False,
         intent=result.intent.model_dump() if result.intent else None,
         response_data=[d.model_dump() for d in result.data] if result.data else None,
         error_message=result.error,
-        ip_address=gate.ip,
-        user_agent=gate.user_agent,
-        response_status=derive_response_status(result),
+        response_status=response_status,
         processing_time_ms=getattr(result, "processingTimeMs", None),
+        **log_ctx,
     )
+    emit_query_timing(tracker, endpoint="/api/query", outcome=response_status,
+                      total_ms=result.processingTimeMs, channel=log_ctx["channel"])
 
     return result
 
@@ -1748,6 +1848,42 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
 
     logger.info("📝 Stream Query: %s (conversation: %s, user: %s)", request.query, conversation_id, user.id if user else "anonymous")
 
+    # Exactly ONE query-log row + ONE query_timing line per stream, whichever
+    # exit it takes (data, timeout, processing failure). Disconnects are not
+    # recorded (no outcome reached the user).
+    stream_query_start = time.perf_counter()
+    log_ctx = query_log_request_context(raw_request, gate)
+    _stream_outcome = {"recorded": False}
+
+    def _record_stream_outcome(tracker, *, response_status, result=None, error_message=None):
+        if _stream_outcome["recorded"]:
+            return
+        _stream_outcome["recorded"] = True
+        processing_ms = _elapsed_ms(stream_query_start)
+        if result is not None:
+            # The stream path never set this, so 400+ browser rows logged
+            # processing_time_ms NULL. Set it before logging (and emitting).
+            result.processingTimeMs = processing_ms
+        row_conversation_id = result.conversationId if result is not None else conversation_id
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            # Same session key as before: sessionId, falling back to conversationId
+            session_id=None if user else (request.sessionId or row_conversation_id),
+            conversation_id=row_conversation_id,
+            pro_mode=False,
+            intent=result.intent.model_dump() if result is not None and result.intent else None,
+            response_data=(
+                [d.model_dump() for d in result.data] if result is not None and result.data else None
+            ),
+            error_message=error_message if result is None else result.error,
+            response_status=response_status,
+            processing_time_ms=processing_ms,
+            **log_ctx,
+        )
+        emit_query_timing(tracker, endpoint="/api/query/stream", outcome=response_status,
+                          total_ms=processing_ms, channel=log_ctx["channel"])
+
     # Queue for streaming events
     event_queue: asyncio.Queue = asyncio.Queue()
 
@@ -1757,6 +1893,7 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
         from backend.utils.processing_steps import ProcessingTracker, activate_processing_tracker, reset_processing_tracker
 
         tracker_token = None
+        tracker = None
         query_task = None
         client_disconnected = False
         _conv_lock = _get_conversation_lock(conversation_id) if conversation_id else None
@@ -1825,16 +1962,21 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             # Stream events as they come
             processing_complete = False
             _stream_start = time.perf_counter()
-            _STREAM_TIMEOUT = 300  # 5 minute overall timeout for streaming queries
+            _STREAM_TIMEOUT = _SSE_STREAM_TIMEOUT_SECONDS  # 5 minute overall timeout for streaming queries
             _last_emit = time.perf_counter()  # last time we wrote to the wire
             _KEEPALIVE_INTERVAL = _SSE_KEEPALIVE_INTERVAL  # silence before keepalive
             while not processing_complete:
                 # Check overall streaming timeout
                 if time.perf_counter() - _stream_start > _STREAM_TIMEOUT:
                     logger.warning("Streaming query timed out after %ds: %s", _STREAM_TIMEOUT, request.query[:80])
+                    _record_stream_outcome(tracker, response_status="timeout", error_message="request_timeout")
                     yield f"event: error\ndata: {json.dumps({'error': 'Query timed out. Try a simpler query or narrow the scope.'})}\n\n"
                     yield f"event: done\ndata: {json.dumps({'done': True})}\n\n"
-                    break
+                    # Return (not break): `done` is already sent, so falling
+                    # through to `await query_task` would block unboundedly and
+                    # then log/emit a second outcome. The finally block cancels
+                    # the still-running task and releases the turn lock.
+                    return
                 # Try to get events with timeout
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
@@ -1886,6 +2028,7 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 return
             except Exception as query_error:
                 logger.exception("Query task failed")
+                _record_stream_outcome(tracker, response_status="server_error", error_message="processing_error")
                 # Sanitize error message - don't expose internal details to client
                 error_data = {"error": "processing_error", "message": "Failed to process your query. Please try again."}
                 yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
@@ -1917,21 +2060,14 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
                 result.anonymousQueriesUsed = gate.used
                 result.anonymousQueryLimit = gate.limit
 
-            # Log query to Supabase (for both authenticated and anonymous users)
-            # Use request.sessionId for consistency with non-streaming path, fallback to conversationId
-            schedule_query_log_to_supabase(
-                query=request.query,
-                user=user,
-                session_id=None if user else (request.sessionId or result.conversationId),
-                conversation_id=result.conversationId,
-                pro_mode=False,
-                intent=result.intent.model_dump() if result.intent else None,
-                response_data=[d.model_dump() for d in result.data] if result.data else None,
-                error_message=result.error,
-                ip_address=gate.ip,
-                user_agent=gate.user_agent,
-                response_status=derive_response_status(result),
-                processing_time_ms=getattr(result, "processingTimeMs", None),
+            # Log query to Supabase (for both authenticated and anonymous users).
+            # A processing_error result is a server failure, as on /api/query.
+            _record_stream_outcome(
+                tracker,
+                response_status=(
+                    "server_error" if result.error == "processing_error" else derive_response_status(result)
+                ),
+                result=result,
             )
 
             # Send final result
@@ -1951,6 +2087,7 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
             logger.info("📡 Stream cancelled (client disconnect)")
         except Exception as e:
             logger.exception("Streaming query error")
+            _record_stream_outcome(tracker, response_status="server_error", error_message="processing_error")
             # Sanitize error message - don't expose internal details to client
             error_event = {
                 "error": "processing_error",
@@ -2008,7 +2145,11 @@ async def query_stream_endpoint(request: QueryRequest, raw_request: Request, use
     tags=["Pro Mode"],
     dependencies=[Depends(require_promode)],
 )
-async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
+async def query_pro_endpoint(
+    request: QueryRequest,
+    raw_request: Request = None,
+    user: Optional[User] = Depends(get_optional_user),
+) -> QueryResponse:
     """Pro Mode endpoint: Generate and execute Python code using Grok"""
     if not request.query:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Query is required"})
@@ -2020,9 +2161,12 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
     logger.info("⚡ Pro Mode Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id if user else "anonymous")
 
     _pro_start = time.perf_counter()
+    # `raw_request` is FastAPI-injected; the None default keeps direct
+    # (unit-test) callers working.
+    log_ctx = query_log_request_context(raw_request)
     try:
         return await asyncio.wait_for(
-            _pro_query_inner(request, user),
+            _pro_query_inner(request, user, log_ctx=log_ctx, started=_pro_start),
             timeout=float(settings.pro_query_timeout_seconds),
         )
     except asyncio.TimeoutError:
@@ -2031,8 +2175,21 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
             settings.pro_query_timeout_seconds,
             request.query[:120],
         )
+        timeout_conversation_id = request.conversationId or str(uuid.uuid4())
+        timeout_ms = _elapsed_ms(_pro_start)
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=None,
+            conversation_id=timeout_conversation_id,
+            pro_mode=True,
+            error_message="request_timeout",
+            response_status="timeout",
+            processing_time_ms=timeout_ms,
+            **log_ctx,
+        )
         return QueryResponse(
-            conversationId=request.conversationId or str(uuid.uuid4()),
+            conversationId=timeout_conversation_id,
             clarificationNeeded=False,
             error="request_timeout",
             message=(
@@ -2040,14 +2197,38 @@ async def query_pro_endpoint(request: QueryRequest, user: Optional[User] = Depen
                 "Try a simpler query or use the streaming endpoint /api/query/pro/stream."
             ),
             isProMode=True,
-            processingTimeMs=round((time.perf_counter() - _pro_start) * 1000, 1),
+            processingTimeMs=timeout_ms,
         )
 
 
-async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> QueryResponse:
+async def _pro_query_inner(
+    request: QueryRequest,
+    user: Optional[User],
+    log_ctx: Optional[dict] = None,
+    started: Optional[float] = None,
+) -> QueryResponse:
     """Inner body of /api/query/pro. Extracted so the outer endpoint can wrap
     it in asyncio.wait_for. Preserves the original try/except contract.
+
+    Every return path logs exactly one query row (the outer endpoint logs the
+    timeout row, since wait_for cancels this coroutine).
     """
+    log_ctx = log_ctx or {}
+    started = started if started is not None else time.perf_counter()
+
+    def _log_failure(error_code: str, response_status: str) -> None:
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=None if user else request.conversationId,
+            conversation_id=request.conversationId,
+            pro_mode=True,
+            error_message=error_code,
+            response_status=response_status,
+            processing_time_ms=_elapsed_ms(started),
+            **log_ctx,
+        )
+
     try:
         # Import services here to avoid circular imports
         from backend.services.grok import get_grok_service
@@ -2200,7 +2381,8 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
             clarificationNeeded=False,
             message=response_message,
             codeExecution=execution_result,
-            isProMode=True
+            isProMode=True,
+            processingTimeMs=_elapsed_ms(started),
         )
 
         # Save to user history if authenticated
@@ -2218,6 +2400,7 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
             error_message=execution_result.error if execution_result else None,
             response_status=derive_response_status(response),
             processing_time_ms=getattr(response, "processingTimeMs", None),
+            **log_ctx,
         )
 
         return response
@@ -2226,6 +2409,7 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
         # Generation produced no usable code — the message is user-safe and
         # actionable (retry/rephrase), unlike internal execution errors.
         logger.warning(f"Pro Mode code generation failed: {e}")
+        _log_failure("code_generation_failed", "error")
         return QueryResponse(
             conversationId=request.conversationId or str(uuid.uuid4()),
             clarificationNeeded=False,
@@ -2235,6 +2419,7 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
         )
     except Exception as e:
         logger.error(f"Pro Mode error: {str(e)}", exc_info=True)
+        _log_failure("pro_mode_error", "server_error")
         # Sanitize error message - don't expose internal details to client
         return QueryResponse(
             conversationId=request.conversationId or str(uuid.uuid4()),
@@ -2253,7 +2438,11 @@ async def _pro_query_inner(request: QueryRequest, user: Optional[User]) -> Query
     tags=["Pro Mode"],
     dependencies=[Depends(require_promode)],
 )
-async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] = Depends(get_optional_user)):
+async def query_pro_stream_endpoint(
+    request: QueryRequest,
+    raw_request: Request = None,
+    user: Optional[User] = Depends(get_optional_user),
+):
     """Streaming Pro Mode endpoint with real-time code generation and execution updates"""
     import json
     import asyncio
@@ -2278,6 +2467,21 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
         return StreamingResponse(_pro_blocked_stream(), media_type="text/event-stream")
 
     logger.info("⚡ Pro Mode Stream Query: %s (conversation: %s, user: %s)", request.query, request.conversationId, user.id)
+    pro_stream_start = time.perf_counter()
+    log_ctx = query_log_request_context(raw_request)
+
+    def _log_pro_stream_failure(error_code: str, response_status: str) -> None:
+        schedule_query_log_to_supabase(
+            query=request.query,
+            user=user,
+            session_id=None,
+            conversation_id=request.conversationId,
+            pro_mode=True,
+            error_message=error_code,
+            response_status=response_status,
+            processing_time_ms=_elapsed_ms(pro_stream_start),
+            **log_ctx,
+        )
 
     # Queue for streaming events
     event_queue: asyncio.Queue = asyncio.Queue()
@@ -2659,7 +2863,8 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
                 message=response_message,
                 codeExecution=execution_result,
                 isProMode=True,
-                processingSteps=tracker.to_list()
+                processingSteps=tracker.to_list(),
+                processingTimeMs=_elapsed_ms(pro_stream_start),
             )
 
             # Save to user history if authenticated
@@ -2677,6 +2882,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
                 error_message=execution_result.error if execution_result else None,
                 response_status=derive_response_status(response),
                 processing_time_ms=getattr(response, "processingTimeMs", None),
+                **log_ctx,
             )
 
             # Send final result
@@ -2697,6 +2903,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
         except CodeGenerationError as e:
             # Generation produced no usable code — message is user-safe.
             logger.warning(f"Pro Mode code generation failed (stream): {e}")
+            _log_pro_stream_failure("code_generation_failed", "error")
             error_event = {
                 "error": "code_generation_failed",
                 "message": str(e),
@@ -2705,6 +2912,7 @@ async def query_pro_stream_endpoint(request: QueryRequest, user: Optional[User] 
             yield f"event: done\ndata: {json.dumps({})}\n\n"
         except Exception as e:
             logger.exception("Pro Mode streaming error")
+            _log_pro_stream_failure("pro_mode_error", "server_error")
             # Sanitize error message - don't expose internal details to client
             error_event = {
                 "error": "pro_mode_error",
@@ -2936,6 +3144,10 @@ def mcp_streamable_http_enabled() -> bool:
         os.environ.get("MCP_STREAMABLE_HTTP_ENABLED", "true").strip().lower()
         not in ("0", "false", "no", "off")
     )
+    # Analytics attribution: tag fastapi_mcp's in-process self-call to
+    # /api/query with the MCP client's clientInfo.name (query-log channel
+    # 'mcp'). Composes with whatever client fastapi_mcp was built with.
+    install_mcp_channel_tagging(getattr(mcp, "_http_client", None))
 
 
 if not settings.disable_mcp:

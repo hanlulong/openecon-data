@@ -106,7 +106,13 @@ class HTTPClientPool:
     _sync_http1_client: Optional[httpx.AsyncClient] = None
     _MAX_CONNECTIONS = 100
     _MAX_KEEPALIVE_CONNECTIONS = 50
-    _KEEPALIVE_EXPIRY = 5.0
+    # Idle keep-alive lifetime. LLM calls (parse, selector, fallback) share
+    # this pool; over the vLLM SSH tunnel a new connection costs ~0.5-1s
+    # versus ~0.24s reused, and calls within one query are often >5s apart
+    # (provider fetches in between). Effective reuse is still capped by the
+    # SERVER's idle timeout (uvicorn/vLLM default 5s); a peer-closed idle
+    # socket is detected (readable EOF) and discarded by httpcore before reuse.
+    _KEEPALIVE_EXPIRY = 60.0
     _TOTAL_TIMEOUT = 30.0
     _CONNECT_TIMEOUT = 10.0
     _READ_TIMEOUT = 20.0
@@ -148,7 +154,7 @@ class HTTPClientPool:
         limits = httpx.Limits(
             max_connections=cls._MAX_CONNECTIONS,  # Total concurrent connections
             max_keepalive_connections=cls._MAX_KEEPALIVE_CONNECTIONS,  # Keep-alive connections
-            keepalive_expiry=cls._KEEPALIVE_EXPIRY,  # Keep connection alive for 5 seconds
+            keepalive_expiry=cls._KEEPALIVE_EXPIRY,  # Idle keep-alive lifetime (see above)
         )
 
         # Configure timeouts (total timeout, connect timeout)

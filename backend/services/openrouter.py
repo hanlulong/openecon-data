@@ -23,13 +23,14 @@ from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
 import instructor
 from openai import AsyncOpenAI
 
 from ..models import ParsedIntent
 from ..config import Settings, get_settings
 from .llm import create_llm_provider, BaseLLMProvider
+from .http_pool import get_http_client
+from ..utils.processing_steps import record_llm_call
 from .simplified_prompt import SimplifiedPrompt
 from .json_parser import parse_json_response, parse_json_response_tracked, JSONParseError
 
@@ -532,6 +533,28 @@ class OpenRouterService:
             user_msg += 'Try rephrasing, e.g. "US unemployment rate" or "China GDP growth".'
         raise RuntimeError(user_msg)
 
+    async def _post_direct(self, client: Any, request_body: dict) -> Any:
+        """One direct OpenRouter chat-completions round trip, attributed to
+        the active query's timing summary."""
+        t0 = time.perf_counter()
+        ok = False
+        try:
+            response = await client.post(
+                f"{self.BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://openecon.ai",
+                    "X-Title": "OpenEcon Data",
+                },
+                json=request_body,
+                timeout=60.0,
+            )
+            ok = getattr(response, "status_code", 500) < 400
+            return response
+        finally:
+            record_llm_call("openrouter.parse_direct", (time.perf_counter() - t0) * 1000, ok)
+
     async def _parse_direct(
         self,
         query: str,
@@ -566,17 +589,10 @@ class OpenRouterService:
             }
             if use_response_format:
                 request_body["response_format"] = {"type": "json_object"}
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{self.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://openecon.ai",
-                        "X-Title": "OpenEcon Data",
-                    },
-                    json=request_body,
-                )
+            # Shared pooled client (keep-alive reuse); the 60s deadline is
+            # passed per request so behavior matches the old per-call client.
+            client = get_http_client()
+            response = await self._post_direct(client, request_body)
             if (
                 response.status_code == 400
                 and use_response_format
@@ -586,18 +602,8 @@ class OpenRouterService:
                 # output; retry without it — parse_json_response handles
                 # JSON embedded in prose.
                 use_response_format = False
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    request_body.pop("response_format", None)
-                    response = await client.post(
-                        f"{self.BASE_URL}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                            "HTTP-Referer": "https://openecon.ai",
-                            "X-Title": "OpenEcon Data",
-                        },
-                        json=request_body,
-                    )
+                request_body.pop("response_format", None)
+                response = await self._post_direct(client, request_body)
             llm_elapsed = time.perf_counter() - llm_start
             logger.info(f"LLM parse (direct, {fallback_model}, attempt {attempt + 1}): {llm_elapsed:.2f}s")
 

@@ -49,21 +49,19 @@ class _FakeResponse:
 
 
 class _FakeAsyncClient:
-    """Captures the request body sent to OpenRouter."""
+    """Stands in for the shared pooled client (patched over
+    ``get_http_client``, so calling the class returns the "pool" client).
+    Captures the request body sent to OpenRouter."""
 
     last_request_body = None
+    last_timeout = None
 
     def __init__(self, *args, **kwargs):
         pass
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def post(self, url, headers=None, json=None):
+    async def post(self, url, headers=None, json=None, timeout=None):
         _FakeAsyncClient.last_request_body = json
+        _FakeAsyncClient.last_timeout = timeout
         return _FakeResponse()
 
 
@@ -72,7 +70,7 @@ async def test_runtime_provider_failure_falls_through_to_openrouter():
     service = _make_service("vllm")
     with patch.object(
         service, "_parse_with_provider", new=AsyncMock(side_effect=RuntimeError("tunnel down"))
-    ), patch("backend.services.openrouter.httpx.AsyncClient", _FakeAsyncClient):
+    ), patch("backend.services.openrouter.get_http_client", _FakeAsyncClient):
         intent = await service.parse_query("US GDP")
 
     assert intent.apiProvider == "FRED"
@@ -82,6 +80,8 @@ async def test_runtime_provider_failure_falls_through_to_openrouter():
     # Reasoning models spend completion tokens on reasoning before the JSON
     # answer; the old 300-token cap would starve them.
     assert body["max_tokens"] >= 1500
+    # Shared pooled client: the per-call deadline rides on the request.
+    assert _FakeAsyncClient.last_timeout == 60.0
 
 
 @pytest.mark.asyncio
@@ -90,7 +90,7 @@ async def test_openrouter_provider_failure_propagates():
     _FakeAsyncClient.last_request_body = None
     with patch.object(
         service, "_parse_with_provider", new=AsyncMock(side_effect=RuntimeError("boom"))
-    ), patch("backend.services.openrouter.httpx.AsyncClient", _FakeAsyncClient):
+    ), patch("backend.services.openrouter.get_http_client", _FakeAsyncClient):
         with pytest.raises(RuntimeError, match="boom"):
             await service.parse_query("US GDP")
 
@@ -108,7 +108,7 @@ async def test_provider_success_skips_direct_fallback():
     good = ParsedIntent.model_validate(json.loads(VALID_INTENT_JSON))
     with patch.object(
         service, "_parse_with_provider", new=AsyncMock(return_value=good)
-    ), patch("backend.services.openrouter.httpx.AsyncClient", _FakeAsyncClient):
+    ), patch("backend.services.openrouter.get_http_client", _FakeAsyncClient):
         intent = await service.parse_query("US GDP")
 
     assert intent is good

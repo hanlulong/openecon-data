@@ -28,7 +28,8 @@ def post(query: str, conversation_id: str | None = None, timeout: float = 150.0)
     req = urllib.request.Request(
         BASE,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        # Analytics attribution: query-log channel "internal" (no privilege).
+        headers={"Content-Type": "application/json", "X-OpenEcon-Internal": "run_accuracy_probes"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:

@@ -469,10 +469,21 @@ class SupabaseService:
         user_agent: Optional[str] = None,
         ip_address: Optional[str] = None,
         response_status: Optional[str] = None,
+        channel: Optional[str] = None,
+        client_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Log a user query to the database asynchronously."""
+        """Log a user query to the database asynchronously.
+
+        ``channel``/``client_name`` (request-origin attribution) ride INSIDE the
+        existing ``intent`` JSONB column under ``_request_meta`` so no schema
+        migration is needed: ``intent->'_request_meta'->>'channel'``.
+        """
         if not self.client:
             return {}
+
+        request_meta = {k: v for k, v in (("channel", channel), ("client_name", client_name)) if v}
+        if request_meta:
+            intent = {**(intent if isinstance(intent, dict) else {}), "_request_meta": request_meta}
 
         # Ensure at least one of user_id or session_id is set
         # This satisfies the database constraint 'valid_user_or_session'

@@ -25,7 +25,8 @@ def post_query(query, conversation_id=None, timeout=90):
     req = urllib.request.Request(
         BASE + "/api/query",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        # Analytics attribution: query-log channel "internal" (no privilege).
+        headers={"Content-Type": "application/json", "X-OpenEcon-Internal": "live_battery"},
         method="POST",
     )
     t0 = time.time()

@@ -481,7 +481,8 @@ def run_round(query: str, conversation_id: str | None = None, max_retries: int =
                 f"{BASE_URL}/api/query",
                 json=payload,
                 timeout=request_timeout,
-                headers={"Content-Type": "application/json"},
+                # Analytics attribution: query-log channel "internal" (no privilege).
+                headers={"Content-Type": "application/json", "X-OpenEcon-Internal": "test_multiround_10x10"},
             )
             elapsed = time.time() - start
             if resp.status_code != 200:

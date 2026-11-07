@@ -13,17 +13,33 @@ Updated: 2025-01-20 - Added vLLM support with model-specific prompts
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Dict, Any, Optional, List
 from enum import Enum
+import time
 import httpx
 import logging
 
 from ..config import get_settings
+from ..utils.processing_steps import record_llm_call
+from .http_pool import get_http_client
 from .model_config import (
     get_model_config, resolve_model_alias,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _pooled_client() -> AsyncIterator[httpx.AsyncClient]:
+    """Borrow the shared, per-event-loop pooled client WITHOUT closing it.
+
+    A fresh ``httpx.AsyncClient`` per call paid a new TCP connection every
+    LLM request — over the vLLM SSH tunnel that is ~0.5-1s versus ~0.24s on
+    a reused connection. Callers pass ``timeout=`` per request, so the
+    per-provider deadline is unchanged.
+    """
+    yield get_http_client()
 
 
 class LLMProvider(str, Enum):
@@ -201,8 +217,10 @@ class OpenRouterProvider(BaseLLMProvider):
         if self._should_use_json_mode(response_format):
             payload["response_format"] = response_format
 
+        _llm_t0 = time.perf_counter()
+        _llm_ok = False
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with _pooled_client() as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={
@@ -210,7 +228,8 @@ class OpenRouterProvider(BaseLLMProvider):
                         "HTTP-Referer": "https://openecon.ai",
                         "X-Title": "OpenEcon Data"
                     },
-                    json=payload
+                    json=payload,
+                    timeout=self.timeout,
                 )
                 response.raise_for_status()
 
@@ -225,19 +244,23 @@ class OpenRouterProvider(BaseLLMProvider):
                     result["choices"][0]["message"]["_original_content"] = content
 
                 self._log_token_usage(result, call_site="openrouter.generate")
+                _llm_ok = True
                 return result
 
         except httpx.HTTPError as e:
             logger.error(f"OpenRouter API error: {e}")
             raise
+        finally:
+            record_llm_call("openrouter.generate", (time.perf_counter() - _llm_t0) * 1000, _llm_ok)
 
     async def health_check(self) -> bool:
         """Check OpenRouter API availability"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with _pooled_client() as client:
                 response = await client.get(
                     f"{self.base_url}/models",
-                    headers={"Authorization": f"Bearer {self.api_key}"}
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    timeout=5.0,
                 )
                 return response.status_code == 200
         except Exception as e:
@@ -315,15 +338,18 @@ class VLLMProvider(BaseLLMProvider):
         logger.debug(f"  Model: {self.model}")
         logger.debug(f"  Temperature: {payload['temperature']}")
 
+        _llm_t0 = time.perf_counter()
+        _llm_ok = False
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with _pooled_client() as client:
                 response = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json"
                     },
-                    json=payload
+                    json=payload,
+                    timeout=self.timeout,
                 )
                 response.raise_for_status()
 
@@ -354,6 +380,7 @@ class VLLMProvider(BaseLLMProvider):
                         logger.debug(f"Found reasoning_content ({len(reasoning_content)} chars)")
 
                 self._log_token_usage(result, call_site="vllm.generate")
+                _llm_ok = True
                 return result
 
         except httpx.TimeoutException:
@@ -362,12 +389,14 @@ class VLLMProvider(BaseLLMProvider):
         except httpx.HTTPError as e:
             logger.error(f"vLLM API error: {e}")
             raise
+        finally:
+            record_llm_call("vllm.generate", (time.perf_counter() - _llm_t0) * 1000, _llm_ok)
 
     async def health_check(self) -> bool:
         """Check vLLM server availability"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/v1/models")
+            async with _pooled_client() as client:
+                response = await client.get(f"{self.base_url}/v1/models", timeout=5.0)
                 if response.status_code == 200:
                     models = response.json()
                     logger.info(f"vLLM models available: {models}")
@@ -380,8 +409,8 @@ class VLLMProvider(BaseLLMProvider):
     async def list_models(self) -> List[str]:
         """List available models on the vLLM server"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/v1/models")
+            async with _pooled_client() as client:
+                response = await client.get(f"{self.base_url}/v1/models", timeout=5.0)
                 if response.status_code == 200:
                     data = response.json()
                     return [m["id"] for m in data.get("data", [])]
@@ -439,11 +468,14 @@ class OllamaProvider(BaseLLMProvider):
         if response_format and response_format.get("type") == "json_object":
             payload["format"] = "json"
 
+        _llm_t0 = time.perf_counter()
+        _llm_ok = False
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with _pooled_client() as client:
                 response = await client.post(
                     f"{self.base_url}/api/chat",
-                    json=payload
+                    json=payload,
+                    timeout=self.timeout,
                 )
                 response.raise_for_status()
 
@@ -471,17 +503,20 @@ class OllamaProvider(BaseLLMProvider):
                     }
                 }
                 self._log_token_usage(ollama_result, call_site="ollama.generate")
+                _llm_ok = True
                 return ollama_result
 
         except httpx.HTTPError as e:
             logger.error(f"Ollama API error: {e}")
             raise
+        finally:
+            record_llm_call("ollama.generate", (time.perf_counter() - _llm_t0) * 1000, _llm_ok)
 
     async def health_check(self) -> bool:
         """Check Ollama availability"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/api/tags")
+            async with _pooled_client() as client:
+                response = await client.get(f"{self.base_url}/api/tags", timeout=5.0)
                 return response.status_code == 200
         except Exception:
             return False
