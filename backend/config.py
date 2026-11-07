@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     supabase_anon_key: str | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_KEY")
 
+    # Redis for the response cache, conversation persistence and shared
+    # rate-limit counters. Consumers already read `settings.redis_url`; before
+    # this field existed (extra="ignore") REDIS_URL was silently dropped and
+    # everything fell back to this same default, so production is unchanged.
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+
     jwt_secret: str = Field(..., alias="JWT_SECRET")  # Required - no insecure default
     jwt_expiration_days: int = Field(default=7, alias="JWT_EXPIRES_DAYS")
     allowed_origins: List[str] = Field(

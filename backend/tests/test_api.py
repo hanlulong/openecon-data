@@ -45,9 +45,15 @@ class ApiTests(unittest.TestCase):
         auth_factory._auth_service = None
 
     def test_health_endpoint(self) -> None:
-        result = asyncio.run(health())
+        # The suite points REDIS_URL at an unreachable port (conftest), so stub
+        # the Redis probe as reachable; this test checks the response contract.
+        reachable_redis = MagicMock()
+        reachable_redis.connect = AsyncMock(return_value=True)
+        with patch("backend.main.get_redis_cache", AsyncMock(return_value=reachable_redis)):
+            result = asyncio.run(health())
         self.assertEqual(result.status, "ok")
         self.assertIn("openrouter", result.services)
+        self.assertTrue(result.services["redis"])
 
     def test_query_endpoint(self) -> None:
         mock_response = QueryResponse(
