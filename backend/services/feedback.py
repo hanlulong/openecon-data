@@ -1,6 +1,15 @@
 """
 Feedback service for handling user bug reports and feature requests.
-Stores feedback in a JSON file and optionally sends email notifications.
+Stores feedback in an append-only JSONL file and optionally sends email
+notifications.
+
+Storage model (multi-process safe): production runs several uvicorn workers in
+separate processes over one data directory. Each record is appended as ONE
+JSON line to ``feedback.jsonl`` (``O_APPEND`` under an exclusive ``flock``);
+no process keeps the list in memory and nothing ever rewrites the file, so a
+worker can never overwrite records written by another worker. Reads parse the
+file on demand. A legacy whole-file ``feedback.json`` is migrated once, under
+the same lock, and kept as ``feedback.json.migrated``.
 
 Supports two email methods:
 1. Resend API (recommended) - set RESEND_API_KEY
@@ -8,17 +17,19 @@ Supports two email methods:
 """
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
 import smtplib
 import uuid
 import httpx
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from ..models import FeedbackRequest, FeedbackResponse
 
@@ -32,6 +43,9 @@ _background_tasks: set = set()
 
 # Feedback storage directory
 FEEDBACK_DIR = Path(__file__).parent.parent / "data" / "feedback"
+FEEDBACK_STORE_NAME = "feedback.jsonl"     # append-only, one JSON record per line
+LEGACY_STORE_NAME = "feedback.json"        # pre-JSONL whole-file list (migrated once)
+_LOCK_NAME = ".feedback.lock"              # flock target shared by all workers
 
 # Email configuration (read from environment)
 FEEDBACK_EMAIL_TO = os.getenv("FEEDBACK_EMAIL_TO", "hanlulong@gmail.com")
@@ -51,32 +65,150 @@ SMTP_FROM = os.getenv("SMTP_FROM", "noreply@openecon.ai")
 class FeedbackService:
     """Service for handling user feedback submissions."""
 
-    def __init__(self):
-        # Ensure feedback directory exists
-        FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
-        self._feedback_file = FEEDBACK_DIR / "feedback.json"
-        self._load_feedback()
+    def __init__(self, feedback_dir: Optional[Path] = None):
+        # No disk I/O here: the module-level singleton is constructed at import
+        # time (tests, scripts, every worker). The directory, the lock file and
+        # the one-time legacy migration are set up lazily on first use.
+        self._dir = Path(feedback_dir) if feedback_dir is not None else FEEDBACK_DIR
+        self._store_file = self._dir / FEEDBACK_STORE_NAME
+        self._legacy_file = self._dir / LEGACY_STORE_NAME
+        self._lock_file = self._dir / _LOCK_NAME
+        self._ready = False
 
-    def _load_feedback(self):
-        """Load existing feedback from file."""
-        if self._feedback_file.exists():
-            try:
-                with open(self._feedback_file, "r") as f:
-                    self._feedback = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Failed to load feedback file: {e}")
-                self._feedback = []
-        else:
-            self._feedback = []
+    # ------------------------------------------------------------------
+    # Storage (append-only JSONL, cross-process locked)
+    # ------------------------------------------------------------------
 
-    def _save_feedback(self):
-        """Save feedback to file."""
+    @contextmanager
+    def _locked(self, mode: int) -> Iterator[None]:
+        """Hold an flock (LOCK_EX for writers/migration, LOCK_SH for readers)
+        on the shared lock file. flock is per open-file-description, so it
+        serializes separate worker processes AND threads within one process
+        (each call opens its own descriptor)."""
+        fd = os.open(self._lock_file, os.O_RDWR | os.O_CREAT, 0o640)
         try:
-            with open(self._feedback_file, "w") as f:
-                json.dump(self._feedback, f, indent=2, default=str)
-        except IOError as e:
-            logger.error(f"Failed to save feedback: {e}")
-            raise
+            fcntl.flock(fd, mode)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _ensure_ready(self) -> None:
+        if self._ready:
+            return
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_store()
+        self._ready = True
+
+    @staticmethod
+    def _utc_stamp() -> str:
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+    def _sidecar_path(self, suffix: str) -> Path:
+        """``feedback.json<suffix>``, never overwriting an existing sidecar."""
+        candidate = self._legacy_file.with_name(LEGACY_STORE_NAME + suffix)
+        if candidate.exists():
+            candidate = self._legacy_file.with_name(
+                f"{LEGACY_STORE_NAME}{suffix}-{self._utc_stamp()}"
+            )
+        return candidate
+
+    def _migrate_legacy_store(self) -> None:
+        """One-time, idempotent migration of legacy feedback.json -> JSONL.
+
+        Runs under the exclusive store lock so concurrent workers cannot both
+        migrate. Records whose id is already in the JSONL store are skipped,
+        so a crash between the append and the rename never duplicates. A
+        legacy file that does not parse as a JSON list is quarantined
+        (renamed ``.corrupt-<ts>``) - never wiped or reset to empty.
+        """
+        with self._locked(fcntl.LOCK_EX):
+            if not self._legacy_file.exists():
+                return
+            try:
+                with open(self._legacy_file, "r", encoding="utf-8") as f:
+                    legacy = json.load(f)
+                if not isinstance(legacy, list):
+                    raise ValueError(f"expected a JSON list, got {type(legacy).__name__}")
+            except (OSError, ValueError) as e:  # JSONDecodeError is a ValueError
+                quarantine = self._sidecar_path(f".corrupt-{self._utc_stamp()}")
+                os.replace(self._legacy_file, quarantine)
+                logger.error(
+                    "Legacy feedback store %s is unreadable (%s); quarantined as %s "
+                    "for manual recovery (not migrated, not deleted)",
+                    self._legacy_file, e, quarantine.name,
+                )
+                return
+
+            present = {r.get("id") for r in self._read_records_unlocked()}
+            pending = [
+                r for r in legacy
+                if isinstance(r, dict) and (r.get("id") is None or r.get("id") not in present)
+            ]
+            if pending:
+                self._append_lines_unlocked(pending)
+            migrated = self._sidecar_path(".migrated")
+            os.replace(self._legacy_file, migrated)
+            logger.info(
+                "Migrated %d legacy feedback record(s) to %s (legacy kept as %s)",
+                len(pending), self._store_file.name, migrated.name,
+            )
+
+    def _append_lines_unlocked(self, records: list) -> None:
+        """Append records as JSON lines. Caller must hold LOCK_EX.
+
+        ensure_ascii keeps every line pure ASCII, so no record can contain a
+        raw newline (or a Unicode line separator) and split across lines.
+        """
+        payload = b"".join(
+            (json.dumps(r, default=str, ensure_ascii=True) + "\n").encode("ascii")
+            for r in records
+        )
+        fd = os.open(self._store_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _append_record(self, record: dict) -> None:
+        self._ensure_ready()
+        with self._locked(fcntl.LOCK_EX):
+            self._append_lines_unlocked([record])
+
+    def _read_records_unlocked(self) -> list:
+        """Parse the JSONL store; corrupt lines are skipped and logged."""
+        try:
+            with open(self._store_file, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            return []
+        records = []
+        for lineno, line in enumerate(raw.split(b"\n"), start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError(f"expected a JSON object, got {type(record).__name__}")
+            except ValueError as e:
+                logger.error(
+                    "Skipping corrupt feedback record at %s:%d (%s)",
+                    self._store_file.name, lineno, e,
+                )
+                continue
+            records.append(record)
+        return records
+
+    def _read_records(self) -> list:
+        self._ensure_ready()
+        with self._locked(fcntl.LOCK_SH):
+            return self._read_records_unlocked()
 
     def submit_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
         """
@@ -109,18 +241,19 @@ class FeedbackService:
         """
         Async entry point for FastAPI handlers.
 
-        Records the feedback synchronously (cheap — JSON file append) and
-        fires the email send as a background asyncio task that itself runs
-        inside asyncio.to_thread so the blocking httpx/smtplib calls never
-        touch the event loop. The response returns immediately whether or
-        not the email succeeds.
+        Records the feedback via asyncio.to_thread (the locked, fsync'd
+        JSONL append is blocking file I/O) and fires the email send as a
+        background asyncio task that itself runs inside asyncio.to_thread so
+        the blocking httpx/smtplib calls never touch the event loop. The
+        response returns once the record is durable, whether or not the
+        email succeeds.
 
         A#6/7/13/16: synchronous _send_email_notification was stalling the
         event loop on every feedback submit. Now the user-facing response
         latency is bounded by the (already-fast) file save, and the email
         delivery is best-effort in the background.
         """
-        feedback_id, feedback_entry = self._record_feedback(request)
+        feedback_id, feedback_entry = await asyncio.to_thread(self._record_feedback, request)
         # Fire-and-forget: schedule the blocking email send on a thread.
         # Wrapping in asyncio.create_task means we return to the caller
         # immediately; the task is tracked so it can be reaped/observed.
@@ -145,7 +278,7 @@ class FeedbackService:
 
         Extracted from submit_feedback so both the sync entry point and
         submit_feedback_async share the exact same persistence semantics
-        (id, timestamp, JSON shape, file-append, logging).
+        (id, timestamp, JSON shape, locked JSONL append, logging).
         """
         feedback_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -160,8 +293,7 @@ class FeedbackService:
             "sessionInfo": request.sessionInfo.model_dump() if request.sessionInfo else None,
             "conversation": request.conversation.model_dump() if request.conversation else None,
         }
-        self._feedback.append(feedback_entry)
-        self._save_feedback()
+        self._append_record(feedback_entry)
         logger.info(f"Feedback submitted: {feedback_id} (type={request.type})")
         return feedback_id, feedback_entry
 
@@ -441,13 +573,14 @@ class FeedbackService:
         )
 
     def get_all_feedback(self) -> list:
-        """Get all feedback entries (for admin use)."""
-        return self._feedback.copy()
+        """Get all feedback entries (for admin use), read from disk on demand
+        so records written by every worker process are visible."""
+        return self._read_records()
 
     def get_feedback_by_id(self, feedback_id: str) -> Optional[dict]:
         """Get a specific feedback entry by ID."""
-        for entry in self._feedback:
-            if entry["id"] == feedback_id:
+        for entry in self._read_records():
+            if entry.get("id") == feedback_id:
                 return entry
         return None
 

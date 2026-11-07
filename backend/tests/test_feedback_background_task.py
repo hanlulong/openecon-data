@@ -17,16 +17,13 @@ from backend.models import FeedbackRequest
 from backend.services.feedback import FeedbackService, _background_tasks
 
 
-def _hermetic_service(monkeypatch):
-    """FeedbackService that never touches disk, with a mockable email send."""
-    svc = FeedbackService()
-    svc._feedback = []
-    monkeypatch.setattr(svc, "_save_feedback", lambda: None)
-    return svc
+def _hermetic_service(tmp_path):
+    """FeedbackService writing to a private tmp dir, with a mockable email send."""
+    return FeedbackService(feedback_dir=tmp_path)
 
 
-async def test_async_submit_tracks_task_then_reaps_it(monkeypatch):
-    svc = _hermetic_service(monkeypatch)
+async def test_async_submit_tracks_task_then_reaps_it(monkeypatch, tmp_path):
+    svc = _hermetic_service(tmp_path)
     sent = MagicMock(return_value=True)
     monkeypatch.setattr(svc, "_send_email_notification", sent)
 
@@ -48,8 +45,8 @@ async def test_async_submit_tracks_task_then_reaps_it(monkeypatch):
     assert task not in _background_tasks
 
 
-async def test_email_failure_does_not_break_response_or_leak_task(monkeypatch):
-    svc = _hermetic_service(monkeypatch)
+async def test_email_failure_does_not_break_response_or_leak_task(monkeypatch, tmp_path):
+    svc = _hermetic_service(tmp_path)
     boom = MagicMock(side_effect=RuntimeError("smtp down"))
     monkeypatch.setattr(svc, "_send_email_notification", boom)
 
