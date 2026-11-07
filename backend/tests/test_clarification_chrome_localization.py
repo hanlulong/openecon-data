@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from backend.models import ParsedIntent
+from backend.models import ClarificationOption, ParsedIntent, QueryResponse
 from backend.services import indicator_clarification as ic
 from backend.services.cache import cache_service
 from backend.services.conversation import conversation_manager
@@ -80,6 +80,21 @@ class ChromeCatalogContractTests(unittest.TestCase):
         ):
             self.assertTrue(_MESSAGES[mid]["en"].startswith(_EN_HINT_PREFIX), mid)
             self.assertTrue(_MESSAGES[mid]["zh"].startswith(_ZH_HINT_PREFIX), mid)
+
+    def test_web_ui_sanitizer_strips_every_language_hint_prefix(self) -> None:
+        # The hint prefixes live in the backend catalog; the regex that hides
+        # them next to option buttons lives in ChatPage.tsx. Pin the two
+        # together so adding a language cannot leave a duplicate hint line.
+        chat_page = (
+            Path(__file__).resolve().parents[2]
+            / "packages" / "frontend" / "src" / "components" / "ChatPage.tsx"
+        ).read_text(encoding="utf-8")
+        start = chat_page.index("function sanitizeClarificationContent")
+        sanitizer = chat_page[start:start + 2000]
+        languages = {lang for mid in _MESSAGES if mid.startswith("clarify_") for lang in _MESSAGES[mid]}
+        self.assertEqual(languages, {"en", "zh"}, "new language: add its hint prefix here and in ChatPage.tsx")
+        self.assertIn(_EN_HINT_PREFIX.lower(), sanitizer)
+        self.assertIn(_ZH_HINT_PREFIX, sanitizer)
 
     def test_chrome_falls_back_to_inline_default_on_catalog_miss(self) -> None:
         self.assertEqual(
@@ -359,6 +374,175 @@ class ClarificationBuilderLocalizationTests(unittest.TestCase):
             low_en.message,
             "**Uncertain Query**\nvague\n\nPlease provide more details or use Pro Mode for better results.",
         )
+
+
+class SemanticReplyResolutionIsLanguageInvariantTests(unittest.TestCase):
+    """Localized option LABELS must never change what a reply executes.
+
+    Group-scope and decomposition option labels are system text rendered in
+    the user's language; reply resolution keys on the payload's structural
+    ``option_roles`` and the executed option VALUE instead of label wording.
+    """
+
+    def setUp(self) -> None:
+        cache_service.clear()
+        self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+        self.service.settings.use_outcome_decision_stage = False
+        self.service.settings.use_post_fetch_semantic_judge = False
+        self.service.settings.use_staged_state_commit = False
+
+    def _group_menu(self, language: str | None, conv_name: str) -> str:
+        conv_id = conversation_manager.get_or_create(conv_name)
+        conversation_manager.clear_pending_semantic_clarification(conv_id)
+        intent = ParsedIntent(
+            apiProvider="IMF",
+            indicators=["economic data"],
+            parameters={},
+            clarificationNeeded=False,
+            originalQuery="economic data for G20",
+            language=language,
+        )
+        response = self.service._build_group_scope_clarification(  # pylint: disable=protected-access
+            conversation_id=conv_id,
+            query="economic data for G20",
+            intent=intent,
+            is_multi_indicator=False,
+            processing_steps=None,
+        )
+        assert response is not None
+        return conv_id
+
+    def _resolve(self, conv_id: str, reply: str):
+        pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+        assert pending is not None
+        options = [ClarificationOption.model_validate(o) for o in pending["options"]]
+        selected = ic.match_structured_clarification_option(reply, options)
+        assert selected is not None
+        return self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+            pending=pending, selected_option=selected, refined_query=selected.value,
+        )
+
+    @staticmethod
+    def _decision_view(intent: ParsedIntent) -> dict:
+        return {
+            "provider": intent.apiProvider,
+            "indicators": intent.indicators,
+            "countries": intent.parameters.get("countries"),
+            "country": intent.parameters.get("country"),
+            "originalQuery": intent.originalQuery,
+        }
+
+    def test_compare_members_reply_builds_the_same_intent_in_every_language(self) -> None:
+        built = {}
+        for language in (None, "en", "zh"):
+            conv_id = self._group_menu(language, f"conv-reply-group-{language}")
+            pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+            assert pending is not None
+            # Each persisted role is exactly the scope that produced the value.
+            for option in pending["options"]:
+                role = pending["option_roles"][option["id"]]
+                self.assertEqual(
+                    option["value"],
+                    ic.rewrite_group_scope_query(pending["original_query"], pending["region"], role),
+                )
+            intent = self._resolve(conv_id, "1")
+            self.assertIsNotNone(intent, language)
+            assert intent is not None
+            built[language] = intent
+        en = self._decision_view(built["en"])
+        self.assertGreaterEqual(len(en["countries"] or []), 10)
+        self.assertEqual(en["indicators"], ["economic data"])
+        self.assertEqual(self._decision_view(built["zh"]), en)
+        self.assertEqual(self._decision_view(built[None]), en)
+        # The built intent keeps the menu's language for any later menu.
+        self.assertEqual(built["zh"].language, "zh")
+        self.assertIsNone(built[None].language)
+
+    def test_group_value_reply_still_defers_in_every_language(self) -> None:
+        for language in ("en", "zh"):
+            conv_id = self._group_menu(language, f"conv-reply-group-value-{language}")
+            self.assertIsNone(self._resolve(conv_id, "2"), language)
+
+    def test_legacy_payload_without_roles_keeps_its_english_label_contract(self) -> None:
+        legacy = {
+            "kind": "group_scope",
+            "original_query": "employment rate in G20",
+            "options": [],
+        }
+        compare = ClarificationOption(
+            id="1", label="compare member countries", value="employment rate across G20 member countries",
+        )
+        group_value = ClarificationOption(
+            id="2",
+            label="one overall group value (aggregate/average if available)",
+            value="employment rate for the G20 group as a whole",
+        )
+        self.assertIsNotNone(
+            self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+                pending=legacy, selected_option=compare, refined_query=compare.value,
+            )
+        )
+        self.assertIsNone(
+            self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+                pending=legacy, selected_option=group_value, refined_query=group_value.value,
+            )
+        )
+
+    def test_decomposition_reply_indicator_comes_from_the_value_not_the_label(self) -> None:
+        built = {}
+        for language in ("en", "zh"):
+            conv_id = conversation_manager.get_or_create(f"conv-reply-decomp-{language}")
+            conversation_manager.clear_pending_semantic_clarification(conv_id)
+            intent = ParsedIntent(
+                apiProvider="WORLDBANK",
+                indicators=["inflation"],
+                parameters={"country": "FR"},
+                clarificationNeeded=False,
+                originalQuery="France inflation by category",
+                needsDecomposition=True,
+                decompositionType="category",
+                language=language,
+            )
+            assert ic.build_missing_decomposition_entities_clarification(
+                conversation_id=conv_id, query=intent.originalQuery, intent=intent,
+            ) is not None
+            resolved = self._resolve(conv_id, "2")
+            assert resolved is not None
+            built[language] = resolved
+        self.assertEqual(self._decision_view(built["zh"]), self._decision_view(built["en"]))
+        indicator = built["en"].indicators[0]
+        self.assertNotIn("overall series", indicator)
+        self.assertIn("inflation", indicator.lower())
+        self.assertEqual(built["zh"].language, "zh")
+
+    def test_semantic_metric_options_still_use_their_label_as_the_metric(self) -> None:
+        # LLM-derived semantic options carry no option_roles: their label IS
+        # the metric text (unchanged contract).
+        pending = {"kind": "semantic_metric", "original_query": "employment in Canada"}
+        option = ClarificationOption(id="1", label="number employed", value="number employed in Canada")
+        intent = self.service._build_intent_from_semantic_clarification(  # pylint: disable=protected-access
+            pending=pending, selected_option=option, refined_query=option.value,
+        )
+        assert intent is not None
+        self.assertEqual(intent.indicators, ["number employed"])
+
+    def test_zh_bare_number_reply_executes_the_rewritten_compare_query(self) -> None:
+        for language in ("zh", "en"):
+            conv_id = self._group_menu(language, f"conv-reply-process-{language}")
+            pending = conversation_manager.get_pending_semantic_clarification(conv_id)
+            assert pending is not None
+            expected_value = pending["options"][0]["value"]
+            sentinel = QueryResponse(conversationId=conv_id, clarificationNeeded=False)
+            execute = AsyncMock(return_value=sentinel)
+            with patch.object(self.service, "_execute_resolved_intent", execute):
+                response = run(self.service.process_query("1", conversation_id=conv_id))
+            self.assertIs(response, sentinel, language)
+            execute.assert_awaited_once()
+            kwargs = execute.await_args.kwargs
+            self.assertEqual(kwargs["query"], expected_value, language)
+            self.assertGreaterEqual(len(kwargs["intent"].parameters.get("countries") or []), 10, language)
+            self.assertEqual(kwargs["intent"].language, language)
+            self.assertIsNone(conversation_manager.get_pending_semantic_clarification(conv_id))
 
 
 if __name__ == "__main__":

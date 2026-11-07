@@ -20,6 +20,11 @@ choose" prompts, reply hints, retry notices, "current match" labels — the
 labels that are provider titles, executed option values, rewritten queries and
 series ids are NEVER localized here. Do not grow this into a general i18n layer.
 
+System-written option labels (group scope, decomposition) ARE localized, so
+they are presentation only: reply resolution keys on the pending payload's
+structural ``option_roles`` and the executed option value, never on a label's
+wording (query_helpers.build_intent_from_semantic_clarification).
+
 Reply-hint convention: every hint shown NEXT TO numbered option buttons starts
 with "Reply with the option number" (en) or "请回复选项编号" (zh); the web UI
 strips exactly those prefixes when it renders the options as buttons

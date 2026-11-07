@@ -758,15 +758,35 @@ def build_intent_from_semantic_clarification(
     This avoids sending an already-disambiguated reply back through the full
     LLM parse path.
     """
+    from .indicator_clarification import clarification_language
+
     kind = str(pending.get("kind") or "").strip()
     option_label = str(selected_option.label or "").strip()
     query_text = str(refined_query or "").strip()
     if not query_text:
         return None
 
+    # System-built menus (group scope, decomposition) persist structural
+    # option roles because their labels are LOCALIZED presentation text: no
+    # decision may key on a label's wording. LLM-derived semantic options
+    # (kind "semantic_metric") carry none — their label IS the metric text.
+    raw_roles = pending.get("option_roles")
+    option_roles = raw_roles if isinstance(raw_roles, dict) and raw_roles else None
+    option_role = (
+        str(option_roles.get(str(selected_option.id or "")) or "")
+        if option_roles is not None
+        else ""
+    )
+
     # "group as a whole" still requires more nuanced aggregate handling.
-    if kind == "group_scope" and "compare member countries" not in option_label.lower():
-        return None
+    if kind == "group_scope":
+        if option_roles is not None:
+            if option_role != "compare_members":
+                return None
+        elif "compare member countries" not in option_label.lower():
+            # Payloads persisted before option_roles existed were always
+            # rendered in English; keep their original label contract.
+            return None
 
     extracted_countries = svc._extract_countries_from_query(query_text)
     expanded_region_countries = CountryResolver.expand_regions_in_query(query_text)
@@ -800,9 +820,12 @@ def build_intent_from_semantic_clarification(
     elif isinstance(pending_params.get("countries"), list) and pending_params.get("countries"):
         params["countries"] = list(pending_params["countries"])
 
+    # A system-written label ("use the main overall series", or its zh
+    # rendering) is not an indicator; take the indicator from the executed
+    # option value, which is language-invariant.
     indicator_text = (
         option_label
-        if kind != "group_scope"
+        if kind != "group_scope" and option_roles is None
         else svc._extract_indicator_text_from_refined_query(query_text)
     )
     indicator_text = (
@@ -846,6 +869,9 @@ def build_intent_from_semantic_clarification(
         confidence=0.95,
         recommendedChartType="line",
         originalQuery=query_text,
+        # Carry the menu's language so any later menu on this turn renders
+        # in it (a bare-digit reply has no language signal of its own).
+        language=clarification_language(None, pending),
     )
     svc._apply_country_overrides(intent, query_text)
     return intent

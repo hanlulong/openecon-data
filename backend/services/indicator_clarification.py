@@ -2247,25 +2247,36 @@ def build_group_scope_clarification(
     region_label = humanize_region_name(region)
     lang = clarification_language(intent)
     # Labels are system text (localized); VALUES are executed rewritten
-    # queries and stay byte-identical in every language.
-    options = [
-        ClarificationOption(
-            id="1",
-            label=_chrome(
+    # queries and stay byte-identical in every language. Each option's scope
+    # role drives both its value and the persisted option_roles, so reply
+    # resolution never has to read label wording.
+    scope_choices = [
+        (
+            "compare_members",
+            _chrome(
                 "clarify_group_scope_option_compare", lang, "compare member countries"
             ),
-            value=rewrite_group_scope_query(query, region, "compare_members"),
         ),
-        ClarificationOption(
-            id="2",
-            label=_chrome(
+        (
+            "group_value",
+            _chrome(
                 "clarify_group_scope_option_group_value",
                 lang,
                 "one overall group value (aggregate/average if available)",
             ),
-            value=rewrite_group_scope_query(query, region, "group_value"),
         ),
     ]
+    options = [
+        ClarificationOption(
+            id=str(index),
+            label=label,
+            value=rewrite_group_scope_query(query, region, role),
+        )
+        for index, (role, label) in enumerate(scope_choices, start=1)
+    ]
+    option_roles = {
+        option.id: role for option, (role, _label) in zip(options, scope_choices)
+    }
 
     clarification_questions = [
         _chrome(
@@ -2298,6 +2309,10 @@ def build_group_scope_clarification(
         "original_query": str(query or "").strip(),
         "question_lines": clarification_questions,
         "options": [option.model_dump() for option in options],
+        # Structural option identity for reply resolution: labels are
+        # localized presentation, so consumers key on these roles (option id
+        # -> rewrite_group_scope_query scope), never on label text.
+        "option_roles": option_roles,
         "language": lang,
     }
     store_pending_semantic_clarification(conversation_id, payload)
@@ -2374,25 +2389,35 @@ def build_missing_decomposition_entities_clarification(
     ).strip(" ,;:-") or base_query
     specify_value = f"{base_query} for categories: <name the categories>"
 
-    options = [
-        ClarificationOption(
-            id="1",
-            label=_chrome(
+    # Labels are localized system text; each option's structural role is
+    # persisted next to it (option_roles) so reply resolution never reads
+    # label wording.
+    decomp_choices = [
+        (
+            "specify_members",
+            _chrome(
                 "clarify_decomp_option_specify",
                 lang,
                 "specify {category_plural}",
                 category_plural=category_plural,
             ),
-            value=specify_value,
+            specify_value,
         ),
-        ClarificationOption(
-            id="2",
-            label=_chrome(
+        (
+            "overall_series",
+            _chrome(
                 "clarify_decomp_option_overall", lang, "use the main overall series"
             ),
-            value=overall_value,
+            overall_value,
         ),
     ]
+    options = [
+        ClarificationOption(id=str(index), label=label, value=value)
+        for index, (_role, label, value) in enumerate(decomp_choices, start=1)
+    ]
+    option_roles = {
+        option.id: role for option, (role, _label, _value) in zip(options, decomp_choices)
+    }
     clarification_questions = [
         _chrome(
             "clarify_decomp_missing",
@@ -2426,6 +2451,9 @@ def build_missing_decomposition_entities_clarification(
         "original_query": base_query,
         "question_lines": clarification_questions,
         "options": [option.model_dump() for option in options],
+        # Structural option identity (see group_scope): labels are localized
+        # system text and must never become decision or indicator input.
+        "option_roles": option_roles,
         "language": lang,
     }
     store_pending_semantic_clarification(conversation_id, payload)
@@ -2973,7 +3001,13 @@ async def build_prefetch_indicator_choice_clarification(
                     name=selection_name,
                     metadata=None,
                 )
-                current_label = f"{current_name} from {provider}"
+                current_label = _chrome(
+                    "clarify_current_from",
+                    lang,
+                    "{name} from {provider}",
+                    name=current_name,
+                    provider=provider,
+                )
                 return None
 
         if selection is not None and getattr(selection, "needs_user_choice", False):
