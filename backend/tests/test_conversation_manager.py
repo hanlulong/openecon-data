@@ -360,6 +360,36 @@ class TestClientMintedConversationIsolation:
         assert other != cid
         assert mgr.get_history(other) == []
 
+    def test_request_edge_resolves_distinct_chats_under_one_session(self):
+        """End to end through the request-edge helpers main.py uses: two
+        requests from one anonymous browser (same sessionId) with different
+        client conversation ids land in separate conversations, while a
+        request with NO id keeps the sessionId fallback API clients rely on."""
+        from backend.main import get_conversation_owner, get_request_conversation_id
+        from backend.models import QueryRequest
+
+        mgr = _fresh_manager()
+
+        def resolve(request: QueryRequest) -> str:
+            owner, claimable = get_conversation_owner(request, None)
+            return mgr.get_or_create(
+                get_request_conversation_id(request, None),
+                owner_key=owner,
+                claimable_keys=claimable,
+            )
+
+        first = resolve(QueryRequest(query="inflation in China", conversationId="chat-a", sessionId="sess-1"))
+        mgr.add_message(first, "user", "inflation in China")
+        second = resolve(QueryRequest(query="inflation", conversationId="chat-b", sessionId="sess-1"))
+
+        assert (first, second) == ("chat-a", "chat-b")
+        assert mgr.get_history(second) == []
+        assert mgr.get_history(first) == ["inflation in China"]
+        # Same chat id again resumes it (follow-up in the same chat).
+        assert resolve(QueryRequest(query="and Japan", conversationId="chat-a", sessionId="sess-1")) == "chat-a"
+        # API clients that send only sessionId keep one conversation per session.
+        assert resolve(QueryRequest(query="GDP", sessionId="sess-1")) == "sess-1"
+
 
 # ─── Thread Safety ───────────────────────────────────────────────────
 

@@ -193,7 +193,9 @@ describe('ChatPage', () => {
         },
       },
     });
-    // Reset API mocks
+    // Reset API mocks. clearAllMocks keeps implementations, so a test that
+    // installs its own queryStream behaviour must not leak it into the next.
+    mocks.mockApi.queryStream.mockReset();
     mocks.mockApi.getUserHistory.mockResolvedValue({ history: [], total: 0 });
     mocks.mockApi.getSessionHistory.mockResolvedValue({ history: [], total: 0 });
   });
@@ -511,8 +513,46 @@ describe('ChatPage', () => {
       expect(newChatId).not.toBe('');
       expect(newChatId).not.toBe(firstId);
       expect(newChatId).not.toBe('test-session-id');
+    });
 
-      mocks.mockApi.queryStream.mockReset();
+    // A restored history item resumes ITS conversation; one without a stored
+    // id must not inherit the active chat's id.
+    it('resumes a history item by its own id and mints one when it has none', async () => {
+      const user = userEvent.setup();
+      mocks.mockApi.queryStream.mockImplementation(async (_q, conversationId, callbacks) => {
+        callbacks.onDone?.(conversationId);
+      });
+      mocks.mockApi.getSessionHistory.mockResolvedValue({
+        history: [
+          { id: '1', query: 'Stored chat', timestamp: '2024-01-01', conversationId: 'conv-stored' },
+          { id: '2', query: 'Legacy chat', timestamp: '2024-01-02', conversationId: '' },
+        ],
+        total: 2,
+      });
+
+      renderChatPage();
+      const submit = async (text: string) => {
+        await user.type(await screen.findByPlaceholderText(/Ask about economic data/i), text);
+        fireEvent.submit(screen.getByPlaceholderText(/Ask about economic data/i).closest('form')!);
+      };
+
+      await submit('inflation in China');
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(1));
+      const activeId = mocks.mockApi.queryStream.mock.calls[0][1];
+
+      await user.click(await screen.findByText('Stored chat'));
+      await submit('and in Japan');
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(2));
+      expect(mocks.mockApi.queryStream.mock.calls[1][1]).toBe('conv-stored');
+
+      await user.click(await screen.findByText('Legacy chat'));
+      await submit('inflation');
+      await waitFor(() => expect(mocks.mockApi.queryStream).toHaveBeenCalledTimes(3));
+      const legacyId = mocks.mockApi.queryStream.mock.calls[2][1];
+      expect(typeof legacyId).toBe('string');
+      expect(legacyId).not.toBe('');
+      expect(legacyId).not.toBe(activeId);
+      expect(legacyId).not.toBe('conv-stored');
     });
   });
 

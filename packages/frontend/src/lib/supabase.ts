@@ -6,6 +6,7 @@
  */
 import { createClient, Session, SupabaseClient, User as SupabaseUser } from '@supabase/supabase-js'
 import { getCookie, removeSharedCookie, setSharedCookie } from './sharedStorage'
+import { randomUUID } from './randomId'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -226,7 +227,7 @@ export function getOrCreateSessionId(): string {
   }
 
   if (!sessionId) {
-    sessionId = crypto.randomUUID()
+    sessionId = randomUUID()
     localStorage.setItem(SESSION_ID_KEY, sessionId)
     setSharedCookie(SESSION_ID_KEY, sessionId, SESSION_COOKIE_TTL_SECONDS)
   }

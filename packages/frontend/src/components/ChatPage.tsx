@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { Auth } from './Auth'
 import { ProcessingSteps, ProcessingTimelineStep } from './ProcessingSteps'
 import { getOrCreateSessionId } from '../lib/supabase'
+import { randomUUID } from '../lib/randomId'
 import { useMobile } from '../hooks/useMobile'
 import { logger } from '../utils/logger'
 import { determineChartType } from '../utils/chartType'
@@ -149,7 +150,9 @@ const ACTIVE_EXAMPLE_QUERIES =
 // with NO id falls back to the anonymous sessionId — which is shared by every
 // chat in the browser, so "New chat" would silently continue the previous
 // conversation (inherited country, date window, clarification state).
-const newConversationId = (): string => crypto.randomUUID()
+// randomUUID falls back to getRandomValues outside secure contexts, since this
+// runs during render and a throw would take the whole route down.
+const newConversationId = (): string => randomUUID()
 
 export function ChatPage() {
   const navigate = useNavigate()
@@ -335,10 +338,10 @@ export function ChatPage() {
       setMessages([userMessage])
     }
 
-    // Always set conversationId to resume the conversation
-    if (item.conversationId) {
-      setConversationId(item.conversationId)
-    }
+    // Resume the item's own conversation. An item without a stored id gets a
+    // fresh one: keeping the CURRENT chat's id would silently continue the
+    // active chat's server conversation (the same bleed New chat avoids).
+    setConversationId(item.conversationId || newConversationId())
 
     // Close sidebar on mobile after selecting a history item
     if (isMobile) {
