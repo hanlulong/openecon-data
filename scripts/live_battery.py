@@ -9,6 +9,7 @@ Output: prints a PASS/FAIL table and writes results JSON next to this file.
 """
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.request
@@ -46,17 +47,83 @@ def series_points(resp):
     return out
 
 
+def response_status(resp):
+    """Classify a /api/query JSON body like backend.main.derive_response_status.
+
+    One outcome per response so a clarification (or an explained no-data
+    answer) is never misreported as a silent empty.
+    """
+    if resp is None:
+        return "empty"
+    if str(resp.get("error") or "").strip():
+        return "error"
+    if resp.get("clarificationNeeded"):
+        return "clarification"
+    if resp.get("registrationRequired"):
+        return "registration_gate"
+    if resp.get("data"):
+        return "data"
+    if str(resp.get("message") or "").strip() or resp.get("codeExecution"):
+        return "messaged_no_data"
+    return "empty"
+
+
+# Intent-level geography: any served euro-area entity satisfies a euro-area
+# question (Eurostat EA/EA21, World Bank EMU, IMF/ECB XM, FRED EZ*, or the
+# "Euro area" label). An EU27 or single-country answer does not. Never pins a
+# series id.
+EURO_AREA_GEO = (r"EA\d*", r"EZ\d*", r"EMU", r"XM", r"euro[\s_-]*(area|zone).*", r"eurozone")
+
+
+def _served_geographies(series_meta):
+    """Geography evidence of one served series: country code, else its labels."""
+    country = str(series_meta.get("country") or "").strip()
+    if country and country.upper() not in {"ALL_AVAILABLE", "ALL", "__ALL__"}:
+        return [country]
+    return [str(series_meta.get(key) or "") for key in ("indicator", "description")]
+
+
+def geo_matches(series_meta, patterns):
+    evidence = _served_geographies(series_meta)
+    if len(evidence) == 1:  # a country code/label: must match one pattern exactly
+        return any(re.fullmatch(p, evidence[0], re.IGNORECASE) for p in patterns)
+    # Labels: whole-word search, so "EA" never matches inside "European".
+    return any(
+        re.search(rf"\b(?:{p})\b", text, re.IGNORECASE) for p in patterns for text in evidence if text
+    )
+
+
 def check(resp, exp):
     """exp keys: nonempty(bool), provider(str in metadata.source), value_range((lo,hi) on latest pt),
-    min_series(int), error_contains(str), clarification(bool), indicator_contains(str)."""
+    min_series(int), error_contains(str), clarification(bool), indicator_contains(str),
+    clarification_ok(bool: a clarification is an acceptable answer to a nonempty probe),
+    geo_any_of(regex patterns: every served series' geography must fullmatch one)."""
     problems = []
     if resp is None:
         return ["request failed"]
     data = resp.get("data") or []
+    status = response_status(resp)
     if exp.get("nonempty") and not data:
-        problems.append(f"empty data (error={resp.get('error')!r})")
+        if status == "clarification":
+            if not (exp.get("clarification_ok") or exp.get("clarification")):
+                questions = resp.get("clarificationQuestions") or [""]
+                problems.append(f"unexpected clarification: {str(questions[0])[:120]!r}")
+        elif status == "error":
+            problems.append(f"error: {str(resp.get('error'))[:120]!r}")
+        elif status == "messaged_no_data":
+            problems.append(f"no data, message: {str(resp.get('message'))[:120]!r}")
+        else:
+            problems.append(f"empty data ({status})")
     if exp.get("clarification") and not resp.get("clarificationNeeded"):
         problems.append("expected clarification")
+    if "geo_any_of" in exp and data:
+        wrong = [
+            _served_geographies(d.get("metadata", {}))[0][:40] or "?"
+            for d in data
+            if not geo_matches(d.get("metadata", {}), exp["geo_any_of"])
+        ]
+        if wrong:
+            problems.append(f"wrong geography {wrong} (want one of {list(exp['geo_any_of'])})")
     if "error_contains" in exp:
         err = (resp.get("error") or "") + " " + (resp.get("message") or "")
         if exp["error_contains"].lower() not in err.lower():
@@ -114,7 +181,9 @@ SINGLE = [
     # Provider fixes
     ("bis-credit", "total credit to the non-financial sector for Germany", {"nonempty": True}),
     ("ct-veg-oil", "US exports of vegetable oil", {}),  # must NOT be HS27 petroleum; fail-closed OK
-    ("eu-ea-hicp", "euro area inflation rate", {"nonempty": True, "value_range": (-1, 9)}),
+    ("eu-ea-hicp", "euro area inflation rate", {"nonempty": True, "value_range": (-1, 9), "geo_any_of": EURO_AREA_GEO}),
+    ("zh-ea-hicp", "欧元区通胀率", {"nonempty": True, "value_range": (-1, 9), "geo_any_of": EURO_AREA_GEO}),
+    ("zh-ea-unemp", "欧元区失业率", {"nonempty": True, "value_range": (3, 13), "geo_any_of": EURO_AREA_GEO}),
     ("wb-empty-note", "GDP of Tuvalu since 2030", {"error_contains": "available"}),  # honest window/not-yet-released message
 ]
 
@@ -153,7 +222,7 @@ MULTI = [
         ("show GDP instead", {"nonempty": True}),  # F3: no Sex dimension leak
     ]),
     ("mr9-eurostat-switch", [
-        ("euro area inflation", {"nonempty": True}),
+        ("euro area inflation", {"nonempty": True, "geo_any_of": EURO_AREA_GEO}),
         ("what about France", {"nonempty": True}),
         ("and Italy", {"nonempty": True}),
     ]),
