@@ -20,6 +20,16 @@ MUST_REJECT = [
     "from os import system as s",
     "from os import *",
     "from sys import *",
+    # rebinding a wrapper name elsewhere (even in dead code) must never drop
+    # the checks on the real wrapper-provided os/sys
+    "def _u():\n    import sys as os\nos.system('id')",
+    "import sys as os\nimport os\nos.system('id')",
+    "def _u():\n    import os as sys\nprint(sys.modules)",
+    "import sys as s\nimport os as s\ns.system('id')",
+    # a module that re-exports os/sys, imported under any name
+    "from pathlib import os as q\nq.system('id')",
+    "from pathlib import os\nos.popen('id')",
+    "from mylib import sys as z\nz.exit(0)",
     # low-level OS backends + event-loop / raw I/O / network / datastore layers
     "import posix",
     "from posix import system",
@@ -42,6 +52,10 @@ MUST_REJECT = [
     "from pathlib import Path\nPath('/tmp/promode_x.csv').lchmod(0o777)",
     "import os.path as p\np.os.chmod('/tmp/x', 0o777)",
     "import os as o\no.chmod('/tmp/x', 0o777)",
+    # ...also when only REFERENCED (bound method, higher-order use)
+    "from pathlib import Path\nf = Path('/tmp/promode_x.csv').symlink_to\nf('/etc/hostname')",
+    "from pathlib import Path\nlist(map(Path.symlink_to, [Path('/tmp/a')], ['/etc/hostname']))",
+    "from pathlib import Path\nm = Path.chmod",
 ]
 
 MUST_VALIDATE = [
@@ -79,6 +93,24 @@ def test_bypass_snippets_are_rejected(code, level):
 def test_legitimate_analysis_snippets_still_validate(code):
     ok, violations, _ = SecurityValidator(SecurityLevel.STRICT).validate(code)
     assert ok, f"legit analysis code rejected: {code!r} -> {violations}"
+
+
+def test_checks_fail_closed_without_validate():
+    """The wrapper names resolve to themselves even if a check runs outside
+    validate() (no alias pre-pass), so os.system is still flagged."""
+    import ast
+
+    v = SecurityValidator()
+    v._check_ast(ast.parse("os.system('id')\nsys.exit(0)"))
+    assert any("os.system" in m for m in v.violations)
+    assert any("sys.exit" in m for m in v.violations)
+
+
+def test_one_violation_per_dangerous_os_attribute():
+    """os.chmod is reported once (as an os operation), not twice."""
+    ok, violations, _ = SecurityValidator().validate("os.chmod('/tmp/x', 0o777)")
+    assert not ok
+    assert len(violations) == 1, violations
 
 
 def test_alias_state_does_not_leak_between_validations():
