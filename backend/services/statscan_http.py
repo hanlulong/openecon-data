@@ -21,9 +21,11 @@ it can opt into the same client via this one seam.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import httpx
 
@@ -34,7 +36,25 @@ logger = logging.getLogger(__name__)
 # WAF change requires it.
 _IMPERSONATE = "chrome"
 
-_session = None  # lazy module singleton: one connection pool per process
+# One curl_cffi AsyncSession (connection pool) PER RUNNING EVENT LOOP.
+#
+# A curl_cffi AsyncSession binds to the loop it first runs on (its AsyncCurl
+# schedules timers, socket readers and a timeout task there), so a single
+# process-wide session breaks every later loop with "... attached to a different
+# loop" — e.g. scripts or tests that call ``asyncio.run`` more than once, or any
+# helper that runs a coroutine on a worker-thread loop. This mirrors
+# ``http_pool``'s per-loop clients, with one difference: the session holds a
+# STRONG reference to its loop, so a ``WeakKeyDictionary`` keyed by the loop
+# would never release the entry. Instead each session is owned by a small
+# lifetime task on its own loop; when the loop shuts down (``asyncio.run`` /
+# ``asyncio.Runner`` / uvicorn exit all cancel outstanding tasks), that task
+# closes the session on the still-running loop and drops the entry. Entries for
+# loops closed WITHOUT cancelling their tasks are pruned on the next access.
+#
+# Value: (session, owner_task). The task reference is kept here because asyncio
+# itself only holds tasks weakly.
+_loop_sessions: Dict[asyncio.AbstractEventLoop, Tuple[Any, "asyncio.Task[None]"]] = {}
+_loop_sessions_lock = threading.Lock()  # loops may live on different threads
 
 
 def _translate_kwargs(kw: Dict[str, Any]) -> Dict[str, Any]:
@@ -98,10 +118,20 @@ class _StreamResp:
 
 
 class StatsCanHTTPClient:
-    """httpx.AsyncClient-shaped facade over a curl_cffi AsyncSession."""
+    """httpx.AsyncClient-shaped facade over a curl_cffi AsyncSession.
 
-    def __init__(self, session: Any) -> None:
-        self._session = session
+    With no explicit ``session`` the facade resolves the current loop's pooled
+    session at request time (``_session_for_running_loop``).
+    """
+
+    def __init__(self, session: Optional[Any] = None) -> None:
+        self._fixed_session = session
+
+    @property
+    def _session(self) -> Any:
+        if self._fixed_session is not None:
+            return self._fixed_session
+        return _session_for_running_loop()
 
     async def post(self, url: str, **kw: Any) -> _Resp:
         try:
@@ -137,17 +167,49 @@ class StatsCanHTTPClient:
                 pass
 
 
+async def _own_session(loop: asyncio.AbstractEventLoop, session: Any) -> None:
+    """Keep ``session`` alive for its loop's lifetime, then close it on that loop."""
+    try:
+        await loop.create_future()  # never resolves; ends when the loop cancels us
+    finally:
+        with _loop_sessions_lock:
+            entry = _loop_sessions.get(loop)
+            if entry is not None and entry[0] is session:
+                _loop_sessions.pop(loop, None)
+        try:
+            await session.close()
+        except Exception as exc:  # best-effort cleanup at loop shutdown
+            logger.debug("StatsCan HTTP session close failed: %s", exc)
+
+
+def _session_for_running_loop() -> Any:
+    """Return the curl_cffi session bound to the CURRENT running loop."""
+    loop = asyncio.get_running_loop()
+    with _loop_sessions_lock:
+        entry = _loop_sessions.get(loop)
+        if entry is not None and not getattr(entry[0], "_closed", False):
+            return entry[0]
+        # Drop sessions whose loop closed without cancelling its tasks (their
+        # owner never ran); nothing can be awaited on a closed loop.
+        for stale_loop in [lp for lp in list(_loop_sessions) if lp.is_closed()]:
+            _loop_sessions.pop(stale_loop, None)
+        if entry is not None:
+            entry[1].cancel()  # closed session: let its owner finish cleanup
+        from curl_cffi.requests import AsyncSession
+
+        session = AsyncSession(impersonate=_IMPERSONATE)
+        owner = loop.create_task(_own_session(loop, session), name="statscan-http-session-owner")
+        _loop_sessions[loop] = (session, owner)
+    logger.info("StatsCan HTTP client initialized (curl_cffi impersonate=%s)", _IMPERSONATE)
+    return session
+
+
 def get_statscan_http_client() -> StatsCanHTTPClient:
     """Return the StatsCan HTTP client (curl_cffi, Chrome TLS impersonation).
 
-    Lazy singleton — the curl_cffi AsyncSession binds to the running event loop
-    (the single uvicorn loop in production) and pools connections for the
-    process lifetime.
+    The returned facade is loop-agnostic: every request uses the connection
+    pool of the event loop it is awaited on (see ``_loop_sessions``), so the
+    same client works on the uvicorn loop, under ``asyncio.run`` in scripts, and
+    across per-test loops.
     """
-    global _session
-    if _session is None:
-        from curl_cffi.requests import AsyncSession
-
-        _session = AsyncSession(impersonate=_IMPERSONATE)
-        logger.info("StatsCan HTTP client initialized (curl_cffi impersonate=%s)", _IMPERSONATE)
-    return StatsCanHTTPClient(_session)
+    return StatsCanHTTPClient()

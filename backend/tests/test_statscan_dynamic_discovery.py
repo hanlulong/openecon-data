@@ -14,6 +14,10 @@ import httpx
 import pytest
 from backend.providers.statscan import StatsCanProvider
 
+# Live Statistics Canada WDS calls (network). Still runs by default — nothing in
+# pytest.ini deselects the marker; skip it offline with `-m "not integration"`.
+pytestmark = pytest.mark.integration
+
 _STATSCAN_DATA_ENDPOINT_AVAILABLE: Optional[bool] = None
 
 

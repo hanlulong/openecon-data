@@ -15,10 +15,9 @@ This prevents dimension modifiers from being misclassified as new indicators.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from .conversation_state_v2 import ConversationState, FollowUpDelta
 from ..routing.country_resolver import CountryResolver
@@ -1593,6 +1592,24 @@ Output the query_type and any changed fields as JSON."""
     # Handler: Context-aware dimension modifier  (Phase 3)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _cached_statscan_cube_metadata(statscan: Any, product_id: str) -> Optional[Dict[str, Any]]:
+        """Return StatsCan cube metadata from the provider's network-free
+        caches (in-process cube cache, then the bundled local metadata file),
+        or None. Structural lookup by product id; never performs I/O."""
+        normalized = statscan._normalize_metadata_product_id(product_id)
+        cache = getattr(statscan, "_cube_metadata_cache", None)
+        metadata = cache.get(normalized) if isinstance(cache, dict) else None
+        if not (isinstance(metadata, dict) and metadata):
+            service = getattr(statscan, "_statscan_metadata_service", None)
+            local_lookup = getattr(service, "get_local_cube_metadata", None)
+            try:
+                metadata = local_lookup(normalized) if callable(local_lookup) else None
+            except Exception as exc:
+                logger.debug("Dimension modifier: local cube metadata lookup failed for %s: %s", normalized, exc)
+                metadata = None
+        return metadata if isinstance(metadata, dict) and metadata else None
+
     def _try_dimension_modifier(
         self,
         query: str,
@@ -1609,9 +1626,9 @@ Output the query_type and any changed fields as JSON."""
         If a match is found the delta is ``added_dimensions`` (not
         ``changed_indicator``), which prevents misclassification.
 
-        This handler is synchronous but wraps an async call to
-        ``_get_cube_metadata`` via ``asyncio`` so it integrates with the
-        sync ``extract()`` method.
+        This handler is synchronous (it runs inside the sync ``extract()``),
+        so it only reads cube metadata that is already available without I/O
+        (see ``_cached_statscan_cube_metadata``).
         """
         # Only applies when current state is StatsCan
         current_provider = (
@@ -1653,32 +1670,16 @@ Output the query_type and any changed fields as JSON."""
         if not product_id:
             return None
 
-        # Use cached cube metadata from conversation state (pre-populated
-        # after first successful StatsCan query — no async API call needed).
-        # Fall back to async fetch in a thread if cache is missing.
-        cube_metadata = state.statscan_cube_metadata
-        if not cube_metadata:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        cube_metadata = pool.submit(
-                            lambda: asyncio.run(
-                                statscan._get_cube_metadata(product_id)
-                            )
-                        ).result(timeout=10)
-                else:
-                    cube_metadata = loop.run_until_complete(
-                        statscan._get_cube_metadata(product_id)
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "Dimension modifier: failed to fetch cube metadata for %s: %s",
-                    product_id, exc,
-                )
-                return None
-
+        # Use cube metadata from conversation state (pre-populated after the
+        # first successful StatsCan query), else the provider's network-free
+        # caches. extract() is synchronous and usually runs ON the request's
+        # event loop, so it must never fetch live here: the previous fallback
+        # blocked that loop for up to 10s and ran the fetch on a second,
+        # throwaway loop in a worker thread. With no cached metadata this
+        # handler declines and the follow-up takes the normal (LLM) path.
+        cube_metadata = state.statscan_cube_metadata or self._cached_statscan_cube_metadata(
+            statscan, product_id
+        )
         if not cube_metadata:
             return None
 
