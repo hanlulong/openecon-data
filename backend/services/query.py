@@ -2040,9 +2040,13 @@ class QueryService:
         query: str,
         intent: Optional[ParsedIntent],
         processing_steps: Optional[List[Any]] = None,
+        *,
+        attempt_error: Optional[BaseException] = None,
     ) -> Optional[QueryResponse]:
         """Delegates to :func:`indicator_clarification.build_no_data_indicator_clarification`."""
-        return _ic_build_no_data_indicator_clarification(self, conversation_id, query, intent, processing_steps)
+        return _ic_build_no_data_indicator_clarification(
+            self, conversation_id, query, intent, processing_steps, attempt_error=attempt_error,
+        )
 
     def _looks_like_provider_indicator_code(self, provider: str, indicator: str) -> bool:
         """Delegates to :func:`indicator_clarification.looks_like_provider_indicator_code`."""
@@ -4582,6 +4586,11 @@ class QueryService:
         reports = _DF_MULTI_INDICATOR_FETCH_REPORTS.get() or []
         if not reports or not response.data:
             return
+        # Only a response that still answers a multi-indicator request can
+        # have left an indicator out; a later single-indicator serve in the
+        # same request is not a partial answer.
+        if response.intent is None or len(response.intent.indicators or []) < 2:
+            return
         # The served payload must come entirely from the partial fetch (a
         # subset: reranking/filtering may drop or reorder its series). If any
         # served series came from elsewhere, a later path changed what is
@@ -4625,7 +4634,9 @@ class QueryService:
             if response.data and not (response.error or "").strip():
                 self._disclose_unserved_indicators(response)
         except Exception as exc:  # never let the contract break a response
-            logger.debug("Response contract finalization skipped: %s", exc)
+            logger.warning(
+                "Response contract finalization skipped (%s): %s", type(exc).__name__, exc,
+            )
         return response
 
     def _finalize_empty_data_response(self, response: QueryResponse) -> QueryResponse:
@@ -6464,6 +6475,7 @@ class QueryService:
                 query=query,
                 intent=intent if "intent" in locals() else None,
                 processing_steps=tracker.to_list(),
+                attempt_error=exc,
             )
             if clarification_response:
                 return clarification_response
@@ -7180,6 +7192,7 @@ class QueryService:
             query=query,
             intent=intent,
             processing_steps=tracker.to_list() if tracker else None,
+            attempt_error=fetch_error,
         )
         if clarification_response:
             return clarification_response

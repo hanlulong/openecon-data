@@ -494,7 +494,57 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         "en": "the closest available series",
         "zh": "最接近的可用序列",
     },
+    # Stateless-caller response contract (indicator_clarification.
+    # finalize_clarification_response_contract). Appended to the menu's
+    # existing reply hint, so the web UI hides them with it; {queries} are
+    # executable re-ask strings and are never translated.
+    "clarify_stateless_resend": {
+        "en": (
+            "If your client does not keep this conversation, resend the number "
+            'with conversationId="{conversation_id}".'
+        ),
+        "zh": '如果您的客户端不保留此对话，请连同 conversationId="{conversation_id}" 重新发送选项编号。',
+    },
+    "clarify_stateless_requeries": {
+        "en": "Or send one of these self-contained queries instead: {queries}.",
+        "zh": "也可以直接发送以下任一完整查询：{queries}。",
+    },
+    # Used only when a menu has no reply hint of its own; keeps the fixed
+    # per-language hint prefix so the web UI strips it like every other hint.
+    "clarify_stateless_reply_hint": {
+        "en": "Reply with the option number.",
+        "zh": "请回复选项编号。",
+    },
+    # The user named a provider; say which menu options come from others.
+    # Worded on the menu, not on provider coverage: the evidence is the
+    # candidate list, not a fetch.
+    "clarify_explicit_provider_none": {
+        "en": "No {provider} option matched this request; the options below are from other providers.",
+        "zh": "没有与此请求匹配的 {provider} 选项；以下选项来自其他数据源。",
+    },
+    "clarify_explicit_provider_mixed": {
+        "en": "Options {options} are from providers other than {provider}.",
+        "zh": "选项 {options} 来自 {provider} 以外的数据源。",
+    },
 }
+
+# The fixed prefix every option reply hint starts with, per language (see the
+# module docstring). The web UI strips exactly these; backend code that needs
+# to find a menu's reply hint keys on them, never on English text alone.
+CLARIFY_REPLY_HINT_PREFIXES: Dict[str, str] = {
+    "en": "Reply with the option number",
+    "zh": "请回复选项编号",
+}
+
+
+def reply_hint_language(line: str) -> Optional[str]:
+    """The language whose fixed reply-hint prefix *line* starts with, else None."""
+    text = str(line or "").lstrip()
+    for language, prefix in CLARIFY_REPLY_HINT_PREFIXES.items():
+        if text[: len(prefix)].casefold() == prefix.casefold():
+            return language
+    return None
+
 
 _DEFAULT_LANG = "en"
 

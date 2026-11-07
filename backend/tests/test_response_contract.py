@@ -40,7 +40,8 @@ from backend.services.indicator_selector import IndicatorSelector
 from backend.services.provider_strategy import collect_target_countries
 from backend.services.query import QueryService
 from backend.tests.utils import run
-from backend.utils.retry import DataNotAvailableError
+from backend.services.user_messages import CLARIFY_REPLY_HINT_PREFIXES, _MESSAGES, reply_hint_language
+from backend.utils.retry import DataNotAvailableError, ProviderCoolingDown
 
 
 @pytest.fixture(scope="module")
@@ -185,8 +186,13 @@ def test_contract_renders_requeries_in_browser_hidden_reply_line_and_message(ser
     assert reply_line.lower().startswith("reply with the option number")
     assert 'conversationId="conv-1"' in reply_line
     assert "1) US M2SL from FRED" in reply_line and "2) US BIS_WS_TC from BIS" in reply_line
-    # Clients that read only `message` see the full menu.
-    assert response.message == "\n".join(response.clarificationQuestions)
+    # The contract leaves `message` to the empty-data finalizer's renderer,
+    # which shows message-only clients the finalized lines plus every option.
+    assert response.message is None
+    rendered = service._finalize_empty_data_response(response)  # pylint: disable=protected-access
+    message_lines = rendered.message.splitlines()
+    assert message_lines[: len(questions)] == response.clarificationQuestions
+    assert "1) US M2SL from FRED" in message_lines[len(questions) - 1]
 
     # Idempotent.
     again = clarification.finalize_clarification_response_contract(service, response)
@@ -207,6 +213,159 @@ def test_contract_adds_hidden_reply_line_when_builder_had_none(service):
 def test_contract_ignores_non_clarification_responses(service):
     response = QueryResponse(conversationId="c", clarificationNeeded=False, message=None)
     assert clarification.finalize_clarification_response_contract(service, response).message is None
+
+
+def test_option_query_is_omitted_when_menu_scope_is_unknown_or_subnational(service):
+    option = _option("WORLDBANK", "NY.GDP.MKTP.CD")
+    # A menu with no intent (e.g. the pending re-prompt) has an unknown scope:
+    # a country-less string would serve the provider default and drop it.
+    assert clarification.stateless_option_query(service, option, None) is None
+    # A sub-national menu: a national re-ask would skip the fail-closed check
+    # a stateful pick still runs.
+    intent = _intent("WORLDBANK", {"country": "Canada"})
+    intent.subnationalRegion = "Ontario"
+    assert clarification.stateless_option_query(service, option, intent) is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"frequency": "quarterly"},
+        {"dimensions": {"sex": "F"}},
+        {"aggregation_method": "avg"},
+        {"partner": "China"},
+    ],
+)
+def test_option_query_is_omitted_when_user_scope_cannot_be_carried(service, extra):
+    # The fast path re-asks at the series' default form; any user scope it
+    # does not reproduce means no string rather than a silent scope drop.
+    params = {"country": "US", **extra}
+    assert clarification.stateless_option_query(service, _option("FRED", "UNRATE"), _intent("FRED", params)) is None
+
+
+def test_null_valued_parse_slots_do_not_block_the_option_query(service):
+    # Parse intents carry many empty slots (live shape); only VALUES are scope.
+    params = {"country": "Japan", "seriesId": None, "reporter": None, "partner": None,
+              "flow": None, "coinIds": None, "vsCurrency": None, "indicator": "credit to GDP ratio",
+              "__time_scope_authority": "default"}
+    assert clarification.stateless_option_query(
+        service, _option("BIS", "BIS_WS_TC"), _intent("BIS", params),
+    ) == "Japan BIS_WS_TC from BIS"
+
+
+def test_option_query_uses_country_named_only_in_the_original_query(service):
+    intent = _intent("WORLDBANK", {}, query="Germany GDP")
+    query = clarification.stateless_option_query(service, _option("WORLDBANK", "NY.GDP.MKTP.CD"), intent)
+    assert query, "the collector's scope (countries named in the query) is the menu's scope"
+    resolved = service._build_explicit_provider_code_intent(query)  # pylint: disable=protected-access
+    assert CountryResolver.normalize(resolved.parameters["country"]) == "DE"
+
+
+def test_option_query_dedupes_country_aliases_by_iso2(service):
+    # Two spellings of one country are one-country scope, not a list the
+    # fast path cannot carry.
+    params = {"country": "US", "countries": ["United States"]}
+    query = clarification.stateless_option_query(service, _option("FRED", "M2SL"), _intent("FRED", params))
+    assert query in {"US M2SL from FRED", "United States M2SL from FRED"}
+
+
+def test_intentless_menu_still_gets_conversation_instruction(service):
+    options = [_option("WORLDBANK", "NY.GDP.MKTP.CD", 1), _option("WORLDBANK", "NY.GDP.MKTP.KD", 2)]
+    response = clarification.finalize_clarification_response_contract(
+        service, _menu_response(options, ["1. a", "2. b"], None),
+    )
+    assert [o.query for o in response.clarificationOptions] == [None, None]
+    assert 'conversationId="conv-1"' in response.clarificationQuestions[-1]
+    assert "self-contained" not in response.clarificationQuestions[-1]
+
+
+ZH_REPLY_HINT = _MESSAGES["clarify_reply_hint"]["zh"]
+
+
+def _zh_menu(service, intent, options, questions):
+    return clarification.finalize_clarification_response_contract(
+        service, _menu_response(options, questions, intent),
+    )
+
+
+def test_zh_menu_chrome_stays_in_chinese_and_extends_the_zh_hint(service):
+    intent = _intent("IMF", {"country": "China"}, query="中国CPI 来自IMF")
+    intent.language = "zh"
+    options = [_option("IMF", "PCPI_IX", 1), _option("WORLDBANK", "FP.CPI.TOTL", 2)]
+    questions = ["请选择您想要的指标：", "1. a", "2. b", ZH_REPLY_HINT]
+    with patch.object(service, "_detect_explicit_provider", return_value="IMF"):
+        response = _zh_menu(service, intent, options, questions)
+
+    lines = response.clarificationQuestions
+    # Exactly one reply hint, still on the zh prefix the web UI strips.
+    hints = [line for line in lines if reply_hint_language(line)]
+    assert len(hints) == 1 and reply_hint_language(hints[0]) == "zh"
+    assert 'conversationId="conv-1"' in hints[0]
+    assert "重新发送选项编号" in hints[0]
+    assert "Reply with" not in "\n".join(lines) and "If your client" not in "\n".join(lines)
+    # The alternatives disclosure is localized too.
+    assert "选项 2 来自 IMF 以外的数据源。" in lines
+
+
+def test_intentless_zh_reprompt_follows_the_stored_hint_language(service):
+    options = [_option("IMF", "PCPI_IX", 1), _option("IMF", "PCPIPCH", 2)]
+    response = _zh_menu(service, None, options, ["请选择您想要的指标：", "1. a", "2. b", ZH_REPLY_HINT])
+    hint = response.clarificationQuestions[-1]
+    assert hint.startswith(CLARIFY_REPLY_HINT_PREFIXES["zh"])
+    assert "重新发送选项编号" in hint and "If your client" not in hint
+
+
+def test_every_reply_hint_catalog_entry_keeps_the_fixed_prefix():
+    hint_ids = [mid for mid in _MESSAGES if mid.endswith("reply_hint")]
+    assert "clarify_stateless_reply_hint" in hint_ids
+    for mid in hint_ids:
+        for language, prefix in CLARIFY_REPLY_HINT_PREFIXES.items():
+            assert _MESSAGES[mid][language].startswith(prefix), (mid, language)
+            assert reply_hint_language(_MESSAGES[mid][language]) == language
+
+
+@pytest.fixture
+def pipeline_service():
+    from backend.services.cache import cache_service
+
+    cache_service.clear()
+    svc = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+    svc.settings.use_outcome_decision_stage = False
+    svc.settings.use_post_fetch_semantic_judge = False
+    svc.settings.use_staged_state_commit = False
+    return svc
+
+
+@pytest.mark.parametrize(
+    "provider,code,params,source",
+    [
+        ("FRED", "M2SL", {"country": "US"}, "FRED"),
+        ("WORLDBANK", "NY.GDP.MKTP.CD", {"country": "Germany"}, "World Bank"),
+        ("BIS", "BIS_WS_TC", {"country": "Japan"}, "BIS"),
+        ("IMF", "NGDP_RPCH", {"country": "United States"}, "IMF"),
+    ],
+)
+def test_reissued_option_query_is_served_through_process_query_without_a_menu(
+    pipeline_service, provider, code, params, source,
+):
+    """A stateless re-send (no conversationId) serves exactly that series, never re-asks."""
+    query = clarification.stateless_option_query(pipeline_service, _option(provider, code), _intent(provider, params))
+    assert query
+    served = NormalizedData(
+        metadata=Metadata(source=source, indicator=code, country=params["country"], frequency="annual",
+                          unit="x", seriesId=code),
+        data=[{"date": "2020-01-01", "value": 1.0}, {"date": "2021-01-01", "value": 2.0}],
+    )
+    fetch = AsyncMock(return_value=[served])
+    with patch.object(pipeline_service.pipeline, "parse_and_route",
+                      new=AsyncMock(side_effect=AssertionError("the LLM parse must not run"))), \
+         patch.object(pipeline_service, "_fetch_data", new=fetch):
+        response = run(pipeline_service.process_query(query))
+    assert response.clarificationNeeded is False
+    assert response.data and response.data[0].metadata.seriesId == code
+    fetched_intent = fetch.await_args_list[0].args[0]
+    assert fetched_intent.apiProvider == provider
+    assert str(fetched_intent.parameters["indicator"]).upper() == code.upper()
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +439,36 @@ def test_explicit_provider_with_no_options_keeps_alternatives_and_discloses(serv
     response = clarification.finalize_clarification_response_contract(
         service, _menu_response(options, ["1. a", "2. b"], intent),
     )
-    assert response.clarificationQuestions[0].startswith("FRED has no matching series at this scope")
+    assert response.clarificationQuestions[0] == (
+        "No FRED option matched this request; the options below are from other providers."
+    )
+
+
+def test_recovery_with_explicit_provider_fetches_only_that_provider_bounded(collect, pipeline_service, monkeypatch):
+    """Explicit-first ranking feeds uncertain-match recovery more named-provider
+    candidates; recovery must still fetch ONLY that provider, at most max_options."""
+    service = pipeline_service
+    monkeypatch.setattr(service, "_get_fallback_providers", lambda *args, **kwargs: ["WORLDBANK"])
+    monkeypatch.setattr(service.bis_provider, "_lookup_dataflow_info", lambda code: (None, None), raising=False)
+    monkeypatch.setattr(service, "_needs_indicator_clarification", lambda *args, **kwargs: True)
+    monkeypatch.setattr(clarification, "_selection_authority_holds", lambda *args, **kwargs: False)
+    fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(service, "_fetch_data", fetch)
+
+    query = "Credit to GDP ratio US from BIS"
+    intent = _intent("BIS", {"country": "US"}, query=query, indicators=["credit to GDP ratio"])
+    served = NormalizedData(
+        metadata=Metadata(source="BIS", indicator="Credit", country="US", frequency="quarterly",
+                          unit="x", seriesId="BIS_OTHER"),
+        data=[{"date": "2020-01-01", "value": 1.0}],
+    )
+    result = run(clarification.maybe_recover_from_uncertain_match(service, query, intent, [served]))
+
+    assert result is None  # every candidate fetch came back empty
+    fetched = [(call.args[0].apiProvider, call.args[0].parameters["indicator"]) for call in fetch.await_args_list]
+    assert fetched, "the named provider's candidates must reach recovery"
+    assert {provider for provider, _ in fetched} == {"BIS"}
+    assert len({code for _, code in fetched}) <= 4
 
 
 def test_mixed_menu_labels_other_provider_options_as_alternatives(service):
@@ -289,28 +477,49 @@ def test_mixed_menu_labels_other_provider_options_as_alternatives(service):
     response = clarification.finalize_clarification_response_contract(
         service, _menu_response(options, ["Choose:", "1. a", "2. b"], intent),
     )
-    assert response.clarificationQuestions[1] == "Option(s) 2 are alternatives from providers other than BIS."
+    assert response.clarificationQuestions[1] == "Options 2 are from providers other than BIS."
     # Option text/value keep the parseable "[Provider] ... (CODE)" shape.
     assert [clarification.parse_indicator_option(o.value) for o in response.clarificationOptions] == [
         ("BIS", "BIS_WS_TC"), ("WORLDBANK", "FS.AST.PRVT.GD.ZS"),
     ]
 
 
-def test_no_data_menu_excludes_the_code_that_just_returned_nothing():
-    options = [
-        "[BIS] Total credit (BIS_WS_TC)",
-        "[BIS] Credit-to-GDP gap (BIS_WS_CREDIT_GAP)",
-        "[WorldBank] Domestic credit (FS.AST.PRVT.GD.ZS)",
-    ]
-    qs = SimpleNamespace(_collect_indicator_choice_options=lambda **kwargs: list(options))
+NO_DATA_OPTIONS = [
+    "[BIS] Total credit (BIS_WS_TC)",
+    "[BIS] Credit-to-GDP gap (BIS_WS_CREDIT_GAP)",
+    "[WorldBank] Domestic credit (FS.AST.PRVT.GD.ZS)",
+]
+
+
+def _no_data_menu(**kwargs):
+    qs = SimpleNamespace(_collect_indicator_choice_options=lambda **kw: list(NO_DATA_OPTIONS))
     intent = _intent("BIS", {"country": "US", "indicator": "BIS_WS_TC"}, query="credit from BIS")
     with patch.object(clarification, "dedupe_indicator_choice_options", side_effect=lambda qs, opts: list(opts)), \
          patch.object(clarification, "store_pending_indicator_options"), \
          patch.object(clarification, "build_clarification_options", return_value=None):
-        response = clarification.build_no_data_indicator_clarification(qs, "c", "credit from BIS", intent)
+        return clarification.build_no_data_indicator_clarification(qs, "c", "credit from BIS", intent, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "attempt_error",
+    [None, DataNotAvailableError("Data not available: 404"), DataNotAvailableError("Invalid request: 400")],
+)
+def test_no_data_menu_excludes_the_code_that_definitively_returned_nothing(attempt_error):
+    response = _no_data_menu(attempt_error=attempt_error)
     assert response is not None
     assert not any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
     assert any("BIS_WS_CREDIT_GAP" in line for line in response.clarificationQuestions)
+
+
+@pytest.mark.parametrize(
+    "attempt_error",
+    [ProviderCoolingDown("Rate limit exceeded (429)."), TimeoutError("read timeout"), RuntimeError("HTTP 503")],
+)
+def test_no_data_menu_keeps_the_code_after_a_transient_failure(attempt_error):
+    # A cooldown or transport error says nothing about the series itself.
+    response = _no_data_menu(attempt_error=attempt_error)
+    assert response is not None
+    assert any("BIS_WS_TC)" in line for line in response.clarificationQuestions)
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +578,58 @@ def test_partial_multi_indicator_answer_discloses_unserved_in_message(service):
     assert [(u.indicator, u.reason) for u in response.unservedIndicators] == [("CPI", "no_data")]
     # The existing per-series note stays for backward compatibility.
     assert any("CPI" in note for note in response.data[0].metadata.notes or [])
+
+
+def test_partial_disclosure_through_the_real_serve_path(pipeline_service):
+    """Real _process_query_impl (parse stubbed): rerank/recovery/coverage run as in production."""
+    from backend.services.query_pipeline import ParseRouteResult, ValidationResult
+
+    service = pipeline_service
+    intent = ParsedIntent(
+        apiProvider="FRED", indicators=["unemployment rate", "CPI"],
+        parameters={"country": "US", "startDate": "2010-01-01", "__time_scope_authority": "user"},
+        clarificationNeeded=False, originalQuery="US unemployment and CPI together since 2010",
+    )
+    validation = ValidationResult(
+        is_multi_indicator=True, is_valid=True, validation_error=None, suggestions=None,
+        is_confident=True, confidence_reason=None,
+    )
+
+    async def _fetch(_svc, single_intent):
+        name = single_intent.indicators[0]
+        if "cpi" in name.lower():
+            raise DataNotAvailableError("Invalid request: series does not exist")
+        return [NormalizedData(
+            metadata=Metadata(source="FRED", indicator="Unemployment Rate", country="US",
+                              frequency="monthly", unit="Percent", seriesId="UNRATE"),
+            data=[{"date": "2020-01-01", "value": 3.5}, {"date": "2021-01-01", "value": 6.4}],
+        )]
+
+    with patch.object(service.pipeline, "parse_and_route", new=AsyncMock(return_value=ParseRouteResult(
+            intent=intent, explicit_provider=None, routed_provider="FRED", validation_warning=None))), \
+         patch.object(service.pipeline, "validate_intent", return_value=validation), \
+         patch.object(service, "_build_post_parse_clarification", new=AsyncMock(return_value=None)), \
+         patch.object(DF, "fetch_data", new=_fetch):
+        response = run(service.process_query(intent.originalQuery))
+
+    assert response.clarificationNeeded is False
+    assert [s.metadata.seriesId for s in response.data] == ["UNRATE"]
+    assert [(u.indicator, u.reason) for u in response.unservedIndicators] == [("CPI", "no_data")]
+    assert response.message and "Could not fetch data for: CPI" in response.message
+
+
+def test_single_indicator_serve_is_never_announced_as_partial(service):
+    intent = _intent("FRED", {"country": "US"}, indicators=["a"])
+    response = QueryResponse(conversationId="c", intent=intent, data=[_series("a")], clarificationNeeded=False)
+    token = DF.MULTI_INDICATOR_FETCH_REPORTS.set([
+        {"unserved": [{"indicator": "b", "reason": "no_data"}],
+         "served": {DF.served_series_identity(response.data[0])}},
+    ])
+    try:
+        service._finalize_response_contract(response)  # pylint: disable=protected-access
+    finally:
+        DF.MULTI_INDICATOR_FETCH_REPORTS.reset(token)
+    assert response.message is None and response.unservedIndicators is None
 
 
 def test_full_multi_indicator_answer_is_unchanged(service):

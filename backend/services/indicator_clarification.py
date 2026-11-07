@@ -64,9 +64,9 @@ from ..utils.processing_steps import (
     get_processing_tracker,
     reset_processing_tracker,
 )
-from ..utils.retry import retry_async
+from ..utils.retry import DataNotAvailableError, ProviderCoolingDown, retry_async
 from .semantic_match_judge import decide_prefetch_outcome
-from .user_messages import get_message
+from .user_messages import get_message, reply_hint_language
 
 if TYPE_CHECKING:
     from ..services.query_pipeline import ParseRouteResult, ValidationResult
@@ -393,21 +393,47 @@ def build_clarification_options(
 # Stateless response contract for clarification menus
 # ====================================================================
 
-_REPLY_WITH_OPTION_NUMBER_RE = re.compile(r"^\s*reply with the option number", re.IGNORECASE)
 _NUMBERED_OPTION_LINE_RE = re.compile(r"^\s*\d+\.\s+")
-_STATELESS_REQUERY_MARKER = "send one of these self-contained queries"
 _STATELESS_REPLY_MARKER = "conversationid="
 
+# Parameter-schema roles (STRUCTURAL; no semantic judgment). The re-ask string
+# carries the geography and the user's year window; these keys are the series
+# IDENTITY that the option itself replaces. Every other non-internal parameter
+# with a value is user scope the string cannot express (frequency, dimensions,
+# partner/flow, currencies, ...): the round trip must reproduce it exactly, or
+# no re-ask string is emitted, so following one never silently drops scope.
+_REQUERY_CARRIED_SCOPE_KEYS = frozenset({"country", "countries", "startDate", "endDate"})
+_REQUERY_SERIES_IDENTITY_KEYS = frozenset(
+    {"indicator", "seriesId", "series_id", "code", "vectorId", "productId", "coinIds", "commodity"}
+)
 
-def _option_scope_countries(qs: Any, intent: Optional[ParsedIntent]) -> List[str]:
-    """The country scope the menu was built for, as the intent carries it."""
-    if intent is None:
-        return []
+
+def _option_scope_countries(qs: Any, intent: ParsedIntent) -> Optional[List[str]]:
+    """The country scope the menu was built for, deduplicated by ISO2.
+
+    Same derivation as collect_indicator_choice_options: the intent's country
+    parameters, else the countries named in the original query. None when the
+    scope cannot be determined (an unknown scope is never treated as empty).
+    """
     try:
         countries = qs._collect_target_countries(intent.parameters or {}) or []
+        if not countries and intent.originalQuery:
+            extract = getattr(qs, "_extract_countries_from_query", None)
+            countries = list(extract(str(intent.originalQuery)) or []) if callable(extract) else []
     except Exception:
-        return []
-    return [str(country).strip() for country in countries if str(country).strip()]
+        return None
+    scoped: List[str] = []
+    seen: set = set()
+    for country in countries:
+        text = str(country or "").strip()
+        if not text:
+            continue
+        key = str(qs._normalize_country_to_iso2(text) or text).upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        scoped.append(text)
+    return scoped
 
 
 def _iso2_scope(qs: Any, countries: List[str]) -> Optional[set]:
@@ -421,15 +447,13 @@ def _iso2_scope(qs: Any, countries: List[str]) -> Optional[set]:
     return iso2
 
 
-def _user_time_window(intent: Optional[ParsedIntent]) -> Optional[tuple[str, str]]:
+def _user_time_window(intent: ParsedIntent) -> Optional[tuple[str, str]]:
     """(start_year, end_year) of a USER-set time window.
 
     ('', '') when the window is a framework default (or absent); None when the
     user did set a window that cannot be rendered as a year range — the caller
     must then emit no re-query rather than silently drop the user's scope.
     """
-    if intent is None:
-        return "", ""
     params = intent.parameters or {}
     from .data_fetcher import _user_set_time_scope
 
@@ -442,6 +466,18 @@ def _user_time_window(intent: Optional[ParsedIntent]) -> Optional[tuple[str, str
     return start, end
 
 
+def _uncarried_user_scope(params: Dict[str, Any]) -> Dict[str, Any]:
+    """User-scope parameters a re-ask string must reproduce (see the key roles above)."""
+    return {
+        key: value
+        for key, value in (params or {}).items()
+        if not str(key).startswith("_")
+        and key not in _REQUERY_CARRIED_SCOPE_KEYS
+        and key not in _REQUERY_SERIES_IDENTITY_KEYS
+        and value not in (None, "", [], {})
+    }
+
+
 def _requery_round_trips(
     qs: Any,
     resolved: Optional[ParsedIntent],
@@ -449,6 +485,7 @@ def _requery_round_trips(
     code: str,
     expected_iso2: set,
     window: tuple[str, str],
+    required_scope: Dict[str, Any],
 ) -> bool:
     """True when *resolved* is exactly this option's provider + code + scope, exact-locked."""
     if resolved is None:
@@ -468,7 +505,7 @@ def _requery_round_trips(
             return False
         if str(params.get("endDate") or "")[:4] != window[1]:
             return False
-    return True
+    return all(params.get(key) == value for key, value in required_scope.items())
 
 
 def stateless_option_query(
@@ -482,23 +519,33 @@ def stateless_option_query(
     existing exact provider-code fast path parses. The string is emitted ONLY
     when it round-trips through that fast path (qs._build_explicit_provider_code_intent)
     to the same provider, the same code, the same country set, the user's own
-    time window, and the exact-match lock — so it re-asks for exactly this
-    series without re-clarifying. Any scope the fast path cannot carry today
-    (multi-country lists, dated windows, aggregates, Comtrade partner/flow,
-    StatsCan coordinates) fails the round trip and yields None: no dead
-    re-query string is ever emitted, and no scope is silently dropped.
+    time window, every other user-scope parameter, and the exact-match lock —
+    so it re-asks for exactly this series without re-clarifying. Any scope the
+    fast path cannot carry today (multi-country lists, dated windows,
+    aggregates, frequency/dimension filters, Comtrade partner/flow, StatsCan
+    coordinates) fails the round trip and yields None, as does a menu whose
+    scope is unknown (no intent) or sub-national (the string would skip the
+    sub-national fail-closed check a stateful pick still runs). No dead re-query
+    string is ever emitted, and no scope is silently dropped.
     """
+    if intent is None:
+        return None
+    if str(getattr(intent, "subnationalRegion", None) or "").strip():
+        return None
     provider = normalize_provider_name(option.provider or "")
     code = str(option.code or "").strip()
     if not provider or not code:
         return None
     countries = _option_scope_countries(qs, intent)
+    if countries is None:
+        return None
     expected_iso2 = _iso2_scope(qs, countries)
     if expected_iso2 is None:
         return None
     window = _user_time_window(intent)
     if window is None:
         return None
+    required_scope = _uncarried_user_scope(intent.parameters or {})
     window_text = (
         "" if not window[0] else (window[0] if window[0] == window[1] else f"{window[0]}-{window[1]}")
     )
@@ -512,7 +559,7 @@ def stateless_option_query(
         except Exception as exc:
             logger.debug("Stateless re-query round trip failed for %s: %s", candidate, exc)
             continue
-        if _requery_round_trips(qs, resolved, provider, code, expected_iso2, window):
+        if _requery_round_trips(qs, resolved, provider, code, expected_iso2, window, required_scope):
             return candidate
     return None
 
@@ -521,6 +568,7 @@ def _explicit_provider_alternatives_line(
     qs: Any,
     intent: Optional[ParsedIntent],
     options: List[ClarificationOption],
+    language: Optional[str],
 ) -> Optional[str]:
     """Disclose which menu options come from providers other than the one named."""
     if intent is None:
@@ -539,11 +587,19 @@ def _explicit_provider_alternatives_line(
         return None
     label = _PROVIDER_OPTION_LABELS.get(explicit, explicit)
     if len(others) == len(provider_backed):
-        return (
-            f"{label} has no matching series at this scope; the options below are "
-            "alternatives from other providers."
+        return _chrome(
+            "clarify_explicit_provider_none",
+            language,
+            "No {provider} option matched this request; the options below are from other providers.",
+            provider=label,
         )
-    return f"Option(s) {', '.join(others)} are alternatives from providers other than {label}."
+    return _chrome(
+        "clarify_explicit_provider_mixed",
+        language,
+        "Options {options} are from providers other than {provider}.",
+        options=", ".join(others),
+        provider=label,
+    )
 
 
 def finalize_clarification_response_contract(qs: Any, response: QueryResponse) -> QueryResponse:
@@ -554,15 +610,17 @@ def finalize_clarification_response_contract(qs: Any, response: QueryResponse) -
 
     * each provider+code option carries a round-trip-verified ``query``
       re-ask string (see :func:`stateless_option_query`);
-    * the existing "Reply with the option number ..." line — which the browser
-      UI hides — is extended to name ``conversationId`` and the re-ask strings,
-      since API/agent callers that never send conversationId back cannot use a
-      bare numeric reply;
+    * the menu's existing reply hint — found by the catalog's fixed
+      per-language hint prefix, which the browser UI hides — is extended, in
+      the hint's own language, to name ``conversationId`` and the re-ask
+      strings, since API/agent callers that never send conversationId back
+      cannot use a bare numeric reply;
     * when the user explicitly named a provider and options come from other
-      providers, a line says so (an explicit provider is part of the intent);
-    * ``message`` carries the rendered menu when no other message is set, for
-      clients that read only ``message``.
+      providers, a localized line says so (an explicit provider is part of
+      the intent).
 
+    ``message`` is left to the empty-data finalizer, which renders the
+    finalized question lines plus every option for message-only clients.
     Idempotent; never raises; non-clarification responses pass through.
     """
     try:
@@ -577,38 +635,59 @@ def finalize_clarification_response_contract(qs: Any, response: QueryResponse) -
                 option.query = stateless_option_query(qs, option, intent)
 
         questions = [str(line) for line in (response.clarificationQuestions or [])]
-        disclosure = _explicit_provider_alternatives_line(qs, intent, options)
+        reply_idx = next(
+            (idx for idx, line in enumerate(questions) if reply_hint_language(line)),
+            None,
+        )
+        # Keep the appended text in the hint's own language (a pending
+        # re-prompt carries no intent, only the stored zh/en lines).
+        language = (
+            reply_hint_language(questions[reply_idx]) if reply_idx is not None else None
+        ) or clarification_language(intent)
+
+        disclosure = _explicit_provider_alternatives_line(qs, intent, options, language)
         if disclosure and disclosure not in questions:
             insert_at = next(
                 (idx for idx, line in enumerate(questions) if _NUMBERED_OPTION_LINE_RE.match(line)),
                 len(questions),
             )
             questions.insert(insert_at, disclosure)
+            if reply_idx is not None and insert_at <= reply_idx:
+                reply_idx += 1
 
-        requeries = [f"{option.id}) {option.query}" for option in options if option.query]
         if not any(_STATELESS_REPLY_MARKER in line.lower() for line in questions):
-            stateless_text = (
-                "If your client does not keep this conversation, resend the number "
-                f'with conversationId="{response.conversationId}"'
-            )
+            parts: List[str] = []
+            conversation_id = str(response.conversationId or "").strip()
+            if conversation_id:
+                parts.append(_chrome(
+                    "clarify_stateless_resend",
+                    language,
+                    "If your client does not keep this conversation, resend the number "
+                    'with conversationId="{conversation_id}".',
+                    conversation_id=conversation_id,
+                ))
+            requeries = [f"{option.id}) {option.query}" for option in options if option.query]
             if requeries:
-                stateless_text += f", or {_STATELESS_REQUERY_MARKER}: " + "; ".join(requeries)
-            stateless_text += "."
-            reply_idx = next(
-                (idx for idx, line in enumerate(questions) if _REPLY_WITH_OPTION_NUMBER_RE.match(line)),
-                None,
-            )
-            if reply_idx is not None:
-                questions[reply_idx] = f"{questions[reply_idx].rstrip()} {stateless_text}"
-            else:
-                # Same line shape the browser UI already hides, so stateless
-                # instructions never show up as duplicate noise there.
-                questions.append(f"Reply with the option number. {stateless_text}")
+                parts.append(_chrome(
+                    "clarify_stateless_requeries",
+                    language,
+                    "Or send one of these self-contained queries instead: {queries}.",
+                    queries="; ".join(requeries),
+                ))
+            if parts:
+                stateless_text = " ".join(parts)
+                if reply_idx is not None:
+                    questions[reply_idx] = f"{questions[reply_idx].rstrip()} {stateless_text}"
+                else:
+                    # Same line shape the browser UI already hides, so the
+                    # stateless instructions never show up there as noise.
+                    hint = _chrome("clarify_stateless_reply_hint", language, "Reply with the option number.")
+                    questions.append(f"{hint} {stateless_text}")
         response.clarificationQuestions = questions
-        if not (response.message or "").strip():
-            response.message = "\n".join(questions)
     except Exception as exc:  # never let the contract break a clarification
-        logger.debug("Clarification response contract skipped: %s", exc)
+        logger.warning(
+            "Clarification response contract skipped (%s): %s", type(exc).__name__, exc,
+        )
     return response
 
 
@@ -4548,8 +4627,14 @@ def build_no_data_indicator_clarification(
     query: str,
     intent: Optional[ParsedIntent],
     processing_steps: Optional[List[Any]] = None,
+    *,
+    attempt_error: Optional[BaseException] = None,
 ) -> Optional[QueryResponse]:
-    """Offer indicator choices when no data is returned and intent may be ambiguous."""
+    """Offer indicator choices when no data is returned and intent may be ambiguous.
+
+    ``attempt_error`` is the exception the intent's own fetch ended with (None
+    when it completed and returned nothing).
+    """
     if not intent:
         return None
     if _is_exact_match_locked(intent.parameters):
@@ -4562,12 +4647,19 @@ def build_no_data_indicator_clarification(
     # the pending-choice record (history/language) below.
     retrieval_query = _follow_up_retrieval_query(qs, intent) or query
 
-    # This menu is built AFTER the intent's own provider+code was executed and
-    # served nothing — a fetch-validated dead end. Re-offering it (now ranked
-    # first when its provider was named explicitly) would invite the user to
-    # pick the exact failure again, so it is excluded from the menu.
+    # This menu is built AFTER the intent's own provider+code was just
+    # attempted. When that attempt DEFINITIVELY came back empty (returned
+    # nothing, or the provider said not-available / invalid request),
+    # re-offering the same pair (now ranked first when its provider was named
+    # explicitly) would invite the user to pick the exact failure again, so it
+    # is excluded. A transient refusal (rate-limit cooldown) or a transport
+    # error says nothing about the series, so it stays selectable.
+    attempt_was_definitive = attempt_error is None or (
+        isinstance(attempt_error, DataNotAvailableError)
+        and not isinstance(attempt_error, ProviderCoolingDown)
+    )
     attempted_key = (
-        normalize_provider_name(intent.apiProvider or ""),
+        normalize_provider_name(intent.apiProvider or "") if attempt_was_definitive else "",
         str((intent.parameters or {}).get("indicator") or "").strip().upper(),
     )
 

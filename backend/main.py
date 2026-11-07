@@ -1559,8 +1559,9 @@ MCP_SERVER_INSTRUCTIONS = (
     "dates itself. Keep the returned conversationId and pass it on follow-up turns "
     "('now add Japan', 'make it quarterly'). When clarificationNeeded is true, present the "
     "options (or choose the one that matches the user's intent) and call again with the "
-    "same conversationId. Quote values together with their units, frequency and source "
-    "from the response metadata."
+    "same conversationId; if you cannot keep the conversationId, call again with the chosen "
+    "option's `query` string when it has one. Quote values together with their units, "
+    "frequency and source from the response metadata."
 )
 
 

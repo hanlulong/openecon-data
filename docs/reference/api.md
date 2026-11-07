@@ -531,7 +531,8 @@ Top-level response for all query endpoints.
 | `clarificationQuestions` | string[] or null | Human-readable questions for the user |
 | `clarificationOptions` | ClarificationOption[] or null | Structured options the user can select from |
 | `error` | string or null | Error code if something went wrong (e.g., `"processing_error"`, `"data_not_available"`) |
-| `message` | string or null | Human-readable message (used for informational responses or Pro Mode output) |
+| `message` | string or null | Human-readable message (informational answers, Pro Mode output, disclosures such as a partial multi-indicator answer). On a clarification it carries the rendered menu for clients that read only text; `clarificationNeeded`, not a non-null `message`, is the signal that no data was fetched |
+| `unservedIndicators` | UnservedIndicator[] or null | For a served multi-indicator answer: the requested indicators it could not include (also disclosed in `message`). Null when everything requested was served |
 | `codeExecution` | CodeExecutionResult or null | Pro Mode code and output (only when `isProMode` is true) |
 | `isProMode` | bool or null | Whether this response used Pro Mode |
 | `processingSteps` | ProcessingStep[] or null | Steps taken to process the query (timing, status) |
@@ -625,6 +626,16 @@ Structured choice presented when the query is ambiguous.
 | `value` | string | Value to use if selected |
 | `provider` | string or null | Associated provider |
 | `code` | string or null | Associated indicator code |
+| `query` | string or null | Self-contained re-query for callers that do not keep `conversationId` (e.g. `"Japan BIS_WS_TC from BIS"`). Sending it as a new `query` serves exactly this option's series without another menu. Present only when it was verified to resolve to the same provider, code and country scope; null when the menu's scope (several countries, a user-set date range or frequency, sub-national regions, trade partners, ...) cannot be expressed that way. It requests the series at its default form and time window. Stateful callers can instead reply with the option `id` and the same `conversationId` |
+
+A clarification's reply hint (in `clarificationQuestions` and `message`) repeats both ways to answer: resend the option number with the given `conversationId`, or send one of the options' `query` strings.
+
+### UnservedIndicator
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `indicator` | string | The requested indicator that was not served |
+| `reason` | string | Failure class: `"no_data"`, `"timeout"` or `"error"` |
 
 ### ProcessingStep
 
