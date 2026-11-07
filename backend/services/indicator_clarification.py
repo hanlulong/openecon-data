@@ -687,10 +687,21 @@ async def maybe_recover_from_uncertain_match(
     top_provider, top_code = qs._extract_series_provider_and_code(top_series)
     decisions: List[Dict[str, Any]] = []
 
-    def _verdict(candidate: str, verdict: str, score: Optional[float] = None) -> None:
+    def _verdict(
+        candidate: str,
+        verdict: str,
+        score: Optional[float] = None,
+        gate_branch: Optional[str] = None,
+    ) -> None:
         entry: Dict[str, Any] = {"candidate": candidate, "verdict": verdict}
         if score is not None:
             entry["score"] = round(float(score), 3)
+        if gate_branch:
+            # WHICH gate branch judged the candidate (recovery_concept_mismatch
+            # vs debt_ratio_cue vs confident_top_score ...), so the record is
+            # self-contained instead of correlated with uncertainty_gate lines
+            # by log order.
+            entry["gate_branch"] = gate_branch
         decisions.append(entry)
 
     def _log_decision(winner: Optional[str] = None, blocked: Optional[str] = None) -> None:
@@ -721,6 +732,17 @@ async def maybe_recover_from_uncertain_match(
     # the pick still selectable. The gate verdict itself is untouched.
     if _selection_authority_holds(qs, intent, top_series):
         _log_decision(blocked="authoritative_pick")
+        return None
+    # Explicit-user-choice guard: the served series is the one the user just
+    # PICKED from a menu (try_resolve_pending_indicator_choice stamps
+    # exact_user_input). A lexical comparator must never replace an explicit
+    # choice with another provider's data while the response still says
+    # "Retrieved data for selected indicator X". Same provenance contract as
+    # build_uncertain_result_clarification's exact_user_input early return.
+    # Needed because resolution drops the authority stamps on that path, so
+    # the authority guard above cannot see that the pick is the user's.
+    if str(params.get("__semantic_authority") or "") == "exact_user_input":
+        _log_decision(blocked="user_choice")
         return None
 
     explicit_provider = normalize_provider_name(qs._detect_explicit_provider(intent.originalQuery or "") or "")
@@ -803,18 +825,20 @@ async def maybe_recover_from_uncertain_match(
             continue
 
         candidate_score = _score_series_relevance(query, candidate_data[0])
+        _LAST_GATE_BRANCH.set(None)
         candidate_uncertain = qs._needs_indicator_clarification(query, candidate_data, attempt_intent, caller="recovery_candidate")
+        candidate_gate_branch = _LAST_GATE_BRANCH.get()
         # Only a candidate the gate JUDGED confident may win, and only by a
         # margin. There is deliberately no lexical-margin path for a
         # gate-UNCERTAIN candidate: a bigger word-overlap score is not evidence
         # that the data answers the question (household debt "won" that way).
         if candidate_uncertain:
-            _verdict(candidate_key, "gate_uncertain", candidate_score)
+            _verdict(candidate_key, "gate_uncertain", candidate_score, candidate_gate_branch)
             continue
         if candidate_score < (best_score + 0.10):
-            _verdict(candidate_key, "insufficient_margin", candidate_score)
+            _verdict(candidate_key, "insufficient_margin", candidate_score, candidate_gate_branch)
             continue
-        _verdict(candidate_key, "accepted", candidate_score)
+        _verdict(candidate_key, "accepted", candidate_score, candidate_gate_branch)
         best_data = candidate_data
         best_score = candidate_score
         winner_key = candidate_key
@@ -3167,8 +3191,8 @@ def _selection_authority_holds(
     """Request-level selection-authority contract (consumption seam).
 
     Returns the authoritative picked code when a confident, non-ambiguous LLM
-    PICK's OWN served top series is what the gate is about to re-question on a
-    close-comparator near-tie — i.e. ALL of:
+    PICK's OWN served top series is what a later stage is about to re-question
+    or replace — i.e. ALL of:
 
       (a) the selection stage stamped an authoritative pick THIS request
           (``__authoritative_pick_code`` is minted in
@@ -3183,10 +3207,20 @@ def _selection_authority_holds(
           fetch (out-of-window observations are dropped there), so any non-empty
           served data already sits inside the window and needs no re-check.
 
-    Returns None (authority ABSENT) whenever ANY condition fails — the gate then
-    behaves byte-for-byte as before. This NEVER suppresses a wrong-data /
-    wrong-member / wrong-region refusal: those fire on earlier HARD branches of
-    the gate, before the single near-tie branch this signal is allowed to relax.
+    Returns None (authority ABSENT) whenever ANY condition fails — every
+    consumer then behaves byte-for-byte as before.
+
+    Two consumers, each with its own narrow contract:
+
+    * needs_indicator_clarification's near-tie branch: authority relaxes that
+      single soft ASK. It NEVER suppresses a wrong-data / wrong-member /
+      wrong-region refusal: those fire on earlier HARD branches of the gate,
+      before the near-tie branch.
+    * maybe_recover_from_uncertain_match: authority forbids a LEXICAL
+      REPLACEMENT of the pick by another candidate. It never changes the gate
+      verdict and never suppresses a refusal: recovery simply declines, and the
+      uncertain-result builder still decides ask-or-serve with the pick
+      selectable.
     """
     if intent is None or top_series is None:
         return None
@@ -3205,6 +3239,16 @@ def _selection_authority_holds(
     if region and not qs._served_data_references_region([top_series], region):
         return None  # (c) region hard predicate would discard the served pick
     return picked_code
+
+
+# The branch of the most recent needs_indicator_clarification decision in this
+# execution context (set by its _gate_log). Lets maybe_recover_from_uncertain_match
+# record WHICH gate branch judged each candidate without changing the gate's
+# bool contract (every qs._needs_indicator_clarification fake keeps working).
+# Imported here, next to its only users, so the hunk stays local.
+from contextvars import ContextVar  # noqa: E402
+
+_LAST_GATE_BRANCH: "ContextVar[Optional[str]]" = ContextVar("_last_gate_branch", default=None)
 
 
 def _is_judged_candidate_fetch(params: Optional[Dict[str, Any]]) -> bool:
@@ -3310,6 +3354,10 @@ def needs_indicator_clarification(
             logger.info("uncertainty_gate %s", json.dumps(payload))
         except Exception:
             pass
+        try:
+            _LAST_GATE_BRANCH.set(branch)
+        except Exception:
+            pass
         return outcome
 
     if not data:
@@ -3317,7 +3365,14 @@ def needs_indicator_clarification(
     # Callers are SUPPOSED to pass a scoring-ready query, but the gate must
     # not depend on that discipline: normalize here too (idempotent — English
     # text passes through untouched).
-    query = semantic_scoring_query(query, intent)
+    # EXCEPT for a recovery candidate: its intent's indicators were rewritten
+    # to the pinned candidate CODE, so for a non-English request re-normalizing
+    # here would score the candidate against its own code ("HDTGPDUSQ163N US")
+    # instead of the user's question (observed in the journal for Chinese
+    # queries: query="FR.INR.LEND"). maybe_recover_from_uncertain_match passes
+    # the ORIGINAL request's scoring key, which its own comparator also uses.
+    if not ((intent.parameters or {}).get("_uncertain_recovery_attempted") if intent else False):
+        query = semantic_scoring_query(query, intent)
     if intent and intent.indicators and len(intent.indicators) > 1:
         return _gate_log(False, "multi_indicator")
 
@@ -3630,7 +3685,6 @@ def build_uncertain_result_clarification(
     if (
         len(options) >= 2
         and top_meta
-        and not severe_mismatch
         and not directional_conflict
         and top_score >= 0.25
     ):
@@ -3642,9 +3696,12 @@ def build_uncertain_result_clarification(
         # dedupe/supportability chokepoint as every other option; the
         # "Current match:" question line labels it. Never offered when the
         # gate's own HARD evidence marks it wrong (directional conflict, or
-        # top_score < 0.25 -- the gate's low_top_score threshold). Placed
-        # first only when no mismatch hint exists, otherwise last. At most one
-        # option is added, so no collected option is dropped (3 + 1 = 4).
+        # top_score < 0.25 -- the gate's low_top_score threshold; together
+        # these imply not severe_mismatch). Placed first only when there is no
+        # mismatch evidence -- neither a cue mismatch hint nor a catalog
+        # concept conflict (the same helper the gate uses) -- otherwise last:
+        # selectability is the fix, not position. At most one option is
+        # added, so no collected option is dropped (3 + 1 = 4).
         served_provider, served_code = qs._extract_series_provider_and_code(top_series)
         served_provider = normalize_provider_name(served_provider or "")
         served_code = str(served_code or "").strip()
@@ -3667,9 +3724,17 @@ def build_uncertain_result_clarification(
                 metadata={"description": str(getattr(top_meta, "description", "") or "")},
             )
             served_option = f"[{served_provider}] {served_name} ({served_code})"
+            try:
+                served_concept_conflict = _catalog_concept_conflict(
+                    qs, query, intent, top_series,
+                    high_signal_query_cues=high_signal_query_cues, top_score=top_score,
+                )
+            except Exception:
+                served_concept_conflict = None
+            served_first = not mismatch_hint and not served_concept_conflict
             options = dedupe_indicator_choice_options(
                 qs,
-                [served_option, *options] if not mismatch_hint else [*options, served_option],
+                [served_option, *options] if served_first else [*options, served_option],
             )
     distinct_options: set[tuple[str, str]] = set()
     for option in options:

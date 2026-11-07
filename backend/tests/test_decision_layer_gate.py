@@ -11,6 +11,11 @@ Three mechanism defects made that possible:
 2. a gate-UNCERTAIN candidate could still win on a lexical score margin;
 3. a lexical comparator could REPLACE the request's authoritative LLM pick.
 
+Two sibling paths of the same "lexical recovery overrides a decided series"
+class are pinned too: an explicit menu CHOICE (exact_user_input) must never be
+replaced, and a non-English request's candidates must be judged against the
+request's scoring key, not against the candidate's own code.
+
 These tests run the REAL gate (``needs_indicator_clarification`` bound on the
 fake service) and the real relevance scorer / catalog: a stubbed gate would
 pass while production stays wrong. They assert INTENT (household debt is never
@@ -203,8 +208,21 @@ def test_household_debt_never_wins_recovery_without_authority(query: str, caplog
             assert record["branch"] != "high_confidence_pre_resolved"
 
 
-@pytest.mark.parametrize("query", DEBT_QUERIES)
-def test_authoritative_pick_is_never_replaced_by_lexical_recovery(query: str, caplog) -> None:
+@pytest.mark.parametrize(
+    "query, guard_must_fire",
+    [
+        # Uncertain at recovery_gate under BOTH the old and the fixed scorer
+        # (debt_ratio_cue: the IMF title lacks the ratio cue), so this case
+        # always reaches -- and pins -- the authority guard itself.
+        ("US debt to GDP ratio", True),
+        # With the word-boundary scorer fix the IMF pick is confident here and
+        # recovery never starts; either mechanism must keep the pick.
+        ("What is the debt-to-GDP ratio of the United States?", False),
+    ],
+)
+def test_authoritative_pick_is_never_replaced_by_lexical_recovery(
+    query: str, guard_must_fire: bool, caplog
+) -> None:
     fetch_calls: list = []
     qs = _real_gate_qs([FRED_HOUSEHOLD_US], fetch_calls)
     current = [_series(*IMF_GOV_DEBT)]
@@ -215,9 +233,104 @@ def test_authoritative_pick_is_never_replaced_by_lexical_recovery(query: str, ca
     assert out is None
     assert fetch_calls == [], "recovery must not even fetch replacements for an authoritative pick"
     recovery_gate = [r for r in _gate_records(caplog) if r["caller"] == "recovery_gate"]
-    if recovery_gate and recovery_gate[0]["outcome"]:
-        decisions = _recovery_records(caplog)
+    assert len(recovery_gate) == 1
+    decisions = _recovery_records(caplog)
+    if guard_must_fire:
+        assert recovery_gate[0]["outcome"] is True
+        assert recovery_gate[0]["branch"] == "debt_ratio_cue"
+    if recovery_gate[0]["outcome"]:
         assert len(decisions) == 1 and decisions[0]["blocked"] == "authoritative_pick"
+    else:
+        assert decisions == []
+
+
+def test_household_rejection_names_the_judging_gate_branch(caplog) -> None:
+    # recovery_decision is self-contained: a gate-rejected candidate records
+    # WHICH gate branch rejected it (here the catalog concept check that runs
+    # before lexical confidence for recovery candidates).
+    query = "US debt to GDP ratio"
+    qs = _real_gate_qs([FRED_HOUSEHOLD_US], [])
+    with caplog.at_level(logging.INFO, logger=ic.logger.name):
+        asyncio.run(
+            maybe_recover_from_uncertain_match(
+                qs, query, _debt_intent(query, authoritative=False), [_series(*IMF_GOV_DEBT)]
+            )
+        )
+    decisions = _recovery_records(caplog)
+    assert len(decisions) == 1
+    (entry,) = decisions[0]["candidates"]
+    assert entry["candidate"] == "FRED:HDTGPDUSQ163N"
+    assert entry["verdict"] == "gate_uncertain"
+    assert entry["gate_branch"] == "recovery_concept_mismatch"
+
+
+def test_explicit_user_choice_is_never_replaced_by_recovery(caplog) -> None:
+    # The user picked the IMF option from a menu. Resolution drops the
+    # authority stamps on that path, so only the exact_user_input provenance
+    # says the served series is the user's explicit choice. A gate-CONFIDENT
+    # candidate from another provider (WB central-government debt scores far
+    # higher lexically) must not replace it -- the response would otherwise
+    # say "Retrieved data for selected indicator GGXWDG_NGDP" over WB data.
+    query = "US debt to GDP ratio"
+    wb_central = ("Central government debt, total (% of GDP)", "GC.DOD.TOTL.GD.ZS", "WorldBank")
+    fetch_calls: list = []
+    qs = _real_gate_qs([wb_central, FRED_HOUSEHOLD_US], fetch_calls)
+    intent = ParsedIntent(
+        apiProvider="IMF",
+        indicators=["GGXWDG_NGDP"],
+        parameters={
+            "country": "US",
+            "indicator": "GGXWDG_NGDP",
+            "__semantic_authority": "exact_user_input",
+            "__decision_source": "user_choice",
+        },
+        clarificationNeeded=False,
+        confidence=0.95,
+        originalQuery=query,
+        isFollowUp=True,
+        followUpType="clarification_answer",
+    )
+    with caplog.at_level(logging.INFO, logger=ic.logger.name):
+        out = asyncio.run(maybe_recover_from_uncertain_match(qs, query, intent, [_series(*IMF_GOV_DEBT)]))
+    assert out is None, "an explicit menu choice must be served as chosen"
+    assert fetch_calls == []
+    recovery_gate = [r for r in _gate_records(caplog) if r["caller"] == "recovery_gate"]
+    assert len(recovery_gate) == 1 and recovery_gate[0]["outcome"] is True  # guard really reached
+    decisions = _recovery_records(caplog)
+    assert len(decisions) == 1 and decisions[0]["blocked"] == "user_choice"
+
+
+def test_non_english_recovery_candidate_is_judged_against_the_request_not_its_code(caplog) -> None:
+    # For a non-English request the gate re-normalizes its query from the
+    # intent's canonical-English indicator key. A recovery candidate's intent
+    # carries the pinned candidate CODE there, so re-normalizing scored the
+    # candidate against its own code ("HDTGPDUSQ163N US"). The candidate must
+    # be judged against the ORIGINAL request's key, the one the recovery
+    # comparator itself uses.
+    query = "美国债务占GDP比例"
+    intent = ParsedIntent(
+        apiProvider="IMF",
+        indicators=["debt to GDP ratio"],
+        parameters={"country": "US", "indicator": "GGXWDG_NGDP"},
+        clarificationNeeded=False,
+        confidence=0.95,
+        originalQuery=query,
+        language="zh",
+    )
+    expected_key = ic.semantic_scoring_query(query, intent)
+    assert expected_key != query  # the canonical-English key, not the raw text
+    fetch_calls: list = []
+    qs = _real_gate_qs([FRED_HOUSEHOLD_US], fetch_calls)
+    with caplog.at_level(logging.INFO, logger=ic.logger.name):
+        out = asyncio.run(maybe_recover_from_uncertain_match(qs, query, intent, [_series(*IMF_GOV_DEBT)]))
+    recovery_gate = [r for r in _gate_records(caplog) if r["caller"] == "recovery_gate"]
+    assert len(recovery_gate) == 1 and recovery_gate[0]["outcome"] is True  # recovery really ran
+    candidate_records = [r for r in _gate_records(caplog) if r["caller"] == "recovery_candidate"]
+    assert fetch_calls == ["HDTGPDUSQ163N"] and len(candidate_records) == 1
+    assert candidate_records[0]["query"] == expected_key[:60]
+    assert "HDTGPDUSQ163N" not in candidate_records[0]["query"]
+    served = out or [_series(*IMF_GOV_DEBT)]
+    assert "HDTGPDUSQ163N" not in {str(s.metadata.seriesId) for s in served}
 
 
 def test_judged_candidate_with_matching_concept_can_still_win(caplog) -> None:
@@ -399,23 +512,34 @@ def _option_codes(options: List[str]) -> List[tuple]:
     return [parse_indicator_option(o) for o in options]
 
 
+FRED_FEDERAL_DEBT = (
+    "Federal Debt: Total Public Debt as Percent of Gross Domestic Product", "GFDEGDQ188S", "FRED",
+)
+
+
 def test_served_series_is_selectable_when_menu_has_two_or_more_options(monkeypatch) -> None:
+    # Served series chosen to score 0.75 under both the substring and the
+    # word-boundary scorer, so this test does not depend on the scorer commit.
     stored = _capture_pending(monkeypatch)
     collected = [
         "[FRED] Household Debt to GDP for United States (HDTGPDUSQ163N)",
-        "[FRED] Federal Debt: Total Public Debt as Percent of Gross Domestic Product (GFDEGDQ188S)",
+        "[IMF] General government gross debt (GGXWDG_NGDP)",
         "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
     ]
     query = "US debt to GDP ratio"
+    intent = ParsedIntent(
+        apiProvider="FRED", indicators=["GFDEGDQ188S"],
+        parameters={"country": "US", "indicator": "GFDEGDQ188S"},
+        clarificationNeeded=False, confidence=0.95, originalQuery=query,
+    )
     response = build_uncertain_result_clarification(
-        _builder_qs(collected), "conv-x", query, _debt_intent(query, authoritative=False),
-        [_series(*IMF_GOV_DEBT)],
+        _builder_qs(collected), "conv-x", query, intent, [_series(*FRED_FEDERAL_DEBT)],
     )
     assert response is not None and response.clarificationNeeded
     labels = [opt.label for opt in (response.clarificationOptions or [])]
     stored_options = stored[-1]["options"]
     parsed = _option_codes(stored_options)
-    assert parsed.count(("IMF", "GGXWDG_NGDP")) == 1, "served series must appear exactly once"
+    assert parsed.count(("FRED", "GFDEGDQ188S")) == 1, "served series must appear exactly once"
     for option in collected:
         assert option in stored_options, "no collected option may be dropped"
     assert len(stored_options) == len(collected) + 1
@@ -423,6 +547,47 @@ def test_served_series_is_selectable_when_menu_has_two_or_more_options(monkeypat
     # Displayed numbered lines and stored options share one order.
     numbered = [line for line in response.clarificationQuestions if line[:2].rstrip(".").isdigit()]
     assert [line.split(". ", 1)[1] for line in numbered] == stored_options
+
+
+@pytest.mark.parametrize(
+    "served, served_intent_provider, expect_first",
+    [
+        # Catalog maps GGXWDG_NGDP to the query's concept: no conflict -> first.
+        # (Title shape without "government" so it scores 0.75 under both the
+        # substring and the word-boundary scorer: commit-independent.)
+        (("Gross public debt", "GGXWDG_NGDP", "IMF"), "IMF", True),
+        # Catalog-unmapped title whose term lookup names another concept
+        # (the gate's inferred concept conflict) -> offered, but last.
+        (FRED_FEDERAL_DEBT, "FRED", False),
+    ],
+)
+def test_served_option_position_follows_catalog_concept_evidence(
+    served, served_intent_provider, expect_first, monkeypatch
+) -> None:
+    # Neutralize the cue mismatch hint so the catalog concept conflict is the
+    # only ordering evidence under test.
+    monkeypatch.setattr(ic, "build_indicator_mismatch_hint", lambda q, s: None)
+    stored = _capture_pending(monkeypatch)
+    collected = [
+        "[FRED] Household Debt to GDP for United States (HDTGPDUSQ163N)",
+        "[WorldBank] Central government debt, total (% of GDP) (GC.DOD.TOTL.GD.ZS)",
+    ]
+    query = "US debt to GDP ratio"
+    name, code, src = served
+    intent = ParsedIntent(
+        apiProvider=served_intent_provider, indicators=[code],
+        parameters={"country": "US", "indicator": code},
+        clarificationNeeded=False, confidence=0.95, originalQuery=query,
+    )
+    build_uncertain_result_clarification(
+        _builder_qs(collected), "conv-p", query, intent, [_series(*served)],
+    )
+    parsed = _option_codes(stored[-1]["options"])
+    served_key = (_norm(src), code)
+    assert parsed.count(served_key) == 1
+    assert (parsed[0] == served_key) is expect_first
+    if not expect_first:
+        assert parsed[-1] == served_key
 
 
 def test_served_series_is_not_duplicated_when_already_collected(monkeypatch) -> None:
