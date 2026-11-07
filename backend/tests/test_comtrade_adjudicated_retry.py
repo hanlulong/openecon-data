@@ -3,9 +3,10 @@ bound, one-shot retry when the text does not resolve.
 
 Commodity text always beat a numeric selector pick, so when the provider's
 lexical HS catalog could not resolve the text (comtrade_commodity_unresolved /
-comtrade_hs_subheading_ambiguous) the request failed even though the
-indicator selector had already adjudicated a concrete HS code. The retry uses
-that code only when it is a 2-6 digit HS code, adjudicated by THIS request's
+comtrade_hs_subheading_unresolved / comtrade_hs_subheading_ambiguous) the
+request failed even though the indicator selector had already adjudicated a
+concrete HS code. The retry uses that code only when it is a 2-6 digit HS code
+(optionally "HS"-prefixed; bare digits are dispatched), adjudicated by THIS request's
 resolver, and bound to the same commodity surface — never TOTAL, never a code
 carried from a previous turn.
 """
@@ -24,6 +25,9 @@ from backend.utils.retry import DataNotAvailableError
 
 _UNRESOLVED = DataNotAvailableError("comtrade_commodity_unresolved: 'x' did not match any UN Comtrade HS commodity.")
 _AMBIGUOUS = DataNotAvailableError("comtrade_hs_subheading_ambiguous: provider catalog contains multiple ...")
+_SUBHEADING_UNRESOLVED = DataNotAvailableError(
+    "comtrade_hs_subheading_unresolved: specific HS heading text did not resolve to a provider catalog code"
+)
 
 
 def _params(**kw):
@@ -42,15 +46,34 @@ def _params(**kw):
 
 # --- pure decision ----------------------------------------------------------
 
-def test_retry_on_unresolved_text_with_bound_adjudicated_code():
-    assert _comtrade_adjudicated_retry_code(_params(), "petroleum oils crude", _UNRESOLVED) == "2709"
-    assert _comtrade_adjudicated_retry_code(_params(), "petroleum oils crude", _AMBIGUOUS) == "2709"
+@pytest.mark.parametrize("error", [_UNRESOLVED, _AMBIGUOUS, _SUBHEADING_UNRESOLVED])
+def test_retry_on_every_text_resolution_failure(error):
+    # All three provider markers are raised while resolving the TEXT, before
+    # any network request; each is a case a bound adjudicated code can rescue.
+    assert _comtrade_adjudicated_retry_code(_params(), "petroleum oils crude", error) == "2709"
 
 
-@pytest.mark.parametrize("indicator", ["TOTAL", "crude oil", "27091", "1", "1234567", "", None])
-def test_non_hs_code_shapes_never_retry(indicator):
+@pytest.mark.parametrize(
+    "indicator,expected",
+    [
+        ("TOTAL", None),
+        ("crude oil", None),
+        ("27091", "27091"),
+        ("1", None),
+        ("1234567", None),
+        ("", None),
+        (None, None),
+        # Provider-legal HS-prefixed shape (indicators.db chapter codes HS01..HS97)
+        ("HS27", "27"),
+        ("hs 2709", "2709"),
+        ("HS", None),
+        ("HS1234567", None),
+        ("HSX27", None),
+        ("27 crude", None),
+    ],
+)
+def test_only_hs_code_shapes_retry_and_dispatch_bare_digits(indicator, expected):
     params = _params(indicator=indicator)
-    expected = "27091" if indicator == "27091" else None
     assert _comtrade_adjudicated_retry_code(params, "petroleum oils crude", _UNRESOLVED) == expected
 
 
@@ -164,3 +187,11 @@ def test_stale_code_switch_fails_closed_instead_of_serving_old_commodity():
     with pytest.raises(DataNotAvailableError):
         _dispatch(svc, params)
     assert svc.comtrade_provider.calls == ["wheat"]
+
+
+def test_hs_prefixed_adjudicated_chapter_code_dispatched_as_digits():
+    svc = _FakeSvc(resolvable={"27"})
+    result = _dispatch(svc, _params(indicator="HS27"))
+    assert svc.comtrade_provider.calls == ["petroleum oils crude", "27"]
+    assert result[0].metadata.seriesId == "27"
+    assert any("served HS 27 " in n for n in result[0].metadata.notes)

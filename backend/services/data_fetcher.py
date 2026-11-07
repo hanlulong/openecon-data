@@ -964,8 +964,13 @@ def _comtrade_dispatch_commodity(params: dict[str, Any]) -> Optional[str]:
 # single HS code" (comtrade.py), as opposed to a data/network failure.
 _COMTRADE_TEXT_RESOLUTION_FAILURES = (
     "comtrade_commodity_unresolved",
+    "comtrade_hs_subheading_unresolved",
     "comtrade_hs_subheading_ambiguous",
 )
+# The provider-legal HS code shape (comtrade.py _commodity_code tiers 1-2):
+# 2-6 digits, optionally "HS"-prefixed (indicators.db stores the 96 chapter
+# codes as HS01..HS97). Captures the bare digits that are dispatched.
+_COMTRADE_HS_CODE_SHAPE = re.compile(r"^(?:HS\s*)?(\d{2,6})$", re.IGNORECASE)
 # Selection provenance that was produced by THIS request's resolution step.
 # verified_conversation_state (and anything else) may carry a previous turn's
 # code, so it never authorizes replacing commodity text.
@@ -986,7 +991,8 @@ def _comtrade_adjudicated_retry_code(
     Commodity TEXT is always dispatched first (it can be more specific than
     the selector's pick). Only when the provider could not resolve that text
     does a one-shot retry use ``params['indicator']``, and only if it is:
-    - a concrete HS code shape (2-6 digits — never TOTAL or a broad label);
+    - a concrete HS code shape (2-6 digits, optionally "HS"-prefixed —
+      never TOTAL or a broad label); the bare digits are dispatched;
     - adjudicated by this request's resolver (``__semantic_authority``);
     - bound to THIS commodity surface: the selector's input label
       (``__semantic_indicator_label``) contains the commodity text, so a code
@@ -997,9 +1003,10 @@ def _comtrade_adjudicated_retry_code(
     """
     if not any(marker in str(error) for marker in _COMTRADE_TEXT_RESOLUTION_FAILURES):
         return None
-    code = str(params.get("indicator") or "").strip()
-    if not (code.isdigit() and 2 <= len(code) <= 6):
+    code_match = _COMTRADE_HS_CODE_SHAPE.match(str(params.get("indicator") or "").strip())
+    if not code_match:
         return None
+    code = code_match.group(1)
     if str(params.get("__semantic_authority") or "") not in _COMTRADE_RETRY_AUTHORITIES:
         return None
     commodity_surface = _norm_surface(dispatched_commodity)
