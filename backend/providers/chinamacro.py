@@ -38,6 +38,7 @@ import logging
 import ssl
 import time
 import unicodedata
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -65,11 +66,22 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) econ-data-mcp/1.0"
 MONTHLY_TTL_SECONDS = 6 * 3600
 DAILY_TTL_SECONDS = 3600
 
+# Freshness budget: the maximum age of a series' LATEST observation that its
+# frequency's release cadence + publication lag + safety margin allows.
+# Calendar-structural (one entry per frequency, never per series). A source
+# that structurally republishes later carries the extra lag as the registry
+# DATA field ``staleness_extra_lag_days``. Shared with
+# scripts/refresh_chinamacro.py --staleness so the operator report and the
+# served answer apply the same budget.
+STALENESS_BUDGET_DAYS: Dict[str, int] = {"daily": 14, "monthly": 75, "quarterly": 140}
+DEFAULT_STALENESS_BUDGET_DAYS = 90
+
 # ---------------------------------------------------------------------------
 # Series registry — DATA, the single source of truth for catalog + dispatch.
 # Loaded from backend/data/chinamacro/registry.json (registry-as-data): each
 # entry is a dict with keys id, name_en, name_zh, unit, frequency,
-# source{kind, report, field}, source_org, synonyms, notes.
+# source{kind, report, field}, source_org, synonyms, notes, and optionally
+# staleness_extra_lag_days (publication lag beyond the frequency budget).
 # source kinds: eastmoney_v1 (report+field), eastmoney_treasury (field),
 # mofcom_shrzgm (field). Adding a series is a JSON edit — no code change.
 # ---------------------------------------------------------------------------
@@ -88,6 +100,56 @@ def _load_registry() -> Tuple[Dict[str, Any], ...]:
 SERIES_REGISTRY: Tuple[Dict[str, Any], ...] = _load_registry()
 
 _REGISTRY_BY_ID: Dict[str, Dict[str, Any]] = {s["id"]: s for s in SERIES_REGISTRY}
+
+
+def staleness_budget(series: Dict[str, Any]) -> timedelta:
+    """Allowed age of a series' latest observation (frequency budget + registry lag)."""
+    days = STALENESS_BUDGET_DAYS.get(series.get("frequency", ""), DEFAULT_STALENESS_BUDGET_DAYS)
+    return timedelta(days=days + int(series.get("staleness_extra_lag_days") or 0))
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def stale_latest_observation(
+    series: Dict[str, Any],
+    points: List[Dict[str, Any]],
+    today: Optional[date] = None,
+) -> Optional[date]:
+    """Latest observation date when it is older than the series' budget, else None.
+
+    Structural freshness signal (observation date vs calendar), evaluated the
+    same way for every series and both tiers. Unparseable dates are never
+    reported as stale — absence of evidence is not staleness.
+    """
+    if not points:
+        return None
+    try:
+        latest = date.fromisoformat(str(points[-1]["date"])[:10])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (today or _today()) - latest > staleness_budget(series):
+        return latest
+    return None
+
+
+def observation_period_end(observed: date, frequency: str) -> date:
+    """Last calendar day covered by an observation dated ``observed``.
+
+    Monthly/quarterly observations carry one date per period, so a window
+    ending inside that period is fully covered by it. Quarterly uses the end
+    of the calendar quarter containing the date, which is right for both
+    quarter-start and quarter-end-month dating.
+    """
+    if frequency == "monthly":
+        month_end = observed.month
+    elif frequency == "quarterly":
+        month_end = ((observed.month - 1) // 3 + 1) * 3
+    else:
+        return observed
+    first_of_next = date(observed.year + month_end // 12, month_end % 12 + 1, 1)
+    return first_of_next - timedelta(days=1)
 
 
 class _SchemaDriftError(Exception):
@@ -353,9 +415,11 @@ class ChinaMacroProvider(BaseProvider):
             )
 
         provenance: str
+        lag_holder: str  # who lacks newer data, for the staleness disclosure
         try:
             points = await self._live_observations(series)
             provenance = f"live: {series['source_org']}"
+            lag_holder = f"the live source ({series['source_org']}) has not published newer data yet"
         except _SchemaDriftError as drift:
             logger.warning(
                 "chinamacro_schema_drift %s",
@@ -363,6 +427,7 @@ class ChinaMacroProvider(BaseProvider):
             )
             points, as_of = self._csv_observations(series["id"])
             provenance = f"curated snapshot (as-of {as_of}); live schema drifted"
+            lag_holder = f"the live source could not be parsed and the curated snapshot (as-of {as_of}) has nothing newer"
         except Exception as exc:  # noqa: BLE001 — any live failure falls back
             logger.warning(
                 "chinamacro_live_unavailable %s",
@@ -370,14 +435,42 @@ class ChinaMacroProvider(BaseProvider):
             )
             points, as_of = self._csv_observations(series["id"])
             provenance = f"curated snapshot (as-of {as_of}); live source unavailable"
+            lag_holder = f"the live source is unavailable and the curated snapshot (as-of {as_of}) has nothing newer"
+
+        # Freshness is judged on the source's latest observation (before any
+        # window filter), and disclosed only when the requested window reaches
+        # past it -- a closed historical window is unaffected by a lagging tail.
+        # Never relabel stale data as fresh: the provenance and a metadata note
+        # both carry the lag, for either tier.
+        notes: List[str] = []
+        stale_latest = stale_latest_observation(series, points)
+        if stale_latest is not None and (
+            not end_date
+            or end_date[:10] > observation_period_end(stale_latest, series["frequency"]).isoformat()
+        ):
+            latest_label = stale_latest.isoformat()[: 10 if series["frequency"] == "daily" else 7]
+            age_days = (_today() - stale_latest).days
+            provenance += f" (source lagging: latest {latest_label})"
+            notes.append(
+                f"Source lagging: the latest available {series['frequency']} observation is "
+                f"{latest_label} ({age_days} days old), beyond this series' usual "
+                f"publication lag ({staleness_budget(series).days} days); {lag_holder}."
+            )
+            logger.warning(
+                "chinamacro_source_lagging %s",
+                json.dumps({"series": series["id"], "latest": stale_latest.isoformat(), "age_days": age_days}),
+            )
 
         if start_date:
             points = [p for p in points if p["date"] >= start_date[:10]]
         if end_date:
             points = [p for p in points if p["date"] <= end_date[:10]]
         if not points:
+            # A window that starts after a lagging source's latest observation
+            # must say why it is empty, not just that it is.
             raise DataNotAvailableError(
                 f"{series['id']}: no observations in the requested window"
+                + (f". {notes[0]}" if notes else "")
             )
 
         source_pages = {
@@ -396,5 +489,6 @@ class ChinaMacroProvider(BaseProvider):
             apiUrl=f"chinamacro://{series['id']} [{provenance}]",
             sourceUrl=source_pages.get(series["source"]["kind"]),
             description=series["notes"] or None,
+            notes=notes or None,
         )
         return NormalizedData(metadata=metadata, data=points)

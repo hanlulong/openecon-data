@@ -132,7 +132,8 @@
   },
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "retail sales china, consumer spending china, 社会消费品零售总额, 零售销售, 消费增速",
-  "notes": "NBS combines Jan-Feb into one release for this series; no separate January value exists."
+  "notes": "NBS combines Jan-Feb into one release for this series; no separate January value exists.",
+  "staleness_extra_lag_days": 60
  },
  {
   "id": "CN_IP_YOY",
@@ -147,7 +148,8 @@
   },
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "industrial production china, industrial output, 工业增加值, 工业生产, 工业产出",
-  "notes": "NBS combines Jan-Feb into one release for this series."
+  "notes": "NBS combines Jan-Feb into one release for this series.",
+  "staleness_extra_lag_days": 60
  },
  {
   "id": "CN_FAI_YOY",
@@ -162,7 +164,8 @@
   },
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "fixed asset investment china, fai china, capital investment, 固定资产投资, 投资增速",
-  "notes": "As published on the EastMoney datacenter monthly row (BASE_SAME); the NBS headline print is the cumulative year-to-date rate — cite accordingly."
+  "notes": "As published on the EastMoney datacenter monthly row (BASE_SAME); the NBS headline print is the cumulative year-to-date rate — cite accordingly.",
+  "staleness_extra_lag_days": 60
  },
  {
   "id": "CN_GDP_CUM_YOY",
@@ -177,7 +180,8 @@
   },
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "china gdp growth quarterly, gdp yoy china, GDP增速, 经济增长率, 国内生产总值增速",
-  "notes": "Each release covers cumulative quarters (Q1, Q1-2, Q1-3, full year); the value is the cumulative YoY rate."
+  "notes": "Each release covers cumulative quarters (Q1, Q1-2, Q1-3, full year); the value is the cumulative YoY rate.",
+  "staleness_extra_lag_days": 14
  },
  {
   "id": "CN_10Y_YIELD",
@@ -205,7 +209,8 @@
   },
   "source_org": "PBoC data via MOFCOM open query",
   "synonyms": "social financing china, aggregate financing to the real economy, total social financing, tsf, new social financing, 社会融资规模, 社融增量, 社融, 新增社融",
-  "notes": "The monthly PBoC 社会融资规模 headline release IS this increment (flow) figure — this is the number reported for '社融' each month. The outstanding STOCK (存量) series is not yet carried (no free live source). MOFCOM republishes with a ~2-3 month lag."
+  "notes": "The monthly PBoC 社会融资规模 headline release IS this increment (flow) figure — this is the number reported for '社融' each month. The outstanding STOCK (存量) series is not yet carried (no free live source). MOFCOM republishes with a ~2-3 month lag.",
+  "staleness_extra_lag_days": 60
  },
  {
   "id": "CN_FX_RESERVES",
@@ -310,7 +315,8 @@
   },
   "source_org": "NBS via EastMoney datacenter",
   "synonyms": "consumer confidence china, consumer sentiment china, 消费者信心指数, 消费者信心",
-  "notes": "NBS consumer confidence headline index (~1-2 month publication lag)."
+  "notes": "NBS consumer confidence headline index (~1-2 month publication lag).",
+  "staleness_extra_lag_days": 30
  },
  {
   "id": "CN_LPR_1Y",

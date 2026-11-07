@@ -24,26 +24,21 @@ import argparse
 import asyncio
 import csv
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+# The staleness budget (per frequency + the registry's per-series
+# staleness_extra_lag_days) lives in the provider, so this operator report and
+# the provider's served-answer disclosure always agree.
 from backend.providers.chinamacro import (  # noqa: E402
     DATA_DIR,
     SERIES_REGISTRY,
     ChinaMacroProvider,
+    staleness_budget,
 )
-
-# Allowed staleness per frequency: release lag + safety margin.
-STALENESS_BUDGET = {
-    "daily": timedelta(days=14),
-    "monthly": timedelta(days=75),
-    "quarterly": timedelta(days=140),
-}
-# The MOFCOM republication path structurally lags the PBoC release.
-EXTRA_LAG_DAYS = {"CN_SF_INCREMENT": 60}
 
 
 async def _collect_live() -> dict[str, list[dict]]:
@@ -142,8 +137,7 @@ def cmd_staleness() -> int:
             stale += 1
             continue
         latest = datetime.strptime(points[-1]["date"], "%Y-%m-%d").date()
-        budget = STALENESS_BUDGET.get(series["frequency"], timedelta(days=90))
-        budget += timedelta(days=EXTRA_LAG_DAYS.get(series["id"], 0))
+        budget = staleness_budget(series)
         status = "STALE" if today - latest > budget else "ok"
         if status == "STALE":
             stale += 1
