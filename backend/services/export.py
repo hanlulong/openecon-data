@@ -112,31 +112,27 @@ class ExportService:
                 for point in series.data
             ])
         else:
-            # Multiple series - wide format with date as index
+            # Multiple series - wide format with date as index. Column names
+            # and a date -> value map are built once per series, so this is
+            # O(dates x series) rather than a scan of every series per date.
             all_dates = sorted({dp.date for series in data for dp in series.data})
+            column_names = []
+            series_maps = []
+            for series in data:
+                parts = [
+                    self._slug(series.metadata.seriesId),
+                    self._slug(series.metadata.country),
+                    self._slug(series.metadata.indicator),
+                ]
+                # Stata variable names have max 32 chars
+                column_names.append(("_".join(filter(None, parts)) or "series")[:32])
+                series_maps.append({dp.date: dp.value for dp in series.data})
 
-            # Build column data
             rows = []
             for date in all_dates:
                 row = {"date": self._csv_safe(date)}
-                for series in data:
-                    # Create column name from series metadata
-                    parts = [
-                        self._slug(series.metadata.seriesId),
-                        self._slug(series.metadata.country),
-                        self._slug(series.metadata.indicator),
-                    ]
-                    col_name = "_".join(filter(None, parts)) or "series"
-                    # Stata variable names have max 32 chars
-                    col_name = col_name[:32]
-
-                    # Find value for this date
-                    value = None
-                    for dp in series.data:
-                        if dp.date == date:
-                            value = dp.value
-                            break
-                    row[col_name] = value
+                for name, mapping in zip(column_names, series_maps):
+                    row[name] = mapping.get(date)
                 rows.append(row)
 
             df = pd.DataFrame(rows)

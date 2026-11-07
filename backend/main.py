@@ -2960,14 +2960,16 @@ async def export_endpoint(request: ExportRequest) -> Response:
     if request.format not in {"csv", "json", "dta"}:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "Format must be csv, json, or dta"})
 
+    # Generation is CPU-bound (up to 200,000 points); run it in a worker
+    # thread so one large export does not stall every request on this worker.
     if request.format == "csv":
-        content = export_service.generate_csv(request.data)
+        content = await asyncio.to_thread(export_service.generate_csv, request.data)
         media_type = "text/csv"
     elif request.format == "dta":
-        content = export_service.generate_dta(request.data)
+        content = await asyncio.to_thread(export_service.generate_dta, request.data)
         media_type = "application/x-stata-dta"
     else:
-        content = export_service.generate_json(request.data)
+        content = await asyncio.to_thread(export_service.generate_json, request.data)
         media_type = "application/json"
 
     filename = request.filename or export_service.generate_filename(request.data, request.format)
