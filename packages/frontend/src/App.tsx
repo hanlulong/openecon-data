@@ -4,19 +4,19 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './contexts/AuthContext'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { RouteMeta } from './components/RouteMeta'
-import { installStaleChunkRecovery } from './lib/staleChunkRecovery'
+import { installStaleChunkRecovery, loadRoute } from './lib/staleChunkRecovery'
 
 // Lazy route chunks can vanish under an open tab after a deploy; reload once
 // to pick up the current build instead of leaving the route broken.
 installStaleChunkRecovery()
 
 const queryClient = new QueryClient()
-const LandingPage = lazy(() => import('./components/LandingPage').then((module) => ({ default: module.LandingPage })))
-const ChatPage = lazy(() => import('./components/ChatPage').then((module) => ({ default: module.ChatPage })))
-const DocsPage = lazy(() => import('./pages/DocsPage').then((module) => ({ default: module.DocsPage })))
-const ExamplesPage = lazy(() => import('./pages/ExamplesPage').then((module) => ({ default: module.ExamplesPage })))
-const AuthCallback = lazy(() => import('./pages/AuthCallback').then((module) => ({ default: module.AuthCallback })))
-const ResetPassword = lazy(() => import('./pages/ResetPassword').then((module) => ({ default: module.ResetPassword })))
+const LandingPage = lazy(() => loadRoute(() => import('./components/LandingPage'), (module) => module.LandingPage))
+const ChatPage = lazy(() => loadRoute(() => import('./components/ChatPage'), (module) => module.ChatPage))
+const DocsPage = lazy(() => loadRoute(() => import('./pages/DocsPage'), (module) => module.DocsPage))
+const ExamplesPage = lazy(() => loadRoute(() => import('./pages/ExamplesPage'), (module) => module.ExamplesPage))
+const AuthCallback = lazy(() => loadRoute(() => import('./pages/AuthCallback'), (module) => module.AuthCallback))
+const ResetPassword = lazy(() => loadRoute(() => import('./pages/ResetPassword'), (module) => module.ResetPassword))
 
 function RouteFallback() {
   return (
