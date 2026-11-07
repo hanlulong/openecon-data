@@ -24,7 +24,14 @@ vi.mock('recharts', () => ({
   Line: () => <g data-testid="line" />,
   Bar: () => <g data-testid="bar" />,
   XAxis: () => <g data-testid="x-axis" />,
-  YAxis: () => <g data-testid="y-axis" />,
+  // Expose the props the axis-scaling contract depends on.
+  YAxis: ({ domain, yAxisId }: { domain?: unknown; yAxisId?: string }) => (
+    <g
+      data-testid="y-axis"
+      data-domain={domain === undefined ? 'default' : JSON.stringify(domain)}
+      data-axis-id={yAxisId ?? 'single'}
+    />
+  ),
   CartesianGrid: () => <g data-testid="cartesian-grid" />,
   Tooltip: () => <g data-testid="tooltip" />,
   Legend: () => <g data-testid="legend" />,
@@ -585,6 +592,69 @@ describe('MessageChart', () => {
       );
 
       expect(screen.queryByTestId('responsive-container')).toBeNull();
+    });
+  });
+
+  // Line charts encode value by POSITION, so the axis must fit the data range
+  // (a 0 baseline flattens index-level series such as CPI ~113-115 into a
+  // straight line). Bars encode value by LENGTH and keep the zero baseline.
+  describe('y-axis scaling', () => {
+    const series = (unit: string, values: number[], label = 'S'): NormalizedData => ({
+      metadata: {
+        source: 'FRED',
+        indicator: label,
+        country: 'US',
+        frequency: 'monthly',
+        unit,
+        lastUpdated: '2024-01-01',
+      },
+      data: values.map((value, i) => ({ date: `2024-${String(i + 1).padStart(2, '0')}-01`, value })),
+    });
+
+    const cases: Array<[string, NormalizedData[]]> = [
+      ['index-level', [series('Index 2015=100', [113.1, 113.6, 114.2, 114.9, 115.3])]],
+      ['rate', [series('Percent', [3.6, 3.8, 3.9, 4.1, 4.2])]],
+      ['negative', [series('Percent', [-2.1, -0.8, 0.4, -1.2, 1.0])]],
+    ];
+
+    it.each(cases)('fits the line-chart axis to the data for %s series', (_label, data) => {
+      render(
+        <MessageChart data={data} chartType="line" onChartTypeChange={mockOnChartTypeChange} onExport={mockOnExport} />
+      );
+      const axes = screen.getAllByTestId('y-axis');
+      expect(axes).toHaveLength(1);
+      expect(axes[0].getAttribute('data-domain')).toBe(JSON.stringify(['auto', 'auto']));
+    });
+
+    it('fits BOTH dual axes to their data on a line chart', () => {
+      const data = [
+        series('Percent', [3.6, 3.8, 3.9, 4.1, 4.2], 'Rate'),
+        series('Billions of Dollars', [27000, 27300, 27650, 27900, 28100], 'Level'),
+      ];
+      render(
+        <MessageChart data={data} chartType="line" onChartTypeChange={mockOnChartTypeChange} onExport={mockOnExport} />
+      );
+      const axes = screen.getAllByTestId('y-axis');
+      expect(axes.map((a) => a.getAttribute('data-axis-id')).sort()).toEqual(['left', 'right']);
+      for (const axis of axes) {
+        expect(axis.getAttribute('data-domain')).toBe(JSON.stringify(['auto', 'auto']));
+      }
+    });
+
+    it('keeps the zero baseline (default domain) for bar charts', () => {
+      const dual = [
+        series('Percent', [3.6, 3.8, 3.9, 4.1, 4.2], 'Rate'),
+        series('Billions of Dollars', [27000, 27300, 27650, 27900, 28100], 'Level'),
+      ];
+      for (const data of [cases[0][1], dual]) {
+        const { unmount } = render(
+          <MessageChart data={data} chartType="bar" onChartTypeChange={mockOnChartTypeChange} onExport={mockOnExport} />
+        );
+        for (const axis of screen.getAllByTestId('y-axis')) {
+          expect(axis.getAttribute('data-domain')).toBe('default');
+        }
+        unmount();
+      }
     });
   });
 });

@@ -229,6 +229,15 @@ function makeYAxisTickFormatter(values: number[]): (value: number) => string {
 // stay on one shared axis, where comparing them is meaningful.
 const MAGNITUDE_GAP_FOR_DUAL_AXIS = 2
 
+// Y-axis domain for LINE charts. Recharts' numeric default is [0, 'auto'],
+// which is right for bars (value is encoded by bar LENGTH, so the baseline must
+// be zero) but wrong for lines, where value is encoded by POSITION: anchoring
+// at zero squashes any series whose level sits far from zero (index levels
+// such as CPI ~113-115, yields, exchange rates, populations) into a flat line
+// at the top of the plot. 'auto' on both ends fits the axis to the data's own
+// min/max with nice ticks, and still crosses zero when the data does.
+const LINE_Y_DOMAIN: [string, string] = ['auto', 'auto']
+
 type AxisGroup = {
   seriesNames: string[]
   magnitude: number
@@ -579,6 +588,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             <>
               <YAxis
                 yAxisId="left"
+                domain={LINE_Y_DOMAIN}
                 stroke={CHART_STYLE.axis}
                 style={{ fontSize: '11px' }}
                 tickFormatter={dualAxis.leftFormatter}
@@ -590,6 +600,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
               <YAxis
                 yAxisId="right"
                 orientation="right"
+                domain={LINE_Y_DOMAIN}
                 stroke={CHART_STYLE.axis}
                 style={{ fontSize: '11px' }}
                 tickFormatter={dualAxis.rightFormatter}
@@ -601,6 +612,7 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
             </>
           ) : (
             <YAxis
+              domain={LINE_Y_DOMAIN}
               stroke={CHART_STYLE.axis}
               style={{ fontSize: '11px' }}
               tickFormatter={yAxisTickFormatter}
