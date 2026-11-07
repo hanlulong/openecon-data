@@ -223,6 +223,12 @@ describe('ChatPage', () => {
       expect(newChatButton).toBeInTheDocument();
     });
 
+    it('gives icon-only buttons an accessible name', async () => {
+      renderChatPage();
+      expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'OpenEcon home' })).toBeInTheDocument();
+    });
+
     it('renders Feedback button', async () => {
       renderChatPage();
 

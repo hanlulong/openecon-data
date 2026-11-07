@@ -779,6 +779,7 @@ export function LandingPage() {
                               onClick={() => setIsPlaying(!isPlaying)}
                               className="p-1.5 rounded-lg hover:bg-gray-200 transition-colors"
                               title={isPlaying ? 'Pause' : 'Play'}
+                              aria-label={isPlaying ? 'Pause examples' : 'Play examples'}
                             >
                               {isPlaying ? (
                                 <Pause className="h-3.5 w-3.5 text-gray-500" />
@@ -789,12 +790,14 @@ export function LandingPage() {
                             <button
                               onClick={prevSlide}
                               className="p-1.5 rounded-lg hover:bg-gray-200 transition-colors"
+                              aria-label="Previous example"
                             >
                               <ChevronLeft className="h-3.5 w-3.5 text-gray-500" />
                             </button>
                             <button
                               onClick={nextSlide}
                               className="p-1.5 rounded-lg hover:bg-gray-200 transition-colors"
+                              aria-label="Next example"
                             >
                               <ChevronRight className="h-3.5 w-3.5 text-gray-500" />
                             </button>
@@ -859,6 +862,8 @@ export function LandingPage() {
                         key={idx}
                         onClick={() => goToSlide(idx)}
                         className="flex-1 h-0.5 rounded-full overflow-hidden bg-gray-200 hover:bg-gray-300 transition-colors"
+                        aria-label={`Show example ${idx + 1}`}
+                        aria-current={idx === currentIndex ? 'true' : undefined}
                       >
                         <motion.div
                           className="h-full bg-indigo-500"

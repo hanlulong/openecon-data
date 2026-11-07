@@ -1108,8 +1108,8 @@ print(f"\\nData source: ${sourceUrl}")
 
       <div className={`chat-sidebar ${isMobile && sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <button className="logo-button" onClick={() => navigate('/')}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+          <button className="logo-button" onClick={() => navigate('/')} aria-label="OpenEcon home">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -1428,8 +1428,9 @@ print(f"\\nData source: ${sourceUrl}")
                 type="submit"
                 className="submit-button"
                 disabled={processingQuery.current !== null || !query.trim()}
+                aria-label="Send"
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M7 11L12 6L17 11M12 18V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>

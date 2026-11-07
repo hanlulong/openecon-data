@@ -4,6 +4,11 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './contexts/AuthContext'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { RouteMeta } from './components/RouteMeta'
+import { installStaleChunkRecovery } from './lib/staleChunkRecovery'
+
+// Lazy route chunks can vanish under an open tab after a deploy; reload once
+// to pick up the current build instead of leaving the route broken.
+installStaleChunkRecovery()
 
 const queryClient = new QueryClient()
 const LandingPage = lazy(() => import('./components/LandingPage').then((module) => ({ default: module.LandingPage })))
