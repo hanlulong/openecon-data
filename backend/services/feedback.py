@@ -23,14 +23,17 @@ import json
 import logging
 import os
 import smtplib
+import unicodedata
 import uuid
 import httpx
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Iterator, Optional
+from urllib.parse import quote
 
 from ..models import FeedbackRequest, FeedbackResponse, User
 
@@ -53,6 +56,32 @@ _LOCK_NAME = ".feedback.lock"              # flock target shared by all workers
 # user is verified; claims are stored and rendered under distinct keys/labels
 # so nothing downstream can mistake them for an authenticated identity.
 CLAIMED_LABEL = "claimed (unverified, client-supplied)"
+UNVALIDATED_CONTACT_LABEL = "Contact, unvalidated (no reply-to)"
+
+
+def normalize_contact_email(raw: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Structural validity check for a client-supplied contact address.
+
+    Returns ``(address, None)`` when ``raw`` (stripped) is a single plain
+    addr-spec: no whitespace/control/format characters (so no CR/LF), exactly
+    one '@' with a non-empty local part and domain, and email.utils.parseaddr
+    round-trips it unchanged (no display names, brackets, lists). Otherwise
+    returns ``(None, raw)``: the value is kept for the owner as unvalidated
+    text but must never become a reply-to header or a mailto link. Purely
+    syntactic — the submission itself is never rejected over it.
+    """
+    if raw is None:
+        return None, None
+    candidate = raw.strip()
+    if not candidate:
+        return None, None
+    structurally_valid = (
+        not any(ch.isspace() or unicodedata.category(ch).startswith("C") for ch in candidate)
+        and candidate.count("@") == 1
+        and all(candidate.split("@"))
+        and parseaddr(candidate) == ("", candidate)
+    )
+    return (candidate, None) if structurally_valid else (None, raw)
 
 # Email configuration (read from environment)
 FEEDBACK_EMAIL_TO = os.getenv("FEEDBACK_EMAIL_TO", "hanlulong@gmail.com")
@@ -241,7 +270,7 @@ class FeedbackService:
         if email_sent:
             logger.info(f"Email notification sent for feedback {feedback_id}")
         else:
-            logger.info(f"Email notification skipped (SMTP not configured) for feedback {feedback_id}")
+            logger.info(f"Email notification not sent for feedback {feedback_id} (see preceding log)")
         return FeedbackResponse(
             success=True,
             message="Thank you for your feedback! We'll review it and get back to you if needed.",
@@ -314,6 +343,13 @@ class FeedbackService:
             "claimedUserName": request.userName,
         }
 
+    @staticmethod
+    def _contact_fields(raw_email: Optional[str]) -> dict:
+        """``email`` holds ONLY a structurally valid address (safe for
+        reply_to/mailto); anything else is kept as ``emailUnvalidated``."""
+        address, unvalidated = normalize_contact_email(raw_email)
+        return {"email": address, "emailUnvalidated": unvalidated}
+
     def _record_feedback(
         self, request: FeedbackRequest, user: Optional[User] = None
     ) -> tuple[str, dict]:
@@ -329,7 +365,7 @@ class FeedbackService:
             "id": feedback_id,
             "type": request.type,
             "message": request.message,
-            "email": request.email,
+            **self._contact_fields(request.email),
             **self._identity_fields(request, user),
             "timestamp": timestamp,
             "sessionInfo": request.sessionInfo.model_dump() if request.sessionInfo else None,
@@ -358,8 +394,23 @@ class FeedbackService:
         if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD]):
             return self._send_via_smtp(feedback)
 
-        logger.warning("No email service configured. Set RESEND_API_KEY or SMTP_* environment variables.")
+        logger.warning(
+            "No email service configured; feedback %s stored without notification. "
+            "Set RESEND_API_KEY or SMTP_* environment variables.", feedback.get("id"),
+        )
         return False
+
+    @staticmethod
+    def _post_resend(payload: dict):
+        return httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10.0,
+        )
 
     def _send_via_resend(self, feedback: dict) -> bool:
         """Send email via Resend API."""
@@ -377,30 +428,33 @@ class FeedbackService:
                 "text": text_body,
             }
 
-            # Add reply-to if user provided email
-            user_email = feedback.get("email")
-            if user_email:
-                email_payload["reply_to"] = user_email
+            # reply_to only for a structurally valid address. Resend rejects
+            # the WHOLE message (422) over a bad reply_to, which used to drop
+            # the owner notification while the client saw success.
+            reply_to = self._reply_to_address(feedback)
+            if reply_to:
+                email_payload["reply_to"] = reply_to
 
-            response = httpx.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {RESEND_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=email_payload,
-                timeout=10.0,
-            )
+            response = self._post_resend(email_payload)
+            if response.status_code == 422 and "reply_to" in email_payload:
+                logger.warning(
+                    "Resend rejected feedback %s notification (422: %s); retrying once without reply_to",
+                    feedback.get("id"), response.text[:500],
+                )
+                email_payload.pop("reply_to")
+                response = self._post_resend(email_payload)
 
-            if response.status_code == 200:
-                logger.info(f"Email sent via Resend: {response.json()}")
+            if 200 <= response.status_code < 300:
+                logger.info(f"Email sent via Resend for feedback {feedback.get('id')}: {response.text[:200]}")
                 return True
-            else:
-                logger.error(f"Resend API error: {response.status_code} - {response.text}")
-                return False
+            logger.error(
+                "Feedback %s notification NOT delivered: Resend API error %s - %s",
+                feedback.get("id"), response.status_code, response.text[:500],
+            )
+            return False
 
         except Exception as e:
-            logger.error(f"Failed to send email via Resend: {e}")
+            logger.error("Feedback %s notification NOT delivered: Resend request failed: %s", feedback.get("id"), e)
             return False
 
     def _send_via_smtp(self, feedback: dict) -> bool:
@@ -431,7 +485,7 @@ class FeedbackService:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to send email via SMTP: {e}")
+            logger.error("Feedback %s notification NOT delivered: SMTP send failed: %s", feedback.get("id"), e)
             return False
 
     def _format_feedback_text(self, feedback: dict) -> str:
@@ -497,6 +551,10 @@ class FeedbackService:
                 rows.append((f"User ID, {CLAIMED_LABEL}", feedback["claimedUserId"]))
         if feedback.get("email"):
             rows.append(("Contact email", feedback["email"]))
+        if feedback.get("emailUnvalidated"):
+            # json.dumps makes CR/LF/control characters visible instead of
+            # letting them restructure the plain-text body.
+            rows.append((UNVALIDATED_CONTACT_LABEL, json.dumps(feedback["emailUnvalidated"])))
         return rows
 
     @staticmethod
@@ -615,9 +673,19 @@ class FeedbackService:
 
     @staticmethod
     def _contact_mailto(feedback: dict) -> Optional[str]:
-        """mailto: href for the contact address (escaped again by _h)."""
-        address = feedback.get("email")
-        return f"mailto:{address}" if address else None
+        """mailto: href, only for a structurally valid address; the address
+        is percent-encoded here and the whole href html-escaped by _h."""
+        address, _ = normalize_contact_email(feedback.get("email"))
+        return f"mailto:{quote(address, safe='@')}" if address else None
+
+    @staticmethod
+    def _reply_to_address(feedback: dict) -> Optional[str]:
+        """Valid contact address, else the verified account email, else None."""
+        for raw in (feedback.get("email"), feedback.get("verifiedEmail")):
+            address, _ = normalize_contact_email(raw)
+            if address:
+                return address
+        return None
 
     def get_all_feedback(self) -> list:
         """Get all feedback entries (for admin use), read from disk on demand
