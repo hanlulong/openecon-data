@@ -118,17 +118,20 @@ def _cpi_rows(query):
     return [{"date": "2026-08-01", "value": "2.9"}, {"date": "2026-09-01", "value": "3.0"}]
 
 
+CPI_TITLE = SERIES_INFO["CPIAUCSL"]["title"]
+
+
 @pytest.mark.parametrize(
-    ("series_id", "data_type", "units"),
+    ("series_id", "data_type", "units", "indicator", "unit"),
     [
-        ("CPIAUCSL:pc1", "Percent Change", "pc1"),
-        ("CPIAUCSL:pch", "Percent Change", "pch"),
-        ("CPIAUCSL:ch1", "Change", "ch1"),
-        ("CPIAUCSL:lin", "Index", "lin"),
-        ("CPIAUCSL", "Index", None),
+        ("CPIAUCSL:pc1", "Percent Change", "pc1", f"{CPI_TITLE} (YoY % Change)", "Percent Change from Year Ago"),
+        ("CPIAUCSL:pch", "Percent Change", "pch", f"{CPI_TITLE} (% Change)", "Percent Change"),
+        ("CPIAUCSL:ch1", "Change", "ch1", CPI_TITLE, "Index 1982-1984=100"),
+        ("CPIAUCSL:lin", "Index", "lin", CPI_TITLE, "Index 1982-1984=100"),
+        ("CPIAUCSL", "Index", None, CPI_TITLE, "Index 1982-1984=100"),
     ],
 )
-def test_transformation_sets_data_type_and_api_url(monkeypatch, series_id, data_type, units):
+def test_transformation_sets_data_type_and_api_url(monkeypatch, series_id, data_type, units, indicator, unit):
     result, observation_calls = _fetch(
         monkeypatch,
         {"seriesId": series_id, "indicator": "CPI", "__original_query": "US CPI"},
@@ -136,6 +139,9 @@ def test_transformation_sets_data_type_and_api_url(monkeypatch, series_id, data_
     )
     metadata = result.metadata
     assert metadata.dataType == data_type
+    # The indicator label names the transformation the unit already states.
+    assert metadata.indicator == indicator
+    assert metadata.unit == unit
     assert observation_calls[0].get("units") == units
     api_query = parse_qs(urlparse(metadata.apiUrl).query)
     assert api_query.get("units") == ([units] if units else None)

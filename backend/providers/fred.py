@@ -764,7 +764,7 @@ class FREDProvider(BaseProvider):
 
         metadata = Metadata(
             source="FRED",
-            indicator=info["title"],
+            indicator=indicator_title,
             country=inferred_country,
             frequency=self._map_frequency(info["frequency"]),
             unit=unit,
