@@ -7860,6 +7860,7 @@ class QueryServiceTests(unittest.TestCase):
                     "value": "[IMF] Trade Balance (% of GDP) (BT_GDP)",
                     "provider": "IMF",
                     "code": "BT_GDP",
+                    "query": None,
                 },
                 {
                     "id": "2",
@@ -7867,6 +7868,7 @@ class QueryServiceTests(unittest.TestCase):
                     "value": "[WorldBank] Trade Balance (% of GDP) (NE.RSB.GNFS.ZS)",
                     "provider": "WORLDBANK",
                     "code": "NE.RSB.GNFS.ZS",
+                    "query": None,
                 },
             ],
         )

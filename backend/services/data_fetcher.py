@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import calendar
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
@@ -64,6 +65,47 @@ if TYPE_CHECKING:
     from ..providers.coingecko import CoinGeckoProvider
 
 logger = logging.getLogger(__name__)
+
+# Request-scoped STRUCTURED outcome channel for partial multi-indicator
+# fetches. process_query installs a fresh list per request; every partial
+# fetch_multi_indicator_data call appends one report naming the unserved
+# indicators (with a structural failure class) and the identities of the
+# series it DID serve, so the response finalizer can disclose the gap in
+# ``message`` only when that fetch's data is what is actually being served --
+# without string-scanning metadata.notes and without persisting anything in
+# intent.parameters (which is saved into conversation state). Unset (None)
+# outside a process_query request: nothing is recorded.
+MULTI_INDICATOR_FETCH_REPORTS: ContextVar[Optional[list]] = ContextVar(
+    "multi_indicator_fetch_reports", default=None,
+)
+
+
+def served_series_identity(series: Any) -> tuple[str, str]:
+    """Structural identity of one served series: (source, seriesId-or-indicator)."""
+    metadata = getattr(series, "metadata", None)
+    source = str(getattr(metadata, "source", "") or "").strip().upper()
+    series_id = str(
+        getattr(metadata, "seriesId", None) or getattr(metadata, "indicator", None) or ""
+    ).strip().upper()
+    return source, series_id
+
+
+def multi_indicator_partial_note(missing: str, language: Optional[str] = None) -> str:
+    """The localized partial-success disclosure naming the unserved indicators."""
+    return _localized_message("multi_indicator_partial", language, missing=missing) or (
+        f"Could not fetch data for: {missing}. The results shown cover only "
+        "the indicators that resolved successfully; the missing series may "
+        "be unavailable from the selected provider(s) at this scope."
+    )
+
+
+def _multi_indicator_failure_reason(result: Any) -> str:
+    """Classify one per-indicator fetch outcome structurally (type, not text)."""
+    if isinstance(result, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(result, DataNotAvailableError) or not isinstance(result, Exception):
+        return "no_data"
+    return "error"
 
 _KNOWN_COUNTRY_ALIASES = {
     alias
@@ -4647,21 +4689,28 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
     # dropping the missing series (F6). An empty list counts as a failure for
     # that indicator (a provider that returned [] served nothing usable).
     failed_indicators: list[str] = []
+    unserved: list[dict[str, str]] = []
     for i, result in enumerate(results):
         indicator_name = intent.indicators[i] if i < len(intent.indicators) else "unknown"
         if isinstance(result, Exception):
             logger.warning("Failed to fetch indicator %s: %s", indicator_name, result)
             failed_indicators.append(indicator_name)
+            unserved.append({
+                "indicator": indicator_name,
+                "reason": _multi_indicator_failure_reason(result),
+            })
             continue
         if isinstance(result, list):
             if result:
                 all_data.extend(result)
             else:
                 failed_indicators.append(indicator_name)
+                unserved.append({"indicator": indicator_name, "reason": "no_data"})
         elif result is not None:
             all_data.append(result)
         else:
             failed_indicators.append(indicator_name)
+            unserved.append({"indicator": indicator_name, "reason": "no_data"})
 
     if not all_data:
         raise DataNotAvailableError(
@@ -4676,17 +4725,21 @@ async def fetch_multi_indicator_data(svc: Any, intent: ParsedIntent) -> List[Nor
         missing = ", ".join(dict.fromkeys(failed_indicators))
         # Localize the transparency note to the query's language (available on
         # the intent here); English is the guaranteed fallback.
-        note = _localized_message(
-            "multi_indicator_partial", getattr(intent, "language", None), missing=missing,
-        ) or (
-            f"Could not fetch data for: {missing}. The results shown cover only "
-            "the indicators that resolved successfully; the missing series may "
-            "be unavailable from the selected provider(s) at this scope."
-        )
+        note = multi_indicator_partial_note(missing, getattr(intent, "language", None))
         first_meta = all_data[0].metadata
         existing_notes = list(first_meta.notes or [])
         existing_notes.append(note)
         first_meta.notes = existing_notes
+        reports = MULTI_INDICATOR_FETCH_REPORTS.get()
+        if reports is not None:
+            # One entry per indicator name, in request order.
+            unserved_by_name: dict[str, dict[str, str]] = {}
+            for item in unserved:
+                unserved_by_name.setdefault(item["indicator"], dict(item))
+            reports.append({
+                "unserved": list(unserved_by_name.values()),
+                "served": {served_series_identity(series) for series in all_data},
+            })
 
     logger.info("Successfully fetched %s datasets for %s indicators", len(all_data), len(intent.indicators))
     return all_data

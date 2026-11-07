@@ -176,6 +176,23 @@ class ClarificationOption(BaseModel):
     value: str
     provider: Optional[str] = None
     code: Optional[str] = None
+    # Self-contained re-query string for STATELESS callers (API/agent clients
+    # that never send conversationId back, so a numeric reply cannot be
+    # matched to this menu). Present only when the string was verified at
+    # build time to resolve, through the exact provider-code fast path, to this
+    # option's provider + code + country scope without re-clarifying; absent
+    # (None) whenever the scope cannot be expressed that way. Optional and
+    # additive: existing clients that pick by id/value are unaffected.
+    query: Optional[str] = None
+
+
+class UnservedIndicator(BaseModel):
+    """One requested indicator a served multi-indicator response could not include."""
+
+    indicator: str
+    # Structural failure class from the fetch outcome (exception type / empty
+    # result), never parsed from message text: "no_data", "timeout", "error".
+    reason: str
 
 
 class ExecutionPlan(BaseModel):
@@ -251,6 +268,10 @@ class QueryResponse(BaseModel):
     isProMode: Optional[bool] = None
     processingSteps: Optional[List[ProcessingStep]] = None
     alternativeSeries: Optional[List[AlternativeSeries]] = None  # Related indicators user might want
+    # Requested indicators a PARTIAL multi-indicator answer could not serve
+    # (structured twin of the disclosure appended to ``message``). None when
+    # every requested indicator was served or the query asked for only one.
+    unservedIndicators: Optional[List[UnservedIndicator]] = None
     processingTimeMs: Optional[float] = None  # End-to-end query processing time in milliseconds
     # Anonymous free-query gate: how many of the free prompts this anonymous
     # session has used and the limit, so the UI can show "N free queries left".

@@ -21,6 +21,7 @@ from ..models import (
     NormalizedData,
     ParsedIntent,
     QueryResponse,
+    UnservedIndicator,
 )
 from ..config import Settings
 from ..services.cache import cache_service
@@ -183,6 +184,7 @@ from ..services.indicator_clarification import (
     build_uncertain_result_clarification as _ic_build_uncertain_result_clarification,
     build_indicator_mismatch_hint as _ic_build_indicator_mismatch_hint,
     build_no_data_indicator_clarification as _ic_build_no_data_indicator_clarification,
+    finalize_clarification_response_contract as _ic_finalize_clarification_response_contract,
     looks_like_provider_indicator_code as _ic_looks_like_provider_indicator_code,
 )
 from ..services.data_fetcher import (
@@ -192,6 +194,9 @@ from ..services.data_fetcher import (
     extract_exchange_rate_params as _df_extract_exchange_rate_params,
     fetch_data as _df_fetch_data,
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
+    MULTI_INDICATOR_FETCH_REPORTS as _DF_MULTI_INDICATOR_FETCH_REPORTS,
+    multi_indicator_partial_note as _df_multi_indicator_partial_note,
+    served_series_identity as _df_served_series_identity,
     _has_statscan_mechanical_dimension_dispatch_authority as _df_has_statscan_mechanical_dimension_dispatch_authority,
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
     _FRED_DISCOVERY_SCOPED_KEYS as _DF_FRED_DISCOVERY_SCOPED_KEYS,
@@ -4562,6 +4567,67 @@ class QueryService:
             logger.debug("Default-geography disclosure skipped: %s", exc)
         return response
 
+    def _disclose_unserved_indicators(self, response: QueryResponse) -> None:
+        """Lift a PARTIAL multi-indicator outcome into the response contract.
+
+        fetch_multi_indicator_data records, per request, which requested
+        indicators it could not serve (structured: name + failure class) and
+        which series it did serve. When the response being returned serves
+        that fetch's series, the gap is disclosed where every client reads it:
+        ``unservedIndicators`` (structured) and ``message`` (localized text,
+        appended to any existing coverage warning). A report whose series are
+        not what is being served (a later path replaced the data) is ignored,
+        so a stale partial outcome is never announced.
+        """
+        reports = _DF_MULTI_INDICATOR_FETCH_REPORTS.get() or []
+        if not reports or not response.data:
+            return
+        # The served payload must come entirely from the partial fetch (a
+        # subset: reranking/filtering may drop or reorder its series). If any
+        # served series came from elsewhere, a later path changed what is
+        # served and the report may be stale — stay silent (the per-series
+        # metadata note remains) rather than announce a gap that was filled.
+        served = {_df_served_series_identity(series) for series in response.data}
+        report = next(
+            (item for item in reversed(reports) if served <= set(item.get("served") or ())),
+            None,
+        )
+        unserved = list((report or {}).get("unserved") or [])
+        if not unserved:
+            return
+        response.unservedIndicators = [
+            UnservedIndicator(indicator=str(item["indicator"]), reason=str(item["reason"]))
+            for item in unserved
+        ]
+        language = getattr(response.intent, "language", None) if response.intent is not None else None
+        note = _df_multi_indicator_partial_note(
+            ", ".join(str(item["indicator"]) for item in unserved), language,
+        )
+        existing = (response.message or "").strip()
+        if note in existing:
+            return
+        response.message = f"{existing}\n\n{note}" if existing else note
+
+    def _finalize_response_contract(self, response: QueryResponse) -> QueryResponse:
+        """Single response-contract chokepoint (process_query's return).
+
+        Turns structured pipeline outcomes into text every client can act on:
+        clarification menus get stateless re-ask strings + instructions
+        (indicator_clarification.finalize_clarification_response_contract), and
+        served partial multi-indicator answers disclose what was not served.
+        Idempotent; never raises.
+        """
+        try:
+            if response is None:
+                return response
+            if response.clarificationNeeded:
+                return _ic_finalize_clarification_response_contract(self, response)
+            if response.data and not (response.error or "").strip():
+                self._disclose_unserved_indicators(response)
+        except Exception as exc:  # never let the contract break a response
+            logger.debug("Response contract finalization skipped: %s", exc)
+        return response
+
     def _finalize_empty_data_response(self, response: QueryResponse) -> QueryResponse:
         """Guarantee a completed data_fetch never returns silently empty.
 
@@ -4819,76 +4885,87 @@ class QueryService:
         """Public entry point for both the non-stream and SSE paths.
 
         Delegates to _process_query_impl and routes the result through the
-        single empty-data finalization chokepoint (_finalize_empty_data_response)
-        so no completed data_fetch ever reaches the caller silently empty.
+        response-contract chokepoint (_finalize_response_contract: stateless
+        clarification re-ask strings, partial multi-indicator disclosure) and
+        the single empty-data finalization chokepoint
+        (_finalize_empty_data_response) so no completed data_fetch ever reaches
+        the caller silently empty.
         """
-        response = await self._process_query_impl(
-            query,
-            conversation_id=conversation_id,
-            auto_pro_mode=auto_pro_mode,
-            use_orchestrator=use_orchestrator,
-            allow_orchestrator=allow_orchestrator,
-            owner_key=owner_key,
-            claimable_owner_keys=claimable_owner_keys,
-        )
-        # Capture the served series identity BEFORE enforcement discards it —
-        # it is what the one-shot re-adjudication below must exclude.
-        served_provider, served_code = (None, None)
-        if getattr(response, "data", None):
-            try:
-                served_provider, served_code = self._extract_series_provider_and_code(
-                    response.data[0]
-                )
-            except Exception:
-                pass
-        # Subnational fail-closed runs before empty-data finalization: it may
-        # convert a served-national-data response into an explanation (data=None
-        # + message), which finalization then leaves untouched (message set).
-        response = self._enforce_subnational_fail_closed(response)
-        response = self._disclose_default_geography(response)
-
-        # One-shot re-adjudication after a subnational discard: the pick that
-        # produced national data for a region query is evicted from the
-        # selection cache (else repeats fast-fail on it for 6h) and the impl
-        # re-runs once with that code excluded — the region-aware annotations
-        # then steer the second adjudication. If the retry ALSO fails the
-        # check (or errors), the first honest fail-closed response stands.
-        if (
-            response is not None
-            and getattr(response, "error", None) == "subnational_data_unavailable"
-            and served_code
-            and _SUBNATIONAL_RETRY_EXCLUDES.get() is None
-        ):
-            try:
-                from .indicator_selector import invalidate_selection_cache_entry
-
-                evicted = invalidate_selection_cache_entry(served_provider or "", served_code)
-                logger.info(
-                    "🔁 Subnational discard: re-adjudicating once with %s/%s excluded "
-                    "(evicted %d cached selection(s))",
-                    served_provider, served_code, evicted,
-                )
-                token = _SUBNATIONAL_RETRY_EXCLUDES.set([served_code])
+        # Request-scoped structured channel for partial multi-indicator
+        # outcomes (read by _finalize_response_contract).
+        reports_token = _DF_MULTI_INDICATOR_FETCH_REPORTS.set([])
+        try:
+            response = await self._process_query_impl(
+                query,
+                conversation_id=conversation_id,
+                auto_pro_mode=auto_pro_mode,
+                use_orchestrator=use_orchestrator,
+                allow_orchestrator=allow_orchestrator,
+                owner_key=owner_key,
+                claimable_owner_keys=claimable_owner_keys,
+            )
+            # Capture the served series identity BEFORE enforcement discards it —
+            # it is what the one-shot re-adjudication below must exclude.
+            served_provider, served_code = (None, None)
+            if getattr(response, "data", None):
                 try:
-                    retry_response = await self._process_query_impl(
-                        query,
-                        conversation_id=conversation_id,
-                        auto_pro_mode=auto_pro_mode,
-                        use_orchestrator=use_orchestrator,
-                        allow_orchestrator=allow_orchestrator,
-                        owner_key=owner_key,
-                        claimable_owner_keys=claimable_owner_keys,
+                    served_provider, served_code = self._extract_series_provider_and_code(
+                        response.data[0]
                     )
-                finally:
-                    _SUBNATIONAL_RETRY_EXCLUDES.reset(token)
-                retry_response = self._enforce_subnational_fail_closed(retry_response)
-                retry_response = self._disclose_default_geography(retry_response)
-                if retry_response is not None and getattr(retry_response, "data", None):
-                    response = retry_response
-            except Exception as retry_exc:  # keep the honest first answer
-                logger.warning("Subnational re-adjudication failed: %s", retry_exc)
+                except Exception:
+                    pass
+            # Subnational fail-closed runs before empty-data finalization: it may
+            # convert a served-national-data response into an explanation (data=None
+            # + message), which finalization then leaves untouched (message set).
+            response = self._enforce_subnational_fail_closed(response)
+            response = self._disclose_default_geography(response)
 
-        return self._finalize_empty_data_response(response)
+            # One-shot re-adjudication after a subnational discard: the pick that
+            # produced national data for a region query is evicted from the
+            # selection cache (else repeats fast-fail on it for 6h) and the impl
+            # re-runs once with that code excluded — the region-aware annotations
+            # then steer the second adjudication. If the retry ALSO fails the
+            # check (or errors), the first honest fail-closed response stands.
+            if (
+                response is not None
+                and getattr(response, "error", None) == "subnational_data_unavailable"
+                and served_code
+                and _SUBNATIONAL_RETRY_EXCLUDES.get() is None
+            ):
+                try:
+                    from .indicator_selector import invalidate_selection_cache_entry
+
+                    evicted = invalidate_selection_cache_entry(served_provider or "", served_code)
+                    logger.info(
+                        "🔁 Subnational discard: re-adjudicating once with %s/%s excluded "
+                        "(evicted %d cached selection(s))",
+                        served_provider, served_code, evicted,
+                    )
+                    token = _SUBNATIONAL_RETRY_EXCLUDES.set([served_code])
+                    try:
+                        retry_response = await self._process_query_impl(
+                            query,
+                            conversation_id=conversation_id,
+                            auto_pro_mode=auto_pro_mode,
+                            use_orchestrator=use_orchestrator,
+                            allow_orchestrator=allow_orchestrator,
+                            owner_key=owner_key,
+                            claimable_owner_keys=claimable_owner_keys,
+                        )
+                    finally:
+                        _SUBNATIONAL_RETRY_EXCLUDES.reset(token)
+                    retry_response = self._enforce_subnational_fail_closed(retry_response)
+                    retry_response = self._disclose_default_geography(retry_response)
+                    if retry_response is not None and getattr(retry_response, "data", None):
+                        response = retry_response
+                except Exception as retry_exc:  # keep the honest first answer
+                    logger.warning("Subnational re-adjudication failed: %s", retry_exc)
+
+            return self._finalize_empty_data_response(
+                self._finalize_response_contract(response)
+            )
+        finally:
+            _DF_MULTI_INDICATOR_FETCH_REPORTS.reset(reports_token)
 
     async def _process_query_impl(
         self,
