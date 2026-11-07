@@ -20,7 +20,7 @@ from backend.mcp_transport import LegacySSETransport
 from backend.tests.test_mcp_transport import loopback_server
 
 
-@pytest.mark.parametrize("retry_milliseconds", [6000, 300000])
+@pytest.mark.parametrize("retry_milliseconds", [6000, 300000, 900000])
 def test_actual_javascript_sdk_obeys_retry_and_fresh_client_recovers(retry_milliseconds):
     sdk_root = os.environ.get("MCP_JS_SDK_ROOT")
     node = shutil.which("node")
@@ -84,7 +84,7 @@ def test_actual_javascript_sdk_obeys_retry_and_fresh_client_recovers(retry_milli
             assert process.returncode == 0, stderr.decode()
             result = json.loads(stdout)
             assert result["fresh_tools_ok"]
-            assert len(gets) == (3 if retry_milliseconds == 300000 else 4)
+            assert len(gets) == (3 if retry_milliseconds >= 300000 else 4)
             assert all(record["status"] == 200 for record in gets)
             assert b"retry:" not in gets[0]["body"]
             assert gets[1]["body"].endswith(
@@ -93,7 +93,7 @@ def test_actual_javascript_sdk_obeys_retry_and_fresh_client_recovers(retry_milli
             assert b"retry:" not in gets[2]["body"]  # Explicit fresh client.
             assert 2.8 <= gets[1]["start"] - gets[0]["end"] < 5
             assert gets[2]["start"] - gets[1]["end"] < 2
-            if retry_milliseconds != 300000:
+            if retry_milliseconds < 300000:
                 assert 5.8 <= gets[3]["start"] - gets[1]["end"] < 9
             assert methods.count("initialize") == methods.count("tools/list") == 2
             assert methods.count("notifications/initialized") == 2

@@ -24,15 +24,15 @@ async function main() {
     const fresh = await freshClient.listTools();
     await freshClient.close();
     const retry = Number(process.argv[3]);
-    if (retry === 300000) {
-      await pause(4200); // Past the old default retry, without a five-minute unit test.
-      if (errors.length !== 2) throw new Error('Default backoff was not honored');
+    if (retry >= 300000) {
+      await pause(4200); // Past the old default retry, without a long wall-clock unit test.
+      if (errors.length !== 2) throw new Error('Long backoff was not honored');
     } else {
       await waitErrors(3);
       if (errors[2] - errors[1] < retry) throw new Error('Retry happened too early');
     }
     await oldClient.close();
-    if (retry !== 300000) await pause(retry + 500); // Closing cancels the next retry.
+    if (retry < 300000) await pause(retry + 500); // Closing cancels the next retry.
     process.stdout.write(JSON.stringify({
       fresh_tools_ok: Array.isArray(fresh.tools),
       expiry_count: errors.length,

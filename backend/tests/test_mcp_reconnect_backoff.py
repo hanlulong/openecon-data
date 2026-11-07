@@ -128,7 +128,7 @@ def test_settings_reject_invalid_initialization_retry(value):
         Settings(_env_file=None, JWT_SECRET="isolated", MCP_INITIALIZE_RETRY_MILLISECONDS=value)
 
 
-@pytest.mark.parametrize("value", [1000, 60000, 3600000])
+@pytest.mark.parametrize("value", [1000, 60000, 900000, 3600000])
 def test_retry_setting_from_environment_reaches_sse(monkeypatch, value):
     monkeypatch.setenv("MCP_INITIALIZE_RETRY_MILLISECONDS", str(value))
     settings = Settings(_env_file=None, JWT_SECRET="isolated")
