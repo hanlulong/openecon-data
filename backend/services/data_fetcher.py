@@ -644,6 +644,36 @@ def _fred_requested_country_scope(provider_request: dict[str, Any], params: dict
     return scope
 
 
+def _raise_if_scope_outside_provider_coverage(
+    provider: str,
+    provider_request: dict[str, Any],
+    params: dict[str, Any],
+) -> None:
+    """Fail closed when the requested countries are outside a provider's coverage.
+
+    Structural: the shared coverage predicate evaluated on requested ISO
+    codes.  Serving a provider's own-country series for a different
+    requested country is wrong data — worse than an honest no-data that lets
+    the fallback/disclosure path run.  Parser-noise tokens in the country
+    slot (not a known country) are ignored, as in the FRED scope guard.
+    """
+    from .provider_fallback import provider_covers_country_list
+
+    requested = [
+        iso2
+        for iso2 in (
+            _normalize_known_country_to_iso2(country)
+            for country in _fred_requested_country_scope(provider_request, params)
+        )
+        if iso2
+    ]
+    if requested and not provider_covers_country_list(provider, requested):
+        raise DataNotAvailableError(
+            f"{provider} does not cover the requested geography {requested}; "
+            "its series are scoped to a different country."
+        )
+
+
 def _fred_exact_title_targets_country(
     params: dict[str, Any],
     intent: Optional[ParsedIntent],
@@ -1948,6 +1978,13 @@ async def fetch_from_provider_dispatch(
         return await fetch_from_coingecko(svc.coingecko_provider, intent, params, execution_plan)
 
     if provider in {"CHINAMACRO", "CHINA MACRO"}:
+        # Every ChinaMacro series is China-scoped and the fetch ignores
+        # country, so a request for another geography must fail closed here
+        # (the explicit-provider route bypasses the router's coverage
+        # override; see QueryService._select_routed_provider).
+        _raise_if_scope_outside_provider_coverage(
+            provider, dict(execution_plan.provider_request or {}), params
+        )
         # Params-first indicator precedence (staleness-class convention): the
         # post-resolution pick beats any pre-resolution snapshot.
         indicator = str(
