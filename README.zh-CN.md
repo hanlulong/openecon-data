@@ -298,6 +298,8 @@ curl -X POST https://data.openecon.ai/api/query \
 | **CoinGecko** | 加密货币价格与市场数据 | 10,000+ 币种 | 免费 |
 | **ChinaMacro** | 最新中国宏观数据（PMI、M2、社融、CPI/PPI、10年期国债收益率） | 23 个精选序列 | 无需 |
 
+This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.（本产品使用 FRED® API，但未获圣路易斯联邦储备银行认可或认证。）详见 [FRED® API 使用条款](https://fred.stlouisfed.org/docs/api/terms_of_use.html)。
+
 ## 适合谁用
 
 | 角色 | 使用方式 |

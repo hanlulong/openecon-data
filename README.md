@@ -299,6 +299,8 @@ See the [API Reference](docs/reference/api.md) for the full endpoint list and re
 | **CoinGecko** | Cryptocurrency prices and market data | 10,000+ coins | Free |
 | **ChinaMacro** | Fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield) | 23 curated series | None |
 
+This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis. See the [FRED® API Terms of Use](https://fred.stlouisfed.org/docs/api/terms_of_use.html).
+
 ## Who Is This For?
 
 | Role | How they use it |

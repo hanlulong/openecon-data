@@ -31,6 +31,8 @@ OpenEcon.ai routes each query to the right authoritative provider automatically,
 - CoinGecko — cryptocurrency prices and market data
 - ChinaMacro — fresh Chinese headline macro (PMI, M2, social financing, CPI/PPI, 10Y yield)
 
+This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis. FRED® API Terms of Use: https://fred.stlouisfed.org/docs/api/terms_of_use.html
+
 ## Part of OpenEcon.ai
 
 OpenEcon.ai is an open-source toolkit for economics research. All projects live at [github.com/hanlulong](https://github.com/hanlulong).
