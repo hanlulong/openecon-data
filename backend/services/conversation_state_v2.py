@@ -596,6 +596,10 @@ class FollowUpDelta(BaseModel):
     # classifier LLM call. Values: parameter_delta, pro_mode, new_query,
     # clarification_answer, informational.
     query_type: Optional[str] = None
+    # For query_type="informational": the LLM's choice of text answer
+    # (indicator_search, data_sources, indicator_count, definition), carried
+    # into the informational handler's intent. Normalized by ParsedIntent.
+    informational_subtype: Optional[str] = None
 
     # --- Telemetry / escalation (Phase 2.6 schema bump) ---
     # Populated by the LLM extractor; consumed in Phase 2.7 (Tier-3 escape

@@ -91,6 +91,10 @@ class NormalizedData(BaseModel):
 
 # Contract enum for ParsedIntent.queryType (see SimplifiedPrompt output schema).
 _QUERY_TYPES = frozenset({"data_fetch", "informational", "analysis", "comparison"})
+# Contract enum for ParsedIntent.informationalSubtype (which text answer an
+# informational ask gets). Chosen by the LLM; absent means the handler's
+# structural default.
+_INFORMATIONAL_SUBTYPES = frozenset({"indicator_search", "data_sources", "indicator_count", "definition"})
 
 
 class ParsedIntent(BaseModel):
@@ -108,6 +112,10 @@ class ParsedIntent(BaseModel):
     # analysis: complex analysis requiring Pro Mode
     # comparison: structured comparisons across entities
     queryType: Optional[str] = "data_fetch"
+    # For queryType="informational": which text answer fits — indicator_search,
+    # data_sources, indicator_count, or definition. Set by the parse LLM in the
+    # same call; None means the handler's structural default.
+    informationalSubtype: Optional[str] = None
 
     # Original query text for downstream processing (e.g., time period extraction)
     originalQuery: Optional[str] = None
@@ -147,6 +155,14 @@ class ParsedIntent(BaseModel):
         # data path. No keyword guess ever substitutes for the label.
         normalized = str(v or "").strip().lower()
         return normalized if normalized in _QUERY_TYPES else "data_fetch"
+
+    @field_validator('informationalSubtype', mode='before')
+    @classmethod
+    def normalize_informational_subtype(cls, v):
+        # Structural: tolerate case/whitespace; an off-contract value becomes
+        # None (the handler's default) instead of failing the whole parse.
+        normalized = str(v or "").strip().lower()
+        return normalized if normalized in _INFORMATIONAL_SUBTYPES else None
 
     @field_validator('recommendedChartType', mode='before')
     @classmethod

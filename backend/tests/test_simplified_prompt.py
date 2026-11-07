@@ -29,6 +29,12 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # 317 -> 322 (2026-11-07) for the explicit seriesId slot rule (user-named
     # codes were parsed then ignored/described) + the CoinGecko `metric` enum
     # (raw-text measure rules served market caps for "prices not market caps").
+    # The informational-LLM-authority cluster (same day) added the
+    # informationalSubtype output field + the data_fetch boundary sentence (a
+    # keyword rule that overrode the parsed queryType and picked the
+    # informational sub-type was deleted; both decisions are now the parse's)
+    # WITHOUT raising this limit: its lines were offset by compressing
+    # existing prompt text at integration.
     assert len(prompt.splitlines()) < 322
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
@@ -87,7 +93,9 @@ def test_simplified_prompt_with_conversation_context() -> None:
     # correctness-based refinement (user 07-19: the test is answer
     # correctness, not the provider — FRED stays valid for historical China
     # windows and explicit requests); to 405 for the seriesId-verbatim rule +
-    # CoinGecko `metric` enum (2026-11-07 user-reported defects))
+    # CoinGecko `metric` enum (2026-11-07 user-reported defects); the
+    # informationalSubtype field + data_fetch boundary sentence of the same day
+    # fit under it by compression, not a further bump)
     assert len(prompt.splitlines()) < 405
 
 

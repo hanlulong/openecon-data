@@ -1832,67 +1832,8 @@ def build_multi_concept_query_clarification(
 # Informational / Metadata Query Handling
 # ====================================================================
 
-def _classify_informational_subtype(query: str) -> str:
-    """Classify an informational query into a sub-type for dispatch.
-
-    Returns one of:
-      - "data_sources"       : questions about available providers / data sources
-      - "indicator_count"    : questions about how many indicators / series exist
-      - "definition"         : "what is X?" style definitional / explanatory questions
-      - "indicator_search"   : questions about what indicators exist for a topic
-    """
-    q = query.lower().strip()
-    words = set(q.split())
-
-    # ── data sources / providers ───────────────────────────────────
-    source_keywords = {"sources", "providers", "databases", "APIs"}
-    # Also match phrases like "where do you get data" or "what databases"
-    source_phrases = [
-        "data source", "data provider", "where do you get",
-        "where does the data come from", "what databases",
-        "which providers", "which sources", "what apis",
-        "what services", "supported providers", "supported sources",
-    ]
-    if (words & {w.lower() for w in source_keywords}) or any(p in q for p in source_phrases):
-        # Ensure it's asking ABOUT sources, not asking for data FROM a source
-        fetch_signals = {"for", "in", "from", "last", "since", "between", "rate", "growth"}
-        # If query is short or doesn't have fetch signals alongside a specific topic
-        non_meta_words = words - {"what", "which", "do", "you", "have", "are",
-                                   "the", "your", "data", "sources", "providers",
-                                   "available", "databases", "list", "show", "me",
-                                   "all", "supported", "can", "access", "offer",
-                                   "does", "cover", "services", "apis", "a"}
-        if len(non_meta_words) <= 2:
-            return "data_sources"
-
-    # ── indicator / series count ───────────────────────────────────
-    count_phrases = [
-        "how many indicators", "how many series", "how many datasets",
-        "how many variables", "how many metrics", "total indicators",
-        "total number of", "indicator count", "number of indicators",
-        "number of series",
-    ]
-    if any(p in q for p in count_phrases):
-        return "indicator_count"
-
-    # ── definitions: "what is X?" style ────────────────────────────
-    # Matches "what is GDP?", "what does CPI measure?", "define inflation",
-    # "explain monetary policy", "tell me about purchasing power parity"
-    definition_patterns = [
-        r"^what\s+(?:is|are|does)\s+(?:the\s+)?(?!.*\bindicat)",  # "what is GDP" but not "what indicators..."
-        r"^(?:define|explain|describe|tell\s+me\s+about)\s+",
-        r"^what\s+do\s+you\s+(?:mean|know)\s+(?:by|about)\s+",
-        r"^how\s+(?:is|are)\s+\w+\s+(?:calculated|measured|defined)",
-    ]
-    # Only classify as definition if NOT also asking about indicators/series
-    indicator_words = {"indicators", "indicator", "series", "datasets", "metrics", "variables"}
-    if not (words & indicator_words):
-        for pat in definition_patterns:
-            if re.search(pat, q):
-                return "definition"
-
-    # ── fallback: indicator search ─────────────────────────────────
-    return "indicator_search"
+# Structural default when the parse did not choose an informational sub-type.
+_DEFAULT_INFORMATIONAL_SUBTYPE = "indicator_search"
 
 
 def _handle_data_sources_query(
@@ -2082,14 +2023,21 @@ def handle_informational_intent(
 ) -> Optional[QueryResponse]:
     """Handle informational queries classified by the LLM (queryType=informational).
 
-    Dispatches to sub-type handlers based on query classification:
+    Dispatches on the LLM-chosen ``intent.informationalSubtype``:
       - data_sources   → static provider list
       - indicator_count → database count query
       - definition     → LLM-generated explanation
       - indicator_search → indicator database search (original behavior)
+
+    When the sub-type is absent the structural default is indicator_search.
+    Once the LLM labelled the ask informational, this always answers with
+    text (never ``None``), so the caller cannot fall through to fetching.
     """
-    subtype = _classify_informational_subtype(query)
-    logger.info("Informational sub-type: %s for query: %s", subtype, query[:60])
+    subtype = intent.informationalSubtype or _DEFAULT_INFORMATIONAL_SUBTYPE
+    logger.info(
+        "Informational sub-type: %s (llm=%s) for query: %s",
+        subtype, intent.informationalSubtype, query[:60],
+    )
 
     # ── data sources ───────────────────────────────────────────────
     if subtype == "data_sources":
@@ -2138,7 +2086,9 @@ def handle_informational_intent(
         provider = _extract_provider_from_query(query)
 
     if not search_terms and not provider:
-        return None
+        # Nothing to search on: answer with the overview of what is available
+        # rather than returning None (which would route to a data fetch).
+        return _handle_data_sources_query(query, conversation_id, tracker)
 
     from .indicator_database import IndicatorLookup
     lookup = IndicatorLookup()
@@ -2184,9 +2134,23 @@ class _DefinitionSentinel:
         self.conversation_id = conversation_id
         self.tracker = tracker
 
-    async def resolve(self) -> Optional[QueryResponse]:
-        return await _handle_definition_query(
+    async def resolve(self) -> QueryResponse:
+        response = await _handle_definition_query(
             self.qs, self.query, self.conversation_id, self.tracker,
+        )
+        if response is not None:
+            return response
+        # Explanation LLM unavailable or empty: say so honestly instead of
+        # returning None (which would route an informational ask to a fetch).
+        return QueryResponse(
+            conversationId=self.conversation_id,
+            clarificationNeeded=False,
+            message=(
+                "I couldn't generate an explanation for that right now. "
+                "To see actual data, try asking something like: "
+                "*\"Show me [indicator] for [country]\"*"
+            ),
+            processingSteps=self.tracker.to_list() if self.tracker else None,
         )
 
 

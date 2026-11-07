@@ -336,3 +336,116 @@ def test_query_type_normalizer_keeps_contract_values() -> None:
         (None, "data_fetch"),
     ]:
         assert ParsedIntent(**base, queryType=value).queryType == expected
+
+
+# ── (d) the informational SUB-TYPE is the LLM's choice, not a keyword rule ─
+
+def _info_turn(service: QueryService, query: str, subtype: Optional[str], **overrides: Any) -> _Run:
+    fields: Dict[str, Any] = {
+        "queryType": "informational",
+        "informationalSubtype": subtype,
+        "indicators": ["housing"],
+        "apiProvider": "FRED",
+    }
+    fields.update(overrides)
+    return _process(service, query, _intent(query, **fields), real_informational_handler=True)
+
+
+def test_llm_data_sources_subtype_serves_provider_overview(service: QueryService) -> None:
+    result = _info_turn(service, "where does your economic data come from", "data_sources",
+                        indicators=["data sources"], apiProvider="WorldBank")
+
+    assert result.reached_informational and not result.reached_fetch
+    assert result.response.message.startswith("I have access to")
+
+
+def test_llm_indicator_count_subtype_serves_count(service: QueryService) -> None:
+    # Chinese count question: the keyword classifier only knew English phrases.
+    result = _info_turn(service, "数据库里一共有多少个指标", "indicator_count",
+                        indicators=["indicators"], apiProvider="WorldBank")
+
+    assert not result.reached_fetch
+    assert "indicator database contains" in result.response.message
+
+
+def test_llm_definition_subtype_uses_explanation_llm(service: QueryService) -> None:
+    # A method question the keyword classifier sent to indicator_search
+    # ("Found N indicators matching ...").
+    query = "explain the difference between comparative statics and dynamics"
+    generate = AsyncMock(return_value={
+        "choices": [{"message": {"content": "Comparative statics compares equilibria."}}],
+    })
+    with patch.object(service.openrouter.llm_provider, "generate", generate):
+        result = _info_turn(service, query, "definition", indicators=["comparative statics"],
+                            apiProvider="WorldBank")
+
+    assert generate.await_count == 1
+    assert not result.reached_fetch
+    assert result.response.message.startswith("Comparative statics compares equilibria.")
+
+
+def test_definition_without_explanation_llm_answers_honestly_not_fetch(service: QueryService) -> None:
+    with patch.object(service.openrouter, "llm_provider", None):
+        result = _info_turn(service, "what does purchasing power parity mean", "definition",
+                            indicators=["purchasing power parity"], apiProvider="WorldBank")
+
+    assert not result.reached_fetch
+    assert result.response.message.startswith("I couldn't generate an explanation")
+
+
+@pytest.mark.parametrize("subtype", [None, "catalog_lookup"])
+def test_absent_or_invalid_subtype_uses_structural_indicator_search_default(
+    service: QueryService, subtype: Optional[str],
+) -> None:
+    result = _info_turn(service, "what housing indicators does FRED have", subtype)
+
+    assert result.info.calls[0]["intent"].informationalSubtype is None
+    assert not result.reached_fetch
+    message = result.response.message
+    assert message.startswith("Found") or message.startswith("I couldn't find indicators")
+
+
+def test_informational_label_with_nothing_to_search_never_falls_through_to_fetch(
+    service: QueryService,
+) -> None:
+    # Placeholder-only intent, no provider, and a query with no searchable
+    # terms: the handler used to return None, routing the ask to a fetch.
+    result = _info_turn(service, "what do you have", None,
+                        indicators=["INFORMATIONAL"], apiProvider="NONE")
+
+    assert not result.reached_fetch
+    assert result.response.message.startswith("I have access to")
+
+
+def test_follow_up_informational_label_carries_llm_subtype(service: QueryService) -> None:
+    """Tier-2 (delta classifier LLM) dispatch: its sub-type reaches the
+    handler; the main parse is not called and nothing is fetched."""
+    conv_id = conversation_manager.get_or_create("conv-info-authority-subtype")
+    prior = _intent("US GDP")
+    conversation_manager.add_message_safe(conv_id, "user", "US GDP", intent=prior)
+    conversation_manager.set_conversation_state(
+        conv_id, ConversationState(indicator="GDP", country="US", provider="FRED"),
+    )
+    delta = FollowUpDelta(query_type="informational", informational_subtype="data_sources")
+    with patch.object(DeltaExtractor, "extract", return_value=None), \
+         patch.object(DeltaExtractor, "extract_with_llm", new_callable=AsyncMock, return_value=delta):
+        result = _process(service, "and which sources do you pull from?", _intent("unused"),
+                          conversation_id=conv_id, real_informational_handler=True)
+
+    assert result.parse.await_count == 0
+    assert not result.reached_fetch
+    assert result.info.calls[0]["intent"].informationalSubtype == "data_sources"
+    assert result.response.message.startswith("I have access to")
+
+
+def test_informational_subtype_normalizer() -> None:
+    base = {"apiProvider": "FRED", "indicators": ["GDP"], "clarificationNeeded": False}
+    for value, expected in [
+        ("indicator_search", "indicator_search"),
+        (" Data_Sources ", "data_sources"),
+        ("INDICATOR_COUNT", "indicator_count"),
+        ("definition", "definition"),
+        ("concept", None),
+        (None, None),
+    ]:
+        assert ParsedIntent(**base, informationalSubtype=value).informationalSubtype == expected

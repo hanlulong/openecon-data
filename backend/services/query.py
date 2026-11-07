@@ -5184,6 +5184,7 @@ class QueryService:
                     _current_conv_state.last_indicators_resolved = None
             _query_type = None
             _delta = None
+            _informational_subtype = None
             _llm_new_query = False
             if _current_conv_state is not None:
                 _delta_extractor = DeltaExtractor(self)
@@ -5199,6 +5200,7 @@ class QueryService:
                         )
                         if _delta is not None:
                             _query_type = _delta.query_type or "parameter_delta"
+                            _informational_subtype = _delta.informational_subtype
                             logger.info("LLM classified+extracted: type=%s, delta_type=%s for: %s",
                                         _query_type, _delta.delta_type, query[:50])
                             # Non-delta types: clear delta, dispatch to correct handler
@@ -5229,11 +5231,15 @@ class QueryService:
             # ── Dispatch: Informational ─────────────────────────────────
             if _query_type == "informational":
                 logger.info("📖 Dispatching informational handler for: %s", query[:50])
-                # Build a minimal intent so the handler can operate without
-                # waiting for the full LLM parse (saves ~2-4s on first turn).
+                # The combined delta classifier (an LLM call) labelled this
+                # follow-up informational and chose the sub-type; build a
+                # minimal intent so the handler answers without a second
+                # (full) parse. Search terms come from the handler's
+                # structural fallback because this intent has placeholders.
                 _info_intent = ParsedIntent(
                     originalQuery=query,
                     queryType="informational",
+                    informationalSubtype=_informational_subtype,
                     apiProvider="NONE",
                     indicators=["INFORMATIONAL"],
                     clarificationNeeded=False,
@@ -5256,7 +5262,8 @@ class QueryService:
                         conv_id, "assistant", _info_response.message or "",
                     )
                     return _info_response
-                # If handler returned None, fall through to LLM parse
+                # Defensive: the handler always answers an informational label
+                # with text; a None would fall through to the LLM parse.
 
             # ── Dispatch: Parameter Delta ───────────────────────────────
             if _delta is not None:
