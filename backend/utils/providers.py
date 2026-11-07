@@ -68,9 +68,10 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="OECD",
         display_name="OECD",
         description="Cross-country economic data for OECD member nations",
-        normalize_aliases=("oecd",),
+        normalize_aliases=("oecd", "经合组织", "经济合作与发展组织"),
         bare_aliases=("oecd data",),
-        directive_aliases=("oecd",),
+        # 经合组织国家 = "OECD countries" (geography): directive-only.
+        directive_aliases=("oecd", "经合组织", "经济合作与发展组织"),
         start_of_query=True,
     ),
     ProviderSpec(
@@ -80,10 +81,13 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         description="US economic data — 800K+ time series from the Federal Reserve Bank of St. Louis",
         normalize_aliases=(
             "fred", "fred (federal reserve)", "federal reserve",
-            "st. louis fed", "stlouisfed",
+            "st. louis fed", "stlouisfed", "美联储", "圣路易斯联储",
         ),
         bare_aliases=("fred", "federal reserve", "st. louis fed", "stlouisfed"),
-        directive_aliases=("fred", "federal reserve", "st. louis fed", "stlouisfed"),
+        # 美联储 ("the Fed") is also a policy topic: directive-only.
+        directive_aliases=(
+            "fred", "federal reserve", "st. louis fed", "stlouisfed", "美联储", "圣路易斯联储",
+        ),
         progress_label="Federal Reserve",
     ),
     ProviderSpec(
@@ -91,9 +95,9 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="WorldBank",
         display_name="World Bank",
         description="Global development indicators — 16,000+ series covering 200+ countries",
-        normalize_aliases=("world bank", "worldbank", "wb"),
-        bare_aliases=("world bank", "worldbank", "wb data", "world bank data"),
-        directive_aliases=("world bank", "worldbank"),
+        normalize_aliases=("world bank", "worldbank", "wb", "世界银行"),
+        bare_aliases=("world bank", "worldbank", "wb data", "world bank data", "世界银行"),
+        directive_aliases=("world bank", "worldbank", "世界银行"),
     ),
     ProviderSpec(
         canonical="COMTRADE",
@@ -102,10 +106,14 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         description="International trade data — bilateral import/export flows by commodity",
         normalize_aliases=(
             "un comtrade", "un_comtrade", "uncomtrade", "comtrade", "un",
-            "united nations comtrade",
+            "united nations comtrade", "联合国商品贸易统计数据库",
         ),
-        bare_aliases=("comtrade", "un comtrade", "united nations comtrade"),
-        directive_aliases=("comtrade", "un comtrade", "united nations comtrade"),
+        bare_aliases=(
+            "comtrade", "un comtrade", "united nations comtrade", "联合国商品贸易统计数据库",
+        ),
+        directive_aliases=(
+            "comtrade", "un comtrade", "united nations comtrade", "联合国商品贸易统计数据库",
+        ),
     ),
     ProviderSpec(
         canonical="STATSCAN",
@@ -114,18 +122,21 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         description="Canadian economic and social data — 40,000+ tables",
         normalize_aliases=(
             "statistics canada", "statisticscanada", "stats canada", "statcan", "statscan",
+            "加拿大统计局",
         ),
-        bare_aliases=("statscan", "statistics canada", "stats canada"),
-        directive_aliases=("statscan", "statistics canada", "stats canada", "statcan"),
+        bare_aliases=("statscan", "statistics canada", "stats canada", "加拿大统计局"),
+        directive_aliases=(
+            "statscan", "statistics canada", "stats canada", "statcan", "加拿大统计局",
+        ),
     ),
     ProviderSpec(
         canonical="IMF",
         name="IMF",
         display_name="IMF",
         description="International financial data — balance of payments, exchange rates, fiscal indicators",
-        normalize_aliases=("imf", "international monetary fund", "the imf"),
-        bare_aliases=("international monetary fund", "imf data"),
-        directive_aliases=("imf", "the imf", "international monetary fund"),
+        normalize_aliases=("imf", "international monetary fund", "the imf", "国际货币基金组织"),
+        bare_aliases=("international monetary fund", "imf data", "国际货币基金组织"),
+        directive_aliases=("imf", "the imf", "international monetary fund", "国际货币基金组织"),
         start_of_query=True,
     ),
     ProviderSpec(
@@ -136,9 +147,9 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
             "Central bank statistics — credit, debt securities, property prices "
             "from the Bank for International Settlements"
         ),
-        normalize_aliases=("bis", "bank for international settlements"),
-        bare_aliases=("bank for international settlements", "bis data"),
-        directive_aliases=("bis", "bank for international settlements"),
+        normalize_aliases=("bis", "bank for international settlements", "国际清算银行"),
+        bare_aliases=("bank for international settlements", "bis data", "国际清算银行"),
+        directive_aliases=("bis", "bank for international settlements", "国际清算银行"),
         start_of_query=True,
         progress_label="Bank for International Settlements",
     ),
@@ -147,9 +158,9 @@ PROVIDER_SPECS: Tuple[ProviderSpec, ...] = (
         name="Eurostat",
         display_name="Eurostat",
         description="European Union statistics — demographics, trade, economy across EU members",
-        normalize_aliases=("eurostat",),
-        bare_aliases=("eurostat data",),
-        directive_aliases=("eurostat",),
+        normalize_aliases=("eurostat", "欧盟统计局"),
+        bare_aliases=("eurostat data", "欧盟统计局"),
+        directive_aliases=("eurostat", "欧盟统计局"),
         start_of_query=True,
     ),
     ProviderSpec(

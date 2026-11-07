@@ -89,9 +89,14 @@ _LEGACY_TOPIC_CUES: Dict[str, Tuple[str, ...]] = {
 }
 
 # Source-directive grammar.  An optional article ("from the BIS") is
-# structural, not an alias.
+# structural, not an alias.  Chinese source markers are the same syntactic
+# class as from/using (来自 "from", 使用/用 "using", 根据/依据/据 "according
+# to", 从 "from", 数据来源/来源 "data source:"); a marker alone never matches —
+# a registered alias must follow directly.  (?<!数) keeps 数据 ("data") from
+# reading as the 据 marker.
 _DIRECTIVE_PREFIX = (
-    r"(?<![a-z0-9_-])(?:from|using|use|via|according\s+to)\s+(?:the\s+)?"
+    r"(?:(?<![a-z0-9_-])(?:from|using|use|via|according\s+to)\s+(?:the\s+)?"
+    r"|(?:来自于?|来源于?\s*[:：]?|数据来源\s*[:：]?|使用|根据|依据|(?<!数)据|从|用)\s*)"
 )
 
 _START_OF_QUERY_PROVIDERS = [spec.name for spec in PROVIDER_SPECS if spec.start_of_query]

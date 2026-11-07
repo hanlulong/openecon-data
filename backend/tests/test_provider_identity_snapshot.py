@@ -173,8 +173,24 @@ _INTENDED_DETECTION_CHANGES: dict = {
     'chinamacro PMI': ('ChinaMacro', 'chinamacro'),
     'ChinaMacro China PMI': ('ChinaMacro', 'chinamacro'),
     'China PMI (ChinaMacro)': ('ChinaMacro', 'chinamacro'),
-    '中国PMI 来自ChinaMacro': ('ChinaMacro', 'chinamacro'),
-    '从chinamacro获取中国PMI': ('ChinaMacro', 'chinamacro'),
+    '中国PMI 来自ChinaMacro': ('ChinaMacro', '来自chinamacro'),
+    '从chinamacro获取中国PMI': ('ChinaMacro', '从chinamacro'),
+    # Chinese source markers are directive syntax; official Chinese names
+    # are identity (经合组织 / 美联储 directive-only).
+    '中国GDP 来自IMF': ('IMF', '来自imf'),
+    '中国GDP 使用IMF数据': ('IMF', '使用imf'),
+    '德国通胀 来自Eurostat': ('Eurostat', '来自eurostat'),
+    '中国信贷缺口 来自BIS': ('BIS', '来自bis'),
+    '加拿大CPI 来自statcan': ('StatsCan', '来自statcan'),
+    '用世界银行数据 中国GDP': ('WorldBank', '用世界银行'),
+    '国际货币基金组织 中国GDP': ('IMF', '国际货币基金组织'),
+    '中国GDP 世界银行': ('WorldBank', '世界银行'),
+    '美国GDP 来自FRED': ('FRED', '来自fred'),  # was bare 'fred'; same provider
+    '据IMF统计中国GDP': ('IMF', '据imf'),
+    '根据国际清算银行 中国信贷': ('BIS', '根据国际清算银行'),
+    '数据来源：欧盟统计局 德国通胀': ('Eurostat', '数据来源：欧盟统计局'),
+    '加拿大CPI 来自加拿大统计局': ('StatsCan', '来自加拿大统计局'),
+    '中国GDP 来自经合组织': ('OECD', '来自经合组织'),
     # Directive aliases normalize_provider_name already knew.
     'Canada CPI from statcan': ('StatsCan', 'from statcan'),
     'Canada CPI using statcan': ('StatsCan', 'using statcan'),
