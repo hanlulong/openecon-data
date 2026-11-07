@@ -11099,11 +11099,14 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(simple_mock.call_args.kwargs.get("vs_currency"), "usd")
         self.assertFalse(range_mock.called)
 
-    def test_fetch_data_coingecko_uses_query_text_for_coin_and_metric_when_indicator_is_dynamic(self) -> None:
+    def test_fetch_data_coingecko_uses_query_text_for_coin_and_enum_for_metric_when_indicator_is_dynamic(self) -> None:
+        # The MEASURE comes from the parse's structured ``metric`` enum, never
+        # from raw query text (a raw-text substring rule served market caps for
+        # "prices not market caps"); the coin still falls back to query text.
         intent = ParsedIntent(
             apiProvider="CoinGecko",
             indicators=["dynamic"],
-            parameters={},
+            parameters={"metric": "volume"},
             clarificationNeeded=False,
             originalQuery="solana trading volume over the last 90 days",
         )
