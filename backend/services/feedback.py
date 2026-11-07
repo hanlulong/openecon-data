@@ -18,6 +18,7 @@ Supports two email methods:
 
 import asyncio
 import fcntl
+import html
 import json
 import logging
 import os
@@ -29,9 +30,9 @@ from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
-from ..models import FeedbackRequest, FeedbackResponse
+from ..models import FeedbackRequest, FeedbackResponse, User
 
 logger = logging.getLogger("openecon.feedback")
 
@@ -46,6 +47,12 @@ FEEDBACK_DIR = Path(__file__).parent.parent / "data" / "feedback"
 FEEDBACK_STORE_NAME = "feedback.jsonl"     # append-only, one JSON record per line
 LEGACY_STORE_NAME = "feedback.json"        # pre-JSONL whole-file list (migrated once)
 _LOCK_NAME = ".feedback.lock"              # flock target shared by all workers
+
+# Identity provenance. /api/feedback accepts anonymous submissions, so any
+# userId/userName in the request body is a client CLAIM. Only the bearer-token
+# user is verified; claims are stored and rendered under distinct keys/labels
+# so nothing downstream can mistake them for an authenticated identity.
+CLAIMED_LABEL = "claimed (unverified, client-supplied)"
 
 # Email configuration (read from environment)
 FEEDBACK_EMAIL_TO = os.getenv("FEEDBACK_EMAIL_TO", "hanlulong@gmail.com")
@@ -210,7 +217,9 @@ class FeedbackService:
         with self._locked(fcntl.LOCK_SH):
             return self._read_records_unlocked()
 
-    def submit_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
+    def submit_feedback(
+        self, request: FeedbackRequest, user: Optional[User] = None
+    ) -> FeedbackResponse:
         """
         Submit user feedback (synchronous, blocking — kept for test parity).
 
@@ -220,11 +229,13 @@ class FeedbackService:
 
         Args:
             request: The feedback request containing type, message, and optional session info
+            user: The bearer-token-authenticated user, if any (the ONLY
+                source of verified identity)
 
         Returns:
             FeedbackResponse with success status and feedback ID
         """
-        feedback_id, feedback_entry = self._record_feedback(request)
+        feedback_id, feedback_entry = self._record_feedback(request, user)
         # Try to send email notification (blocking — sync entry point only)
         email_sent = self._send_email_notification(feedback_entry)
         if email_sent:
@@ -237,7 +248,9 @@ class FeedbackService:
             feedbackId=feedback_id,
         )
 
-    async def submit_feedback_async(self, request: FeedbackRequest) -> FeedbackResponse:
+    async def submit_feedback_async(
+        self, request: FeedbackRequest, user: Optional[User] = None
+    ) -> FeedbackResponse:
         """
         Async entry point for FastAPI handlers.
 
@@ -253,7 +266,9 @@ class FeedbackService:
         latency is bounded by the (already-fast) file save, and the email
         delivery is best-effort in the background.
         """
-        feedback_id, feedback_entry = await asyncio.to_thread(self._record_feedback, request)
+        feedback_id, feedback_entry = await asyncio.to_thread(
+            self._record_feedback, request, user
+        )
         # Fire-and-forget: schedule the blocking email send on a thread.
         # Wrapping in asyncio.create_task means we return to the caller
         # immediately; the task is tracked so it can be reaped/observed.
@@ -273,7 +288,35 @@ class FeedbackService:
             feedbackId=feedback_id,
         )
 
-    def _record_feedback(self, request: FeedbackRequest) -> tuple[str, dict]:
+    @staticmethod
+    def _identity_fields(request: FeedbackRequest, user: Optional[User]) -> dict:
+        """Identity provenance for one record.
+
+        ``userId``/``userName`` are set ONLY from the authenticated user.
+        When a verified user exists the client-claimed identity is dropped;
+        otherwise the claims are kept under ``claimedUserId``/``claimedUserName``.
+        """
+        if user is not None:
+            return {
+                "identityVerified": True,
+                "userId": user.id,
+                "userName": user.name,
+                "verifiedEmail": user.email,
+                "claimedUserId": None,
+                "claimedUserName": None,
+            }
+        return {
+            "identityVerified": False,
+            "userId": None,
+            "userName": None,
+            "verifiedEmail": None,
+            "claimedUserId": request.userId,
+            "claimedUserName": request.userName,
+        }
+
+    def _record_feedback(
+        self, request: FeedbackRequest, user: Optional[User] = None
+    ) -> tuple[str, dict]:
         """Build, persist, and return the canonical feedback record.
 
         Extracted from submit_feedback so both the sync entry point and
@@ -287,8 +330,7 @@ class FeedbackService:
             "type": request.type,
             "message": request.message,
             "email": request.email,
-            "userId": request.userId,
-            "userName": request.userName,
+            **self._identity_fields(request, user),
             "timestamp": timestamp,
             "sessionInfo": request.sessionInfo.model_dump() if request.sessionInfo else None,
             "conversation": request.conversation.model_dump() if request.conversation else None,
@@ -404,12 +446,8 @@ class FeedbackService:
             f"",
         ]
 
-        if feedback.get("userName"):
-            lines.append(f"User: {feedback['userName']}")
-        if feedback.get("email"):
-            lines.append(f"Email: {feedback['email']}")
-        if feedback.get("userId"):
-            lines.append(f"User ID: {feedback['userId']}")
+        for label, value in self._identity_rows(feedback):
+            lines.append(f"{label}: {value}")
 
         lines.append("")
         lines.append("Message:")
@@ -441,16 +479,64 @@ class FeedbackService:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _identity_rows(feedback: dict) -> list:
+        """(label, value) rows for identity + contact, provenance-labelled."""
+        rows = []
+        if feedback.get("identityVerified"):
+            if feedback.get("userName"):
+                rows.append(("User (verified)", feedback["userName"]))
+            if feedback.get("userId"):
+                rows.append(("User ID (verified)", feedback["userId"]))
+            if feedback.get("verifiedEmail"):
+                rows.append(("Account email (verified)", feedback["verifiedEmail"]))
+        else:
+            if feedback.get("claimedUserName"):
+                rows.append((f"User, {CLAIMED_LABEL}", feedback["claimedUserName"]))
+            if feedback.get("claimedUserId"):
+                rows.append((f"User ID, {CLAIMED_LABEL}", feedback["claimedUserId"]))
+        if feedback.get("email"):
+            rows.append(("Contact email", feedback["email"]))
+        return rows
+
+    @staticmethod
+    def _h(value: Any) -> str:
+        """The ONLY way a value enters the HTML body: html.escape everything
+        (quote=True, so attribute contexts are safe too). None renders as ''."""
+        return html.escape("" if value is None else str(value), quote=True)
+
     def _format_feedback_html(self, feedback: dict) -> str:
-        """Format feedback as HTML for email."""
+        """Format feedback as HTML for email.
+
+        Escape-by-default: every interpolated value passes through ``_h`` —
+        including fields that are "trusted" today (id, timestamp, type) — so a
+        new field can never be added unescaped by omission.
+        """
+        h = self._h
         feedback_type_colors = {
             "bug": "#dc2626",
             "feature": "#10b981",
             "other": "#6b7280",
         }
-        type_color = feedback_type_colors.get(feedback["type"], "#6b7280")
+        type_color = feedback_type_colors.get(feedback.get("type"), "#6b7280")
 
-        html = f"""
+        def info_row(label: str, value: Any, style: str = "", href: Optional[str] = None) -> str:
+            style_attr = f' style="{h(style)}"' if style else ""
+            inner = f'<a href="{h(href)}">{h(value)}</a>' if href else h(value)
+            return (
+                f'<span class="info-label">{h(label)}:</span>'
+                f'<span class="info-value"{style_attr}>{inner}</span>'
+            )
+
+        details = [info_row("Feedback ID", feedback.get("id"))]
+        for label, value in self._identity_rows(feedback):
+            href = None
+            if label == "Contact email":
+                href = self._contact_mailto(feedback)
+            style = "font-family: monospace;" if "User ID" in label else ""
+            details.append(info_row(label, value, style=style, href=href))
+
+        body = f"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -459,7 +545,7 @@ class FeedbackService:
                 .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
                 .header {{ background: linear-gradient(135deg, #4f46e5, #7c3aed); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
                 .header h1 {{ margin: 0; font-size: 20px; }}
-                .badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: {type_color}; color: white; }}
+                .badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: {h(type_color)}; color: white; }}
                 .content {{ background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px; }}
                 .section {{ margin-bottom: 20px; }}
                 .section h3 {{ color: #374151; margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }}
@@ -473,104 +559,65 @@ class FeedbackService:
         <body>
             <div class="container">
                 <div class="header">
-                    <span class="badge">{feedback['type']}</span>
+                    <span class="badge">{h(feedback.get('type'))}</span>
                     <h1 style="margin-top: 10px;">New OpenEcon Data Feedback</h1>
-                    <p style="margin: 5px 0 0; opacity: 0.9; font-size: 14px;">{feedback['timestamp']}</p>
+                    <p style="margin: 5px 0 0; opacity: 0.9; font-size: 14px;">{h(feedback.get('timestamp'))}</p>
                 </div>
                 <div class="content">
                     <div class="section">
                         <h3>Details</h3>
                         <div class="info-grid">
-                            <span class="info-label">Feedback ID:</span>
-                            <span class="info-value">{feedback['id']}</span>
-        """
-
-        if feedback.get("userName"):
-            html += f"""
-                            <span class="info-label">User:</span>
-                            <span class="info-value">{feedback['userName']}</span>
-            """
-
-        if feedback.get("email"):
-            html += f"""
-                            <span class="info-label">Email:</span>
-                            <span class="info-value"><a href="mailto:{feedback['email']}">{feedback['email']}</a></span>
-            """
-
-        if feedback.get("userId"):
-            html += f"""
-                            <span class="info-label">User ID:</span>
-                            <span class="info-value" style="font-family: monospace;">{feedback['userId']}</span>
-            """
-
-        html += """
+                            {''.join(details)}
                         </div>
                     </div>
 
                     <div class="section">
                         <h3>Message</h3>
-                        <div class="message-box">
-        """
-
-        message = feedback.get("message") or "(No message provided)"
-        html += f"{self._escape_html(message)}"
-
-        html += """
-                        </div>
+                        <div class="message-box">{h(feedback.get("message") or "(No message provided)")}</div>
                     </div>
         """
 
-        if feedback.get("sessionInfo"):
-            session = feedback["sessionInfo"]
-            html += f"""
+        session = feedback.get("sessionInfo")
+        if session:
+            session_rows = "".join([
+                info_row("URL", session.get("url", "N/A"), style="word-break: break-all;"),
+                info_row("Screen", session.get("screenSize", "N/A")),
+                info_row("Language", session.get("language", "N/A")),
+                info_row("Timezone", session.get("timezone", "N/A")),
+                info_row("Browser", session.get("userAgent", "N/A"),
+                         style="font-size: 12px; word-break: break-all;"),
+            ])
+            body += f"""
                     <div class="section">
                         <h3>Session Info</h3>
-                        <div class="info-grid">
-                            <span class="info-label">URL:</span>
-                            <span class="info-value" style="word-break: break-all;">{self._escape_html(session.get('url', 'N/A'))}</span>
-                            <span class="info-label">Screen:</span>
-                            <span class="info-value">{self._escape_html(session.get('screenSize', 'N/A'))}</span>
-                            <span class="info-label">Language:</span>
-                            <span class="info-value">{self._escape_html(session.get('language', 'N/A'))}</span>
-                            <span class="info-label">Timezone:</span>
-                            <span class="info-value">{self._escape_html(session.get('timezone', 'N/A'))}</span>
-                            <span class="info-label">Browser:</span>
-                            <span class="info-value" style="font-size: 12px; word-break: break-all;">{self._escape_html(session.get('userAgent', 'N/A'))}</span>
-                        </div>
+                        <div class="info-grid">{session_rows}</div>
                     </div>
             """
 
-        if feedback.get("conversation"):
-            conv = feedback["conversation"]
-            html += f"""
+        conv = feedback.get("conversation")
+        if conv:
+            body += f"""
                     <div class="section">
-                        <h3>Conversation ({conv.get('messageCount', 0)} messages)</h3>
-                        <p style="font-size: 12px; color: #6b7280; margin-bottom: 10px;">Conversation ID: {self._escape_html(conv.get('conversationId') or 'N/A')}</p>
-                        <div class="conversation-box">{self._escape_html(conv.get('messages') or '(No messages)')}</div>
+                        <h3>Conversation ({h(conv.get('messageCount', 0))} messages)</h3>
+                        <p style="font-size: 12px; color: #6b7280; margin-bottom: 10px;">Conversation ID: {h(conv.get('conversationId') or 'N/A')}</p>
+                        <div class="conversation-box">{h(conv.get('messages') or '(No messages)')}</div>
                     </div>
             """
 
-        html += """
+        body += """
                 </div>
             </div>
         </body>
         </html>
         """
 
-        return html
+        return body
 
     @staticmethod
-    def _escape_html(text: str) -> str:
-        """Escape HTML special characters."""
-        if not text:
-            return ""
-        return (
-            text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;")
-        )
+    def _contact_mailto(feedback: dict) -> Optional[str]:
+        """mailto: href for the contact address (escaped again by _h)."""
+        address = feedback.get("email")
+        return f"mailto:{address}" if address else None
 
     def get_all_feedback(self) -> list:
         """Get all feedback entries (for admin use), read from disk on demand

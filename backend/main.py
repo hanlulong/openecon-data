@@ -2970,16 +2970,24 @@ async def export_endpoint(request: ExportRequest) -> Response:
 
 
 @app.post("/api/feedback", response_model=FeedbackResponse)
-async def submit_feedback(request: FeedbackRequest):
+async def submit_feedback(
+    request: FeedbackRequest,
+    user: Optional[User] = Depends(get_optional_user),
+):
     """
     Submit user feedback (bug report, feature request, or other).
 
-    Persists the feedback synchronously (fast — JSON append) and dispatches
-    the email notification as a background asyncio.to_thread task so the
-    blocking SMTP/HTTP calls do not stall the event loop. Phase 3.8.
+    Anonymous submissions stay allowed. Identity provenance: the bearer-token
+    user (if any) is the ONLY verified identity; body userId/userName are
+    client claims, dropped when a verified user exists and otherwise stored
+    and rendered as "claimed (unverified, client-supplied)".
+
+    Persists the feedback (locked JSONL append, off the event loop) and
+    dispatches the email notification as a background asyncio.to_thread task
+    so the blocking SMTP/HTTP calls do not stall the event loop. Phase 3.8.
     """
     try:
-        response = await feedback_service.submit_feedback_async(request)
+        response = await feedback_service.submit_feedback_async(request, user=user)
         return response
     except Exception as e:
         logger.error(f"Failed to submit feedback: {e}")

@@ -440,8 +440,10 @@ class FeedbackRequest(BaseModel):
     email: Optional[str] = Field(None, max_length=254, description="User's email for follow-up")
     sessionInfo: Optional[FeedbackSessionInfo] = None
     conversation: Optional[FeedbackConversation] = None
-    userId: Optional[str] = None
-    userName: Optional[str] = None
+    # Client CLAIMS only (the endpoint is anonymous-capable): the verified
+    # identity comes from the bearer token, never from these fields.
+    userId: Optional[str] = Field(None, max_length=100, description="Client-claimed user id (unverified)")
+    userName: Optional[str] = Field(None, max_length=200, description="Client-claimed user name (unverified)")
 
 
 class FeedbackResponse(BaseModel):
