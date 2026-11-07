@@ -191,6 +191,7 @@ from ..services.data_fetcher import (
     fetch_multi_indicator_data as _df_fetch_multi_indicator_data,
     _has_statscan_mechanical_dimension_dispatch_authority as _df_has_statscan_mechanical_dimension_dispatch_authority,
     _statscan_periods_from_date_range as _df_statscan_periods_from_date_range,
+    _FRED_DISCOVERY_SCOPED_KEYS as _DF_FRED_DISCOVERY_SCOPED_KEYS,
 )
 from ..services.provider_strategy import (
     GEOGRAPHY_ENCODED_PROVIDERS,
@@ -2295,6 +2296,12 @@ class QueryService:
         # turn re-resolves cleanly rather than sending a foreign code.
         if intent is not None and intent.indicators and not namespace_mismatch:
             state.last_indicators_resolved = list(intent.indicators)
+        # After a FRED non-U.S. country-scope discovery, ``indicator`` is still
+        # the verified pre-discovery code (e.g. the U.S. series) while the
+        # served series is the discovered one.  Persisting it is safe because
+        # the FRED country-scope guard re-runs on every turn and never lets
+        # that code answer a non-U.S. scope; for a U.S.+non-U.S. comparison
+        # it is the correct code for the U.S. leg.
         resolved_indicator = str(params.get("indicator") or "").strip()
         if resolved_indicator and not namespace_mismatch:
             state.resolved_indicator_code = resolved_indicator
@@ -4318,6 +4325,10 @@ class QueryService:
             # Remove provider-specific resolved indicator identifiers so fallback
             # providers can resolve indicator codes in their own namespace.
             for key in ("indicator", "seriesId", "series_id", "code"):
+                fb_params.pop(key, None)
+            # FRED country-scope discovery keys are FRED-dispatch scoped; on a
+            # fallback provider they would only fragment its cache identity.
+            for key in _DF_FRED_DISCOVERY_SCOPED_KEYS:
                 fb_params.pop(key, None)
 
             # Keep fallback indicator evidence provider-neutral. The fallback

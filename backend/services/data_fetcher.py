@@ -725,9 +725,8 @@ def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict
         # Country-scope discovery searches FRED with dispatch-scoped text while
         # the verified code stays in ``indicator``; the search text is part of
         # the request identity (two discoveries must not share a cache entry).
-        discovery_query = str(params.get("__fred_discovery_query") or "").strip()
-        if params.get("__fred_country_scope_discovery") and discovery_query:
-            contract["discovery_query"] = discovery_query
+        if _fred_discovery_search_is_current(params):
+            contract["discovery_query"] = str(params.get("__fred_discovery_query") or "").strip()
 
     if provider_norm == "WORLDBANK":
         contract["indicator"] = str(code or "").strip()
@@ -946,17 +945,53 @@ _FRED_DISCOVERY_DEMOTED_KEYS = (
     "__exact_indicator_title_match",
 )
 # Dispatch-scoped keys owned by the FRED country-scope discovery.  They are
-# meaningful only for the geography in ``__fred_requested_country``.
+# meaningful only for the geography in ``__fred_requested_country`` AND only
+# for the pick in ``__fred_discovery_pick`` (the ``indicator`` the discovery
+# decision was made for).  A later stage that re-picks ``indicator`` for the
+# same request (same-provider alternate retry, a clarification choice,
+# uncertain-match recovery) supersedes them.
 _FRED_DISCOVERY_SCOPED_KEYS = (
     "__fred_country_scope_discovery",
     "__fred_requested_country",
     "__fred_discovery_query",
     "__fred_pre_discovery",
+    "__fred_discovery_pick",
 )
 
 
+def _same_fred_pick(left: Any, right: Any) -> bool:
+    return str(left or "").strip() == str(right or "").strip()
+
+
+def _fred_discovery_snapshot_pick(params: dict[str, Any]) -> Any:
+    snapshot = params.get("__fred_pre_discovery")
+    return snapshot.get("indicator") if isinstance(snapshot, dict) else None
+
+
+def _fred_discovery_search_is_current(params: dict[str, Any]) -> bool:
+    """Whether dispatch should search FRED with ``__fred_discovery_query``.
+
+    Only while ``indicator`` is still the pick the search text was derived
+    for.  Once a later stage re-picks ``indicator`` the re-pick is fetched
+    as-is and must pass the result-level country validation; a stale search
+    text must never silently replace it.
+    """
+    if not params.get("__fred_country_scope_discovery"):
+        return False
+    if not str(params.get("__fred_discovery_query") or "").strip():
+        return False
+    return _same_fred_pick(params.get("indicator"), _fred_discovery_snapshot_pick(params))
+
+
 def _is_conversation_follow_up(params: dict[str, Any], intent: Optional[ParsedIntent]) -> bool:
-    """Structural follow-up signal: the turn was parsed/materialized as a follow-up."""
+    """Structural follow-up signal: the turn was parsed/materialized as a follow-up.
+
+    ``intent.isFollowUp`` is the effective signal at the fetch/dispatch call
+    sites: materialize_intent sets it for every delta turn (turn_number > 0)
+    and the parser sets it for LLM-detected follow-ups.  fetch_data strips
+    ``__delta_resolved`` as an internal key before its FRED prep runs, so that
+    key only counts for callers that prepare params before the strip.
+    """
     return bool((intent is not None and intent.isFollowUp) or params.get("__delta_resolved"))
 
 
@@ -968,12 +1003,18 @@ def _follow_up_concept_text(params: dict[str, Any], intent: Optional[ParsedInten
     concept is the provider-neutral semantic label materialized from verified
     conversation state (or the parsed, non-code indicator phrase); the parser's
     standalone ``resolvedQuery`` is the last resort.
+
+    ``__display_indicator_label`` is deliberately NOT a concept source: it is
+    filled from the effective original query (the raw delta utterance when the
+    follow-up has no ``resolvedQuery``) and exists only as a display fallback.
+    A code-shaped label (state persisted from a turn where the user typed the
+    series id) is skipped too: "Canada UNRATE" is not a concept search.
     """
-    for key in ("__semantic_indicator_label", "__display_indicator_label"):
-        text = str(params.get(key) or "").strip()
-        if text:
-            return text
     from ..services.indicator_resolution import _looks_like_provider_indicator_code_local
+
+    label = str(params.get("__semantic_indicator_label") or "").strip()
+    if label and not _looks_like_provider_indicator_code_local("FRED", label):
+        return label
 
     for candidate in (intent.indicators if intent else None) or []:
         text = str(candidate or "").strip()
@@ -1092,19 +1133,54 @@ def _prepare_fred_country_scope_params(
     not prove that the selected series targets the requested non-US country, so
     FRED catalog/search retrieval can choose a country-scoped candidate.
 
-    Invariants: the provider-neutral semantic keys (``__semantic_indicator_label``,
-    ``indicator``) are never rewritten here -- conversation-state persistence
-    and cross-provider fallback read them.  The FRED search text lives in the
-    dispatch-scoped ``__fred_discovery_query``.
+    Invariants:
+
+    * ``__semantic_indicator_label`` is never rewritten -- conversation-state
+      persistence and cross-provider fallback read it.
+    * ``indicator`` is never replaced by search text.  The only rewrite is
+      restoring the verified pre-discovery request from the snapshot when a
+      fetch for a DIFFERENT geography inherits the keys.  The FRED search
+      text lives in the dispatch-scoped ``__fred_discovery_query``.
+    * The search text applies only to the pick it was derived for
+      (``__fred_discovery_pick``).  A later same-request re-pick is fetched
+      as-is under the result-level country validation.
     """
     non_us_scope = _fred_non_us_scope(provider_request, params)
     if params.get("__fred_country_scope_discovery"):
-        if (
+        same_country = (
             len(non_us_scope) == 1
             and non_us_scope[0][1] == str(params.get("__fred_requested_country") or "").upper()
-        ):
-            return params
-        params = _restore_fred_pre_discovery_params(params, intent)
+        )
+        if not same_country:
+            params = _restore_fred_pre_discovery_params(params, intent)
+        else:
+            decided_pick = params.get("__fred_discovery_pick", _fred_discovery_snapshot_pick(params))
+            if _same_fred_pick(params.get("indicator"), decided_pick):
+                return params
+            raw_country, iso2 = non_us_scope[0]
+            if _same_fred_pick(
+                _fred_country_context_query(params, intent, raw_country, iso2),
+                params.get("__fred_discovery_query"),
+            ):
+                # Same request, and a later stage chose a different series on
+                # purpose: the selector's next-best code after the search
+                # result failed validation (same-provider alternate retry), a
+                # user's menu choice, or an uncertain-match recovery candidate.
+                # Re-running the identical search would silently discard that
+                # choice.  Keep the bookkeeping (the snapshot still restores the
+                # verified request for other geographies) and let dispatch
+                # fetch the re-pick, which must pass the result-level country
+                # validation.
+                repicked = dict(params)
+                repicked["__fred_discovery_pick"] = params.get("indicator")
+                return repicked
+            # The request itself changed (a params copy carried another
+            # concept's discovery keys): evaluate it from scratch.
+            params = {
+                key: value
+                for key, value in params.items()
+                if key not in _FRED_DISCOVERY_SCOPED_KEYS
+            }
 
     if len(non_us_scope) != 1:
         return params
@@ -1130,6 +1206,7 @@ def _prepare_fred_country_scope_params(
         if key in params
     }
     prepared["__fred_discovery_query"] = search_query
+    prepared["__fred_discovery_pick"] = params.get("indicator")
     prepared["__fred_country_scope_discovery"] = True
     prepared["__fred_requested_country"] = iso2
     for key in _FRED_DISCOVERY_DEMOTED_KEYS:
@@ -2226,12 +2303,23 @@ async def fetch_from_provider_dispatch(
                 params=params,
             ).provider_request or {})
         _raise_if_fred_country_scope_unsupported(fred_request, params, intent)
+        # Decide BEFORE the indicator fill below: the search text applies only
+        # while ``indicator`` is still the pick it was derived for.
+        discovery_query = (
+            str(params.get("__fred_discovery_query") or "").strip()
+            if _fred_discovery_search_is_current(params)
+            else ""
+        )
         # Ensure params has indicator set
         if not params.get("indicator") and intent.indicators:
             params = {**params, "indicator": intent.indicators[0]}
 
         # Handle multiple indicators for FRED
         if len(intent.indicators) > 1:
+            # Country-scope discovery is single-indicator only: this branch
+            # fetches the verified code and the result validation below fails
+            # closed for a non-U.S. scope it does not prove (per-indicator
+            # discovery belongs with the deferred per-country/member fan-out).
             all_series = []
             for indicator in intent.indicators:
                 indicator_params = {
@@ -2243,11 +2331,6 @@ async def fetch_from_provider_dispatch(
             _validate_fred_country_scope_result(all_series, fred_request, params)
             return all_series
         else:
-            discovery_query = (
-                str(params.get("__fred_discovery_query") or "").strip()
-                if params.get("__fred_country_scope_discovery")
-                else ""
-            )
             fred_params = {
                 **params,
                 # Post-resolution pick beats the pre-resolution plan snapshot

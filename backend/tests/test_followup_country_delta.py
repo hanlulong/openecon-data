@@ -347,8 +347,13 @@ class FredFollowUpFetchTests(unittest.TestCase):
         with p1, p2, p3, p4:
             data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
         self.assertEqual(_normalize_known_country_to_iso2(data[0].metadata.country), "CA")
-        self.assertEqual(calls[-1]["indicator"], "Canada unemployment rate last 5 years")
-        state = ConversationState(indicator="unemployment rate", country="CA", provider="FRED")
+        # First-turn search text still derives from the utterance (the dc0b1fa
+        # behaviour the design gate kept byte-identical; time words included).
+        # Assert only what matters here: it names the country and the concept.
+        self.assertTrue(_text_targets_country(calls[-1]["indicator"], "CA"))
+        self.assertIn("unemployment rate", calls[-1]["indicator"])
+        # The persisted concept is the semantic label, NOT that search text.
+        state = ConversationState(indicator="", country="CA", provider="FRED")
         self.service._persist_verified_conversation_state(  # pylint: disable=protected-access
             conversation_manager.get_or_create("conv-fred-first-turn-label"), state, data, intent=intent,
         )
@@ -390,6 +395,267 @@ class FredFollowUpFetchTests(unittest.TestCase):
                     {_normalize_known_country_to_iso2(country) for country in countries},
                     {"US", "CA"},
                 )
+
+
+
+# A FRED code whose title names Canada.  The stubs below key only on whether a
+# fetched series' metadata names the requested country -- no concept or country
+# is mapped to a code.
+_REPICK_CODE = "STUB_CANADA_TITLED_CODE"
+
+
+def _search_miss_fred(calls: list[dict[str, Any]]):
+    """Stub FRED: the country-titled re-pick returns a Canada series; any other
+    request (including the discovery search text) misses and returns a U.S.
+    series, which the result-level country validation must reject."""
+
+    def _fetch(params: dict[str, Any]) -> NormalizedData:
+        calls.append(dict(params))
+        if params.get("indicator") == _REPICK_CODE:
+            return _series(indicator="Unemployment rate for Canada", country="Canada", series_id=_REPICK_CODE)
+        return _series(indicator="Unemployment Rate", country="US", series_id="US_SERIES")
+
+    return _fetch
+
+
+class FredDiscoveryRepickTests(unittest.TestCase):
+    """A later same-request re-pick supersedes the discovery search text.
+
+    Re-entry paths that copy ``intent.parameters`` and set a new ``indicator``
+    (same-provider alternate retry, a clarification choice, uncertain-match
+    recovery, option validation) must fetch the NEW pick, never silently
+    re-run the stale discovery search for the same country.
+    """
+
+    def setUp(self) -> None:
+        cache_service.clear()
+        self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+        self.service.settings.use_outcome_decision_stage = False
+        self.service.settings.use_post_fetch_semantic_judge = False
+        self.service.settings.use_staged_state_commit = False
+
+    def _discovered(self) -> tuple[dict[str, Any], ParsedIntent]:
+        _, intent = _turn2_intent("unemployment rate", "UNRATE", "compare with Canada", added=["CA"])
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+        self.assertTrue(data_fetcher._fred_discovery_search_is_current(prepared))  # pylint: disable=protected-access
+        return prepared, intent
+
+    def test_same_country_repick_disables_the_stale_search_and_is_idempotent(self) -> None:
+        prepared, intent = self._discovered()
+        repick = dict(prepared, indicator=_REPICK_CODE)
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            once = _prepare_fred_country_scope_params({}, repick, intent)
+            twice = _prepare_fred_country_scope_params({}, once, intent)
+        self.assertEqual(once["indicator"], _REPICK_CODE)
+        self.assertIs(twice, once)
+        self.assertFalse(data_fetcher._fred_discovery_search_is_current(once))  # pylint: disable=protected-access
+        contract = data_fetcher._provider_request_contract("FRED", intent, once)  # pylint: disable=protected-access
+        self.assertNotIn("discovery_query", contract)
+        self.assertEqual(once["__semantic_indicator_label"], "unemployment rate")
+        # The snapshot still restores the verified request for the U.S. leg.
+        us_child = {k: v for k, v in once.items() if k != "countries"}
+        us_child["country"] = "US"
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            restored = _prepare_fred_country_scope_params({}, us_child, intent)
+        self.assertEqual(restored["indicator"], "UNRATE")
+        self.assertNotIn("__fred_country_scope_discovery", restored)
+
+    def test_changed_request_with_stale_keys_rediscovers_for_its_own_concept(self) -> None:
+        prepared, _ = self._discovered()
+        _, cpi_intent = _turn2_intent("consumer price index", "CPIAUCSL", "compare with Canada", added=["CA"])
+        stale = dict(prepared, indicator="CPIAUCSL", __semantic_indicator_label="consumer price index")
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            rediscovered = _prepare_fred_country_scope_params({}, stale, cpi_intent)
+        self.assertEqual(rediscovered["__fred_discovery_query"], "Canada consumer price index")
+        self.assertEqual(rediscovered["__fred_pre_discovery"]["indicator"], "CPIAUCSL")
+        self.assertTrue(data_fetcher._fred_discovery_search_is_current(rediscovered))  # pylint: disable=protected-access
+
+    def _alternate_retry(self, catalog_proves_repick: bool):
+        intent = ParsedIntent(
+            apiProvider="FRED", indicators=["unemployment rate"], clarificationNeeded=False,
+            parameters={"country": "CA"}, originalQuery="Canada unemployment rate from FRED",
+        )
+        picks = {"n": 0}
+
+        async def _resolver(_provider, _intent, params):
+            picks["n"] += 1
+            pick = "UNRATE" if picks["n"] == 1 else _REPICK_CODE
+            return {
+                **params, "indicator": pick, "__decision_source": "llm_pick",
+                "__semantic_authority": "llm_adjudication", "__semantic_indicator_label": "unemployment rate",
+            }
+
+        calls: list[dict[str, Any]] = []
+        targets = (lambda sid, iso2: sid == _REPICK_CODE and iso2 == "CA") if catalog_proves_repick else (lambda *_: False)
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_resolver), \
+             patch.object(self.service.fred_provider, "fetch_series", side_effect=_search_miss_fred(calls)), \
+             patch.object(data_fetcher, "_fred_catalog_series_targets_country", side_effect=targets):
+            data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+        return calls, data, intent
+
+    def test_alternate_retry_fetches_the_repick_after_a_failed_discovery(self) -> None:
+        for catalog_proves_repick in (True, False):
+            with self.subTest(catalog_proves_repick=catalog_proves_repick):
+                cache_service.clear()
+                calls, data, intent = self._alternate_retry(catalog_proves_repick)
+                fetched = [str(call.get("indicator")) for call in calls]
+                # One discovery search, then the re-adjudicated pick -- never the
+                # same stale search text again.
+                self.assertEqual(len(fetched), 2, fetched)
+                self.assertTrue(_text_targets_country(fetched[0], "CA"))
+                self.assertEqual(fetched[1], _REPICK_CODE)
+                self.assertEqual({_normalize_known_country_to_iso2(s.metadata.country) for s in data}, {"CA"})
+                self.assertEqual(intent.parameters["__semantic_indicator_label"], "unemployment rate")
+
+    def _clarification_choice(self, *, chosen_is_canada: bool):
+        prepared, _ = self._discovered()
+        chosen = _REPICK_CODE if chosen_is_canada else "SOME_US_CODE"
+        params = dict(prepared, indicator=chosen, __semantic_authority="exact_user_input", __decision_source="user_choice")
+        intent = ParsedIntent(
+            apiProvider="FRED", indicators=[chosen], clarificationNeeded=False, parameters=params,
+            originalQuery="compare with Canada", isFollowUp=True, followUpType="clarification_answer",
+        )
+
+        async def _resolver(_provider, _intent, p):
+            return dict(p)
+
+        calls: list[dict[str, Any]] = []
+        # The catalog cannot prove the chosen code's country: the fetched
+        # series' own metadata is the evidence.
+        with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+             patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+             patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_resolver), \
+             patch.object(self.service.fred_provider, "fetch_series", side_effect=_search_miss_fred(calls)), \
+             patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            try:
+                result: Any = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+            except DataNotAvailableError as exc:
+                result = exc
+        return calls, result, chosen
+
+    def test_explicit_choice_is_fetched_instead_of_the_stale_search(self) -> None:
+        calls, data, chosen = self._clarification_choice(chosen_is_canada=True)
+        self.assertEqual([call.get("indicator") for call in calls], [chosen])
+        self.assertEqual({_normalize_known_country_to_iso2(s.metadata.country) for s in data}, {"CA"})
+
+    def test_explicit_choice_with_wrong_country_fails_closed_without_researching(self) -> None:
+        calls, result, chosen = self._clarification_choice(chosen_is_canada=False)
+        self.assertIsInstance(result, DataNotAvailableError)
+        self.assertEqual([call.get("indicator") for call in calls], [chosen])
+
+
+class FredFollowUpSwitchAndShapeTests(unittest.TestCase):
+    """Fetch-level country switch, concept-source hygiene, multi-indicator."""
+
+    def setUp(self) -> None:
+        cache_service.clear()
+        self.service = QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+        self.service.settings.use_outcome_decision_stage = False
+        self.service.settings.use_post_fetch_semantic_judge = False
+        self.service.settings.use_staged_state_commit = False
+
+    def test_country_switch_fetch_searches_concept_for_the_new_country(self) -> None:
+        for label, code, utterance, changed in _SWITCH_CASES:
+            with self.subTest(utterance=utterance):
+                cache_service.clear()
+                _, intent = _turn2_intent(label, code, utterance, changed=changed)
+
+                async def _resolver(_provider, _intent, params, _code=code):
+                    # Resolution re-picks a U.S.-titled code for the concept.
+                    return {
+                        **params, "indicator": _code, "__decision_source": "llm_pick",
+                        "__semantic_authority": "llm_adjudication",
+                    }
+
+                calls: list[dict[str, Any]] = []
+                with patch.object(self.service, "_get_from_cache", new_callable=AsyncMock, return_value=None), \
+                     patch.object(self.service, "_save_to_cache", new_callable=AsyncMock), \
+                     patch.object(self.service, "_resolve_indicator_for_fetch", side_effect=_resolver), \
+                     patch.object(self.service.fred_provider, "fetch_series", side_effect=_fake_fred_catalog(calls)), \
+                     patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+                    data = run(self.service._fetch_data(intent))  # pylint: disable=protected-access
+                searched = [str(call.get("indicator") or "") for call in calls]
+                self.assertFalse(any(utterance in text for text in searched), searched)
+                self.assertTrue(any(label in text and _text_targets_country(text, "JP") for text in searched), searched)
+                self.assertFalse(any(_text_targets_country(text, "US") for text in searched), searched)
+                self.assertEqual({_normalize_known_country_to_iso2(s.metadata.country) for s in data}, {"JP"})
+                self.assertEqual(intent.parameters["__semantic_indicator_label"], label)
+
+    def test_display_label_and_code_shaped_label_are_not_concepts(self) -> None:
+        # The display label is the raw delta utterance on a follow-up without
+        # resolvedQuery; a code-shaped label is a series id, not a concept.
+        for params_extra, indicators in (
+            ({"__display_indicator_label": "compare with Canada"}, ["UNRATE"]),
+            ({"__semantic_indicator_label": "UNRATE"}, ["UNRATE"]),
+        ):
+            with self.subTest(params_extra=params_extra):
+                intent = ParsedIntent(
+                    apiProvider="FRED", indicators=indicators, clarificationNeeded=False,
+                    parameters={"countries": ["United States", "CA"], "indicator": "UNRATE", **params_extra},
+                    originalQuery="compare with Canada", isFollowUp=True,
+                )
+                with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+                    prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+                self.assertNotIn("__fred_discovery_query", prepared)
+        # A code-shaped label falls through to a non-code parsed indicator.
+        intent = ParsedIntent(
+            apiProvider="FRED", indicators=["UNRATE", "unemployment rate"], clarificationNeeded=False,
+            parameters={"country": "CA", "indicator": "UNRATE", "__semantic_indicator_label": "UNRATE"},
+            originalQuery="and Canada", isFollowUp=True,
+        )
+        with patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            prepared = _prepare_fred_country_scope_params({}, dict(intent.parameters), intent)
+        self.assertEqual(prepared["__fred_discovery_query"], "Canada unemployment rate")
+
+    def test_multi_indicator_non_us_dispatch_fails_closed_instead_of_duplicating(self) -> None:
+        intent = ParsedIntent(
+            apiProvider="FRED", indicators=["UNRATE", "CPIAUCSL"], clarificationNeeded=False,
+            parameters={
+                "country": "CA", "indicator": "UNRATE", "__semantic_indicator_label": "unemployment rate",
+                "__semantic_authority": "llm_adjudication",
+            },
+            originalQuery="Canada unemployment and inflation from FRED",
+        )
+        calls: list[dict[str, Any]] = []
+        with patch.object(self.service.fred_provider, "fetch_series", side_effect=_fake_fred_catalog(calls)), \
+             patch.object(data_fetcher, "_fred_catalog_series_targets_country", return_value=False):
+            plan = data_fetcher.materialize_execution_plan(None, provider="FRED", intent=intent, params=dict(intent.parameters))
+            with self.assertRaises(DataNotAvailableError):
+                run(data_fetcher.fetch_from_provider_dispatch(self.service, intent, plan))
+        # No per-indicator call searched with the discovery text.
+        self.assertTrue(calls)
+        self.assertFalse(any(_text_targets_country(str(call.get("indicator")), "CA") for call in calls))
+
+    def test_cross_provider_fallback_drops_fred_dispatch_keys(self) -> None:
+        from unittest.mock import Mock
+
+        prepared, intent = FredDiscoveryRepickTests._discovered(self)  # type: ignore[arg-type]
+        intent.parameters = prepared
+        served = [NormalizedData.model_validate({
+            "metadata": {
+                "source": "World Bank", "indicator": "Unemployment, total", "country": "Canada",
+                "frequency": "annual", "unit": "Percent", "lastUpdated": "2026-01-01",
+                "seriesId": "WB_STUB", "apiUrl": "https://example.com",
+            },
+            "data": [{"date": "2024-01-01", "value": 6.4}],
+        })]
+        svc = QueryService.__new__(QueryService)
+        svc._detect_explicit_provider = Mock(return_value="")
+        svc._select_indicator_query_for_resolution = Mock(return_value="unemployment rate")
+        svc._collect_target_countries = Mock(return_value=["US", "CA"])
+        svc._get_fallback_providers = Mock(return_value=["WORLDBANK"])
+        svc._effective_original_query = Mock(return_value="compare with Canada")
+        svc._looks_like_provider_indicator_code = Mock(return_value=False)
+        svc._is_fallback_relevant = Mock(return_value=True)
+        svc._fetch_data = AsyncMock(return_value=served)
+        run(svc._try_with_fallback(intent, DataNotAvailableError("FRED has no Canada series")))  # pylint: disable=protected-access
+        fb_intent = svc._fetch_data.call_args.args[0]
+        for key in data_fetcher._FRED_DISCOVERY_SCOPED_KEYS:  # pylint: disable=protected-access
+            self.assertNotIn(key, fb_intent.parameters)
+        self.assertEqual(fb_intent.parameters["__semantic_indicator_label"], "unemployment rate")
 
 
 if __name__ == "__main__":
