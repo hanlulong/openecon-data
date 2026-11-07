@@ -30,6 +30,7 @@ from .mcp_transport import (
     LegacySSETransport,
     MCPPostBodyLimitMiddleware,
     StatelessStreamableHTTP,
+    carries_stateless_session,
     serve_streamable,
 )
 from .utils.logging_security import SecureLogger, log_secure
@@ -83,6 +84,34 @@ for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
 # status, so these per-message lines only multiply journal volume.
 for _noisy in ("mcp.server.lowlevel", "mcp.server.streamable_http"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+
+class MCPAccessLogFilter(logging.Filter):
+    """Drop uvicorn's access line for /mcp* requests that did not fail.
+
+    SecureLoggingASGIMiddleware already writes a richer record for every /mcp*
+    request it sees, so uvicorn's access line only duplicates it. Lines with
+    status >= 400 are kept: MCPPostBodyLimitMiddleware sits outside
+    SecureLogging and answers its 413/408/503 without logging, so the access
+    line is the only record of a full POST pool. Keys only on the record's
+    structural fields (uvicorn args: client, method, path, http_version, status).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (isinstance(args, tuple) and len(args) == 5):
+            return True
+        try:
+            return not (str(args[2]).startswith("/mcp") and int(args[4]) < 400)
+        except (TypeError, ValueError):
+            return True
+
+
+_uvicorn_access = logging.getLogger("uvicorn.access")
+if not any(isinstance(f, MCPAccessLogFilter) for f in _uvicorn_access.filters):
+    # Attached to the logger (not a handler), so uvicorn's dictConfig, which
+    # replaces handlers but keeps logger filters, does not drop it.
+    _uvicorn_access.addFilter(MCPAccessLogFilter())
 # File handler for debugging (uvicorn reloader pipes child output through sockets).
 # Skipped under pytest: the suite imports this module, and its mock-auth /
 # fake-provider log lines would interleave with real service traffic in the
@@ -270,7 +299,12 @@ async def lifespan(app: FastAPI):
     try:
         yield  # Application runs here
     finally:
-        await mcp_lifespan.aclose()
+        # Guarded so a manager shutdown error (e.g. an ExceptionGroup from its
+        # task group) cannot skip the remaining shutdown steps below.
+        try:
+            await mcp_lifespan.aclose()
+        except Exception:
+            logger.exception("MCP Streamable HTTP shutdown failed; continuing shutdown")
 
     # === SHUTDOWN ===
     # Close HTTP client pool
@@ -515,7 +549,15 @@ class RateLimitASGIMiddleware:
                 # Off-switch engaged — behave as before (fully exempt).
                 await self.app(scope, receive, send)
                 return
-            if request.method == "GET":
+            if request.method == "GET" and carries_stateless_session(scope):
+                # A Streamable HTTP client's optional notification-stream GET
+                # (it echoes our stateless session id) is answered 405 at once
+                # and never opens a stream, so it must not spend the legacy
+                # stream-open budget other clients behind the same IP/NAT need.
+                # It is an ordinary short request: generic per-path bucket.
+                limit_key = f"{client_ip}:{path}"
+                rate_limit_str = get_rate_limit_for_path(path)
+            elif request.method == "GET":
                 # GET /mcp opens the long-lived SSE stream. Limit CONNECTION
                 # opens, not per-request: the stream is a single request that
                 # stays open, so a per-request limit would 429 the persistent
@@ -586,6 +628,18 @@ def mcp_post_log_policy(
     return "debug", False
 
 
+def mcp_stateless_get_log_policy(status_code: int) -> tuple[str, bool]:
+    """Return (level, include_headers) for a GET echoing our stateless session id.
+
+    That GET is a Streamable HTTP client's optional notification stream; 405
+    (no standalone stream offered) is its designed, routine answer, once per
+    session. Anything else is unexpected and stays visible with headers.
+    """
+    if status_code == 405:
+        return "debug", False
+    return "info", True
+
+
 def _compact_request_log(request_log: dict) -> dict:
     """Request fields without the sanitized header dict or query string."""
     return {k: v for k, v in request_log.items() if k not in ("headers", "query_params")}
@@ -637,7 +691,16 @@ class SecureLoggingASGIMiddleware:
         # get ONE record after completion, at a level chosen from the JSON-RPC
         # method (known only after the body peek below) and the status.
         _is_mcp_post = scope.get("method") == "POST" and _path.startswith("/mcp")
-        if not _is_mcp_post:
+        # So does a Streamable HTTP client's notification-stream GET (it echoes
+        # our stateless session id): it is answered 405 at once, never a
+        # session open, so it must not log like one.
+        _is_stateless_get = (
+            scope.get("method") == "GET"
+            and _path.rstrip("/") == "/mcp"
+            and carries_stateless_session(scope)
+        )
+        _single_record = _is_mcp_post or _is_stateless_get
+        if not _single_record:
             log_secure("info", "Request received", request_log, request_id)
 
         # MCP client identification: the JSON-RPC "initialize" message carries
@@ -719,8 +782,11 @@ class SecureLoggingASGIMiddleware:
             await self.app(scope, receive_for_app, send_wrapper)
             duration_ms = (time.perf_counter() - start_time) * 1000
             response_log = SecureLogger.format_response_log(request_id, status_code, duration_ms)
-            if _is_mcp_post:
-                level, include_headers = mcp_post_log_policy(_rpc_method, status_code, _rpc_parsed)
+            if _single_record:
+                if _is_mcp_post:
+                    level, include_headers = mcp_post_log_policy(_rpc_method, status_code, _rpc_parsed)
+                else:
+                    level, include_headers = mcp_stateless_get_log_policy(status_code)
                 record = request_log if include_headers else _compact_request_log(request_log)
                 log_secure(level, "MCP request", {
                     **record, **response_log, "mcp_method": _rpc_method,
@@ -730,7 +796,7 @@ class SecureLoggingASGIMiddleware:
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             error_log = SecureLogger.format_error_log(request_id, e, include_traceback=True)
-            if _is_mcp_post:
+            if _single_record:
                 # No "Request received" line was written for this request.
                 error_log = {**request_log, **error_log, "mcp_method": _rpc_method}
             log_secure("error", "Request failed", error_log, request_id)
@@ -1406,21 +1472,27 @@ async def session_history(request: Request, limit: Optional[int] = Query(default
 # default source.
 DATA_COVERAGE_TEXT = (
     "FRED (US macro), World Bank, IMF, Eurostat, Statistics Canada, BIS, "
-    "UN Comtrade (trade flows), exchange rates (ExchangeRate-API), crypto prices "
-    "(CoinGecko) and ChinaMacro (fresh China headline macro: PMI, M2, 社融/TSF, "
-    "CPI/PPI, 10Y yield); OECD only when explicitly requested"
+    "UN Comtrade (trade flows), exchange rates, crypto prices (CoinGecko) and "
+    "ChinaMacro (latest China headline macro: PMI, M2, monthly "
+    "社融/TSF increment, CPI/PPI, 10Y yield); OECD only when explicitly requested"
 )
 QUERY_DATA_SUMMARY = "Fetch economic and financial statistics from a natural-language question"
+# Every MCP agent sees these examples as worked cases, so each must return
+# correct data. All four were run against the live backend during review on
+# 2026-11-07 (FRED UNRATE monthly; Eurostat HICP DE/FR annual; ChinaMacro NBS
+# PMI and PBoC M2 YoY monthly). Re-verify any example you change. Keep the
+# whole tool text (summary + description) at or under 1,024 chars; a test
+# pins this.
 QUERY_DATA_DESCRIPTION = (
     f"Official time series from {DATA_COVERAGE_TEXT}. 330,000+ indicators. "
     "Call this whenever the user wants numbers, time series, charts or cross-country "
     "comparisons of economic or financial data. Pass the user's question as `query`, "
     "verbatim, in any language, e.g. 'US unemployment rate monthly since 2020', "
     "'Germany vs France HICP inflation 2015-2024 from Eurostat', '中国制造业PMI最近12个月', "
-    "'中国社会融资规模存量同比'. The response carries data points plus metadata (source, "
-    "units, frequency, sourceUrl, apiUrl). For follow-ups ('now add Japan') pass the "
-    "returned conversationId. If clarificationNeeded is true, show the options to the "
-    "user (or pick the one matching their intent) and call again with the same conversationId."
+    "'中国M2货币供应量同比增速'. Responses carry the data points with source, units, "
+    "frequency and sourceUrl. For follow-ups ('now add Japan') pass the returned "
+    "conversationId. If clarificationNeeded is true, show the options (or pick the one "
+    "matching the user's intent) and call again with the same conversationId."
 )
 MCP_SERVER_INSTRUCTIONS = (
     "OpenEcon Data answers economic and financial data questions with official statistics. "
@@ -2812,6 +2884,16 @@ async def root():
     return {"status": "ok"}
 
 
+_GENERATED_RESPONSES_MARKER = "\n\n### Responses:"
+
+
+def strip_generated_responses(description: Optional[str]) -> Optional[str]:
+    """Tool description without fastapi_mcp's generated responses section."""
+    if not description:
+        return description
+    return description.split(_GENERATED_RESPONSES_MARKER, 1)[0]
+
+
 def create_mcp_server(target_app: FastAPI, http_client=None) -> FastApiMCP:
     """Build the MCP server exposing query_data from ``target_app``'s OpenAPI.
 
@@ -2833,6 +2915,16 @@ def create_mcp_server(target_app: FastAPI, http_client=None) -> FastApiMCP:
     # field clients inject as when-to-use guidance). Set both explicitly.
     server.server.version = target_app.version
     server.server.instructions = MCP_SERVER_INSTRUCTIONS
+    # fastapi_mcp appends a generated "### Responses:" block (an example built
+    # from the response schema) to every tool description. For query_data it
+    # presents clarificationNeeded: true as the typical answer and pushes the
+    # text past 1,024 chars, a limit some function-calling APIs enforce. The
+    # route description already states what a response carries, so the tool
+    # text ends there. Name and inputSchema are untouched.
+    server.tools = [
+        tool.model_copy(update={"description": strip_generated_responses(tool.description)})
+        for tool in server.tools
+    ]
     return server
 
 

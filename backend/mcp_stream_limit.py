@@ -7,6 +7,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .mcp_transport import carries_stateless_session
+
 logger = logging.getLogger("openecon.mcp_stream_limit")
 
 
@@ -45,6 +47,11 @@ class MCPStreamLimitMiddleware:
             scope["type"] != "http"
             or scope["method"] != "GET"
             or scope["path"] not in ("/mcp", "/mcp/")
+            # A GET echoing our stateless Streamable HTTP session id is that
+            # client's optional notification stream; the route answers it 405
+            # at once, so it never becomes a stream. Admitting it would count
+            # it in the capacity metrics and let it be 503/429-ed at capacity.
+            or carries_stateless_session(scope)
         ):
             await self.app(scope, receive, send)
             return

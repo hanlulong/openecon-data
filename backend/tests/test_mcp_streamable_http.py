@@ -19,7 +19,9 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import sys
 
+import anyio
 import httpx
 import mcp.types as types
 import pytest
@@ -33,9 +35,11 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 
 from backend.mcp_stream_limit import MCPStreamLimitMiddleware
 from backend.mcp_transport import (
+    SDK_STREAMABLE_LOGGER,
     LegacySSETransport,
     MCPPostBodyLimitMiddleware,
     StatelessStreamableHTTP,
+    StatelessTerminateRaceFilter,
     serve_streamable,
 )
 from backend.tests.test_mcp_rate_limit_middleware import _drive, _make_mw
@@ -44,6 +48,7 @@ from backend.tests.test_mcp_transport import ASGIRequest, loopback_server
 ACCEPT_BOTH = "application/json, text/event-stream"
 ACCEPT_CODEX = "text/event-stream, application/json"  # Codex sends this order.
 LEGACY_HEX = "e9f717f4" + "0" * 24  # Shape of our legacy SSE session ids.
+OUR_SESSION = "stateless-" + "2" * 32  # Shape of the ids StatelessStreamableHTTP issues.
 
 
 def isolated_server(entered=None, release=None):
@@ -258,6 +263,19 @@ def test_followup_requests_tolerate_protocol_version_stamps(stamp):
     assert "mcp-session-id" not in listed.headers
 
 
+def test_initialize_carrying_a_foreign_session_id_still_gets_our_marker():
+    """A client re-initializing with a stale or legacy id must still learn an
+    id of ours, or its notification GET would open a legacy SSE session."""
+    app, transport, _ = lifespan_app()
+    with TestClient(app) as client:
+        response = post(client, initialize(), **{"mcp-session-id": LEGACY_HEX})
+        assert response.status_code == 200
+        issued = response.headers["mcp-session-id"]
+        assert issued.startswith("stateless-")
+        stream = client.get("/mcp", headers={"accept": "text/event-stream", "mcp-session-id": issued})
+        assert stream.status_code == 405 and transport.active_sessions == 0
+
+
 def test_post_without_event_stream_accept_is_406_not_rewritten():
     app, _, _ = lifespan_app()
     with TestClient(app) as client:
@@ -357,9 +375,7 @@ def test_start_failure_does_not_fail_startup():
         assert client.get("/mcp/messages/").status_code == 405  # App still serves.
 
 
-def test_main_lifespan_runs_the_mounted_streamable(monkeypatch):
-    """backend.main.lifespan itself (heavy startup pieces stubbed) starts and
-    stops the manager stored on app.state, across repeated lifespans."""
+def _stub_heavy_startup(monkeypatch):
     from backend import main
     from backend.services import catalog_validator, embedding_retrieval
 
@@ -371,6 +387,13 @@ def test_main_lifespan_runs_the_mounted_streamable(monkeypatch):
     monkeypatch.setattr(catalog_validator, "run_validation", lambda: None)
     monkeypatch.setattr(main.settings, "enable_metadata_loading", False)
     monkeypatch.setattr(main.settings, "disable_background_jobs", True)
+    return main
+
+
+def test_main_lifespan_runs_the_mounted_streamable(monkeypatch):
+    """backend.main.lifespan itself (heavy startup pieces stubbed) starts and
+    stops the manager stored on app.state, across repeated lifespans."""
+    main = _stub_heavy_startup(monkeypatch)
 
     server = isolated_server()
     streamable = StatelessStreamableHTTP(server)
@@ -382,6 +405,150 @@ def test_main_lifespan_runs_the_mounted_streamable(monkeypatch):
             assert streamable.running
             assert post(client, initialize()).status_code == 200
         assert not streamable.running
+
+
+def test_main_lifespan_finishes_shutdown_when_the_manager_exit_fails(monkeypatch):
+    main = _stub_heavy_startup(monkeypatch)
+    from backend.services import http_pool
+
+    closed = []
+
+    async def recording_close():
+        closed.append(True)
+
+    monkeypatch.setattr(http_pool, "close_http_pool", recording_close)
+
+    class ExitFails(StatelessStreamableHTTP):
+        @asynccontextmanager
+        async def run(self):
+            yield
+            raise RuntimeError("isolated shutdown failure")
+
+    app = FastAPI(lifespan=main.lifespan)
+    app.state.mcp_streamable = ExitFails(isolated_server())
+    with TestClient(app):
+        pass
+    assert closed == [True]  # The steps after the manager still ran.
+
+
+# ---------------------------------------------------------------------------
+# SDK error noise: the stateless terminate race must never reach the journal
+# ---------------------------------------------------------------------------
+
+def _sdk_problems(caplog):
+    return [
+        (record.name, record.levelname, record.getMessage())
+        for record in caplog.records
+        if record.name.startswith("mcp.") and record.levelno >= logging.WARNING
+    ]
+
+
+def test_streamable_exchanges_log_no_sdk_warnings_or_errors(caplog):
+    """mcp 1.18 terminates each stateless transport after its response, which
+    makes its message router log an ERROR traceback per request unless the
+    benign race is filtered. Covers SDK client traffic, a raw ping and a 400."""
+    caplog.set_level(logging.WARNING)
+
+    async def scenario():
+        app, transport, streamable = build()
+        async with asyncio.timeout(15), serve_streamable(streamable), loopback_server(app) as base:
+            async with streamablehttp_client(base + "/mcp", timeout=3, sse_read_timeout=3) as (read, write, _):
+                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=3)) as session:
+                    await session.initialize()
+                    await session.list_tools()
+                    await session.call_tool("echo", {"value": "quiet"})
+            headers = {"accept": ACCEPT_BOTH, "content-type": "application/json"}
+            async with httpx.AsyncClient(timeout=3) as client:
+                pinged = await client.post(base + "/mcp", content=json.dumps(rpc("ping")), headers=headers)
+                malformed = await client.post(base + "/mcp", content=b"{not json", headers=headers)
+            # The router task fails after the response has been delivered.
+            await asyncio.sleep(0.3)
+        return pinged.status_code, malformed.status_code
+
+    assert asyncio.run(scenario()) == (200, 400)
+    assert _sdk_problems(caplog) == []
+
+
+def _record_with(message, exc=None):
+    exc_info = None
+    if exc is not None:
+        try:
+            raise exc
+        except BaseException:
+            exc_info = sys.exc_info()
+    return logging.LogRecord(SDK_STREAMABLE_LOGGER, logging.ERROR, __file__, 1, message, None, exc_info)
+
+
+def test_terminate_race_filter_drops_only_the_benign_router_record():
+    race = StatelessTerminateRaceFilter()
+    assert not race.filter(_record_with("Error in message router", anyio.ClosedResourceError()))
+    assert not race.filter(_record_with("Error in message router", anyio.BrokenResourceError()))
+    # Genuine failures stay visible.
+    assert race.filter(_record_with("Error in message router", ValueError("real router bug")))
+    assert race.filter(_record_with("Error in message router"))
+    assert race.filter(_record_with("Error handling POST request", anyio.ClosedResourceError()))
+    assert race.filter(_record_with("Stateless session crashed", RuntimeError("crash")))
+    installed = logging.getLogger(SDK_STREAMABLE_LOGGER).filters
+    assert sum(isinstance(f, StatelessTerminateRaceFilter) for f in installed) == 1
+    # The logger level is not raised to hide errors.
+    assert logging.getLogger(SDK_STREAMABLE_LOGGER).getEffectiveLevel() <= logging.WARNING
+
+
+# ---------------------------------------------------------------------------
+# The notification-stream GET is not a legacy stream open
+# ---------------------------------------------------------------------------
+
+def test_stateless_session_get_skips_stream_admission_even_at_capacity(caplog):
+    caplog.set_level(logging.WARNING, logger="openecon.mcp_stream_limit")
+
+    async def scenario():
+        app, transport, _ = build()  # Stream limit: 4 global, 4 per client.
+        legacy = [await ASGIRequest(app, headers=[(b"accept", b"text/event-stream")]).open() for _ in range(4)]
+        assert app.active == 4
+        probe = ASGIRequest(app, headers=[(b"mcp-session-id", OUR_SESSION.encode())])
+        await asyncio.wait_for(probe.run(), 1)
+        assert probe.status == 405 and probe.headers[b"allow"] == b"GET, POST"
+        assert app.active == 4 and app.rejected_global == app.rejected_client == 0
+        for stream in legacy:
+            await stream.close()
+        assert transport.active_sessions == app.active == 0
+
+    asyncio.run(scenario())
+    assert not [r for r in caplog.records if r.name == "openecon.mcp_stream_limit"]
+
+
+def _drive_with_headers(mw, path, ip, headers):
+    scope = {
+        "type": "http", "method": "GET", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "headers": list(headers), "client": (ip, 54321),
+        "server": ("testserver", 80), "scheme": "http",
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(mw(scope, receive, send))
+    return next(m["status"] for m in sent if m["type"] == "http.response.start")
+
+
+def test_stateless_session_get_spends_the_generic_bucket_not_stream_opens(monkeypatch):
+    mw, _ = _make_mw(monkeypatch)
+    ip = "198.51.100.31"
+    marked = [(b"mcp-session-id", OUR_SESSION.encode())]
+    for i in range(20):
+        assert _drive_with_headers(mw, "/mcp", ip, marked) == 200, f"marked {i}"
+    # The legacy stream-open budget (12/min) is untouched by those GETs ...
+    for i in range(12):
+        assert _drive_with_headers(mw, "/mcp", ip, []) == 200, f"legacy open {i}"
+    assert _drive_with_headers(mw, "/mcp", ip, []) == 429
+    # ... and the marked GETs are still bounded, by the generic 200/min bucket.
+    for i in range(180):
+        assert _drive_with_headers(mw, "/mcp", ip, marked) == 200, f"marked {20 + i}"
+    assert _drive_with_headers(mw, "/mcp", ip, marked) == 429
 
 
 # ---------------------------------------------------------------------------
@@ -479,10 +646,21 @@ def test_query_data_over_streamable_with_stub_backend():
     assert init.instructions == main.MCP_SERVER_INSTRUCTIONS and "conversationId" in init.instructions
     assert [tool.name for tool in tools] == ["query_data"]
     assert tools[0].inputSchema == PINNED_QUERY_DATA_SCHEMA
-    assert len(tools[0].description) < 1500  # Some clients truncate long descriptions.
+    # The route text alone: fastapi_mcp's generated "### Responses" example is
+    # stripped, keeping the tool under the 1,024-char cap some APIs enforce.
+    assert tools[0].description == f"{main.QUERY_DATA_SUMMARY}\n\n{main.QUERY_DATA_DESCRIPTION}"
+    assert len(tools[0].description) <= 1024
     assert main.DATA_COVERAGE_TEXT in tools[0].description
     assert not result.isError and "50.2" in result.content[0].text
     assert seen == [{"query": "中国制造业PMI最近12个月"}]
+
+
+def test_generated_responses_section_is_stripped_structurally():
+    from backend.main import strip_generated_responses
+
+    assert strip_generated_responses("Summary\n\nBody\n\n### Responses:\n\n**200**: x") == "Summary\n\nBody"
+    assert strip_generated_responses("Summary only") == "Summary only"
+    assert strip_generated_responses(None) is None
 
 
 def test_coverage_text_names_every_provider_module():
@@ -575,6 +753,22 @@ def test_mcp_post_is_one_record_with_level_from_method_and_status(caplog, path, 
         assert data["mcp_method"] == body["method"]
 
 
+@pytest.mark.parametrize("status,level,with_headers", [
+    (405, logging.DEBUG, False),  # The designed answer, once per streamable session.
+    (503, logging.INFO, True),    # Anything else is unexpected: keep it visible.
+])
+def test_stateless_session_get_is_one_record_not_a_session_open(caplog, status, level, with_headers):
+    caplog.set_level(logging.DEBUG, logger=LOG_NAME)
+    _through_logging("GET", "/mcp", status=status, headers=[(b"mcp-session-id", OUR_SESSION.encode())])
+    records = _records(caplog)
+    assert not [r for r in records if r[1] in ("Request received", "Request completed")]
+    request_records = [r for r in records if r[1] == "MCP request"]
+    assert len(request_records) == 1
+    got_level, _, data = request_records[0]
+    assert got_level == level and data["status_code"] == status
+    assert ("headers" in data) is with_headers
+
+
 def test_streamable_initialize_still_logs_client_identity(caplog):
     caplog.set_level(logging.INFO, logger=LOG_NAME)
     _through_logging("POST", "/mcp", json.dumps(initialize("2025-11-25")).encode(), 200)
@@ -583,9 +777,10 @@ def test_streamable_initialize_still_logs_client_identity(caplog):
     assert connected[0]["protocol_version"] == "2025-11-25"
 
 
-def test_get_mcp_open_keeps_info_with_user_agent_and_headers(caplog):
+@pytest.mark.parametrize("headers", [(), ((b"mcp-session-id", LEGACY_HEX.encode()),)])
+def test_get_mcp_open_keeps_info_with_user_agent_and_headers(caplog, headers):
     caplog.set_level(logging.DEBUG, logger=LOG_NAME)
-    _through_logging("GET", "/mcp", status=200)
+    _through_logging("GET", "/mcp", status=200, headers=headers)
     received = [(lvl, d) for lvl, m, d in _records(caplog) if m == "Request received"]
     assert len(received) == 1
     assert received[0][0] == logging.INFO
@@ -597,3 +792,27 @@ def test_sdk_per_message_loggers_are_capped_at_warning():
 
     for name in ("mcp.server.lowlevel.server", "mcp.server.streamable_http"):
         assert logging.getLogger(name).getEffectiveLevel() == logging.WARNING
+
+
+def _access_line(path, status, method="POST"):
+    return logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("198.51.100.1:5000", method, path, "1.1", status), None,
+    )
+
+
+def test_uvicorn_access_lines_are_dropped_only_for_successful_mcp_requests():
+    from backend.main import MCPAccessLogFilter
+
+    access = MCPAccessLogFilter()
+    # Duplicates of SecureLogging's own MCP records.
+    assert not access.filter(_access_line("/mcp", 200))
+    assert not access.filter(_access_line("/mcp/messages/?session_id=abc", 202))
+    assert not access.filter(_access_line("/mcp", 200, method="GET"))
+    # The only record of POST-pool rejections (answered outside SecureLogging).
+    for status in (408, 413, 429, 503):
+        assert access.filter(_access_line("/mcp", status))
+    assert access.filter(_access_line("/api/query", 200))
+    assert access.filter(logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, "other", None, None))
+    installed = logging.getLogger("uvicorn.access").filters
+    assert sum(isinstance(f, MCPAccessLogFilter) for f in installed) == 1

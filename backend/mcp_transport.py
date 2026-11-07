@@ -51,6 +51,44 @@ def carries_stateless_session(scope: Scope) -> bool:
     return False
 
 
+SDK_STREAMABLE_LOGGER = "mcp.server.streamable_http"
+
+
+class StatelessTerminateRaceFilter(logging.Filter):
+    """Drop the SDK's benign message-router traceback after a stateless exchange.
+
+    In stateless mode the SDK manager terminates each request's transport as
+    soon as the response has been sent, and terminate() closes the stream the
+    transport's message router is still iterating. mcp 1.18 then logs ERROR
+    "Error in message router" with an anyio ClosedResourceError traceback for
+    every non-notification request (initialize, tools/list, tools/call, ping,
+    even 400s), although the client already has its answer. Only that exact
+    record is dropped: the SDK's own message plus a closed/broken-stream
+    exception. Any other router failure, and every other SDK error
+    ("Error handling POST request", "Stateless session crashed", ...), still
+    reaches the journal; the logger level is not raised.
+    """
+
+    MESSAGE = "Error in message router"
+    BENIGN = (anyio.ClosedResourceError, anyio.BrokenResourceError)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg != self.MESSAGE or not record.exc_info:
+            return True
+        return not isinstance(record.exc_info[1], self.BENIGN)
+
+
+def _install_sdk_log_filter() -> None:
+    sdk_logger = logging.getLogger(SDK_STREAMABLE_LOGGER)
+    if not any(isinstance(f, StatelessTerminateRaceFilter) for f in sdk_logger.filters):
+        sdk_logger.addFilter(StatelessTerminateRaceFilter())
+
+
+# Logger filters see only records emitted on that exact logger, which is where
+# the SDK logs this race (logging.getLogger(__name__) in its transport module).
+_install_sdk_log_filter()
+
+
 class StatelessStreamableHTTP:
     """Serve Streamable HTTP POSTs as stateless, JSON-mode exchanges.
 
@@ -98,8 +136,15 @@ class StatelessStreamableHTTP:
             )(scope, receive, send)
             return
 
+        # Issue our marker on any successful answer to a request that does not
+        # already echo one of ours: no id at all, or a foreign one (a client
+        # re-initializing with a stale or legacy id). Nothing validates the
+        # id, so re-issuing is harmless, and a client that keeps a foreign id
+        # would otherwise send it on its notification GET and open a
+        # parasitic legacy SSE session there. Spec clients read it from the
+        # initialize response; that is always covered.
+        echoes_ours = carries_stateless_session(scope)
         headers = []
-        has_session = False
         for name, value in scope.get("headers", []):
             lowered = name.lower()
             if lowered == MCP_PROTOCOL_VERSION_HEADER and value.strip() not in _SUPPORTED_PROTOCOL_VERSIONS:
@@ -111,15 +156,13 @@ class StatelessStreamableHTTP:
                 # successful initialize. Negotiation itself (the initialize
                 # body) is untouched.
                 continue
-            if lowered == MCP_SESSION_ID_HEADER:
-                has_session = True
             headers.append((name, value))
         scope = {**scope, "headers": headers}
 
         async def send_with_session(message) -> None:
             if (
                 message["type"] == "http.response.start"
-                and not has_session
+                and not echoes_ours
                 and 200 <= message.get("status", 500) < 300
             ):
                 session_id = STATELESS_SESSION_PREFIX + uuid4().hex.encode()
