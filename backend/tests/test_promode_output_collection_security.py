@@ -1,21 +1,26 @@
 """Pro Mode output collection must never trust a path the jailed program wrote.
 
-The per-exec output dir (jail /tmp) and work dir (jail /work) are fully
-controlled by the generated program. Publishing, reading result.json, and
-cleanup must operate only on verified regular files created/opened without
-following links, so no entry there can make the backend publish, read,
-re-mode, or delete a host file outside the tree.
+The per-exec output dir (jail /tmp), work dir and persistent session dir
+(jail /sess) are fully controlled by the generated program. Publishing,
+reading result.json, session-store reads/writes, and cleanup must operate only
+on verified regular files created/opened without following links, so no entry
+there can make the backend publish, read, overwrite, re-mode, or delete a host
+file outside the tree.
 """
 
+import asyncio
+import json
 import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
 
-from backend.services import secure_code_executor as sce
+from backend.services import session_storage as ss
+from backend.services import untrusted_fs
 from backend.services.secure_code_executor import SecureCodeExecutor
-from backend.services.session_storage import force_rmtree
+from backend.services.session_storage import SessionStorage, force_rmtree
 
 
 @pytest.fixture
@@ -126,11 +131,131 @@ def test_existing_public_name_is_never_overwritten(executor, out_dir, host_secre
 
 def test_rejections_are_logged_without_contents(executor, out_dir, host_secret, caplog):
     (out_dir / "promode_x.csv").symlink_to(host_secret)
-    with caplog.at_level("WARNING", logger=sce.__name__):
+    with caplog.at_level("WARNING", logger=untrusted_fs.__name__):
         executor._collect_generated_files(out_dir, "sess")
     msgs = [r.getMessage() for r in caplog.records if "promode_output_rejected" in r.getMessage()]
     assert len(msgs) == 1
     assert "TOP_SECRET" not in msgs[0]
+
+
+def test_rejection_log_cannot_be_forged_by_entry_name(executor, out_dir, host_secret, caplog):
+    """Entry names are attacker-chosen; control characters are escaped (repr)."""
+    (out_dir / "promode_x\nFAKE reason=ok\n.csv").symlink_to(host_secret)
+    with caplog.at_level("WARNING", logger=untrusted_fs.__name__):
+        executor._collect_generated_files(out_dir, "sess")
+    msgs = [r.getMessage() for r in caplog.records if "promode_output_rejected" in r.getMessage()]
+    assert len(msgs) == 1
+    assert "\n" not in msgs[0]
+
+
+def test_per_execution_file_count_cap(executor, out_dir, monkeypatch, caplog):
+    monkeypatch.setattr(SecureCodeExecutor, "MAX_PUBLISHED_FILES", 3)
+    for i in range(7):
+        (out_dir / f"promode_{i}.csv").write_text("a\n")
+
+    with caplog.at_level("WARNING", logger="backend.services.secure_code_executor"):
+        files = executor._collect_generated_files(out_dir, "sess")
+
+    assert len(files) == 3
+    assert len(_published(executor)) == 3
+    caps = [r.getMessage() for r in caplog.records if "reason=file_count_cap" in r.getMessage()]
+    assert caps == ["promode_output_rejected reason=file_count_cap skipped=4 cap=3"]
+
+
+def test_per_execution_total_bytes_budget(executor, out_dir, monkeypatch):
+    monkeypatch.setattr(SecureCodeExecutor, "MAX_PUBLISHED_TOTAL_BYTES", 25)
+    (out_dir / "promode_a.csv").write_bytes(b"x" * 10)
+    (out_dir / "promode_b.csv").write_bytes(b"x" * 10)
+    (out_dir / "promode_c.csv").write_bytes(b"x" * 10)  # would exceed the budget
+    (out_dir / "promode_d.csv").write_bytes(b"x" * 5)   # still fits
+
+    files = executor._collect_generated_files(out_dir, "sess")
+
+    assert [f["name"].rsplit("_", 1)[-1] for f in files] == ["a.csv", "b.csv", "d.csv"]
+    total = sum((executor.public_dir / f["name"]).stat().st_size for f in files)
+    assert total <= 25
+
+
+def test_collection_runs_off_the_event_loop(executor, monkeypatch):
+    """Publishing copies bytes, so execute_code must not run it on the loop thread."""
+    seen = {}
+
+    async def fake_canary(self, force=False):
+        return True
+
+    async def fake_run(self, *args, **kwargs):
+        return {"success": True, "output": "ok"}
+
+    def fake_collect(self, tmp_out_dir, session_id):
+        seen["thread"] = threading.current_thread()
+        return []
+
+    monkeypatch.setattr(SecureCodeExecutor, "canary_self_test", fake_canary)
+    monkeypatch.setattr(SecureCodeExecutor, "_run_sandboxed", fake_run)
+    monkeypatch.setattr(SecureCodeExecutor, "_collect_generated_files", fake_collect)
+    monkeypatch.setattr(SecureCodeExecutor, "_layer2_active", lambda self: False)
+
+    async def go():
+        loop_thread = threading.current_thread()
+        result = await executor.execute_code("print(1)", "sess-thread")
+        return loop_thread, result
+
+    loop_thread, result = asyncio.run(go())
+    assert result["success"] is True
+    assert seen["thread"] is not loop_thread
+
+
+# --- SessionStorage: the session dir is jail /sess (writable by generated code)
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "get_session_storage_dir", lambda: tmp_path / "sessions")
+    return SessionStorage()
+
+
+def test_session_save_replaces_planted_link_instead_of_writing_through(store, host_secret):
+    sess_dir = store._get_session_dir("conv1")
+    (sess_dir / "statscan_metadata.json").symlink_to(host_secret)
+
+    assert store.save("conv1", "statscan_metadata", {"k": [1, 2]}) is True
+
+    assert host_secret.read_text() == "TOP_SECRET=1\n"
+    assert stat.S_IMODE(os.stat(host_secret).st_mode) == 0o600
+    key = sess_dir / "statscan_metadata.json"
+    st = os.lstat(key)
+    assert stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
+    assert stat.S_IMODE(st.st_mode) == ss.SESSION_FILE_MODE
+    assert json.loads(key.read_text()) == {"k": [1, 2]}
+    assert [p.name for p in sess_dir.iterdir()] == ["statscan_metadata.json"], "no temp left"
+
+
+def test_session_save_round_trips_and_overwrites(store):
+    assert store.save("conv1", "data", {"a": 1})
+    assert store.save("conv1", "data", {"a": 2})
+    assert store.load("conv1", "data") == {"a": 2}
+    assert store.list_keys("conv1") == ["data"]
+
+
+def test_session_load_does_not_follow_links(store, host_secret):
+    sess_dir = store._get_session_dir("conv1")
+    host_json = host_secret.with_suffix(".json")
+    host_json.write_text('{"secret": true}')
+    (sess_dir / "stolen.json").symlink_to(host_json)
+    os.mkfifo(sess_dir / "pipe.json")
+
+    assert store.load("conv1", "stolen") is None
+    assert store.load("conv1", "pipe") is None
+    assert store.load("conv1", "missing") is None
+
+
+def test_session_list_keys_only_lists_regular_files(store, host_secret):
+    sess_dir = store._get_session_dir("conv1")
+    (sess_dir / "real.json").write_text("{}")
+    (sess_dir / "link.json").symlink_to(host_secret)
+    (sess_dir / "dir.json").mkdir()
+
+    assert store.list_keys("conv1") == ["real"]
 
 
 def test_result_file_read_does_not_follow_links(tmp_path, host_secret):

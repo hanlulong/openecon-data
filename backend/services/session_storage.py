@@ -9,9 +9,20 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from backend.config import get_settings
+from backend.services import untrusted_fs
 from backend.utils import NumpyPandasEncoder, sanitize_identifier
 
 logger = logging.getLogger(__name__)
+
+# Largest session JSON the backend will read back. The jail's RLIMIT_FSIZE
+# (100 MiB) bounds what generated code can write there; match it so nothing a
+# real run saved is refused.
+MAX_SESSION_FILE_BYTES = 100 * 1024 * 1024
+# Mode of session files the backend writes. The jail (promode uid under
+# Layer 2) must be able to read them back via load_session, including files
+# saved before the session dir was group-shared, so keep the 0644 that the
+# backend's 0022 umask produced before writes became link-safe.
+SESSION_FILE_MODE = 0o644
 
 
 def get_session_storage_dir() -> Path:
@@ -78,7 +89,15 @@ def force_rmtree(path: Path) -> bool:
 
 
 class SessionStorage:
-    """Manage persistent storage for Pro Mode sessions"""
+    """Manage persistent storage for Pro Mode sessions.
+
+    SECURITY INVARIANT: each session dir is bound read-write into the Pro Mode
+    jail as /sess, so every ``<key>.json`` name in it may be a link (or FIFO,
+    hardlink, ...) planted by generated code in an earlier run of the same
+    conversation. Reads and writes therefore go through
+    ``backend.services.untrusted_fs``: reads never follow a link, and writes
+    replace the name with a new file instead of writing through it.
+    """
 
     def __init__(self):
         self.base_dir = get_session_storage_dir()
@@ -127,8 +146,8 @@ class SessionStorage:
             sanitized_key = self._validate_key(key)
             file_path = session_dir / f"{sanitized_key}.json"
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(value, f, cls=NumpyPandasEncoder, indent=2)
+            payload = json.dumps(value, cls=NumpyPandasEncoder, indent=2).encode("utf-8")
+            untrusted_fs.replace_file_nofollow(file_path, payload, SESSION_FILE_MODE)
 
             logger.info(f"Saved session data: {session_id}/{sanitized_key}")
             return True
@@ -156,15 +175,20 @@ class SessionStorage:
 
             # Load JSON only (pickle is not supported for security reasons)
             json_path = session_dir / f"{sanitized_key}.json"
-            if json_path.exists():
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            if os.path.lexists(json_path):
+                raw = untrusted_fs.read_untrusted_bytes(
+                    json_path, MAX_SESSION_FILE_BYTES,
+                    event=untrusted_fs.SESSION_REJECTED_EVENT,
+                )
+                if raw is None:
+                    return None
+                data = json.loads(raw.decode("utf-8"))
                 logger.info(f"Loaded session data: {session_id}/{sanitized_key}")
                 return data
 
             # Security: Refuse to load pickle files (arbitrary code execution risk)
             pkl_path = session_dir / f"{sanitized_key}.pkl"
-            if pkl_path.exists():
+            if os.path.lexists(pkl_path):
                 logger.error(f"Refusing to load legacy pickle file: {session_id}/{sanitized_key} - security risk. Please recreate the session data.")
                 # Delete the dangerous pickle file
                 try:
@@ -197,8 +221,13 @@ class SessionStorage:
             if not session_dir.exists():
                 return []
 
-            # Only list JSON files (pickle is not supported for security reasons)
-            json_keys = {f.stem for f in session_dir.glob("*.json")}
+            # Only list JSON files (pickle is not supported for security reasons),
+            # and only real regular files: a link/FIFO/dir named *.json is not
+            # a key the backend will load.
+            json_keys = {
+                f.stem for f in session_dir.glob("*.json")
+                if untrusted_fs.is_regular_file_nofollow(f)
+            }
             return list(json_keys)
         except Exception as e:
             logger.error(f"Failed to list session keys {session_id}: {e}")

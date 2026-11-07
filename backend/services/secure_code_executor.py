@@ -25,7 +25,6 @@ import logging
 import os
 import re
 import shutil
-import stat
 import sys
 import time
 from enum import Enum
@@ -33,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.config import get_settings
+from backend.services import untrusted_fs
 from backend.services.session_storage import force_rmtree, get_session_storage_dir
 
 logger = logging.getLogger(__name__)
@@ -424,6 +424,13 @@ class SecureCodeExecutor:
     # RLIMIT_FSIZE (100 MiB, _set_resource_limits) bounds what can be WRITTEN;
     # publishing is capped tighter since real charts/CSVs are a few MB at most.
     MAX_PUBLISHED_FILE_BYTES = 50 * 1024 * 1024
+    # Per-execution publish budget. Publishing COPIES bytes (it never trusts a
+    # path), so bound how much one run can make the backend copy and how much
+    # it can add to the public dir: generous for real multi-chart output (a
+    # chart per country of a large group plus its data), finite for a hostile
+    # run that writes many large files.
+    MAX_PUBLISHED_FILES = 50
+    MAX_PUBLISHED_TOTAL_BYTES = 100 * 1024 * 1024
     # result.json carries output[:max_output_size] + capped error/stderr; JSON
     # escaping can inflate it several-fold, so the read cap is generous.
     MAX_RESULT_FILE_BYTES = 16 * 1024 * 1024
@@ -619,8 +626,12 @@ class SecureCodeExecutor:
 
             # Step 6: Detect and collect generated files from the PER-EXEC output
             # dir (not global /tmp).
+            # Collection copies bytes (up to the publish budget), so run it off
+            # the event loop to keep a large output from stalling the worker.
             if result.get("success"):
-                files = self._collect_generated_files(tmp_out_dir, session_id)
+                files = await asyncio.to_thread(
+                    self._collect_generated_files, tmp_out_dir, session_id
+                )
                 if files:
                     result["files"] = files
                     logger.info(f"Collected {len(files)} generated file(s) for session {session_id}")
@@ -676,10 +687,19 @@ class SecureCodeExecutor:
         # real artifact ever produced in production.
         allowed_suffixes = {".png", ".csv", ".json"}
 
+        # Per-execution budget (see MAX_PUBLISHED_FILES / _TOTAL_BYTES).
+        bytes_left = self.MAX_PUBLISHED_TOTAL_BYTES
+        over_count = 0
+
         for out_file in sorted(tmp_out_dir.glob("promode_*")):
             try:
                 suffix = out_file.suffix.lower()
                 if suffix not in allowed_suffixes:
+                    continue
+                if len(files) >= self.MAX_PUBLISHED_FILES:
+                    # Counted, logged once below: a run writing thousands of
+                    # entries must not produce thousands of log lines.
+                    over_count += 1
                     continue
 
                 # Publish under a name that is unique across executions to avoid
@@ -692,8 +712,12 @@ class SecureCodeExecutor:
                 # The jailed program fully controls every entry in this dir, so
                 # never trust a path: copy bytes from a verified regular file into
                 # a NEW backend-owned file (see _publish_untrusted_file).
-                if not self._publish_untrusted_file(out_file, dest_file):
+                published = self._publish_untrusted_file(
+                    out_file, dest_file, min(self.MAX_PUBLISHED_FILE_BYTES, bytes_left)
+                )
+                if published is None:
                     continue
+                bytes_left -= published
 
                 url = f"/static/promode/{unique_name}"
                 file_type = {
@@ -703,109 +727,45 @@ class SecureCodeExecutor:
                 }.get(suffix, "file")
 
                 files.append({"url": url, "name": unique_name, "type": file_type})
-                logger.info(f"Collected file: {out_file.name} -> {url}")
+                logger.info("Collected file: %r -> %s", out_file.name, url)
 
             except Exception as e:
-                logger.warning(f"Failed to collect file {out_file}: {e}")
+                logger.warning("Failed to collect file %r: %s", out_file.name, e)
+
+        if over_count:
+            logger.warning(
+                "%s reason=file_count_cap skipped=%d cap=%d",
+                untrusted_fs.OUTPUT_REJECTED_EVENT, over_count, self.MAX_PUBLISHED_FILES,
+            )
 
         return files
 
-    @staticmethod
-    def _reject_untrusted_entry(path: Path, reason: str, **detail: Any) -> None:
-        """One structured warning per rejected sandbox output entry (no contents)."""
-        logger.warning(
-            "promode_output_rejected entry=%s reason=%s %s",
-            path.name, reason,
-            " ".join(f"{k}={v}" for k, v in sorted(detail.items())),
-        )
+    # The no-follow gate lives in backend.services.untrusted_fs so every backend
+    # consumer of a jail-writable dir (this executor, SessionStorage) shares it.
+    _reject_untrusted_entry = staticmethod(untrusted_fs.reject_untrusted_entry)
+    _open_untrusted_regular_file = staticmethod(untrusted_fs.open_untrusted_regular_file)
+    _read_untrusted_text = staticmethod(untrusted_fs.read_untrusted_text)
 
-    @classmethod
-    def _open_untrusted_regular_file(cls, path: Path, max_bytes: int) -> Optional[int]:
-        """Open a sandbox-written entry for reading WITHOUT following links.
-
-        Returns a read-only fd only when the entry is a plain regular file with a
-        single link and size <= max_bytes, verified both before (lstat) and after
-        (fstat on the opened fd, same st_dev/st_ino) the open so a swap in
-        between is detected. O_NOFOLLOW refuses a symlink at open time and
-        O_NONBLOCK keeps a swapped-in FIFO from blocking the backend. Returns
-        None (after logging) for anything else. Caller owns the fd.
-        """
-        try:
-            st = os.lstat(path)
-        except OSError as e:
-            cls._reject_untrusted_entry(path, "lstat_failed", errno=e.errno)
-            return None
-        if not stat.S_ISREG(st.st_mode):
-            cls._reject_untrusted_entry(path, "not_regular_file", mode=oct(st.st_mode))
-            return None
-        if st.st_nlink != 1:
-            cls._reject_untrusted_entry(path, "multiple_links", nlink=st.st_nlink)
-            return None
-        if st.st_size > max_bytes:
-            cls._reject_untrusted_entry(path, "too_large", size=st.st_size, cap=max_bytes)
-            return None
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
-        try:
-            fd = os.open(path, flags)
-        except OSError as e:
-            cls._reject_untrusted_entry(path, "open_refused", errno=e.errno)
-            return None
-        try:
-            fst = os.fstat(fd)
-            if (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
-                cls._reject_untrusted_entry(path, "changed_during_open")
-            elif not stat.S_ISREG(fst.st_mode) or fst.st_nlink != 1:
-                cls._reject_untrusted_entry(path, "not_regular_file_after_open")
-            elif fst.st_size > max_bytes:
-                cls._reject_untrusted_entry(path, "too_large", size=fst.st_size, cap=max_bytes)
-            else:
-                return fd
-        except OSError as e:
-            cls._reject_untrusted_entry(path, "fstat_failed", errno=e.errno)
-        os.close(fd)
-        return None
-
-    @classmethod
-    def _read_untrusted_text(cls, path: Path, max_bytes: int) -> Optional[str]:
-        """Read a sandbox-written regular file (no link following, size-capped)."""
-        fd = cls._open_untrusted_regular_file(path, max_bytes)
-        if fd is None:
-            return None
-        try:
-            chunks, total = [], 0
-            while total <= max_bytes:
-                chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - total))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total += len(chunk)
-            if total > max_bytes:
-                cls._reject_untrusted_entry(path, "too_large_during_read", cap=max_bytes)
-                return None
-            return b"".join(chunks).decode("utf-8", errors="replace")
-        except OSError as e:
-            cls._reject_untrusted_entry(path, "read_failed", errno=e.errno)
-            return None
-        finally:
-            os.close(fd)
-
-    def _publish_untrusted_file(self, src: Path, dest: Path) -> bool:
+    def _publish_untrusted_file(self, src: Path, dest: Path, max_bytes: int) -> Optional[int]:
         """Copy a sandbox-written file into the public dir as a NEW backend file.
 
         SECURITY INVARIANT: the published file is always created here by the
         backend (O_CREAT|O_EXCL|O_NOFOLLOW) and its mode is set with fchmod on
         that fd — never a path-based move/chmod — so no link planted by the
         jailed program can redirect what is published or whose mode changes.
-        At most MAX_PUBLISHED_FILE_BYTES are copied; a file that grows past the
-        cap mid-copy is discarded rather than published truncated. The source
-        is unlinked afterwards (unlink never follows a link).
+        At most ``max_bytes`` are copied; a file that grows past the cap
+        mid-copy is discarded rather than published truncated. The source is
+        unlinked afterwards (unlink never follows a link).
+
+        Returns the number of bytes published, or None when nothing was.
         """
-        cap = self.MAX_PUBLISHED_FILE_BYTES
+        cap = max_bytes
         src_fd = self._open_untrusted_regular_file(src, cap)
         if src_fd is None:
-            return False
+            return None
         dest_fd = None
         ok = False
+        copied = 0
         try:
             dest_fd = os.open(
                 dest,
@@ -813,7 +773,6 @@ class SecureCodeExecutor:
                 | getattr(os, "O_CLOEXEC", 0),
                 0o644,
             )
-            copied = 0
             while True:
                 chunk = os.read(src_fd, min(1024 * 1024, cap + 1 - copied))
                 if not chunk:
@@ -845,7 +804,7 @@ class SecureCodeExecutor:
             os.unlink(src)
         except OSError:
             pass
-        return ok
+        return copied if ok else None
 
     @staticmethod
     def _merge_stderr(result: Dict[str, Any], session_id: str) -> None:
