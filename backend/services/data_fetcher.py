@@ -1629,7 +1629,8 @@ def orient_fx_series(series: Any, base: str, target: str) -> Any:
 
     - matches base->target: relabel ``"<base> to <target> Exchange Rate"``;
     - opposite: invert every point (1/v; None and 0 become None, dates kept),
-      unit ``"<target> per 1 <base>"``, note naming the FRED id + native units;
+      unit ``"<target> per 1 <base>"``, description prefixed with the native
+      quote it was inverted from, note naming the FRED id + native units;
     - unparseable: keep FRED's native title and unit, add a disclosure note —
       never assert a direction that was not verified.
     """
@@ -1672,6 +1673,16 @@ def orient_fx_series(series: Any, base: str, target: str) -> Any:
         except (TypeError, ValueError, ZeroDivisionError):
             point.value = None
     metadata.unit = f"{target} per 1 {base}"
+    # The rewritten unit uses ISO codes, so without this the native quote text
+    # (the only served text naming both currencies) would vanish from every
+    # field the post-fetch relevance gate and LLM judge read, and a correct,
+    # inverted answer to "Swiss franc to US dollar" gets a clarification menu.
+    # It still describes the SERVED object: what was fetched and how it was
+    # transformed — never the request's words.
+    native_description = str(getattr(metadata, "description", "") or "").strip()
+    metadata.description = " ".join(
+        part for part in (f"Inverse (1/x) of FRED {series_id} ({native_units}).", native_description) if part
+    )
     notes.append(f"Inverted (1/x) from FRED {series_id} ({native_units}).")
     metadata.notes = notes
     return oriented

@@ -215,3 +215,84 @@ def test_zero_value_becomes_none_when_inverting():
     oriented = orient_fx_series(original, "CHF", "USD")
     assert oriented.data[0].value is None
     assert oriented.data[1].value == pytest.approx(1 / 0.9)
+
+
+# --- the real post-fetch gate must keep serving a correctly inverted series ---
+#
+# Inverting rewrites the unit to ISO codes ("USD per 1 CHF"). If that removed
+# the only served text naming both currencies, the lexical relevance gate
+# scored a CORRECT answer to "Swiss franc to US dollar" as unrelated and
+# replaced it with a clarification menu whose first option was the native,
+# wrong-direction FRED quote. These run the production gate
+# (needs_indicator_clarification) with production flag values on the series
+# exactly as orient_fx_series serves it.
+
+_FRED_NOTES = "Noon buying rates in New York City for cash transfers payable in foreign currencies."
+
+
+def _fred_like_series(series_id, title, value):
+    _ccy, units, _usd_first, _px = _BY_ID[series_id]
+    return NormalizedData(
+        metadata=Metadata(
+            source="FRED",
+            indicator=title,
+            country=None,
+            frequency="daily",
+            unit=units,
+            lastUpdated="",
+            seriesId=series_id,
+            apiUrl="",
+            sourceUrl=f"https://fred.stlouisfed.org/series/{series_id}",
+            description=_FRED_NOTES,
+        ),
+        data=[DataPoint(date="2024-01-02", value=value)],
+    )
+
+
+@pytest.fixture(scope="module")
+def _gate_service():
+    from backend.services.query import QueryService
+
+    return QueryService(openrouter_key="test", fred_key="fred", comtrade_key="demo")
+
+
+@pytest.mark.parametrize(
+    "query,series_id,title,base,tgt,indicators,language",
+    [
+        ("Swiss franc to US dollar since 2020", "DEXSZUS",
+         "Swiss Francs to U.S. Dollar Spot Exchange Rate", "CHF", "USD", ["exchange rate"], "en"),
+        ("Swiss franc to US dollar since 2020", "DEXSZUS",
+         "Swiss Francs to U.S. Dollar Spot Exchange Rate", "CHF", "USD",
+         ["Swiss franc to US dollar exchange rate"], "en"),
+        ("US dollar to euro since 2020", "DEXUSEU",
+         "U.S. Dollars to Euro Spot Exchange Rate", "USD", "EUR", ["exchange rate"], "en"),
+        ("dollar to pound since 2015", "DEXUSUK",
+         "U.S. Dollars to U.K. Pound Sterling Spot Exchange Rate", "USD", "GBP", ["exchange rate"], "en"),
+        ("日元兑美元 2020年以来", "DEXJPUS",
+         "Japanese Yen to U.S. Dollar Spot Exchange Rate", "JPY", "USD", ["Japanese yen to US dollar"], "zh"),
+        ("人民币兑美元汇率 2020年以来", "DEXCHUS",
+         "Chinese Yuan Renminbi to U.S. Dollar Spot Exchange Rate", "CNY", "USD",
+         ["CNY to USD exchange rate"], "zh"),
+    ],
+)
+def test_inverted_series_still_passes_real_post_fetch_gate(
+    _gate_service, monkeypatch, query, series_id, title, base, tgt, indicators, language
+):
+    monkeypatch.setattr(_gate_service.settings, "use_outcome_decision_stage", False, raising=False)
+    monkeypatch.setattr(_gate_service.settings, "use_post_fetch_semantic_judge", False, raising=False)
+    served = orient_fx_series(_fred_like_series(series_id, title, 0.85), base, tgt)
+    # Precondition: these are the inverted direction for their FRED series.
+    assert served.metadata.unit == f"{tgt} per 1 {base}"
+    assert _BY_ID[series_id][1] in (served.metadata.description or "")
+    intent = ParsedIntent(
+        apiProvider="ExchangeRate",
+        indicators=indicators,
+        parameters={"baseCurrency": base, "targetCurrency": tgt, "startDate": "2020-01-01"},
+        clarificationNeeded=False,
+        confidence=0.95,
+        originalQuery=query,
+        language=language,
+    )
+    assert _gate_service._needs_indicator_clarification(  # pylint: disable=protected-access
+        query, [served], intent, caller="test"
+    ) is False
