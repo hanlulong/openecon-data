@@ -1006,6 +1006,41 @@ export const MessageChart = memo(function MessageChart({ data, chartType, onChar
         </div>
       )}
 
+      {/* Provider prose about the series (definition, methodology, sources)
+          from the display-only metadata.about field. Kept collapsed and
+          separate from the always-visible transparency notes above, so long
+          prose never crowds out a coverage/substitution disclosure. Providers
+          opt in by filling about; metadata.description is NOT rendered here
+          (several providers set it to a label such as an internal dataset
+          key). Deduped; text that merely repeats the indicator name is
+          skipped. */}
+      {(() => {
+        const seen = new Set<string>()
+        const abouts: Array<{ key: string; label: string; text: string }> = []
+        data.forEach((series, index) => {
+          const text = (series.metadata.about || '').trim()
+          const label = series.metadata.indicator || series.metadata.seriesId || ''
+          if (!text || seen.has(text) || text.toLowerCase() === label.trim().toLowerCase()) return
+          seen.add(text)
+          abouts.push({ key: `${label}-${index}`, label, text })
+        })
+        if (abouts.length === 0) return null
+        return (
+          <details
+            className="series-about"
+            style={{ margin: '12px 0 4px', fontSize: '0.8rem', lineHeight: 1.5, color: '#6b7280' }}
+          >
+            <summary style={{ cursor: 'pointer', fontWeight: 500, color: '#4b5563' }}>About this series</summary>
+            {abouts.map(({ key, label, text }) => (
+              <p key={key} style={{ margin: '6px 0 0' }}>
+                {abouts.length > 1 && label ? <strong>{label}: </strong> : null}
+                {text}
+              </p>
+            ))}
+          </details>
+        )
+      })()}
+
       <div className="api-urls-section">
         <button type="button" className="api-section-toggle" onClick={() => setShowApiUrls((prev) => !prev)}>
           <span className="toggle-icon">{showApiUrls ? '▼' : '▶'}</span>

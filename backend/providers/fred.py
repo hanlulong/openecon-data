@@ -139,6 +139,42 @@ def _fred_country_label(iso2: Optional[str]) -> Optional[str]:
     return _country_label_for_iso2(iso2)
 
 
+# Upper bound for metadata.about. FRED series notes range from one line to
+# several KB of methodology/citation text; "about" is display-only (rendered
+# collapsed as "About this series") but rides along in every API/MCP payload,
+# so it is bounded — cut at a sentence end so it never stops mid-word.
+_ABOUT_MAX_CHARS = 1200
+
+
+def _series_about(notes: Optional[str]) -> Optional[str]:
+    """Whitespace-normalized FRED series notes for the display-only
+    metadata.about field.
+
+    Structural only: collapses whitespace and bounds length, preferring the
+    last sentence end inside the window. A sentence cut is accepted only when
+    it keeps at least half the window — otherwise an early abbreviation
+    ("The U.S. series …") would shrink the text to a few characters — and the
+    cut falls back to the last word boundary. No interpretation of the text.
+    """
+    text = " ".join(str(notes or "").split())
+    if not text:
+        return None
+    if len(text) <= _ABOUT_MAX_CHARS:
+        return text
+    # Include one char past the window so a sentence ending exactly at the
+    # boundary ("…end." + " ") is still found.
+    window = text[: _ABOUT_MAX_CHARS + 1]
+    cut = window.rfind(". ")
+    if cut + 1 >= _ABOUT_MAX_CHARS // 2:
+        head = window[: cut + 1]
+    else:
+        head = text[:_ABOUT_MAX_CHARS]
+        space = head.rfind(" ")
+        if space > 0:
+            head = head[:space]
+    return head.rstrip() + " …"
+
+
 def _infer_country_from_fred_info(info: Dict[str, Any]) -> Optional[str]:
     """Infer a FRED series' geography ONLY from a positive structured signal.
 
@@ -705,15 +741,18 @@ class FREDProvider(BaseProvider):
         elif "nominal" in title_lower or "current" in title_lower:
             price_type = "Nominal (current prices)"
 
-        # Parse notes into list (split by periods/semicolons for readability)
-        notes_list = None
-        if notes:
-            # Truncate very long notes and split into sentences
-            notes_text = notes[:500] if len(notes) > 500 else notes
-            # Split on sentence boundaries (period + whitespace), not bare
-            # periods — "U.S." was fragmenting into "U"/"S" notes, which the
-            # frontend footnote now renders visibly.
-            notes_list = [n.strip() for n in re.split(r"\.\s+", notes_text) if n.strip()][:3]
+        # FRED's series notes are descriptive prose (definition, methodology,
+        # citation boilerplate). They are NOT copied into metadata.notes: that
+        # is the always-visible transparency channel (coverage gaps,
+        # substitutions, defaults) other layers append to, and sentence
+        # fragments of prose there ("(accessed on (date)).") drowned out real
+        # disclosures. The full text goes to the DISPLAY-ONLY metadata.about
+        # (collapsed "About this series"). metadata.description keeps its
+        # historical 200-char head unchanged on purpose: relevance scoring,
+        # fallback validation and the country/region scope checks read it, and
+        # growing it would shift their decisions.
+        description = notes[:200] if notes else None
+        about = _series_about(notes)
 
         # FRED's own labeling convention: foreign/aggregate series name their
         # geography in the title, US-domestic series usually don't. So when the
@@ -742,8 +781,8 @@ class FREDProvider(BaseProvider):
             seasonalAdjustment=seasonal_adjustment or seasonal_adj_short,
             dataType=data_type,
             priceType=price_type,
-            description=info.get("notes", "")[:200] if info.get("notes") else None,
-            notes=notes_list,
+            description=description,
+            about=about,
             startDate=info.get("observation_start"),
             endDate=info.get("observation_end"),
         )

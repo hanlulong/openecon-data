@@ -595,6 +595,80 @@ describe('MessageChart', () => {
     });
   });
 
+  // Display-only provider prose (metadata.about) is collapsed; transparency
+  // notes stay visible; metadata.description is never rendered as prose.
+  describe('series about vs transparency notes', () => {
+    const described = (extra: Partial<NormalizedData['metadata']>): NormalizedData[] => [
+      {
+        metadata: {
+          source: 'FRED',
+          indicator: 'Unemployment Rate',
+          country: 'US',
+          frequency: 'monthly',
+          unit: 'Percent',
+          lastUpdated: '2026-11-07',
+          ...extra,
+        },
+        data: [
+          { date: '2026-08-01', value: 4.3 },
+          { date: '2026-09-01', value: 4.4 },
+        ],
+      },
+    ];
+
+    it('renders about inside a collapsed About this series disclosure', () => {
+      render(
+        <MessageChart
+          data={described({
+            about: 'The unemployment rate represents the number of unemployed as a percentage of the labor force.',
+            notes: ['Showing national data; the requested state was not available.'],
+          })}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      const details = document.querySelector('details.series-about') as HTMLDetailsElement | null;
+      expect(details).not.toBeNull();
+      expect(details!.open).toBe(false);
+      expect(details!.querySelector('summary')?.textContent).toBe('About this series');
+      expect(details!.textContent).toContain('percentage of the labor force');
+      // The transparency disclosure stays in the always-visible notes list.
+      const notes = document.querySelector('ul.chart-notes');
+      expect(notes?.textContent).toContain('requested state was not available');
+      expect(notes?.textContent).not.toContain('labor force');
+    });
+
+    it('renders no disclosure without about, for a label-like description, or when about repeats the indicator', () => {
+      const { unmount } = render(
+        <MessageChart data={described({})} chartType="line" onChartTypeChange={mockOnChartTypeChange} onExport={mockOnExport} />,
+      );
+      expect(document.querySelector('details.series-about')).toBeNull();
+      unmount();
+      // description is a short/label field for several providers (e.g. an
+      // internal dataset key); it is not shown as series prose.
+      const second = render(
+        <MessageChart
+          data={described({ description: 'Unemployment Rate (IMF.STA LS key USA.UR.M)' })}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(document.querySelector('details.series-about')).toBeNull();
+      second.unmount();
+      render(
+        <MessageChart
+          data={described({ about: 'Unemployment rate' })}
+          chartType="line"
+          onChartTypeChange={mockOnChartTypeChange}
+          onExport={mockOnExport}
+        />,
+      );
+      expect(document.querySelector('details.series-about')).toBeNull();
+    });
+  });
+
   // The header states the span the RETURNED points cover, so a window that is
   // shorter or staler than requested is visible without reading the chart.
   describe('covered range in series header', () => {

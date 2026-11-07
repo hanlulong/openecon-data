@@ -15,8 +15,9 @@ export interface NormalizedData {
     seasonalAdjustment?: string; // e.g., "Seasonally adjusted", "Not seasonally adjusted"
     dataType?: string; // e.g., "Level", "Change", "Percent Change", "Index"
     priceType?: string; // e.g., "Chained (2017) dollars", "Current prices"
-    description?: string; // Full description of the series
-    notes?: string[]; // Additional notes or footnotes
+    description?: string; // Short description of the series (backend checks read it)
+    notes?: string[]; // Transparency disclosures (coverage gaps, substitutions), always shown
+    about?: string; // Display-only long-form provider prose, shown collapsed as "About this series"
     scaleFactor?: string; // e.g., "millions", "billions", "thousands"
     startDate?: string; // First available data date
     endDate?: string; // Last available data date

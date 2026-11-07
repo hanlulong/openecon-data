@@ -62,8 +62,13 @@ class Metadata(BaseModel):
     seasonalAdjustment: Optional[str] = None  # e.g., "Seasonally adjusted", "Not seasonally adjusted"
     dataType: Optional[str] = None  # e.g., "Level", "Change", "Percent Change", "Index"
     priceType: Optional[str] = None  # e.g., "Chained (2017) dollars", "Current prices"
-    description: Optional[str] = None  # Full description of the series
-    notes: Optional[List[str]] = None  # Additional notes or footnotes
+    description: Optional[str] = None  # Short description; runtime relevance/fallback/scope checks read it
+    notes: Optional[List[str]] = None  # Transparency disclosures (coverage gaps, substitutions), always shown
+    # DISPLAY-ONLY long-form provider prose (definition, methodology, sources),
+    # rendered collapsed as "About this series". No selection, validation or
+    # scope check reads it — keep it that way, so the length of a provider's
+    # prose can never shift relevance scores or fail-closed guards.
+    about: Optional[str] = None
     scaleFactor: Optional[str] = None  # e.g., "millions", "billions", "thousands"
     startDate: Optional[str] = None  # First available data date
     endDate: Optional[str] = None  # Last available data date
