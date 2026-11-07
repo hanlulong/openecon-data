@@ -318,7 +318,10 @@ def series_text_for_relevance(series: Any) -> str:
 _SHORT_TERM_MAX_LEN = 3
 
 
-@lru_cache(maxsize=None)
+# Bounded: every current caller passes a fixed module-level term list (a few
+# dozen distinct tuples), so the cache never evicts in practice, but a future
+# caller passing dynamic terms cannot grow it without limit.
+@lru_cache(maxsize=256)
 def _term_list_pattern(terms: tuple[str, ...]) -> "re.Pattern[str]":
     """Compile ONE word-start pattern for a penalty term list (cached per list).
 
@@ -327,22 +330,33 @@ def _term_list_pattern(terms: tuple[str, ...]) -> "re.Pattern[str]":
     another word ("employment" inside "unemployment"); short terms must also
     END the word (optional ``s``/``es`` plural). Longer terms keep prefix
     matching so inflections ("regional", "educational") still count.
+
+    The shared left boundary is factored OUT of the alternation: inside every
+    alternative it defeats the regex engine's first-character scan and the
+    matcher ran ~20x slower on long titles (it runs per scored series, on the
+    event loop). Match results are identical.
     """
     parts: List[str] = []
     for term in terms:
         escaped = re.escape(str(term).lower())
         if len(term) <= _SHORT_TERM_MAX_LEN:
-            parts.append(rf"(?<![a-z]){escaped}(?:e?s)?(?![a-z])")
+            parts.append(rf"{escaped}(?:e?s)?(?![a-z])")
         else:
-            parts.append(rf"(?<![a-z]){escaped}")
-    return re.compile("|".join(parts) if parts else r"(?!x)x")
+            parts.append(escaped)
+    if not parts:
+        return re.compile(r"(?!x)x")
+    return re.compile(r"(?<![a-z])(?:" + "|".join(parts) + ")")
 
 
 def text_mentions_term(text: str, *terms: str) -> bool:
-    """True when lower-cased ``text`` mentions any term as a word (see above)."""
+    """True when ``text`` mentions any term as a word (see above).
+
+    ``text`` is lower-cased here so the contract does not depend on every
+    caller remembering to (the compiled patterns are lower-case).
+    """
     if not text or not terms:
         return False
-    return bool(_term_list_pattern(tuple(terms)).search(text))
+    return bool(_term_list_pattern(tuple(terms)).search(str(text).lower()))
 
 
 def labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> float:

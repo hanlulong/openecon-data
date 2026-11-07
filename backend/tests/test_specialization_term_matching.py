@@ -110,3 +110,11 @@ def test_labor_rate_sibling_check_does_not_match_inside_unemployment() -> None:
     assert labor_rate_specificity_penalty(
         "unemployment rate united states", "employment rate, total"
     ) > 2.0
+
+
+def test_text_mentions_term_lowercases_its_input() -> None:
+    # The compiled patterns are lower-case; the helper must not silently
+    # return False for a mixed-case caller ("Women", "MEN").
+    assert text_mentions_term("Unemployment Rate - Women", "women")
+    assert text_mentions_term("EMPLOYED MEN", "men")
+    assert not text_mentions_term("GOVERNMENT DEBT", "men")
