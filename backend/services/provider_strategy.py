@@ -90,8 +90,20 @@ PROVIDER_GROUP_AGGREGATES: Dict[str, Dict[str, str]] = {
         "WORLD": "WLD",
     },
     "IMF": {
-        # DataMapper accepts region aggregates for WEO-style codes.
-        "EUROZONE": "EA",
+        # DataMapper analytical-group ids, checked 2026-11-07 against
+        # /api/v1/groups (EURO="Euro area", EU="European Union",
+        # WEOWORLD="World") and present as keys in /api/v1/PCPIPCH values.
+        # The former "EA" is not a DataMapper key (euro-area fetches came
+        # back without the aggregate).
+        "EUROZONE": "EURO",
+        "EU": "EU",
+        "WORLD": "WEOWORLD",
+    },
+    "BIS": {
+        # BIS REF_AREA for the euro area (checked 2026-11-07: WS_CBPOL/M.XM
+        # returns "Central bank policy rates - Euro area"). Without it the
+        # label reached BISProvider._expand_region and fanned out to members.
+        "EUROZONE": "XM",
     },
 }
 
@@ -203,6 +215,16 @@ def country_qualified_indicator_text(intent: Any, provider: str, indicator_text:
     ).strip()
     if not country or country.lower() in text.lower():
         return text
+    # Established aggregates (euro area, EU) are TITLED in region-as-series
+    # providers too ("... for Euro area"); CountryResolver.normalize knows no
+    # aggregate, so without this the aggregate silently fell back to the home
+    # country's series.
+    aggregate = canonical_aggregate_region(country)
+    if aggregate:
+        aggregate_label = humanize_region_name(aggregate)
+        if aggregate_label.lower() in text.lower():
+            return text
+        return f"{text} {aggregate_label}"
     try:
         from ..routing.country_resolver import CountryResolver
 

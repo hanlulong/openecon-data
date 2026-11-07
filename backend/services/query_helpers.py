@@ -95,6 +95,66 @@ def apply_country_overrides(
     elif extracted_countries and extracted_countries[0].upper() != "US":
         intent.parameters["country"] = extracted_countries[0]
         intent.parameters.pop("countries", None)
+    elif not extracted_countries:
+        aggregate_label = _single_established_aggregate_entity(svc, intent, query)
+        if aggregate_label:
+            logger.info(
+                "🌍 Empty parsed geography filled with established aggregate entity '%s'",
+                aggregate_label,
+            )
+            intent.parameters["country"] = aggregate_label
+            intent.parameters.pop("countries", None)
+
+
+# Trade-flow parameter shape: when any of these is set the request's geography
+# is directional (reporter/partner), and a bare ``country`` is consumed as the
+# REPORTER downstream — so an empty ``country`` is not "no geography".
+_DIRECTIONAL_GEOGRAPHY_KEYS = ("reporter", "reporters", "partner", "partners", "flow")
+
+
+def _single_established_aggregate_entity(
+    svc: "QueryService", intent: ParsedIntent, query: str
+) -> Optional[str]:
+    """Return the entity label of the ONE established aggregate the query names.
+
+    STRUCTURAL geographic entity extraction — the aggregate counterpart of the
+    concrete-country fill above, consulted only when the parser left geography
+    empty/default-US and the query names no concrete country (US included:
+    "US imports from the euro area" is not filled). An entity qualifies only
+    when the provider aggregate-identity table (PROVIDER_GROUP_AGGREGATES via
+    canonical_aggregate_region) declares it; groups without an established
+    aggregate (G7, BRICS, ASEAN, ...) are never filled and keep their scope
+    question. Never member-expands and never overrides parser-set geography.
+
+    Vetoes (fail-closed — fall back to today's ask/default path, never
+    authorize a fill): directional trade geography, parser comparison or
+    decomposition structure, two or more detected regions, and the existing
+    member/comparison/ranking scope markers. English-only: CountryResolver has
+    no CJK region aliases, so Chinese aggregate requests rely on the parse
+    prompt plus provider-default disclosure.
+    """
+    from .indicator_clarification import has_explicit_member_group_scope
+    from .provider_strategy import canonical_aggregate_region, humanize_region_name
+
+    params = intent.parameters or {}
+    if any(params.get(key) for key in _DIRECTIONAL_GEOGRAPHY_KEYS):
+        return None
+    if intent.needsDecomposition:
+        return None
+    if str(intent.queryType or "").strip().lower() == "comparison":
+        return None
+    regions = CountryResolver.detect_regions_in_query(query)
+    if len(regions) != 1:
+        return None
+    label = humanize_region_name(regions[0])
+    if not canonical_aggregate_region(label):
+        return None
+    try:
+        if has_explicit_member_group_scope(svc, query):
+            return None
+    except Exception:
+        return None
+    return label
 
 
 def build_alternative_series(intent: ParsedIntent, data: Any) -> Optional[list]:

@@ -55,6 +55,7 @@ from ..services.provider_strategy import (
     humanize_region_name,
     region_qualified_indicator_text,
 )
+from ..services.query_parsing import extract_indicator_text_from_refined_query
 from ..utils.option_supportability import option_supportability_reason
 from ..utils.processing_steps import (
     ProcessingTracker,
@@ -1962,43 +1963,99 @@ def verify_semantic_discriminators(
 
 
 
-def has_explicit_group_scope(qs: Any, query: str) -> bool:
-    """Return True when the query already makes group scope explicit."""
+# Existing scope markers, split by WHICH scope they make explicit. The split
+# adds no words: has_explicit_group_scope keeps the union (unchanged ask
+# behaviour); the member subset alone vetoes the empty-geography aggregate
+# fill in query_helpers.apply_country_overrides (fail-closed: a vetoed fill
+# falls back to the existing ask/default path).
+_GROUP_MEMBER_SCOPE_MARKERS = (
+    "member countries",
+    "member country",
+    "members",
+    "countries",
+    "nations",
+    "nation",
+    "economies",
+    "each country",
+    "by country",
+    "country by country",
+    "cross-country",
+)
+_GROUP_AGGREGATE_SCOPE_MARKERS = (
+    "group average",
+    "regional average",
+    "average across",
+    "mean across",
+    "aggregate",
+    "aggregated",
+    "overall",
+    "as a group",
+    "as a whole",
+    "group as a whole",
+    "one value",
+    "single value",
+    "combined",
+    "total for the group",
+)
+
+
+def has_explicit_member_group_scope(qs: Any, query: str) -> bool:
+    """Return True when the query makes MEMBER/comparison/ranking scope explicit."""
     query_lower = str(query or "").lower()
     if qs._is_comparison_query(query_lower) or qs._is_ranking_query(query_lower):
         return True
+    return any(marker in query_lower for marker in _GROUP_MEMBER_SCOPE_MARKERS)
 
-    explicit_markers = [
-        "member countries",
-        "member country",
-        "members",
-        "countries",
-        "nations",
-        "nation",
-        "economies",
-        "each country",
-        "by country",
-        "country by country",
-        "cross-country",
-        "group average",
-        "regional average",
-        "average across",
-        "mean across",
-        "aggregate",
-        "aggregated",
-        "overall",
-        "as a group",
-        "as a whole",
-        "group as a whole",
-        "one value",
-        "single value",
-        "combined",
-        "total for the group",
-    ]
-    if any(marker in query_lower for marker in explicit_markers):
+
+def has_explicit_group_scope(qs: Any, query: str) -> bool:
+    """Return True when the query already makes group scope explicit."""
+    if has_explicit_member_group_scope(qs, query):
         return True
+    query_lower = str(query or "").lower()
+    return any(marker in query_lower for marker in _GROUP_AGGREGATE_SCOPE_MARKERS)
 
-    return False
+
+def build_group_scope_follow_up_query(
+    original_query: str,
+    region: str,
+    country_labels: List[str],
+    indicator_label: str = "",
+) -> str:
+    """Rebuild a group-scope ask's original request around the follow-up entities.
+
+    "euro area inflation rate" + ["France"] -> "France inflation rate". The
+    pending region mention is SUBSTITUTED (never kept alongside the new
+    entities), so downstream text consumers (gate scoring, display labels,
+    conversation state) see one geography. Falls back to
+    "<indicator label> <countries>" when the region mention is not found
+    verbatim. Structural text plumbing over already-extracted entities.
+    """
+    labels = [str(label).strip() for label in country_labels if str(label or "").strip()]
+    if not labels:
+        return str(original_query or "").strip()
+    entity_text = " and ".join(labels)
+    query_text = str(original_query or "").strip()
+    region_label = humanize_region_name(region)
+    region_upper = str(region or "").strip()
+    patterns = [
+        re.escape(alias)
+        for alias in dict.fromkeys(
+            alias for alias in (region_label, region_upper.replace("_", " "), region_upper) if alias
+        )
+    ]
+    if query_text and patterns:
+        region_regex = "|".join(patterns)
+        rewritten = re.sub(
+            rf"(?:\bthe\s+)?\b(?:{region_regex})\b",
+            entity_text,
+            query_text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if rewritten != query_text:
+            return re.sub(r"\s+", " ", rewritten).strip()
+    base = str(indicator_label or "").strip() or extract_indicator_text_from_refined_query(query_text)
+    return f"{base} {entity_text}".strip()
 
 
 def rewrite_group_scope_query(

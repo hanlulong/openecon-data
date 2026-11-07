@@ -29,8 +29,10 @@ import httpx
 from ..models import ExecutionPlan, Metadata, NormalizedData, ParsedIntent
 from ..services.indicator_resolution import is_exact_match_locked
 from ..services.provider_strategy import (
+    PROVIDER_GROUP_AGGREGATES,
     REGION_AS_SERIES_PROVIDERS,
     canonical_aggregate_region,
+    humanize_region_name,
     normalize_aggregate_geography,
     region_qualified_indicator_text,
 )
@@ -472,6 +474,56 @@ def _coingecko_has_historical_time_scope(query: str) -> bool:
     if _TIME_SCOPE_SINGLE_YEAR_RE.search(snapshot_neutral_text):
         return True
     return bool(_TIME_SCOPE_YEAR_RANGE_RE.search(snapshot_neutral_text))
+
+
+# Provenance for a geography the provider DISPATCH chose because the request
+# carried none (mirrors __time_scope_authority="default"). Disclosure only:
+# the served data is unchanged; the response chokepoint
+# (QueryService._disclose_default_geography) reads Metadata.geoScopeAuthority.
+GEO_SCOPE_AUTHORITY_DEFAULT = "default"
+
+
+def _mark_provider_default_geography(
+    series_list: List[NormalizedData], default_scope: str,
+) -> List[NormalizedData]:
+    """Stamp a provider-default geography on the served series (never changes data)."""
+    scope = str(default_scope or "").strip()
+    if not scope:
+        return series_list
+    note = f"No geography was resolved from the request; showing the source default scope: {scope}."
+    for series in series_list or []:
+        metadata = getattr(series, "metadata", None)
+        if metadata is None:
+            continue
+        metadata.geoScopeAuthority = GEO_SCOPE_AUTHORITY_DEFAULT
+        notes = list(metadata.notes or [])
+        if note not in notes:
+            notes.append(note)
+        metadata.notes = notes
+    logger.info("🌍 Provider default geography disclosed: %s", scope)
+    return series_list
+
+
+def _native_aggregate_or_none(provider: str, value: Any) -> Optional[str]:
+    """Provider-native id for an established aggregate entity, else None.
+
+    Structural guard consulted before a provider's own region resolver: an
+    established aggregate (euro area, EU, World) must never be member-expanded
+    into a fan-out of member series. When the provider declares a native id
+    (PROVIDER_GROUP_AGGREGATES) it is returned; when it declares none, the
+    request fails honestly so fallback can try a provider that publishes the
+    aggregate. Values that are not established aggregates return None.
+    """
+    region = canonical_aggregate_region(value)
+    if region is None:
+        return None
+    native = PROVIDER_GROUP_AGGREGATES.get(_normalize_provider_name(provider), {}).get(region)
+    if native:
+        return native
+    raise DataNotAvailableError(
+        f"{provider} publishes no native {humanize_region_name(region)} aggregate; "
+        "member-country series are not a substitute for the group value."
+    )
 
 
 def _provider_request_contract(provider: str, intent: ParsedIntent, params: dict) -> dict[str, Any]:
@@ -1869,10 +1921,18 @@ async def fetch_from_provider_dispatch(
     if provider == "BIS":
         indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else "POLICY_RATE"))
         params["indicator"] = indicator
+        bis_country = params.get("country")
+        bis_countries = params.get("countries")
+        if bis_country:
+            bis_country = _native_aggregate_or_none("BIS", bis_country) or bis_country
+        if isinstance(bis_countries, list):
+            bis_countries = [
+                _native_aggregate_or_none("BIS", item) or item for item in bis_countries
+            ]
         return await svc.bis_provider.fetch_indicator(
             indicator=indicator,
-            country=params.get("country"),
-            countries=params.get("countries"),
+            country=bis_country,
+            countries=bis_countries,
             start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
             frequency=params.get("frequency", "M"),
@@ -2418,14 +2478,27 @@ async def _fetch_from_imf(
         request_end_year = int(str(params["endDate"])[:4])
 
     # Resolve countries/regions to list of country codes
+    def _resolve_imf_entity(item: Any) -> List[str]:
+        native_aggregate = _native_aggregate_or_none("IMF", item)
+        if native_aggregate:
+            return [native_aggregate]
+        return svc.imf_provider._resolve_countries(item)
+
     resolved_countries: List[str] = []
+    default_geography: Optional[str] = None
     if isinstance(countries_param, list):
         for item in countries_param:
-            resolved_countries.extend(svc.imf_provider._resolve_countries(item))
+            resolved_countries.extend(_resolve_imf_entity(item))
     elif isinstance(countries_param, str):
-        resolved_countries = svc.imf_provider._resolve_countries(countries_param)
+        resolved_countries = _resolve_imf_entity(countries_param)
     else:
-        resolved_countries = [str(imf_request.get("default_country") or "USA")]
+        default_geography = str(imf_request.get("default_country") or "USA")
+        resolved_countries = [default_geography]
+
+    def _disclose_default(series_list: List[NormalizedData]) -> List[NormalizedData]:
+        if default_geography:
+            return _mark_provider_default_geography(series_list, default_geography)
+        return series_list
 
     # Remove duplicates while preserving order
     resolved_countries = list(dict.fromkeys(resolved_countries))
@@ -2489,7 +2562,7 @@ async def _fetch_from_imf(
                 end_year=request_end_year,
             )
             all_data.extend(series_list)
-        return all_data
+        return _disclose_default(all_data)
     else:
         country = resolved_countries[0]
         if len(intent.indicators) > 1:
@@ -2505,15 +2578,15 @@ async def _fetch_from_imf(
                     end_year=request_end_year,
                 )
                 all_data.extend(series_list)
-            return all_data
+            return _disclose_default(all_data)
         else:
             indicator = str(params.get("indicator") or (intent.indicators[0] if intent.indicators else ""))
-            return await _fetch_imf_series_batch(
+            return _disclose_default(await _fetch_imf_series_batch(
                 indicator=resolved_indicator or indicator,
                 countries=[country],
                 start_year=request_start_year,
                 end_year=request_end_year,
-            )
+            ))
 
 
 async def _fetch_from_eurostat(
@@ -2593,7 +2666,7 @@ async def _fetch_from_eurostat(
 
     if not is_multi_country and isinstance(country_param, str):
         upper_country = country_param.upper().replace(" ", "_")
-        if upper_country not in EU_AGGREGATES:
+        if upper_country not in EU_AGGREGATES and not canonical_aggregate_region(country_param):
             from ..routing.country_resolver import CountryResolver
 
             expanded = CountryResolver.expand_region(country_param)
@@ -2644,6 +2717,8 @@ async def _fetch_from_eurostat(
     # Single country query (default to EU aggregate if not specified)
     single_country = country_param if country_param else ("__ALL__" if exact_provider_surface_requested else "EU27_2020")
     series = await _fetch_indicator_with_sparse_history_retry(single_country)
+    if not country_param and not exact_provider_surface_requested:
+        return _mark_provider_default_geography([series], single_country)
     return [series]
 
 

@@ -171,6 +171,7 @@ Geography extraction:
 - Preserve the requested geographic entity and extent; a continent is not interchangeable with a political union.
 - An available narrower aggregate does not justify substitution. If distinct geographic interpretations remain unresolved, ask for clarification rather than inventing membership.
 - Set parameters.country for one geographic entity, including a group aggregate; use parameters.countries for distinct requested entities in order, preserving aggregate entities in comparisons. Enumerate member countries only when the user requests member comparisons.
+- A currency union or political bloc named as a whole is ONE entity, written with its English name: "euro area inflation" or "欧元区失业率" -> country "Euro area"; "欧盟GDP" -> country "European Union"; but "compare euro area member countries" -> countries lists the members.
 - subnationalRegion: when the user asks about a sub-country region (a state,
   province, prefecture, municipality, city, etc.), set subnationalRegion to that
   region's name AND still set country to the PARENT country. Set null when the

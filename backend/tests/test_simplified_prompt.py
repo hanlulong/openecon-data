@@ -22,7 +22,11 @@ def test_simplified_prompt_is_compact_and_extraction_focused() -> None:
     # 305 -> 315 for the ChinaMacro provider entry + China routing rule
     # (2026-07-19 — new provider closing the China high-frequency gap,
     # user-approved; the #1 real-user failure class).
-    assert len(prompt.splitlines()) < 315
+    # 315 -> 317 (2026-11-07) for the one-line group-aggregate geography
+    # example (euro area / 欧元区 / 欧盟 as ONE entity): the local parser left
+    # parameters.country null in ~4/5 "euro area X" parses, which produced
+    # redundant scope asks and silent EU27 provider defaults.
+    assert len(prompt.splitlines()) < 317
     assert "Return JSON only" in prompt
     assert "Select apiProvider using the PROVIDER CAPABILITIES" in prompt
     # Provider matrix should always be included

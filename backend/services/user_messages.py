@@ -95,6 +95,20 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
             "您可以查询其他时段或最新可用数据。"
         ),
     },
+    # (3c) Provider-default geography disclosure (query._disclose_default_geography).
+    # Worded for "not resolved", not "not specified": the user may have named
+    # a place the framework could not resolve. {scope} = served geography code.
+    "geo_scope_default": {
+        "en": (
+            "ℹ️ **Geography not resolved from the request** — showing the "
+            "source's default scope: **{scope}**. Name a country or region to "
+            "change it."
+        ),
+        "zh": (
+            "ℹ️ **未能从请求中识别地区** —— 当前显示数据源的默认范围：**{scope}**。"
+            "如需其他范围，请指明国家或地区。"
+        ),
+    },
     # (4) Multi-indicator partial-failure note (data_fetcher.fetch_multi_indicator_data).
     "multi_indicator_partial": {
         "en": (

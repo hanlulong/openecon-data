@@ -69,6 +69,9 @@ class Metadata(BaseModel):
     # scope check reads it — keep it that way, so the length of a provider's
     # prose can never shift relevance scores or fail-closed guards.
     about: Optional[str] = None
+    # "default" when the provider dispatch chose this geography because the
+    # request named none (disclosure provenance, mirrors __time_scope_authority).
+    geoScopeAuthority: Optional[str] = None
     scaleFactor: Optional[str] = None  # e.g., "millions", "billions", "thousands"
     startDate: Optional[str] = None  # First available data date
     endDate: Optional[str] = None  # Last available data date

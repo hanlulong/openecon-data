@@ -199,23 +199,66 @@ def test_coingecko_frequency_from_spacing():
 # --- Round 5: provider-native group aggregates -------------------------------
 
 def test_group_scope_resolves_native_aggregate_instead_of_asking():
+    """Post-651a078 contract: an EMPTY parsed geography naming one established
+    aggregate is filled with that entity before routing (no redundant scope
+    ask), the provider then sees its native id; parser-set geography — even a
+    member list — is never overridden."""
     from backend.services.indicator_clarification import build_group_scope_clarification
+    from backend.services.provider_strategy import (
+        canonical_aggregate_region,
+        normalize_aggregate_geography,
+    )
     from backend.services.query import QueryService
 
     svc = QueryService.__new__(QueryService)
+    for query, provider, region in (
+        ("euro area inflation rate", "EUROSTAT", "EUROZONE"),
+        ("eurozone unemployment rate", "EUROSTAT", "EUROZONE"),
+        ("EU GDP growth", "EUROSTAT", "EU"),
+        ("euro area inflation rate as a whole", "EUROSTAT", "EUROZONE"),
+        ("euro area inflation rate", "WORLDBANK", "EUROZONE"),
+        ("EU GDP growth", "WORLDBANK", "EU"),
+        ("euro area inflation rate", "IMF", "EUROZONE"),
+        ("euro area inflation rate", "FRED", "EUROZONE"),
+    ):
+        intent = ParsedIntent(
+            apiProvider=provider, indicators=["inflation rate"], parameters={},
+            clarificationNeeded=False, originalQuery=query,
+        )
+        svc._apply_country_overrides(intent, query)
+        assert canonical_aggregate_region(intent.parameters.get("country")) == region, query
+        out = build_group_scope_clarification(svc, "c1", query, intent, is_multi_indicator=False)
+        assert out is None, query  # no redundant scope question
+        routed = normalize_aggregate_geography(provider, intent.parameters)
+        assert canonical_aggregate_region(routed["country"]) == region
+        assert not routed.get("countries")
+
+    # "as a whole" is the GROUP value — never the EU-27 default.
     intent = ParsedIntent(
-        apiProvider="EUROSTAT",
-        indicators=["inflation rate"],
-        parameters={"countries": ["AT", "BE", "DE"]},
-        clarificationNeeded=False,
-        originalQuery="euro area inflation rate",
+        apiProvider="EUROSTAT", indicators=["inflation rate"], parameters={},
+        clarificationNeeded=False, originalQuery="euro area inflation rate as a whole",
     )
-    out = build_group_scope_clarification(
-        svc, "c1", "euro area inflation rate", intent, is_multi_indicator=False
-    )
-    assert out is None  # no clarification
-    assert intent.parameters.get("country") == "EA20"
-    assert "countries" not in intent.parameters
+    svc._apply_country_overrides(intent, intent.originalQuery)
+    routed = normalize_aggregate_geography("EUROSTAT", intent.parameters)
+    assert canonical_aggregate_region(routed["country"]) == "EUROZONE"
+
+    # Parser-set geography (members, a country) is never overridden.
+    for params in ({"countries": ["AT", "BE", "DE"]}, {"country": "France"}):
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT", indicators=["inflation rate"], parameters=dict(params),
+            clarificationNeeded=False, originalQuery="euro area inflation rate",
+        )
+        svc._apply_country_overrides(intent, intent.originalQuery)
+        assert intent.parameters == params
+
+    # A concrete country (US counts) or member-comparison wording: not filled.
+    for query in ("US imports from the euro area", "compare euro area member countries inflation"):
+        intent = ParsedIntent(
+            apiProvider="EUROSTAT", indicators=["inflation rate"], parameters={},
+            clarificationNeeded=False, originalQuery=query,
+        )
+        svc._apply_country_overrides(intent, query)
+        assert not canonical_aggregate_region(intent.parameters.get("country")), query
 
 
 def test_group_scope_without_native_aggregate_still_asks():
@@ -223,15 +266,20 @@ def test_group_scope_without_native_aggregate_still_asks():
     from backend.services.query import QueryService
 
     svc = QueryService.__new__(QueryService)
-    intent = ParsedIntent(
-        apiProvider="WORLDBANK",
-        indicators=["gdp growth"],
-        parameters={"countries": ["US", "DE", "JP"]},
-        clarificationNeeded=False,
-        originalQuery="G7 gdp growth",
-    )
-    out = build_group_scope_clarification(
-        svc, "c1", "G7 gdp growth", intent, is_multi_indicator=False
-    )
-    # No official G7 aggregate series → the clarification still applies.
-    assert out is not None and out.clarificationNeeded
+    svc._normalize_provider_alias = lambda value: value
+    svc._detect_explicit_provider = lambda _query: None
+    for query in ("G7 gdp growth", "BRICS inflation", "ASEAN GDP growth"):
+        intent = ParsedIntent(
+            apiProvider="WORLDBANK",
+            indicators=["gdp growth"],
+            parameters={},
+            clarificationNeeded=False,
+            originalQuery=query,
+        )
+        svc._apply_country_overrides(intent, query)
+        assert not intent.parameters.get("country"), query  # no established aggregate
+        out = build_group_scope_clarification(
+            svc, "c1", query, intent, is_multi_indicator=False
+        )
+        # No official aggregate series -> the scope clarification still applies.
+        assert out is not None and out.clarificationNeeded, query

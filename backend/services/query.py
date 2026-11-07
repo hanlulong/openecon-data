@@ -164,6 +164,7 @@ from ..services.indicator_clarification import (
     verify_semantic_discriminators as _ic_verify_semantic_discriminators,
     humanize_region_name as _ic_humanize_region_name,
     has_explicit_group_scope as _ic_has_explicit_group_scope,
+    build_group_scope_follow_up_query as _ic_build_group_scope_follow_up_query,
     rewrite_group_scope_query as _ic_rewrite_group_scope_query,
     build_group_scope_clarification as _ic_build_group_scope_clarification,
     build_unspecified_geography_breakdown_clarification as _ic_build_unspecified_geography_breakdown_clarification,
@@ -1008,6 +1009,37 @@ class QueryService:
             if normalized_country not in normalized:
                 normalized.append(normalized_country)
         return normalized
+
+    @staticmethod
+    def _country_mentions_in_query(query: str, country_codes: List[str]) -> List[str]:
+        """The user's own wording for each extracted country code (fallback: the code).
+
+        Structural reverse lookup over CountryResolver's alias table -- the same
+        table extraction used -- so "what about France" yields "France".
+        """
+        text = str(query or "")
+        mentions: List[str] = []
+        for code in country_codes:
+            code_text = str(code or "").strip()
+            if not code_text:
+                continue
+            aliases = sorted(
+                (
+                    alias
+                    for alias, alias_code in CountryResolver.COUNTRY_ALIASES.items()
+                    if alias_code == code_text.upper()
+                ),
+                key=len,
+                reverse=True,
+            )
+            mention = code_text
+            for alias in aliases:
+                match = re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text, flags=re.IGNORECASE)
+                if match:
+                    mention = match.group(0)
+                    break
+            mentions.append(mention)
+        return mentions
 
     def _looks_like_country_follow_up(
         self,
@@ -3261,6 +3293,9 @@ class QueryService:
             # Provenance only — the DATES are identity-bearing, their source
             # is not (same window must hit the same cache entry).
             "__time_scope_authority",
+            # Same for geography provenance: the served geography (country
+            # params) is identity-bearing, its source (default/user) is not.
+            "__geo_scope_authority",
             # Transient retry bookkeeping — never part of cache identity.
             "__exclude_indicator_codes",
             # Raw query text: identity for the cache is the RESOLVED params, not
@@ -4370,6 +4405,84 @@ class QueryService:
         logger.error(f"All fallbacks failed for {primary_provider}")
         raise primary_error  # Raise original error
 
+    @staticmethod
+    def _render_clarification_text(response: QueryResponse) -> str:
+        """Join a clarification's question lines plus any option not already listed.
+
+        Renders the builder's lines verbatim (no translation here); options are
+        numbered so a message-only client can reply with the option id.
+        """
+        lines = [
+            str(line).strip()
+            for line in (response.clarificationQuestions or [])
+            if str(line or "").strip()
+        ]
+        rendered_lines = set(lines)
+        for option in response.clarificationOptions or []:
+            option_id = str(getattr(option, "id", "") or "").strip()
+            option_label = str(getattr(option, "label", "") or "").strip()
+            if not option_label:
+                continue
+            option_line = f"{option_id}. {option_label}" if option_id else option_label
+            if option_line not in rendered_lines:
+                lines.append(option_line)
+                rendered_lines.add(option_line)
+        return "\n".join(lines)
+
+    def _disclose_default_geography(self, response: QueryResponse) -> QueryResponse:
+        """Surface a provider-default geography instead of serving it silently.
+
+        Provider dispatch stamps Metadata.geoScopeAuthority="default" when the
+        request carried no geography and the source chose one (Eurostat
+        EU27_2020, IMF USA). Disclosure only -- the served data is unchanged:
+        record __geo_scope_authority="default" on the response intent, append a
+        localized message naming the served scope, and replace a raw-query
+        display label (which may name an unresolved geography) with the clean
+        indicator label so no chart shows one geography over another's data.
+        Idempotent; never raises.
+        """
+        try:
+            if response is None or not response.data or response.error:
+                return response
+            served_scopes: List[str] = []
+            for series in response.data:
+                metadata = getattr(series, "metadata", None)
+                if getattr(metadata, "geoScopeAuthority", None) != "default":
+                    continue
+                scope = str(getattr(metadata, "country", None) or "").strip()
+                if scope and scope not in served_scopes:
+                    served_scopes.append(scope)
+            if not served_scopes:
+                return response
+            intent = response.intent
+            if intent is not None:
+                params = dict(intent.parameters or {})
+                if params.get("__geo_scope_authority") == "default":
+                    return response  # already disclosed
+                params["__geo_scope_authority"] = "default"
+                clean_label = str(
+                    params.get("__semantic_indicator_label")
+                    or (intent.indicators[0] if intent.indicators else "")
+                ).strip()
+                if clean_label:
+                    params["__display_indicator_label"] = clean_label
+                intent.parameters = params
+            scope_text = ", ".join(served_scopes)
+            disclosure = _localized_message(
+                "geo_scope_default",
+                getattr(intent, "language", None),
+                scope=scope_text,
+            ) or (
+                "No geography was resolved from the request, so this shows the "
+                f"source's default scope: **{scope_text}**."
+            )
+            existing = (response.message or "").strip()
+            if disclosure not in existing:
+                response.message = f"{existing}\n\n{disclosure}" if existing else disclosure
+        except Exception as exc:  # disclosure must never break a response
+            logger.debug("Default-geography disclosure skipped: %s", exc)
+        return response
+
     def _finalize_empty_data_response(self, response: QueryResponse) -> QueryResponse:
         """Guarantee a completed data_fetch never returns silently empty.
 
@@ -4394,6 +4507,12 @@ class QueryService:
             if response.error is not None and not response.error.strip():
                 # Normalize the junk value so telemetry/clients never see " ".
                 response.error = None
+            if response.clarificationNeeded and not (response.message or "").strip():
+                # Message-only API/MCP clients otherwise get a blank answer;
+                # the web UI renders clarificationQuestions, not message.
+                rendered = self._render_clarification_text(response)
+                if rendered:
+                    response.message = rendered
             if (response.error or "").strip() or response.clarificationNeeded:
                 return response
             if (response.message or "").strip() or response.codeExecution:
@@ -4588,6 +4707,7 @@ class QueryService:
         # convert a served-national-data response into an explanation (data=None
         # + message), which finalization then leaves untouched (message set).
         response = self._enforce_subnational_fail_closed(response)
+        response = self._disclose_default_geography(response)
 
         # One-shot re-adjudication after a subnational discard: the pick that
         # produced national data for a region query is evicted from the
@@ -4624,6 +4744,7 @@ class QueryService:
                 finally:
                     _SUBNATIONAL_RETRY_EXCLUDES.reset(token)
                 retry_response = self._enforce_subnational_fail_closed(retry_response)
+                retry_response = self._disclose_default_geography(retry_response)
                 if retry_response is not None and getattr(retry_response, "data", None):
                     response = retry_response
             except Exception as retry_exc:  # keep the honest first answer
@@ -4775,6 +4896,24 @@ class QueryService:
                         else:
                             narrowed_params["countries"] = follow_up_countries
                             narrowed_params.pop("country", None)
+                        # The follow-up ("what about France") names only the
+                        # entity; downstream gate scoring, recovery and labels
+                        # need the full request. Rebuild the ORIGINAL request
+                        # with the pending region SUBSTITUTED by the follow-up
+                        # entities (as the option branch above passes its
+                        # refined_query) -- never the bare follow-up text.
+                        refined_query = _ic_build_group_scope_follow_up_query(
+                            str(pending_semantic.get("original_query") or pending_intent.originalQuery or ""),
+                            str(pending_semantic.get("region") or ""),
+                            self._country_mentions_in_query(query, follow_up_countries),
+                            indicator_label=str(
+                                narrowed_params.get("__semantic_indicator_label")
+                                or (narrowed_intent.indicators[0] if narrowed_intent.indicators else "")
+                            ),
+                        ) or query
+                        narrowed_intent.originalQuery = refined_query
+                        narrowed_params["__original_query"] = refined_query
+                        narrowed_params["__display_indicator_label"] = refined_query
                         narrowed_intent.parameters = narrowed_params
                         conversation_manager.clear_pending_semantic_clarification(conv_id)
                         narrowed_parse_result = ParseRouteResult(
@@ -4784,7 +4923,7 @@ class QueryService:
                             validation_warning=None,
                         )
                         return await self._execute_resolved_intent(
-                            query=query,
+                            query=refined_query,
                             conversation_id=conv_id,
                             intent=narrowed_intent,
                             parse_result=narrowed_parse_result,
