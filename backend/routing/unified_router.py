@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional, List, Dict, Any, Tuple
 
 from .country_resolver import CountryResolver
@@ -94,9 +95,17 @@ _LEGACY_TOPIC_CUES: Dict[str, Tuple[str, ...]] = {
 # to", 从 "from", 数据来源/来源 "data source:"); a marker alone never matches —
 # a registered alias must follow directly.  (?<!数) keeps 数据 ("data") from
 # reading as the 据 marker.
+#
+# Linear-time invariant: no two unbounded quantifiers may be adjacent over
+# the same characters.  The optional colon is grouped WITH its own leading
+# whitespace ``(?:\s*[:：])?`` so the shared trailing ``\s*`` is the only
+# free whitespace run — ``来源\s*[:：]?\s*`` backtracked quadratically on a
+# marker followed by a long whitespace run (a 5000-char query stalled the
+# event loop for ~50 s).  test_provider_registry_zh pins this with a timing
+# guard.
 _DIRECTIVE_PREFIX = (
     r"(?:(?<![a-z0-9_-])(?:from|using|use|via|according\s+to)\s+(?:the\s+)?"
-    r"|(?:来自于?|来源于?\s*[:：]?|数据来源\s*[:：]?|使用|根据|依据|(?<!数)据|从|用)\s*)"
+    r"|(?:来自于?|来源于?(?:\s*[:：])?|数据来源(?:\s*[:：])?|使用|根据|依据|(?<!数)据|从|用)\s*)"
 )
 
 _START_OF_QUERY_PROVIDERS = [spec.name for spec in PROVIDER_SPECS if spec.start_of_query]
@@ -128,8 +137,14 @@ _BARE_PATTERNS: List[Tuple[str, str, "re.Pattern[str]"]] = [
 
 def detect_explicit_provider_match(query: str) -> Optional[Tuple[str, str]]:
     """Return (provider, matched_keyword) if user explicitly names a provider, else None."""
-    query_lower = query.lower()
+    return _detect_explicit_provider_match_lower(query.lower())
 
+
+# Pure function of the lowered query returning an immutable tuple; the
+# pipeline calls the detector 20+ times per request with the same text on
+# the event loop, so memoize it (bounded) instead of re-running ~60 patterns.
+@lru_cache(maxsize=1024)
+def _detect_explicit_provider_match_lower(query_lower: str) -> Optional[Tuple[str, str]]:
     directive_matches: List[Tuple[int, str, str]] = []
     for provider, pattern in _DIRECTIVE_PATTERNS:
         for match in pattern.finditer(query_lower):

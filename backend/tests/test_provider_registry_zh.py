@@ -82,3 +82,49 @@ def test_zh_ordinary_language_is_never_an_explicit_provider(query) -> None:
 
 def test_later_zh_directive_wins_like_english() -> None:
     assert detect_explicit_provider_match("不用IMF，用世界银行的中国GDP")[0] == "WorldBank"
+
+
+# ---------------------------------------------------------------------------
+# Linear-time guard (the detector runs synchronously on the event loop, many
+# times per request, on anonymous input up to the 5000-char QueryRequest cap)
+# ---------------------------------------------------------------------------
+
+_MAX_QUERY_CHARS = 5000
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["数据来源", "来源", "来源于", "数据来源：", "来源:", "来自", "使用", "根据", "据", "从", "用",
+     "from", "using", "according to", "from the"],
+)
+@pytest.mark.parametrize("whitespace", [" ", "　", "\t", "\n", " 　"])
+def test_marker_followed_by_long_whitespace_run_stays_linear(marker, whitespace) -> None:
+    import time
+
+    from backend.routing.unified_router import _detect_explicit_provider_match_lower
+
+    prefix = f"中国gdp {marker}"
+    run = whitespace * ((_MAX_QUERY_CHARS - len(prefix) - 1) // len(whitespace))
+    query = f"{prefix}{run}x"
+    assert len(query) <= _MAX_QUERY_CHARS
+    started = time.perf_counter()
+    # Bypass the memo so the regex work itself is timed.
+    assert _detect_explicit_provider_match_lower.__wrapped__(query) is None
+    # Linear: ~tens of ms even on a loaded host.  The quadratic form this
+    # guards against took ~50 s at this length.
+    assert time.perf_counter() - started < 2.0
+
+
+@pytest.mark.parametrize(
+    ("query", "keyword"),
+    [
+        ("数据来源：IMF", "数据来源：imf"),
+        ("数据来源: imf", "数据来源: imf"),
+        ("来源于IMF", "来源于imf"),
+        ("来源 ： IMF", "来源 ： imf"),
+        ("数据来源 IMF", "数据来源 imf"),
+        ("来源：  imf", "来源：  imf"),
+    ],
+)
+def test_source_marker_colon_and_spacing_forms_still_match(query, keyword) -> None:
+    assert detect_explicit_provider_match(query) == ("IMF", keyword)
