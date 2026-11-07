@@ -960,6 +960,57 @@ def _comtrade_dispatch_commodity(params: dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Provider error markers that mean "the commodity TEXT did not resolve to a
+# single HS code" (comtrade.py), as opposed to a data/network failure.
+_COMTRADE_TEXT_RESOLUTION_FAILURES = (
+    "comtrade_commodity_unresolved",
+    "comtrade_hs_subheading_ambiguous",
+)
+# Selection provenance that was produced by THIS request's resolution step.
+# verified_conversation_state (and anything else) may carry a previous turn's
+# code, so it never authorizes replacing commodity text.
+_COMTRADE_RETRY_AUTHORITIES = frozenset({"llm_adjudication", "exact_user_input"})
+
+
+def _norm_surface(text: Any) -> str:
+    return " ".join(re.findall(r"[0-9a-z]+", str(text or "").lower()))
+
+
+def _comtrade_adjudicated_retry_code(
+    params: dict[str, Any],
+    dispatched_commodity: Optional[str],
+    error: BaseException,
+) -> Optional[str]:
+    """Return the selector-adjudicated HS code to retry with, or None.
+
+    Commodity TEXT is always dispatched first (it can be more specific than
+    the selector's pick). Only when the provider could not resolve that text
+    does a one-shot retry use ``params['indicator']``, and only if it is:
+    - a concrete HS code shape (2-6 digits — never TOTAL or a broad label);
+    - adjudicated by this request's resolver (``__semantic_authority``);
+    - bound to THIS commodity surface: the selector's input label
+      (``__semantic_indicator_label``) contains the commodity text, so a code
+      carried from a previous turn ("crude oil" -> "now wheat") never serves
+      a different commodity.
+    All checks are structural (error code, code shape, provenance, string
+    identity); none judges what the commodity means.
+    """
+    if not any(marker in str(error) for marker in _COMTRADE_TEXT_RESOLUTION_FAILURES):
+        return None
+    code = str(params.get("indicator") or "").strip()
+    if not (code.isdigit() and 2 <= len(code) <= 6):
+        return None
+    if str(params.get("__semantic_authority") or "") not in _COMTRADE_RETRY_AUTHORITIES:
+        return None
+    commodity_surface = _norm_surface(dispatched_commodity)
+    label_surface = _norm_surface(params.get("__semantic_indicator_label"))
+    if not commodity_surface or not label_surface or code == commodity_surface:
+        return None
+    if f" {commodity_surface} " not in f" {label_surface} ":
+        return None
+    return code
+
+
 def _cache_identity(fetch_strategy: str, provider_request: dict[str, Any], expected_shape: dict[str, Any]) -> dict[str, Any]:
     return {
         "fetch_strategy": fetch_strategy,
@@ -2004,16 +2055,39 @@ async def fetch_from_provider_dispatch(
             # If there is only a single effective reporter, ignore broad
             # countries[] context to avoid duplicate/misaligned fan-out.
             reporters_value = None
-        series_list = await svc.comtrade_provider.fetch_trade_data(
+        trade_kwargs = dict(
             reporter=reporter_value,
             reporters=reporters_value,
             partner=params.get("partner"),
-            commodity=_comtrade_dispatch_commodity(params),
             flow=params.get("flow"),
             start_year=int(params["startDate"][:4]) if params.get("startDate") else None,
             end_year=int(params["endDate"][:4]) if params.get("endDate") else None,
             frequency=params.get("frequency", "annual"),
         )
+        dispatched_commodity = _comtrade_dispatch_commodity(params)
+        try:
+            series_list = await svc.comtrade_provider.fetch_trade_data(
+                commodity=dispatched_commodity, **trade_kwargs
+            )
+        except DataNotAvailableError as text_error:
+            retry_code = _comtrade_adjudicated_retry_code(params, dispatched_commodity, text_error)
+            if not retry_code:
+                raise
+            logger.info(
+                "Comtrade: commodity text %r unresolved (%s); retrying once with adjudicated HS %s",
+                dispatched_commodity, str(text_error)[:80], retry_code,
+            )
+            series_list = await svc.comtrade_provider.fetch_trade_data(
+                commodity=retry_code, **trade_kwargs
+            )
+            for series in series_list or []:
+                meta = getattr(series, "metadata", None)
+                if meta is None:
+                    continue
+                meta.notes = list(getattr(meta, "notes", None) or []) + [
+                    f'Commodity "{dispatched_commodity}" did not resolve in the UN Comtrade '
+                    f"HS catalog; served HS {retry_code} chosen by indicator selection."
+                ]
         deduped: dict[tuple[str, str, str, str], Any] = {}
         for series in series_list:
             meta = getattr(series, "metadata", None)
