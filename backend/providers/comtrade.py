@@ -24,6 +24,7 @@ from .comtrade_metadata import (
 # Previously imported: EU27_COUNTRY_CODES, REGION_EXPANSIONS, G7_COUNTRY_CODES,
 # BRICS_COUNTRY_CODES, ASEAN_COUNTRY_CODES, NORDIC_COUNTRY_CODES
 from .base import BaseProvider
+from ..utils.retry import ProviderCoolingDown
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,11 @@ for _alias, _ccode in COUNTRY_CODE_MAPPINGS.items():
     ):
         _COMTRADE_CODE_TO_COUNTRY[_ccode] = _alias
 
-# Retry configuration.  Transport-level retry (429/5xx/timeouts) is handled by
-# BaseProvider._get_with_retry (tenacity, 3 attempts, exponential backoff);
+# Retry configuration.  Transport-level retry (5xx/timeouts/connection errors)
+# is handled by BaseProvider._get_with_retry (tenacity, 3 attempts, exponential
+# backoff).  A 429 is never retried: it opens the shared provider cooldown and
+# raises ProviderCoolingDown, which also stops the reporter/partner/period
+# fan-out in fetch_trade_data at the first occurrence;
 # MAX_RETRIES/RETRY_DELAY_BASE here govern the application-level retry for
 # empty TOTAL payloads and keep the wall-clock budget math below conservative.
 # Worst-case latency = MAX_RETRIES * REQUEST_TIMEOUT + sum(backoff delays).
@@ -715,7 +719,7 @@ class ComtradeProvider(BaseProvider):
         """Fetch trade data for a single reporter country with retry logic.
 
         Helper method to enable parallel fetching of multiple reporters.
-        Implements exponential backoff for rate limiting (HTTP 429).
+        An HTTP 429 raises ProviderCoolingDown (never retried here).
 
         Args:
             client: httpx AsyncClient instance
@@ -779,9 +783,10 @@ class ComtradeProvider(BaseProvider):
 
         records: list[dict[str, Any]] = []
 
-        # Transport-level retry (429/5xx, timeouts, connection errors) with
-        # exponential backoff, rate-limiter pacing, and the per-provider
-        # circuit breaker are delegated to BaseProvider._get_with_retry.
+        # Transport-level retry (5xx, timeouts, connection errors) with
+        # exponential backoff, rate-limiter admission, the terminal 429 shared
+        # cooldown, and the per-provider circuit breaker are delegated to
+        # BaseProvider._get_with_retry.
         # raise_on_status=False so remaining non-2xx responses come back for
         # inspection here: Comtrade signals subscription-quota exhaustion as
         # an HTTP 403 whose body mentions "quota" (or carries Retry-After).
@@ -803,6 +808,10 @@ class ComtradeProvider(BaseProvider):
                     follow_redirects=False,
                     timeout=REQUEST_TIMEOUT,
                 )
+            except ProviderCoolingDown as e:
+                # Keep the type so the caller's fan-out stops at this one.
+                logger.warning(f"Comtrade cooling down for reporter {reporter_raw}: {e}")
+                raise e.with_context(f"Comtrade API error for reporter {reporter_raw}") from e
             except DataNotAvailableError as e:
                 logger.error(f"Comtrade API error for reporter {reporter_raw}: {e}")
                 raise DataNotAvailableError(
@@ -811,8 +820,9 @@ class ComtradeProvider(BaseProvider):
 
             status_code = response.status_code
             if status_code >= 300:
-                # Non-2xx returned for inspection (429/5xx were already
-                # retried and raised terminally inside _get_with_retry).
+                # Non-2xx returned for inspection (a 429 already raised
+                # ProviderCoolingDown and 5xx was retried, then raised,
+                # inside _get_with_retry).
                 response_text = (response.text or "").strip()[:300]
                 retry_after = response.headers.get("Retry-After")
                 quota_exhausted = (
@@ -1317,6 +1327,11 @@ class ComtradeProvider(BaseProvider):
         # protects the shared subscription key from cross-session 429 bursts.
         max_concurrent_requests = 2 if freq_code == "A" else 3
         semaphore = asyncio.Semaphore(max_concurrent_requests)
+        # First ProviderCoolingDown of this fetch. Once Comtrade (or our shared
+        # limiter) is cooling down, every remaining sub-request would only be
+        # refused locally after waiting out the request spacing, so the rest of
+        # the fan-out — and the fallback envelopes below — are skipped.
+        cooling_down: Optional[ProviderCoolingDown] = None
 
         async def _guarded_fetch(
             reporter_raw: str,
@@ -1324,23 +1339,33 @@ class ComtradeProvider(BaseProvider):
             period_param: str,
             flow_code_arg: str = flow_code,
         ) -> List[NormalizedData]:
+            nonlocal cooling_down
             async with semaphore:
                 async with _global_request_semaphore():
+                    if cooling_down is not None:
+                        return []
                     await _respect_global_request_spacing()
-                    return await self._fetch_single_reporter_data(
-                        client,
-                        reporter_raw,
-                        partner_code,
-                        commodity_code,
-                        flow_code_arg,
-                        period_param,
-                        freq_code,
-                    )
+                    try:
+                        return await self._fetch_single_reporter_data(
+                            client,
+                            reporter_raw,
+                            partner_code,
+                            commodity_code,
+                            flow_code_arg,
+                            period_param,
+                            freq_code,
+                        )
+                    except ProviderCoolingDown as exc:
+                        if cooling_down is None:
+                            cooling_down = exc
+                        raise
 
         async def _run_fetch_for_chunks(
             chunks: List[str],
             flow_code_arg: str,
         ) -> Tuple[List[NormalizedData], Optional[BaseException]]:
+            if cooling_down is not None:
+                return [], cooling_down
             tasks = [
                 _guarded_fetch(reporter_raw, partner_code, period_param, flow_code_arg)
                 for reporter_raw in reporter_list
@@ -1379,13 +1404,13 @@ class ComtradeProvider(BaseProvider):
                     newest_error = result
                     continue
                 flattened.extend(result)
-            return flattened, newest_error
+            return flattened, cooling_down or newest_error
 
         all_results, last_error = await _run_fetch_for_chunks(period_chunks, flow_code)
 
         async def _retry_both_flow_envelope(chunks: List[str]) -> None:
             nonlocal all_results, last_error
-            if all_results or flow_code not in {"X", "M"}:
+            if all_results or flow_code not in {"X", "M"} or cooling_down is not None:
                 return
             # UN Comtrade's v1 endpoint can return an empty payload for a
             # narrow flow-specific world-total request while the equivalent
@@ -1411,6 +1436,7 @@ class ComtradeProvider(BaseProvider):
 
         if (
             not all_results
+            and cooling_down is None
             and implicit_default_period
             and freq_code == "A"
             and commodity_code != "TOTAL"
@@ -1555,6 +1581,11 @@ class ComtradeProvider(BaseProvider):
                 end_year=end_year,
                 frequency=frequency,
             )
+        except ProviderCoolingDown as exc:
+            # Imports would be refused locally too; keep the type for callers.
+            raise exc.with_context(
+                "Failed to fetch export data for trade balance calculation"
+            ) from exc
         except Exception as exc:
             raise DataNotAvailableError(
                 f"Failed to fetch export data for trade balance calculation: {str(exc)}"
@@ -1573,6 +1604,10 @@ class ComtradeProvider(BaseProvider):
                 end_year=end_year,
                 frequency=frequency,
             )
+        except ProviderCoolingDown as exc:
+            raise exc.with_context(
+                "Failed to fetch import data for trade balance calculation"
+            ) from exc
         except Exception as exc:
             raise DataNotAvailableError(
                 f"Failed to fetch import data for trade balance calculation: {str(exc)}"

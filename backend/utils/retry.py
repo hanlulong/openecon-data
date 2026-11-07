@@ -22,6 +22,26 @@ class DataNotAvailableError(Exception):
     pass
 
 
+class ProviderCoolingDown(DataNotAvailableError):
+    """The provider refused (HTTP 429) or our shared limiter is in its cooldown.
+
+    Every further request to the same provider would be refused locally until
+    the cooldown expires, so fan-out loops should stop at the first one instead
+    of queueing more zero-HTTP refusals. Subclassing DataNotAvailableError keeps
+    every existing handler and provider fallback behaving unchanged.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+    def with_context(self, context: str) -> "ProviderCoolingDown":
+        """Return a copy whose message is prefixed with caller context."""
+        return ProviderCoolingDown(
+            f"{context}: {self}", retry_after_seconds=self.retry_after_seconds
+        )
+
+
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float:
     """Parse Retry-After without exposing raw header text or overflowing dates.
 
@@ -113,28 +133,20 @@ async def retry_async(
                         f"Invalid request: {error_msg}"
                     ) from exc
                 elif exc.response.status_code == 429:
-                    # Rate limiting - use longer delay with exponential backoff
-                    # Check for Retry-After header
-                    retry_after = exc.response.headers.get('Retry-After')
-                    if retry_after and retry_after.isdigit():
-                        # Use Retry-After value, but ensure minimum 5 second delay
-                        delay = max(float(retry_after), 5.0)
-                    else:
-                        # Use longer delay for rate limits (start at 5 seconds)
-                        delay = max(delay, 5.0)
-
+                    # Terminal: sleeping out an upstream Retry-After here would
+                    # hold the request for an unbounded time (the header is
+                    # provider-controlled) and retrying would spend quota into
+                    # the cooldown. Shared cooldown policy lives in the
+                    # provider admission path (BaseProvider + rate_limiter).
+                    retry_after = parse_retry_after(exc.response.headers.get('Retry-After'))
                     logger.warning(
-                        f"Rate limit hit (429). Attempt {attempt}/{max_attempts}. "
-                        f"Retrying after {delay:.1f}s..."
+                        "Rate limit hit (429) on attempt %d/%d; not retrying "
+                        "(Retry-After %.0fs)", attempt, max_attempts, retry_after,
                     )
-                    if attempt < max_attempts:
-                        await asyncio.sleep(delay)
-                        delay *= backoff_factor  # Exponential backoff for next attempt
-                        continue  # Skip the normal retry logic below
-                    else:
-                        raise DataNotAvailableError(
-                            f"Rate limit exceeded after {max_attempts} attempts. Please try again later."
-                        ) from exc
+                    raise ProviderCoolingDown(
+                        "Rate limit exceeded (429). Please try again later.",
+                        retry_after_seconds=retry_after,
+                    ) from exc
 
             if attempt < max_attempts:
                 # Add jitter to avoid thundering herd problem

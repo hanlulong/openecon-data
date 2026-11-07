@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import pybreaker
 import pytest
 from tenacity import wait_none
 
@@ -15,7 +16,8 @@ from backend.providers import oecd as oecd_module
 from backend.providers.oecd import OECDProvider
 from backend.services import rate_limiter as rates
 from backend.services.rate_limiter import ProviderRateLimiter, RateLimiterConfig, ProviderRateLimitWaitExceeded
-from backend.utils.retry import DataNotAvailableError, parse_retry_after, retry_async
+from backend.utils import retry as retry_module
+from backend.utils.retry import DataNotAvailableError, ProviderCoolingDown, parse_retry_after, retry_async
 
 
 class Provider(BaseProvider):
@@ -308,8 +310,8 @@ async def test_cancellation_propagates_and_never_retries(monkeypatch, method, ca
         await task
     await asyncio.sleep(0)
     assert getattr(client, method).call_count == (cancel_during == "http")
+    assert breaker.fail_counter == 1  # cancellation is neutral in either phase
     if cancel_during == "admission":
-        assert breaker.fail_counter == 1
         assert not rates.get_global_rate_limiter().get_limiter("ADMISSION_TEST").minute_window
 
 
@@ -368,7 +370,10 @@ async def test_oecd_refusal_and_wait_cancellation_do_not_send_or_count_429(monke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["get", "post"])
 @pytest.mark.parametrize("state", ["near-open", "half-open"])
-async def test_io_cancellation_still_propagates_when_breaker_opens(method, state):
+async def test_io_cancellation_propagates_and_is_breaker_neutral(method, state):
+    # A caller cancelling (SSE disconnect, wait_for deadline, fan-out teardown)
+    # is not a provider failure: it must neither trip a near-open breaker nor
+    # re-open a half-open one.
     ready = asyncio.Event()
     async def blocked(*args, **kwargs):
         ready.set()
@@ -379,12 +384,320 @@ async def test_io_cancellation_still_propagates_when_breaker_opens(method, state
         breaker._state_storage.increment_counter()
     if state == "half-open":
         breaker.half_open()
+    before = (breaker.current_state, breaker.fail_counter)
     task = asyncio.create_task(getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture"))
     await ready.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert getattr(client, method).call_count == 1
+    assert (breaker.current_state, breaker.fail_counter) == before
+    # The half-open trial is still available to the next real outcome.
+    setattr(client, method, AsyncMock(return_value=response()))
+    await getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture")
+    assert breaker.current_state == "closed"
+    assert breaker.fail_counter == 0
+
+
+async def _cancel_while_in_http(method, count=1):
+    ready = asyncio.Event()
+    started = 0
+    async def blocked(*args, **kwargs):
+        nonlocal started
+        started += 1
+        if started == count:
+            ready.set()
+        await asyncio.Event().wait()
+    client = SimpleNamespace(**{method: AsyncMock(side_effect=blocked)})
+    tasks = [
+        asyncio.create_task(getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture"))
+        for _ in range(count)
+    ]
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        pytest.fail(f"request was refused before reaching HTTP: {outcomes!r}")
+    outer = asyncio.gather(*tasks)
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_consecutive_http_cancellations_never_open_breaker(method):
+    breaker = _get_breaker("ADMISSION_TEST")
+    for _ in range(breaker.fail_max + 1):
+        await _cancel_while_in_http(method)
+    assert breaker.current_state == "closed"
+    assert breaker.fail_counter == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_one_outer_cancel_of_same_provider_fanout_counts_nothing(method):
+    breaker = _get_breaker("ADMISSION_TEST")
+    client = await _cancel_while_in_http(method, count=breaker.fail_max)
+    assert getattr(client, method).call_count == breaker.fail_max
+    assert breaker.current_state == "closed"
+    assert breaker.fail_counter == 0
+
+
+async def _open_breaker_during_io(method, outcome):
+    """Run one request whose I/O completes after a concurrent failure opened the breaker."""
+    breaker = _get_breaker("ADMISSION_TEST")
+    for _ in range(breaker.fail_max - 1):
+        breaker._state_storage.increment_counter()
+    in_io, release = asyncio.Event(), asyncio.Event()
+    async def slow(*args, **kwargs):
+        in_io.set()
+        await release.wait()
+        return outcome
+    client = SimpleNamespace(**{method: AsyncMock(side_effect=slow)})
+    pending = asyncio.create_task(getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture"))
+    await in_io.wait()
+    with pytest.raises(pybreaker.CircuitBreakerError):
+        with breaker.calling():
+            raise httpx.ConnectError("concurrent genuine failure")
+    assert breaker.current_state == "open"
+    release.set()
+    return breaker, client, pending
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_success_is_kept_when_breaker_opened_during_io(method):
+    breaker, client, pending = await _open_breaker_during_io(method, response())
+    result = await pending
+    assert result.status_code == 200
+    assert breaker.current_state == "open"
+    assert breaker.fail_counter == breaker.fail_max
+
+
+@pytest.mark.asyncio
+async def test_failure_when_breaker_opened_during_io_raises_its_own_error():
+    breaker, client, pending = await _open_breaker_during_io("get", response(404))
+    with pytest.raises(DataNotAvailableError, match="API returned 404"):
+        await pending
+    assert breaker.current_state == "open"
+    assert client.get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failure_that_trips_breaker_reports_the_upstream_failure():
+    breaker = _get_breaker("ADMISSION_TEST")
+    for _ in range(breaker.fail_max - 1):
+        breaker._state_storage.increment_counter()
+    client = client_for("get", [response(500)] * 3)
+    with pytest.raises(DataNotAvailableError, match="Failed after 3 HTTP attempts"):
+        await Provider()._get_with_retry(client, "https://example.invalid/fixture")
+    assert breaker.current_state == "open"
+    with pytest.raises(DataNotAvailableError, match="circuit breaker OPEN"):
+        await Provider()._get_with_retry(client, "https://example.invalid/fixture")
+    assert client.get.call_count == 3
+
+
+def test_breaker_open_check_degrades_when_private_state_is_unavailable():
+    # Simulates a pybreaker release that renames its private storage.
+    assert base_module._breaker_refuses_now(SimpleNamespace(current_state=pybreaker.STATE_OPEN)) is False
+    breaker = _get_breaker("ADMISSION_TEST")
+    breaker.open()
+    assert base_module._breaker_refuses_now(breaker) is True
+
+
+@pytest.mark.asyncio
+async def test_breaker_bookkeeping_error_never_drops_fetched_data(monkeypatch):
+    breaker = _get_breaker("ADMISSION_TEST")
+    def broken_calling():
+        raise AttributeError("incompatible pybreaker")
+    monkeypatch.setattr(breaker, "calling", broken_calling)
+    result = await Provider()._get_with_retry(client_for("get", [response()]), "https://example.invalid/fixture")
+    assert result.status_code == 200
+
+
+# --- Retry-After cap (limiter policy) -------------------------------------
+
+
+def test_pathological_retry_after_is_capped_by_limiter(monkeypatch):
+    fake_clock(monkeypatch)
+    limiter = ProviderRateLimiter(RateLimiterConfig("T"))
+    remaining = limiter.record_rate_limit_error(31536000)
+    cap = rates.MAX_RETRY_AFTER_COOLDOWN_SECONDS
+    assert remaining == cap
+    assert limiter.get_circuit_status()["cooldown_remaining_seconds"] <= cap
+    # The escalating tier still applies below the cap; a shorter header never shortens it.
+    limiter2 = ProviderRateLimiter(RateLimiterConfig("T2"))
+    assert limiter2.record_rate_limit_error(5) == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["31536000", "9" * 5000, "Fri, 31 Dec 9999 23:59:59 GMT"])
+async def test_http_429_with_huge_retry_after_reopens_after_cap(monkeypatch, header):
+    clock = fake_clock(monkeypatch)
+    client = client_for("get", [response(429, {"Retry-After": header}), response()])
+    with pytest.raises(ProviderCoolingDown) as caught:
+        await Provider()._get_with_retry(client, "https://example.invalid/fixture")
+    cap = rates.MAX_RETRY_AFTER_COOLDOWN_SECONDS
+    assert caught.value.retry_after_seconds == cap
+    clock.value += cap + 1
+    await Provider()._get_with_retry(client, "https://example.invalid/fixture")
+    assert client.get.call_count == 2
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 900.0), ("120", 120.0), ("bad", 900.0), ("-5", 900.0), ("inf", 900.0), ("0", 900.0)])
+def test_retry_after_cap_env_override(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("PROVIDER_MAX_RETRY_AFTER_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("PROVIDER_MAX_RETRY_AFTER_SECONDS", raw)
+    assert rates._env_positive_seconds("PROVIDER_MAX_RETRY_AFTER_SECONDS", 900.0) == expected
+
+
+# --- Typed cooldown signal -------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get", "post"])
+async def test_429_and_cooldown_refusal_raise_typed_cooling_down(method):
+    client = client_for(method, [response(429, {"Retry-After": "120"}), response()])
+    with pytest.raises(ProviderCoolingDown, match="Rate limited") as first:
+        await getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture")
+    assert first.value.retry_after_seconds == 120
+    with pytest.raises(ProviderCoolingDown, match="cooldown is active") as refused:
+        await getattr(Provider(), f"_{method}_with_retry")(client, "https://example.invalid/fixture")
+    assert 0 < refused.value.retry_after_seconds <= 120
+    assert isinstance(refused.value, DataNotAvailableError)
+    assert getattr(client, method).call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_budget_refusal_is_not_reported_as_cooldown(monkeypatch):
+    monkeypatch.setattr(base_module, "acquire_provider", AsyncMock(side_effect=ProviderRateLimitWaitExceeded("budget")))
+    with pytest.raises(DataNotAvailableError, match="budget") as caught:
+        await Provider()._get_with_retry(client_for("get", [response()]), "https://example.invalid/fixture")
+    assert not isinstance(caught.value, ProviderCoolingDown)
+
+
+@pytest.mark.asyncio
+async def test_retry_async_429_is_terminal_without_sleeping(monkeypatch):
+    sleeps = []
+    async def record_sleep(seconds):
+        sleeps.append(seconds)
+    monkeypatch.setattr(retry_module.asyncio, "sleep", record_sleep)
+    rate_limited = response(429, {"Retry-After": "99999"})
+    calls = 0
+    async def call():
+        nonlocal calls
+        calls += 1
+        raise httpx.HTTPStatusError("429", request=rate_limited.request, response=rate_limited)
+    with pytest.raises(ProviderCoolingDown) as caught:
+        await retry_async(call, max_attempts=3, initial_delay=0)
+    assert calls == 1
+    assert sleeps == []
+    assert caught.value.retry_after_seconds == 99999
+
+
+# --- StatsCan streamed full-table download uses the shared contract -------
+
+
+class _StreamClient:
+    def __init__(self, status=200, headers=None, body=b""):
+        self.calls = []
+        self.status, self.headers, self.body = status, headers or {}, body
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append((method, url))
+        client = self
+        class _Ctx:
+            async def __aenter__(self):
+                return SimpleNamespace(
+                    status_code=client.status,
+                    headers=client.headers,
+                    aiter_bytes=lambda: _aiter([client.body]),
+                )
+            async def __aexit__(self, *exc):
+                return False
+        return _Ctx()
+
+
+async def _aiter(items):
+    for item in items:
+        yield item
+
+
+@pytest.mark.asyncio
+async def test_statscan_stream_refuses_during_open_cooldown_without_sending(monkeypatch):
+    from backend.providers import statscan as statscan_module
+    client = _StreamClient()
+    monkeypatch.setattr(statscan_module, "get_statscan_http_client", lambda: client)
+    rates.get_global_rate_limiter().get_limiter("STATSCAN").record_rate_limit_error(120)
+    with pytest.raises(ProviderCoolingDown, match="cooldown is active"):
+        await statscan_module.StatsCanProvider()._download_full_table_csv_bundle("13100071")
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_statscan_stream_429_opens_shared_cooldown_with_retry_after(monkeypatch):
+    from backend.providers import statscan as statscan_module
+    client = _StreamClient(status=429, headers={"Retry-After": "300"})
+    monkeypatch.setattr(statscan_module, "get_statscan_http_client", lambda: client)
+    with pytest.raises(ProviderCoolingDown, match="Rate limited"):
+        await statscan_module.StatsCanProvider()._download_full_table_csv_bundle("13100071")
+    limiter = rates.get_global_rate_limiter().get_limiter("STATSCAN")
+    assert limiter.get_circuit_status()["cooldown_remaining_seconds"] > 299
+    assert len(limiter.minute_window) == 1  # the one admitted request
+    with pytest.raises(ProviderCoolingDown):
+        await statscan_module.StatsCanProvider()._download_full_table_csv_bundle("13100071")
+    assert len(client.calls) == 1
+
+
+# --- Comtrade fan-out stops at the first cooldown --------------------------
+
+
+@pytest.mark.asyncio
+async def test_comtrade_multi_chunk_fetch_stops_at_first_429(monkeypatch):
+    from backend.providers import comtrade as comtrade_module
+    rates.get_global_rate_limiter()._limiters["COMTRADE"] = ProviderRateLimiter(
+        RateLimiterConfig("COMTRADE", min_delay_seconds=0, max_requests_per_minute=100)
+    )
+    requests = []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(429, headers={"Retry-After": "120"})
+    http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(comtrade_module, "get_http_client", lambda: http)
+    provider = comtrade_module.ComtradeProvider("test-key-not-real")
+    single = provider._fetch_single_reporter_data
+    single_calls = 0
+    async def counted(*args, **kwargs):
+        nonlocal single_calls
+        single_calls += 1
+        return await single(*args, **kwargs)
+    monkeypatch.setattr(provider, "_fetch_single_reporter_data", counted)
+    try:
+        with pytest.raises(ProviderCoolingDown):
+            await provider.fetch_trade_data(
+                reporter="Canada", partner="USA", flow="EXPORTS",
+                start_year=2020, end_year=2023, frequency="monthly",
+            )
+    finally:
+        await http.aclose()
+    assert len(requests) == 1
+    assert single_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_comtrade_trade_balance_keeps_cooldown_type(monkeypatch):
+    from backend.providers import comtrade as comtrade_module
+    provider = comtrade_module.ComtradeProvider("test-key-not-real")
+    fetch = AsyncMock(side_effect=ProviderCoolingDown("cooling", retry_after_seconds=60))
+    monkeypatch.setattr(provider, "fetch_trade_data", fetch)
+    with pytest.raises(ProviderCoolingDown, match="export data") as caught:
+        await provider.fetch_trade_balance(reporter="Canada", start_year=2020, end_year=2023)
+    assert caught.value.retry_after_seconds == 60
+    assert fetch.await_count == 1
 
 
 @pytest.mark.asyncio

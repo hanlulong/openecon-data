@@ -16,13 +16,8 @@ from ..services.statscan_metadata import get_statscan_metadata_service
 from ..models import Metadata, NormalizedData
 from ..utils.geographies import canonicalize_canadian_region
 from ..utils.retry import DataNotAvailableError
-from ..services.rate_limiter import (
-    record_provider_rate_limit_error,
-    record_provider_request,
-    record_provider_success,
-    wait_for_provider,
-)
-from .base import BaseProvider
+from ..services.rate_limiter import record_provider_success
+from .base import BaseProvider, admit_provider_request, record_rate_limited_response
 
 logger = logging.getLogger(__name__)
 
@@ -2880,23 +2875,16 @@ class StatsCanProvider(BaseProvider):
             # This site cannot use the base _get_with_retry helper: the helper
             # buffers the full response body, which would defeat the incremental
             # FULL_TABLE_CSV_MAX_BYTES cap enforced chunk-by-chunk below for
-            # these potentially multi-hundred-MB table bundles.  Mirror the
-            # helper's rate-limiter integration (base.py) manually instead.
+            # these potentially multi-hundred-MB table bundles.  It uses the
+            # same shared admission contract as the helper instead: an active
+            # cooldown refuses with no request sent, and a 429 opens the shared
+            # cooldown honoring (capped) Retry-After.
             _provider_key = (self.provider_name or "").upper()
-            try:
-                await wait_for_provider(_provider_key)
-                record_provider_request(_provider_key)
-            except Exception as _wait_err:
-                logger.debug(
-                    "Rate limiter wait failed for %s: %s", _provider_key, _wait_err
-                )
+            await admit_provider_request(_provider_key)
             content = bytearray()
             async with client.stream("GET", url, timeout=30.0, follow_redirects=True) as response:
                 if response.status_code == 429:
-                    try:
-                        record_provider_rate_limit_error(_provider_key)
-                    except Exception:
-                        pass
+                    raise record_rate_limited_response(_provider_key, response)
                 self._raise_for_status_or_data_unavailable(
                     response,
                     f"downloading full-table CSV for product {normalized_product_id}",
@@ -2916,10 +2904,7 @@ class StatsCanProvider(BaseProvider):
                         raise DataNotAvailableError(
                             "Statistics Canada full-table CSV bundle exceeds the safe exact-table fallback size"
                         )
-            try:
-                record_provider_success(_provider_key)
-            except Exception:
-                pass
+            record_provider_success(_provider_key)
             response_content = bytes(content)
         else:
             # Test doubles and older clients may only expose get().

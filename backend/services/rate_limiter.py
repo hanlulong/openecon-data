@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import time
 from typing import Dict, Optional
 from collections import deque
@@ -15,8 +16,48 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 
+def _env_positive_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("Ignoring invalid %s=%r; using %.0fs", name, raw, default)
+        return default
+    return value
+
+
+# Upper bound on how long ONE honored upstream Retry-After may keep a provider
+# closed in this worker. The header is provider/proxy-controlled; uncapped, a
+# pathological value (e.g. a year) disables the provider until restart because
+# record_success() cannot revoke an active cooldown. The escalating 429 tiers
+# (max 600s) stay below the cap, so normal behavior is unchanged.
+MAX_RETRY_AFTER_COOLDOWN_SECONDS = _env_positive_seconds(
+    "PROVIDER_MAX_RETRY_AFTER_SECONDS", 900.0
+)
+
+
 class ProviderRateLimitWaitExceeded(RuntimeError):
-    """Raised when a provider would require an unreasonable wait before retrying."""
+    """Raised when a provider would require an unreasonable wait before retrying.
+
+    ``cooldown_active`` distinguishes a refusal caused by an open 429 cooldown
+    (every request is refused until it expires; ``retry_after_seconds`` is the
+    remaining time) from one caused only by a caller's wait budget.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retry_after_seconds: Optional[float] = None,
+        cooldown_active: bool = False,
+    ):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+        self.cooldown_active = cooldown_active
 
 
 class RateLimiterConfig:
@@ -159,7 +200,9 @@ class ProviderRateLimiter:
         while True:
             if self.is_circuit_open():
                 raise ProviderRateLimitWaitExceeded(
-                    f"{self.config.name} is temporarily rate-limited; cooldown is active"
+                    f"{self.config.name} is temporarily rate-limited; cooldown is active",
+                    retry_after_seconds=self.cooldown_remaining_seconds(),
+                    cooldown_active=True,
                 )
             elapsed = time.monotonic() - started
             delay = self.get_delay_until_ready()
@@ -188,10 +231,12 @@ class ProviderRateLimiter:
         if self.config.max_requests_per_hour is not None:
             self.hour_window.append(now)
 
-    def record_rate_limit_error(self, retry_after_seconds: Optional[float] = None) -> None:
+    def record_rate_limit_error(self, retry_after_seconds: Optional[float] = None) -> float:
         """Record that a 429 rate limit error was received.
 
-        Opens the circuit breaker to prevent further requests until cooldown expires.
+        Opens the circuit breaker to prevent further requests until cooldown
+        expires. An upstream Retry-After is honored up to
+        MAX_RETRY_AFTER_COOLDOWN_SECONDS. Returns the remaining cooldown.
         """
         self._consecutive_429_count += 1
         now = time.time()
@@ -202,12 +247,20 @@ class ProviderRateLimiter:
         cooldown_index = min(self._consecutive_429_count - 1, len(cooldown_durations) - 1)
         cooldown = cooldown_durations[cooldown_index]
         if retry_after_seconds is not None and math.isfinite(retry_after_seconds):
-            cooldown = max(cooldown, retry_after_seconds)
+            cap = MAX_RETRY_AFTER_COOLDOWN_SECONDS
+            if retry_after_seconds > cap:
+                logger.warning(
+                    "%s Retry-After %.0fs exceeds the %.0fs cap; clamping",
+                    self.config.name, retry_after_seconds, cap,
+                )
+            cooldown = max(cooldown, min(retry_after_seconds, cap))
         self._circuit_open_until = max(self._circuit_open_until or now, now + cooldown)
+        remaining = self._circuit_open_until - now
         logger.warning(
             "🚫 %s circuit breaker OPEN: rate limit hit %d time(s); cooldown %.1fs",
-            self.config.name, self._consecutive_429_count, self._circuit_open_until - now,
+            self.config.name, self._consecutive_429_count, remaining,
         )
+        return remaining
 
     def record_success(self) -> None:
         """Record a successful request - resets circuit breaker."""
@@ -238,6 +291,12 @@ class ProviderRateLimiter:
         remaining = self._circuit_open_until - now
         logger.debug(f"🚫 {self.config.name} circuit open, {remaining:.0f}s remaining")
         return True
+
+    def cooldown_remaining_seconds(self) -> float:
+        """Seconds until an active 429 cooldown expires (0 when closed)."""
+        if self._circuit_open_until is None:
+            return 0.0
+        return max(0.0, self._circuit_open_until - time.time())
 
     def get_circuit_status(self) -> dict:
         """Get detailed circuit breaker status for debugging."""
@@ -396,10 +455,10 @@ def record_provider_request(provider: str) -> None:
     limiter.record_request()
 
 
-def record_provider_rate_limit_error(provider: str, retry_after_seconds: Optional[float] = None) -> None:
-    """Record that a 429 rate limit error was received from a provider."""
+def record_provider_rate_limit_error(provider: str, retry_after_seconds: Optional[float] = None) -> float:
+    """Record that a 429 was received from a provider; return the remaining cooldown."""
     limiter = get_global_rate_limiter().get_limiter(provider)
-    limiter.record_rate_limit_error(retry_after_seconds)
+    return limiter.record_rate_limit_error(retry_after_seconds)
 
 
 def record_provider_success(provider: str) -> None:
