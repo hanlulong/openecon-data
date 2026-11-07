@@ -14,6 +14,7 @@ This module provides:
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, List, Optional
 
 from ..routing.country_resolver import CountryResolver
@@ -304,6 +305,46 @@ def series_text_for_relevance(series: Any) -> str:
     ).strip()
 
 
+
+# ---------------------------------------------------------------------------
+# Structural term matching for the specialization / labour-rate penalty lists
+# ---------------------------------------------------------------------------
+
+# Terms of this length or shorter must match as a whole word (optional plural):
+# as raw substrings they fire inside unrelated words ("men" in increMENt,
+# governMENt, unemployMENt; "man" in MANufacturing, GerMANy, OMAN; "sex" in
+# sussex), which applied a subgroup penalty to ~37% of catalog names and, on
+# the query side, made generic queries falsely "mention" the subgroup.
+_SHORT_TERM_MAX_LEN = 3
+
+
+@lru_cache(maxsize=None)
+def _term_list_pattern(terms: tuple[str, ...]) -> "re.Pattern[str]":
+    """Compile ONE word-start pattern for a penalty term list (cached per list).
+
+    Purely structural tokenization, no semantic judgement: every term must
+    START a word (``(?<![a-z])``), so a term never matches from the middle of
+    another word ("employment" inside "unemployment"); short terms must also
+    END the word (optional ``s``/``es`` plural). Longer terms keep prefix
+    matching so inflections ("regional", "educational") still count.
+    """
+    parts: List[str] = []
+    for term in terms:
+        escaped = re.escape(str(term).lower())
+        if len(term) <= _SHORT_TERM_MAX_LEN:
+            parts.append(rf"(?<![a-z]){escaped}(?:e?s)?(?![a-z])")
+        else:
+            parts.append(rf"(?<![a-z]){escaped}")
+    return re.compile("|".join(parts) if parts else r"(?!x)x")
+
+
+def text_mentions_term(text: str, *terms: str) -> bool:
+    """True when lower-cased ``text`` mentions any term as a word (see above)."""
+    if not text or not terms:
+        return False
+    return bool(_term_list_pattern(tuple(terms)).search(text))
+
+
 def labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> float:
     """Penalize near-miss labour-rate candidates for generic rate queries."""
     query_lower = str(query_text or "").lower()
@@ -332,7 +373,7 @@ def labor_rate_specificity_penalty(query_text: str, candidate_text: str) -> floa
             return True
         # Recognize percentage-of-labor-force indicators as equivalent to "rate"
         # e.g., "unemployment, total (% of total labor force)" IS the unemployment rate
-        if metric in candidate_lower and re.search(r"\(%\s+of\s+(?:total\s+)?labo[u]?r\s+force\)", candidate_lower):
+        if text_mentions_term(candidate_lower, metric) and re.search(r"\(%\s+of\s+(?:total\s+)?labo[u]?r\s+force\)", candidate_lower):
             return True
         return False
 
@@ -358,11 +399,14 @@ def specialization_mismatch_penalty(query_text: str, candidate_text: str) -> flo
 
     penalty = 0.0
 
+    # ONE shared word-start matcher on both sides (see text_mentions_term):
+    # substring matching made "governMENt"/"MANufacturing" count as gender
+    # subgroup series and "unemployMENt" count as a query that asked for one.
     def query_mentions(*terms: str) -> bool:
-        return any(term in query_lower for term in terms)
+        return text_mentions_term(query_lower, *terms)
 
     def candidate_mentions(*terms: str) -> bool:
-        return any(term in candidate_lower for term in terms)
+        return text_mentions_term(candidate_lower, *terms)
 
     penalty += labor_rate_specificity_penalty(query_lower, candidate_lower)
 
