@@ -1,11 +1,16 @@
-"""Legacy MCP SSE with bounded request intake and deterministic session cleanup.
+"""MCP over HTTP: legacy SSE plus stateless Streamable HTTP on one path.
 
-Tool discovery and execution remain owned by the installed MCP server. These
-routes retain the existing SSE protocol without patching installed packages.
+Tool discovery and execution remain owned by the installed MCP server. GET
+/mcp keeps the legacy HTTP+SSE protocol (2024-11-05) with bounded request
+intake and deterministic session cleanup; POST /mcp speaks Streamable HTTP
+(2025-03-26+) through the SDK's session manager in stateless JSON mode. No
+installed package is patched.
 """
 
+import contextlib
 import logging
 import math
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -14,7 +19,9 @@ import anyio
 from anyio.abc import ObjectReceiveStream
 from anyio.streams.memory import MemoryObjectSendStream
 from fastapi import FastAPI, Request
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.message import ServerMessageMetadata, SessionMessage
+from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 from mcp.types import JSONRPCError, JSONRPCMessage, JSONRPCRequest, JSONRPCResponse
 from pydantic import ValidationError
 from sse_starlette import EventSourceResponse
@@ -23,6 +30,124 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger("openecon.mcp_transport")
 RETRY_HEADERS = {"Retry-After": "5", "Cache-Control": "no-store"}
+
+MCP_SESSION_ID_HEADER = b"mcp-session-id"
+MCP_PROTOCOL_VERSION_HEADER = b"mcp-protocol-version"
+# Marks a session id this server issued on a Streamable HTTP response. The id
+# is never stored or validated (every POST is stateless); clients echo it on
+# later requests, which is what lets GET /mcp tell a streamable client's
+# optional notification stream apart from a legacy SSE open. Legacy clients
+# may also send mcp-session-id (some reuse the legacy session hex on
+# reconnect), but never one carrying this prefix.
+STATELESS_SESSION_PREFIX = b"stateless-"
+_SUPPORTED_PROTOCOL_VERSIONS = frozenset(v.encode() for v in SUPPORTED_PROTOCOL_VERSIONS)
+
+
+def carries_stateless_session(scope: Scope) -> bool:
+    """Whether a request echoes a session id issued by StatelessStreamableHTTP."""
+    for name, value in scope.get("headers", []):
+        if name.lower() == MCP_SESSION_ID_HEADER:
+            return value.strip().startswith(STATELESS_SESSION_PREFIX)
+    return False
+
+
+class StatelessStreamableHTTP:
+    """Serve Streamable HTTP POSTs as stateless, JSON-mode exchanges.
+
+    Each POST gets a fresh SDK transport and an already-initialized server
+    session, so no protocol state outlives its HTTP request and nothing can
+    hold stream capacity between messages. Concurrency is bounded by the shared
+    POST allowance in MCPPostBodyLimitMiddleware, which holds for the whole
+    exchange (JSON mode answers in the POST itself).
+
+    The SDK manager's run() can be entered once per instance, so each run()
+    here (one per application lifespan) builds a new manager. Requests that
+    arrive while no manager runs get 503 + Retry-After, never a 500.
+    """
+
+    def __init__(self, server, *, json_response: bool = True) -> None:
+        self.server = server
+        self.json_response = json_response
+        self._manager: StreamableHTTPSessionManager | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._manager is not None
+
+    @contextlib.asynccontextmanager
+    async def run(self) -> AsyncIterator[None]:
+        if self._manager is not None:
+            raise RuntimeError("Streamable HTTP manager is already running")
+        manager = StreamableHTTPSessionManager(
+            app=self.server, stateless=True, json_response=self.json_response,
+        )
+        async with manager.run():
+            self._manager = manager
+            try:
+                yield
+            finally:
+                self._manager = None
+
+    async def handle_post(self, scope: Scope, receive: Receive, send: Send) -> None:
+        manager = self._manager
+        if manager is None:
+            await JSONResponse(
+                {"detail": "MCP Streamable HTTP is not ready. Retry shortly."},
+                status_code=503,
+                headers=RETRY_HEADERS,
+            )(scope, receive, send)
+            return
+
+        headers = []
+        has_session = False
+        for name, value in scope.get("headers", []):
+            lowered = name.lower()
+            if lowered == MCP_PROTOCOL_VERSION_HEADER and value.strip() not in _SUPPORTED_PROTOCOL_VERSIONS:
+                # A stateless server cannot know what a client negotiated, and
+                # the legacy transport never validated this header. Clients
+                # newer than the SDK stamp their own version after accepting
+                # our negotiated one; dropping an unsupported value makes the
+                # SDK assume its default instead of answering 400 after a
+                # successful initialize. Negotiation itself (the initialize
+                # body) is untouched.
+                continue
+            if lowered == MCP_SESSION_ID_HEADER:
+                has_session = True
+            headers.append((name, value))
+        scope = {**scope, "headers": headers}
+
+        async def send_with_session(message) -> None:
+            if (
+                message["type"] == "http.response.start"
+                and not has_session
+                and 200 <= message.get("status", 500) < 300
+            ):
+                session_id = STATELESS_SESSION_PREFIX + uuid4().hex.encode()
+                message = {
+                    **message,
+                    "headers": [*message.get("headers", []), (MCP_SESSION_ID_HEADER, session_id)],
+                }
+            await send(message)
+
+        await manager.handle_request(scope, receive, send_with_session)
+
+
+@contextlib.asynccontextmanager
+async def serve_streamable(streamable: StatelessStreamableHTTP | None) -> AsyncIterator[None]:
+    """Run ``streamable`` for an application lifespan without failing startup.
+
+    A start failure is logged and the application still serves; POST /mcp
+    then answers 503 + Retry-After until the next lifespan.
+    """
+    async with contextlib.AsyncExitStack() as stack:
+        if streamable is not None:
+            try:
+                await stack.enter_async_context(streamable.run())
+            except Exception:
+                logger.exception("MCP Streamable HTTP failed to start; POST /mcp will answer 503")
+            else:
+                logger.info("MCP Streamable HTTP ready at POST /mcp (stateless, JSON responses)")
+        yield
 
 
 class MCPPostBodyLimitMiddleware:
@@ -141,6 +266,17 @@ class _SessionResponse(Response):
         await self.transport.serve(scope, receive, send, self.endpoint)
 
 
+class _ASGIHandlerResponse(Response):
+    """Hand the raw ASGI request to a transport handler (body still unread)."""
+
+    def __init__(self, handler):
+        super().__init__(content=b"")
+        self.handler = handler
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.handler(scope, receive, send)
+
+
 @dataclass
 class _Delivery:
     item: SessionMessage
@@ -213,17 +349,51 @@ class LegacySSETransport:
     def active_sessions(self) -> int:
         return len(self._sessions)
 
-    def mount(self, app: FastAPI, path: str = "/mcp", dependencies=None) -> None:
+    def mount(
+        self, app: FastAPI, path: str = "/mcp", dependencies=None,
+        streamable: StatelessStreamableHTTP | None = None,
+    ) -> None:
+        """Register legacy SSE routes and, when given, Streamable HTTP on ``path``.
+
+        Dispatch keys only on HTTP method and our own issued session marker:
+        every GET opens a legacy SSE stream except one echoing a stateless
+        Streamable HTTP session id, which gets 405 (the spec's answer when a
+        server offers no standalone notification stream). POST ``path`` goes
+        to ``streamable``; without it, POST/DELETE keep answering 405.
+        """
         path = "/" + path.strip("/")
         endpoint = path + "/messages/"
 
         @app.get(path, include_in_schema=False, operation_id="mcp_connection", dependencies=dependencies)
         async def connect(request: Request):
+            if carries_stateless_session(request.scope):
+                return JSONResponse(
+                    {"detail": "This server offers no standalone stream for Streamable HTTP sessions."},
+                    status_code=405,
+                    headers={"Allow": "GET, POST", "Cache-Control": "no-store"},
+                )
             return _SessionResponse(self, endpoint)
 
         @app.post(endpoint, include_in_schema=False, operation_id="mcp_messages", dependencies=dependencies)
         async def message(request: Request):
             return await self.post_message(request)
+
+        if streamable is None:
+            return
+
+        @app.post(path, include_in_schema=False, operation_id="mcp_streamable_http", dependencies=dependencies)
+        async def streamable_message(request: Request):
+            return _ASGIHandlerResponse(streamable.handle_post)
+
+        @app.delete(path, include_in_schema=False, operation_id="mcp_streamable_delete", dependencies=dependencies)
+        async def streamable_delete(request: Request):
+            # Stateless: there is no session to terminate. 405 is the spec's
+            # answer for servers that do not allow client-initiated termination.
+            return JSONResponse(
+                {"detail": "Method Not Allowed"},
+                status_code=405,
+                headers={"Allow": "GET, POST", "Cache-Control": "no-store"},
+            )
 
     async def serve(self, scope: Scope, receive: Receive, send: Send, endpoint: str) -> None:
         incoming_writer, incoming_reader = anyio.create_memory_object_stream[_Delivery](0)
@@ -232,7 +402,7 @@ class LegacySSETransport:
         opened_at = anyio.current_time()
         session = _Session(incoming_writer, opened_at, opened_at)
         self._sessions[session_id] = session
-        logger.info("MCP session opened active=%d", self.active_sessions)
+        logger.debug("MCP session opened active=%d", self.active_sessions)
         try:
             message_path = quote(scope.get("root_path", "").rstrip("/") + endpoint)
 
@@ -302,7 +472,7 @@ class LegacySSETransport:
                             session.expired = True
                             session.expiry_reason = reason
                             self._sessions.pop(session_id, None)
-                            logger.info("MCP session expired reason=%s active=%d", reason, self.active_sessions)
+                            logger.debug("MCP session expired reason=%s active=%d", reason, self.active_sessions)
                             # Finish SSE normally before cancelling the protocol task.
                             outgoing_writer.close()
                             with anyio.move_on_after(self.post_send_timeout):

@@ -78,7 +78,7 @@ class MCPStreamLimitMiddleware:
         self.active += 1
         self.active_by_client[client] = client_active + 1
         try:
-            logger.info("MCP stream admitted active=%d limit=%d", self.active, self.max_streams)
+            logger.debug("MCP stream admitted active=%d limit=%d", self.active, self.max_streams)
             await self.app(scope, receive, send)
         finally:
             self.active -= 1
@@ -87,4 +87,4 @@ class MCPStreamLimitMiddleware:
                 self.active_by_client[client] = remaining
             else:
                 del self.active_by_client[client]
-            logger.info("MCP stream released active=%d limit=%d", self.active, self.max_streams)
+            logger.debug("MCP stream released active=%d limit=%d", self.active, self.max_streams)

@@ -31,7 +31,7 @@ class InitErrorServer(ReplyServer):
     "closed", "initialize_timeout", "idle_timeout", "blocked_initialize", "failed_initialize",
 ])
 def test_close_metrics_follow_delivery_and_preserve_privacy(caplog, case):
-    caplog.set_level(logging.INFO, logger=LOGGER)
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
     captured = {}
 
     async def scenario():
@@ -80,8 +80,15 @@ def test_close_metrics_follow_delivery_and_preserve_privacy(caplog, case):
         server.assert_streams_closed()
 
     asyncio.run(scenario())
-    messages = [r.getMessage() for r in caplog.records if r.name == LOGGER]
-    # Existing opened/closed records plus one expiry record, with no added logs.
+    records = [r for r in caplog.records if r.name == LOGGER]
+    messages = [r.getMessage() for r in records]
+    # Journal volume: the per-session lifecycle is ONE INFO line (closed, with
+    # the metrics). Opened and expiry lines still exist, only at DEBUG.
+    info = [r.getMessage() for r in records if r.levelno >= logging.INFO]
+    assert len(info) == 1 and info[0].startswith("MCP session closed ")
+    debug = [r.getMessage() for r in records if r.levelno == logging.DEBUG]
+    assert sum(m.startswith("MCP session opened ") for m in debug) == 1
+    assert sum(m.startswith("MCP session expired ") for m in debug) == (0 if case == "closed" else 1)
     assert len(messages) == (2 if case == "closed" else 3)
     closed = [m for m in messages if m.startswith("MCP session closed ")]
     assert len(closed) == 1

@@ -26,7 +26,12 @@ from slowapi.errors import RateLimitExceeded
 
 from .config import Settings, get_settings
 from .mcp_stream_limit import MCPStreamLimitMiddleware
-from .mcp_transport import LegacySSETransport, MCPPostBodyLimitMiddleware
+from .mcp_transport import (
+    LegacySSETransport,
+    MCPPostBodyLimitMiddleware,
+    StatelessStreamableHTTP,
+    serve_streamable,
+)
 from .utils.logging_security import SecureLogger, log_secure
 from .models import (
     AuthResponse,
@@ -70,6 +75,13 @@ logging.basicConfig(level=logging.INFO)
 # reach the log; this is the structural fix for the leak class, independent of
 # any per-provider URL masking.
 for _noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+# The MCP SDK logs one INFO line per JSON-RPC message (lowlevel: "Processing
+# request of type PingRequest", ...) and one per stateless Streamable HTTP
+# request ("Terminating session: None"). SecureLoggingASGIMiddleware already
+# records the protocol method of every MCP POST at a level chosen by method and
+# status, so these per-message lines only multiply journal volume.
+for _noisy in ("mcp.server.lowlevel", "mcp.server.streamable_http"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 # File handler for debugging (uvicorn reloader pipes child output through sockets).
 # Skipped under pytest: the suite imports this module, and its mock-auth /
@@ -244,9 +256,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Catalog validation skipped: {e}")
 
+    # MCP Streamable HTTP (POST /mcp): the SDK session manager's task group
+    # must live for the whole application lifespan. A fresh manager is built
+    # per lifespan entry (its run() is single-use); a start failure must not
+    # take the API down — POST /mcp then answers 503 + Retry-After.
+    mcp_lifespan = contextlib.AsyncExitStack()
+    await mcp_lifespan.enter_async_context(
+        serve_streamable(getattr(app.state, "mcp_streamable", None))
+    )
+
     logger.info("🚀 OpenEcon Data Python backend ready (startup time optimized)")
 
-    yield  # Application runs here
+    try:
+        yield  # Application runs here
+    finally:
+        await mcp_lifespan.aclose()
 
     # === SHUTDOWN ===
     # Close HTTP client pool
@@ -538,6 +562,35 @@ class RateLimitASGIMiddleware:
         return
 
 
+# JSON-RPC method names are protocol identifiers (structural, not semantic).
+# initialize carries client analytics and tools/call is the usage signal, so
+# both keep INFO with sanitized headers; tools/list is the discovery counter
+# (list-to-call ratio) and keeps a compact INFO line. Pings, notifications and
+# client responses drop to DEBUG unless the request failed.
+_MCP_POST_INFO_WITH_HEADERS = frozenset({"initialize", "tools/call"})
+_MCP_POST_INFO_COMPACT = frozenset({"tools/list"})
+
+
+def mcp_post_log_policy(
+    rpc_method: Optional[str], status_code: int, parsed: bool,
+) -> tuple[str, bool]:
+    """Return (level, include_headers) for the single record of an MCP POST.
+
+    ``parsed`` is False for an empty, unparseable, oversized-for-peek, or
+    batch body: those stay visible (INFO with headers) like any failure.
+    """
+    if status_code >= 400 or not parsed or rpc_method in _MCP_POST_INFO_WITH_HEADERS:
+        return "info", True
+    if rpc_method in _MCP_POST_INFO_COMPACT:
+        return "info", False
+    return "debug", False
+
+
+def _compact_request_log(request_log: dict) -> dict:
+    """Request fields without the sanitized header dict or query string."""
+    return {k: v for k, v in request_log.items() if k not in ("headers", "query_params")}
+
+
 class SecureLoggingASGIMiddleware:
     """
     Pure ASGI secure logging middleware.
@@ -579,7 +632,13 @@ class SecureLoggingASGIMiddleware:
         _oe_cid = request.cookies.get("oe_cid", "")
         if _oe_cid:
             request_log["oe_cid"] = _oe_cid[:36]
-        log_secure("info", "Request received", request_log, request_id)
+        # MCP message POSTs (legacy /mcp/messages/ and Streamable HTTP /mcp)
+        # are the bulk of journal volume, mostly pings and notifications. They
+        # get ONE record after completion, at a level chosen from the JSON-RPC
+        # method (known only after the body peek below) and the status.
+        _is_mcp_post = scope.get("method") == "POST" and _path.startswith("/mcp")
+        if not _is_mcp_post:
+            log_secure("info", "Request received", request_log, request_id)
 
         # MCP client identification: the JSON-RPC "initialize" message carries
         # params.clientInfo = {name, version} — the connecting PRODUCT's own
@@ -587,7 +646,9 @@ class SecureLoggingASGIMiddleware:
         # for POST /mcp* (small, single-frame messages), log clientInfo, then
         # replay the buffered frames to the app untouched.
         receive_for_app = receive
-        if scope.get("method") == "POST" and _path.startswith("/mcp"):
+        _rpc_method: Optional[str] = None
+        _rpc_parsed = False
+        if _is_mcp_post:
             _frames: list = []
             _body = b""
             try:
@@ -602,6 +663,10 @@ class SecureLoggingASGIMiddleware:
                 if _body:
                     try:
                         _rpc = json.loads(_body)
+                        if isinstance(_rpc, dict):
+                            _rpc_parsed = True
+                            if isinstance(_rpc.get("method"), str):
+                                _rpc_method = _rpc["method"][:64]
                         if isinstance(_rpc, dict) and _rpc.get("method") == "initialize":
                             _ci = (_rpc.get("params") or {}).get("clientInfo") or {}
                             log_secure("info", "MCP client connected", {
@@ -654,10 +719,20 @@ class SecureLoggingASGIMiddleware:
             await self.app(scope, receive_for_app, send_wrapper)
             duration_ms = (time.perf_counter() - start_time) * 1000
             response_log = SecureLogger.format_response_log(request_id, status_code, duration_ms)
-            log_secure("info", "Request completed", response_log, request_id)
+            if _is_mcp_post:
+                level, include_headers = mcp_post_log_policy(_rpc_method, status_code, _rpc_parsed)
+                record = request_log if include_headers else _compact_request_log(request_log)
+                log_secure(level, "MCP request", {
+                    **record, **response_log, "mcp_method": _rpc_method,
+                }, request_id)
+            else:
+                log_secure("info", "Request completed", response_log, request_id)
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             error_log = SecureLogger.format_error_log(request_id, e, include_traceback=True)
+            if _is_mcp_post:
+                # No "Request received" line was written for this request.
+                error_log = {**request_log, **error_log, "mcp_method": _rpc_method}
             log_secure("error", "Request failed", error_log, request_id)
             raise
 
@@ -1324,18 +1399,50 @@ async def session_history(request: Request, limit: Optional[int] = Query(default
         }
 
 
+# One source for the data coverage that MCP agents see, both in the query_data
+# tool description (this route's OpenAPI text, which fastapi_mcp turns into the
+# tool) and in the server's initialize `instructions`. OECD is served only on
+# explicit request (60 req/h upstream limit), so it is never advertised as a
+# default source.
+DATA_COVERAGE_TEXT = (
+    "FRED (US macro), World Bank, IMF, Eurostat, Statistics Canada, BIS, "
+    "UN Comtrade (trade flows), exchange rates (ExchangeRate-API), crypto prices "
+    "(CoinGecko) and ChinaMacro (fresh China headline macro: PMI, M2, 社融/TSF, "
+    "CPI/PPI, 10Y yield); OECD only when explicitly requested"
+)
+QUERY_DATA_SUMMARY = "Fetch economic and financial statistics from a natural-language question"
+QUERY_DATA_DESCRIPTION = (
+    f"Official time series from {DATA_COVERAGE_TEXT}. 330,000+ indicators. "
+    "Call this whenever the user wants numbers, time series, charts or cross-country "
+    "comparisons of economic or financial data. Pass the user's question as `query`, "
+    "verbatim, in any language, e.g. 'US unemployment rate monthly since 2020', "
+    "'Germany vs France HICP inflation 2015-2024 from Eurostat', '中国制造业PMI最近12个月', "
+    "'中国社会融资规模存量同比'. The response carries data points plus metadata (source, "
+    "units, frequency, sourceUrl, apiUrl). For follow-ups ('now add Japan') pass the "
+    "returned conversationId. If clarificationNeeded is true, show the options to the "
+    "user (or pick the one matching their intent) and call again with the same conversationId."
+)
+MCP_SERVER_INSTRUCTIONS = (
+    "OpenEcon Data answers economic and financial data questions with official statistics. "
+    "Use the query_data tool whenever the user asks for figures, time series, charts or "
+    "cross-country comparisons: GDP, inflation, unemployment, interest rates and bond "
+    "yields, money supply, trade flows, exchange rates, crypto prices, or China's latest "
+    f"headline indicators. Coverage: {DATA_COVERAGE_TEXT}. Pass the user's question "
+    "verbatim in any language; the server resolves the indicator, country, frequency and "
+    "dates itself. Keep the returned conversationId and pass it on follow-up turns "
+    "('now add Japan', 'make it quarterly'). When clarificationNeeded is true, present the "
+    "options (or choose the one that matches the user's intent) and call again with the "
+    "same conversationId. Quote values together with their units, frequency and source "
+    "from the response metadata."
+)
+
+
 @app.post(
     "/api/query",
     response_model=QueryResponse,
     operation_id="query_data",
-    summary="Query economic data using natural language",
-    description=(
-        "Query economic data from 10 providers covering 330,000+ indicators. "
-        "Response includes data points, direct API URL (metadata.apiUrl) for programmatic access, "
-        "source URL (metadata.sourceUrl) for verification, and alternativeSeries for related indicators. "
-        "Examples: 'US GDP 2020-2024', 'Japan inflation rate', 'Compare BRICS GDP growth', "
-        "'female youth unemployment in Nigeria', 'bitcoin price last 7 days'."
-    ),
+    summary=QUERY_DATA_SUMMARY,
+    description=QUERY_DATA_DESCRIPTION,
     tags=["Economic Data"],
 )
 async def query_endpoint(request: QueryRequest, raw_request: Request, response: Response = None, user: Optional[User] = Depends(get_optional_user)) -> QueryResponse:
@@ -2705,33 +2812,56 @@ async def root():
     return {"status": "ok"}
 
 
-if not settings.disable_mcp:
-    # Create and mount the MCP server **after** routes are registered so the OpenAPI schema
-    # includes the endpoints we want to expose as tools.
-    mcp = FastApiMCP(
-        app,
+def create_mcp_server(target_app: FastAPI, http_client=None) -> FastApiMCP:
+    """Build the MCP server exposing query_data from ``target_app``'s OpenAPI.
+
+    Must run after the routes are registered. ``http_client`` overrides the
+    in-process client used for tool self-calls (tests pass a stub backend).
+    """
+    server = FastApiMCP(
+        target_app,
         name="OpenEcon Data MCP Server",
-        description=(
-            "Query economic data from 10 providers (FRED, World Bank, IMF, BIS, Eurostat, "
-            "StatsCan, Comtrade, CoinGecko, ExchangeRate-API, OECD) using natural language. "
-            "Covers 330,000+ indicators. Response includes: data points, metadata with direct "
-            "API URL (apiUrl) for programmatic access, source URL (sourceUrl) for verification, "
-            "and alternativeSeries suggesting related indicators. "
-            "Supports: year ranges ('GDP 2020-2024'), multi-country ('BRICS inflation'), "
-            "variants ('female youth unemployment'), explicit provider ('from Eurostat'), "
-            "and informational queries ('What FRED data is available?')."
-        ),
+        description=MCP_SERVER_INSTRUCTIONS,
         include_operations=[
             "query_data",
         ],
+        http_client=http_client,
+    )
+    # fastapi_mcp 0.4.0 passes `description` as the low-level Server's second
+    # positional argument, which is `version`: initialize used to report the
+    # whole paragraph as serverInfo.version and send no `instructions` (the
+    # field clients inject as when-to-use guidance). Set both explicitly.
+    server.server.version = target_app.version
+    server.server.instructions = MCP_SERVER_INSTRUCTIONS
+    return server
+
+
+def mcp_streamable_http_enabled() -> bool:
+    """MCP_STREAMABLE_HTTP_ENABLED=false restores POST /mcp -> 405 (clients
+    fall back to legacy SSE) without a code change. config.py has no field for
+    it; read the env the same way as MCP_RATE_LIMIT_ENABLED. Default ON."""
+    return (
+        os.environ.get("MCP_STREAMABLE_HTTP_ENABLED", "true").strip().lower()
+        not in ("0", "false", "no", "off")
     )
 
-    # Mount the MCP server - this adds the /mcp endpoint for SSE transport
+
+if not settings.disable_mcp:
+    # Create and mount the MCP server **after** routes are registered so the OpenAPI schema
+    # includes the endpoints we want to expose as tools.
+    mcp = create_mcp_server(app)
+
+    # GET /mcp: legacy HTTP+SSE. POST /mcp: Streamable HTTP (stateless JSON).
+    mcp_streamable = StatelessStreamableHTTP(mcp.server) if mcp_streamable_http_enabled() else None
+    app.state.mcp_streamable = mcp_streamable
     mcp_transport = LegacySSETransport(
         mcp.server,
         initialize_timeout=settings.mcp_initialize_timeout_seconds,
         idle_timeout=settings.mcp_idle_timeout_seconds,
         initialize_retry_milliseconds=settings.mcp_initialize_retry_milliseconds,
     )
-    mcp_transport.mount(app)
-    logger.info("✅ MCP server mounted at /mcp endpoint")
+    mcp_transport.mount(app, streamable=mcp_streamable)
+    logger.info(
+        "✅ MCP server mounted at /mcp (legacy SSE on GET%s)",
+        ", Streamable HTTP on POST" if mcp_streamable is not None else "; Streamable HTTP disabled",
+    )
