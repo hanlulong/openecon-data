@@ -152,3 +152,6 @@ docs/testing/reports/*.json
 # SQLite WAL sidecars for the (already-ignored) indicators database
 backend/data/indicators.db-wal
 backend/data/indicators.db-shm
+
+# Runtime OECD/SDMX structure cache (rewritten by production; 24h TTL)
+backend/data/dsd_cache.json
