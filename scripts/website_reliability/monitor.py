@@ -15,7 +15,7 @@ import tempfile
 import time
 import urllib.request
 
-from check_websites import JOBS, KNOWN_DOWN
+from check_websites import JOBS, KNOWN_DOWN, site_group
 
 HERE = Path(__file__).resolve().parent
 MCP_DIAGNOSTIC_CODES = {
@@ -88,7 +88,10 @@ def website_summary(report):
     observed = {(r["host"], r["scheme"], r["ip_family"]) for r in rows}
     if observed != JOBS:
         raise ValueError("incorrect_website_inventory")
+    # Per site group: only OpenEcon-group failures are fatal (failed_checks);
+    # failures on other vhosts are reported in other_failed_checks.
     failed = []
+    other_failed = []
     degraded = set()
     for row in rows:
         good_transport = (
@@ -97,10 +100,23 @@ def website_summary(report):
         )
         known = row["host"] in KNOWN_DOWN and row.get("http_status") == 503
         if not good_transport or (row.get("http_status") != 200 and not known):
-            failed.append(f"{row['host']}:{row['scheme']}:IPv{row['ip_family']}")
+            label = f"{row['host']}:{row['scheme']}:IPv{row['ip_family']}"
+            (failed if site_group(row["host"]) == "openecon" else other_failed).append(label)
         elif known:
             degraded.add(row["host"])
-    return {"ok": not failed, "failed_checks": failed, "known_degraded": sorted(degraded), "results": rows}
+    return {
+        "ok": not failed, "failed_checks": failed, "other_failed_checks": other_failed,
+        "known_degraded": sorted(degraded), "results": rows,
+    }
+
+
+def overall_status(failed, other_failed, degraded):
+    """FAILED (exit 1) only for OpenEcon-group failures; other vhosts are non-fatal."""
+    if failed:
+        return "FAILED"
+    if other_failed:
+        return "DEGRADED_OTHER"
+    return "DEGRADED" if degraded else "HEALTHY"
 
 
 def check_websites(work):
@@ -112,7 +128,10 @@ def check_websites(work):
         summary = website_summary(json.loads(output.read_text()))
         if result["exit_code"] not in (0, 1):
             raise ValueError("website_probe_crashed")
-        if result["exit_code"] != 0:
+        # The child exits 1 when any row (any group) failed. A child verdict
+        # that contradicts the re-derived rows fails closed.
+        any_row_failed = bool(summary["failed_checks"] or summary["other_failed_checks"])
+        if (result["exit_code"] == 1) != any_row_failed:
             summary.update({"ok": False, "reason": "website_probe_failed"})
         return summary
     except (OSError, ValueError, TypeError, KeyError):
@@ -154,8 +173,60 @@ def check_backends():
     return {"ok": all(check["ok"] for check in checks), "checks": checks}
 
 
+def failed_probe_details(rows, labels):
+    """Allowlisted per-probe evidence for the failing rows named in labels."""
+    wanted = set(labels)
+    probes = []
+    for row in rows:
+        host, scheme, family = row["host"], row["scheme"], row["ip_family"]
+        if (
+            type(host) is not str or type(scheme) is not str or type(family) is not int
+            or (host, scheme, family) not in JOBS
+            or f"{host}:{scheme}:IPv{family}" not in wanted
+        ):
+            continue
+        probe = {"host": host, "scheme": scheme, "ip_family": family}
+        for key in ("tls_verified", "canonical_target_verified"):
+            if type(row.get(key)) is bool:
+                probe[key] = row[key]
+        code = row.get("curl_exit_code")
+        if type(code) is int and 0 <= code <= 255:
+            probe["curl_exit_code"] = code
+        status = row.get("http_status")
+        if type(status) is int and (status == 0 or 100 <= status <= 599):
+            probe["http_status"] = status
+        elapsed = row.get("elapsed_seconds")
+        if type(elapsed) in (int, float) and 0 <= elapsed <= 60 and math.isfinite(elapsed):
+            probe["elapsed_seconds"] = elapsed
+        probes.append(probe)
+    return probes
+
+
+def other_failure_details(check):
+    """Same bounded probe evidence for non-fatal (non-OpenEcon) website failures.
+
+    Emitted for DEGRADED_OTHER and FAILED alike, so an unrelated vhost outage
+    keeps its journal evidence without deciding the exit code.
+    """
+    try:
+        summary = website_summary(check)
+        labels = summary["other_failed_checks"]
+        if not labels:
+            return None
+        return {"websites": {
+            "failed_checks": labels,
+            "failed_probe_details": failed_probe_details(summary["results"], labels),
+        }}
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 def failure_details(checks):
-    """Build concise failure details without reflecting arbitrary child text."""
+    """Build concise failure details without reflecting arbitrary child text.
+
+    Website evidence here covers the fatal (OpenEcon-group) rows only; the
+    other group's evidence is in other_failure_details().
+    """
     details = {}
     for name, check in checks.items():
         if check.get("ok") is not False:
@@ -170,31 +241,9 @@ def failure_details(checks):
             try:
                 summary = website_summary(check)
                 details[name]["failed_checks"] = summary["failed_checks"]
-                failed = set(summary["failed_checks"])
-                probes = []
-                for row in summary["results"]:
-                    host, scheme, family = row["host"], row["scheme"], row["ip_family"]
-                    if (
-                        type(host) is not str or type(scheme) is not str or type(family) is not int
-                        or (host, scheme, family) not in JOBS
-                        or f"{host}:{scheme}:IPv{family}" not in failed
-                    ):
-                        continue
-                    probe = {"host": host, "scheme": scheme, "ip_family": family}
-                    for key in ("tls_verified", "canonical_target_verified"):
-                        if type(row.get(key)) is bool:
-                            probe[key] = row[key]
-                    code = row.get("curl_exit_code")
-                    if type(code) is int and 0 <= code <= 255:
-                        probe["curl_exit_code"] = code
-                    status = row.get("http_status")
-                    if type(status) is int and (status == 0 or 100 <= status <= 599):
-                        probe["http_status"] = status
-                    elapsed = row.get("elapsed_seconds")
-                    if type(elapsed) in (int, float) and 0 <= elapsed <= 60 and math.isfinite(elapsed):
-                        probe["elapsed_seconds"] = elapsed
-                    probes.append(probe)
-                details[name]["failed_probe_details"] = probes
+                details[name]["failed_probe_details"] = failed_probe_details(
+                    summary["results"], summary["failed_checks"],
+                )
             except (ValueError, TypeError, KeyError, AttributeError):
                 pass
         elif name == "backends":
@@ -222,7 +271,7 @@ def saved_status(path):
         age = (datetime.datetime.now(datetime.timezone.utc) - checked_at).total_seconds()
         if age > 600:
             return failure("stale_report")
-        if age < -60 or report.get("status") not in ("HEALTHY", "DEGRADED", "FAILED"):
+        if age < -60 or report.get("status") not in ("HEALTHY", "DEGRADED", "DEGRADED_OTHER", "FAILED"):
             raise ValueError("invalid_time_or_status")
         checks = report["checks"]
         if not isinstance(checks, dict) or set(checks) != {"websites", "mcp", "backends"}:
@@ -234,13 +283,18 @@ def saved_status(path):
             raise ValueError("contradictory_failed_checks")
         website_check = checks["websites"]
         degraded = []
+        other_failed = []
         if website_check["ok"] or "results" in website_check:
             websites = website_summary(website_check)
             degraded = websites["known_degraded"]
+            other_failed = websites["other_failed_checks"]
             if website_check["ok"] and not websites["ok"]:
                 raise ValueError("contradictory_website_check")
-        expected_status = "FAILED" if failed else "DEGRADED" if degraded else "HEALTHY"
-        if report["status"] != expected_status or report["known_degraded"] != degraded:
+        expected_status = overall_status(failed, other_failed, degraded)
+        if (
+            report["status"] != expected_status or report["known_degraded"] != degraded
+            or report.get("other_failed_checks", []) != other_failed
+        ):
             raise ValueError("contradictory_website_status")
         backend_check = checks["backends"]
         if backend_check["ok"] or "checks" in backend_check:
@@ -255,6 +309,11 @@ def saved_status(path):
         if mcp["ok"] and (mcp.get("timed_out") is not False or mcp.get("reason") != "verified" or "diagnostic" in mcp):
             raise ValueError("contradictory_backend_status")
         result = {k: report[k] for k in ("status", "checked_at", "failed_checks", "known_degraded")}
+        if other_failed:
+            result["other_failed_checks"] = other_failed
+            other_details = other_failure_details(website_check)
+            if other_details:
+                result["other_failure_details"] = other_details
         if failed:
             result.update(reason="checks_failed", failure_details=failure_details(checks))
         return result
@@ -291,18 +350,31 @@ def main():
                     report["checks"][name] = future.result()
                 except Exception as error:
                     report["checks"][name] = {"ok": False, "error_type": type(error).__name__}
+    # Fatal checks are the OpenEcon group: its website rows, the MCP session
+    # probe and both backends. Other vhosts only downgrade to DEGRADED_OTHER.
     failed = [name for name, check in report["checks"].items() if not check["ok"]]
     degraded = report["checks"]["websites"].get("known_degraded", [])
+    other_failed = report["checks"]["websites"].get("other_failed_checks", [])
     report.update({
         "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "duration_seconds": round(time.monotonic() - started, 2),
-        "status": "FAILED" if failed else "DEGRADED" if degraded else "HEALTHY",
+        "status": overall_status(failed, other_failed, degraded),
         "failed_checks": failed, "known_degraded": degraded,
+        "other_failed_checks": other_failed,
     })
     atomic_json(args.output, report)
-    summary = {k: report[k] for k in ("status", "checked_at", "duration_seconds", "failed_checks", "known_degraded")}
+    summary = {k: report[k] for k in (
+        "status", "checked_at", "duration_seconds", "failed_checks", "known_degraded", "other_failed_checks",
+    )}
     if failed:
         summary["failure_details"] = failure_details(report["checks"])
+    if other_failed:
+        other_details = other_failure_details(report["checks"]["websites"])
+        if other_details:
+            summary["other_failure_details"] = other_details
+    # TODO(user): push a notification on transitions into FAILED. Needs a
+    # user-supplied webhook/destination; until then the signal is the unit's
+    # exit status (systemctl --failed) and this journal line.
     print(json.dumps(summary))
     return 1 if failed else 0
 

@@ -24,6 +24,18 @@ CANONICAL = {
     "www.openecon.ai": "openecon.ai",
 }
 JOBS = {(host, scheme, family) for host in HOSTS for scheme in ("http", "https") for family in (4, 6)}
+# The property whose availability decides the monitor's exit code. Every other
+# vhost on this server is still probed and reported, but cannot turn the
+# monitor permanently red (an unrelated 503 had masked all OpenEcon state
+# changes for 844 consecutive runs). Membership is structural: a host is in
+# the group when its canonical redirect target is this domain or a subdomain.
+CRITICAL_DOMAIN = "openecon.ai"
+
+
+def site_group(host):
+    """'openecon' for hosts whose canonical target is CRITICAL_DOMAIN, else 'other'."""
+    target = CANONICAL.get(host, host)
+    return "openecon" if target == CRITICAL_DOMAIN or target.endswith("." + CRITICAL_DOMAIN) else "other"
 
 
 def probe(job):

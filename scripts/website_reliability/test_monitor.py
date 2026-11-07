@@ -25,6 +25,8 @@ websites = load_module("website_reliability_probe", "check_websites.py")
 with patch.dict(sys.modules, {"check_websites": websites}):
     monitor = load_module("website_reliability_monitor", "monitor.py")
 
+OPENECON_HOSTS = tuple(sorted(host for host in websites.HOSTS if websites.site_group(host) == "openecon"))
+
 
 def website_report(degraded=False):
     return {"results": [{
@@ -99,14 +101,42 @@ def test_known_down_label_never_masks_transport_tls_target_or_other_status_failu
     row = next(row for row in report["results"] if row["host"] in websites.KNOWN_DOWN)
     row[field] = value
     summary = monitor.website_summary(report)
+    # Known-down hosts are outside the OpenEcon group: the new failure stays
+    # visible (not folded into known_degraded) but is non-fatal.
+    assert summary["ok"] is True
+    assert summary["failed_checks"] == []
+    assert summary["other_failed_checks"] == [f"{row['host']}:{row['scheme']}:IPv{row['ip_family']}"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("tls_verified", False), ("canonical_target_verified", False),
+    ("curl_exit_code", 28), ("http_status", 500), ("http_status", 503),
+])
+@pytest.mark.parametrize("host", OPENECON_HOSTS)
+def test_any_openecon_group_row_failure_is_fatal(host, field, value):
+    report = website_report(degraded=True)
+    next(row for row in report["results"] if row["host"] == host)[field] = value
+    summary = monitor.website_summary(report)
     assert summary["ok"] is False
-    assert len(summary["failed_checks"]) == 1
+    assert len(summary["failed_checks"]) == 1 and summary["failed_checks"][0].startswith(host + ":")
+    assert summary["other_failed_checks"] == []
 
 
-def test_new_503_is_a_regression():
+@pytest.mark.parametrize("host,fatal", [("data.openecon.ai", True), ("luhan.io", False), ("jp.hansearch.com", False)])
+def test_new_503_is_a_regression_fatal_only_in_openecon_group(host, fatal):
     report = website_report()
-    next(row for row in report["results"] if row["host"] == "luhan.io")["http_status"] = 503
-    assert monitor.website_summary(report)["ok"] is False
+    next(row for row in report["results"] if row["host"] == host)["http_status"] = 503
+    summary = monitor.website_summary(report)
+    assert summary["ok"] is (not fatal)
+    assert bool(summary["failed_checks"]) is fatal
+    assert bool(summary["other_failed_checks"]) is (not fatal)
+
+
+def test_site_groups_are_derived_from_canonical_targets():
+    assert set(OPENECON_HOSTS) == {"data.openecon.ai", "openecon.ai", "www.openecon.ai", "deepecon.ai", "www.deepecon.ai"}
+    assert websites.site_group("jp.hansearch.com") == "other"
+    assert "jp.hansearch.com" not in websites.KNOWN_DOWN  # status of that vhost is the owner's call
+    assert all(websites.site_group(host) in ("openecon", "other") for host in websites.HOSTS)
 
 
 @pytest.mark.parametrize("final_url,verified,expected", [
@@ -270,6 +300,91 @@ def test_main_marks_running_then_aggregates_all_checks(tmp_path, monkeypatch, fa
     assert report["failed_checks"] == (["backends"] if failed else [])
     assert set(report["checks"]) == {"websites", "mcp", "backends"}
     assert list(tmp_path.glob("probe-*")) == []
+
+
+def run_main_with_website_rows(tmp_path, monkeypatch, failing_host, child_exit=None):
+    """Drive main() through the real website summary with failing host(s)."""
+    report = website_report(degraded=True)
+    failing = {failing_host} if isinstance(failing_host, str) else set(failing_host or ())
+    for row in report["results"]:
+        if row["host"] in failing:
+            row["http_status"] = 503
+    exit_code = child_exit if child_exit is not None else (1 if failing else 0)
+
+    def fake_probe(arguments, timeout):
+        assert arguments[1].endswith("check_websites.py")
+        Path(arguments[3]).write_text(json.dumps(report))
+        return {"exit_code": exit_code, "output": "", "timed_out": False}
+
+    target = tmp_path / "latest.json"
+    monkeypatch.setattr(monitor, "run_probe", fake_probe)
+    monkeypatch.setattr(monitor, "check_mcp", lambda: {"ok": True, "reason": "verified", "timed_out": False})
+    monkeypatch.setattr(monitor, "check_backends", lambda: {"ok": True, "checks": [{"port": p, "ok": True} for p in (3001, 3002)]})
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--output", str(target)])
+    return monitor.main(), target
+
+
+@pytest.mark.parametrize("host", ["jp.hansearch.com", "luhan.io", "api.hansearch.com"])
+def test_failing_non_openecon_host_exits_zero_as_degraded_other(tmp_path, monkeypatch, capsys, host):
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, host)
+    assert exit_code == 0
+    report = json.loads(target.read_text())
+    assert report["status"] == "DEGRADED_OTHER"
+    assert report["failed_checks"] == []
+    assert sorted({label.split(":")[0] for label in report["other_failed_checks"]}) == [host]
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == "DEGRADED_OTHER"
+    assert "failure_details" not in printed
+    # The non-fatal outage keeps its bounded probe evidence in the journal.
+    evidence = printed["other_failure_details"]["websites"]
+    assert evidence["failed_checks"] == report["other_failed_checks"]
+    assert [probe["host"] for probe in evidence["failed_probe_details"]] == [host] * 4
+    assert all(probe["http_status"] == 503 for probe in evidence["failed_probe_details"])
+    saved = monitor.saved_status(target)
+    assert saved["status"] == "DEGRADED_OTHER"
+    assert len(saved["other_failed_checks"]) == 4
+    assert saved["other_failure_details"] == printed["other_failure_details"]
+    assert "failure_details" not in saved
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--status", "--output", str(target)])
+    assert monitor.main() == 0
+
+
+@pytest.mark.parametrize("host", OPENECON_HOSTS)
+def test_failing_openecon_host_exits_one_even_with_other_failures(tmp_path, monkeypatch, host):
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, (host, "jp.hansearch.com"))
+    assert exit_code == 1
+    report = json.loads(target.read_text())
+    assert report["status"] == "FAILED"
+    assert report["failed_checks"] == ["websites"]
+    assert {label.split(":")[0] for label in report["other_failed_checks"]} == {"jp.hansearch.com"}
+    saved = monitor.saved_status(target)
+    assert saved["status"] == "FAILED"
+    fatal = saved["failure_details"]["websites"]
+    assert len(fatal["failed_checks"]) == 4
+    assert all(label.startswith(host + ":") for label in fatal["failed_checks"])
+    assert {probe["host"] for probe in fatal["failed_probe_details"]} == {host}
+    other = saved["other_failure_details"]["websites"]
+    assert {probe["host"] for probe in other["failed_probe_details"]} == {"jp.hansearch.com"}
+
+
+def test_child_exit_contradicting_rows_fails_closed(tmp_path, monkeypatch):
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, "jp.hansearch.com", child_exit=0)
+    assert exit_code == 1
+    assert json.loads(target.read_text())["checks"]["websites"]["reason"] == "website_probe_failed"
+
+
+def test_saved_degraded_other_with_contradictory_other_list_is_invalid(tmp_path, monkeypatch):
+    _, target = run_main_with_website_rows(tmp_path, monkeypatch, "jp.hansearch.com")
+    report = json.loads(target.read_text())
+    report["other_failed_checks"] = []
+    target.write_text(json.dumps(report))
+    assert monitor.saved_status(target) == {"status": "FAILED", "reason": "invalid_report"}
+
+
+def test_healthy_run_still_reports_known_degradation(tmp_path, monkeypatch):
+    exit_code, target = run_main_with_website_rows(tmp_path, monkeypatch, None)
+    assert exit_code == 0
+    assert json.loads(target.read_text())["status"] == "DEGRADED"
 
 
 def test_timeout_kills_only_the_probe_process_group_including_its_child(tmp_path):
@@ -447,7 +562,7 @@ def test_fresh_non_mcp_failures_retain_their_real_failure_names(tmp_path, failed
     report.update(status="FAILED", failed_checks=[name])
     if failed_check == "websites":
         report["checks"][name]["ok"] = False
-        report["checks"][name]["results"][0]["http_status"] = 500
+        next(row for row in report["checks"][name]["results"] if row["host"] in OPENECON_HOSTS)["http_status"] = 500
     elif failed_check == "backends":
         report["checks"][name]["ok"] = False
         report["checks"][name]["checks"][1]["ok"] = False
@@ -463,16 +578,27 @@ def test_fresh_non_mcp_failures_retain_their_real_failure_names(tmp_path, failed
     assert "SECRET" not in json.dumps(result)
 
 
+PROBE_KEYS = (
+    "host", "scheme", "ip_family", "curl_exit_code", "http_status",
+    "tls_verified", "canonical_target_verified", "elapsed_seconds",
+)
+
+
+def poison_two_rows(check, host):
+    rows = [row for row in check["results"] if row["host"] == host][:2]
+    rows[0].update(curl_exit_code=28, http_status=0, tls_verified=False, elapsed_seconds=12.001)
+    rows[1].update(http_status=500, elapsed_seconds=0.3)
+    for row in rows:
+        row.update(stderr="SECRET", url_effective="https://SECRET/", body="SECRET", diagnostic="SECRET")
+    return rows
+
+
 def test_saved_website_failure_preserves_only_failed_probe_diagnostics(tmp_path):
     report = complete_saved_report(degraded=True)
     report.update(status="FAILED", failed_checks=["websites"])
     check = report["checks"]["websites"]
     check["ok"] = False
-    rows = [row for row in check["results"] if row["host"] == "luhan.io"][:2]
-    rows[0].update(curl_exit_code=28, http_status=0, tls_verified=False, elapsed_seconds=12.001)
-    rows[1].update(http_status=500, elapsed_seconds=0.3)
-    for row in rows:
-        row.update(stderr="SECRET", url_effective="https://SECRET/", body="SECRET", diagnostic="SECRET")
+    rows = poison_two_rows(check, "data.openecon.ai")
     target = tmp_path / "latest.json"
     target.write_text(json.dumps(report))
 
@@ -483,12 +609,28 @@ def test_saved_website_failure_preserves_only_failed_probe_diagnostics(tmp_path)
     assert result["known_degraded"] == sorted(websites.KNOWN_DOWN)
     detail = result["failure_details"]["websites"]
     assert len(detail["failed_checks"]) == len(detail["failed_probe_details"]) == 2
-    assert detail["failed_probe_details"] == [
-        {key: row[key] for key in (
-            "host", "scheme", "ip_family", "curl_exit_code", "http_status",
-            "tls_verified", "canonical_target_verified", "elapsed_seconds",
-        )} for row in rows
-    ]
+    assert detail["failed_probe_details"] == [{key: row[key] for key in PROBE_KEYS} for row in rows]
+    assert "other_failure_details" not in result
+    assert "SECRET" not in json.dumps(result)
+
+
+def test_saved_other_group_failure_preserves_probe_evidence_without_failing(tmp_path):
+    report = complete_saved_report(degraded=True)
+    check = report["checks"]["websites"]
+    rows = poison_two_rows(check, "luhan.io")
+    labels = [f"{row['host']}:{row['scheme']}:IPv{row['ip_family']}" for row in rows]
+    report.update(status="DEGRADED_OTHER", other_failed_checks=labels)
+    target = tmp_path / "latest.json"
+    target.write_text(json.dumps(report))
+
+    result = monitor.saved_status(target)
+
+    assert result["status"] == "DEGRADED_OTHER"
+    assert result["failed_checks"] == []
+    assert "failure_details" not in result
+    detail = result["other_failure_details"]["websites"]
+    assert detail["failed_checks"] == labels
+    assert detail["failed_probe_details"] == [{key: row[key] for key in PROBE_KEYS} for row in rows]
     assert "SECRET" not in json.dumps(result)
 
 
@@ -505,16 +647,21 @@ def test_saved_website_failure_preserves_only_failed_probe_diagnostics(tmp_path)
     ("elapsed_seconds", float("nan")), ("elapsed_seconds", float("inf")),
     ("elapsed_seconds", -float("inf")), ("elapsed_seconds", 10 ** 1000),
 ])
-def test_website_failure_diagnostics_drop_invalid_field_types_and_ranges(field, value):
+@pytest.mark.parametrize("group", ["openecon", "other"])
+def test_website_failure_diagnostics_drop_invalid_field_types_and_ranges(group, field, value):
     check = website_report()
     check["ok"] = False
-    row = check["results"][0]
+    row = next(row for row in check["results"] if websites.site_group(row["host"]) == group)
     row.update(http_status=500, canonical_target_verified=False)
     row[field] = value
 
-    details = monitor.failure_details({"websites": check})
+    if group == "openecon":
+        details = monitor.failure_details({"websites": check})
+    else:
+        details = monitor.other_failure_details(check)
 
     probe = details["websites"]["failed_probe_details"][0]
+    assert probe["host"] == row["host"]
     assert field not in probe
     assert "SECRET" not in json.dumps(details, allow_nan=False)
 
@@ -529,6 +676,7 @@ def test_unknown_website_jobs_cannot_be_reflected_in_failure_diagnostics(field):
     details = monitor.failure_details({"websites": check})
 
     assert details == {"websites": {"reason": "probe_failed"}}
+    assert monitor.other_failure_details(check) is None
     assert "SECRET" not in json.dumps(details)
 
 
@@ -537,11 +685,16 @@ def test_website_failure_diagnostics_remain_bounded_to_exact_inventory():
     check["ok"] = False
     for row in check["results"]:
         row.update(curl_exit_code=28, http_status=0)
-    details = monitor.failure_details({"websites": check})
-    assert len(details["websites"]["failed_probe_details"]) == len(websites.JOBS)
+    fatal = monitor.failure_details({"websites": check})["websites"]["failed_probe_details"]
+    other = monitor.other_failure_details(check)["websites"]["failed_probe_details"]
+    assert len(fatal) == 4 * len(OPENECON_HOSTS)
+    assert {probe["host"] for probe in fatal} == set(OPENECON_HOSTS)
+    assert len(fatal) + len(other) == len(websites.JOBS)
+    assert not {probe["host"] for probe in other} & set(OPENECON_HOSTS)
 
     check["results"].append(copy.deepcopy(check["results"][0]))
     assert monitor.failure_details({"websites": check}) == {"websites": {"reason": "probe_failed"}}
+    assert monitor.other_failure_details(check) is None
 
 
 @pytest.mark.parametrize("contradiction", ["timeout", "error"])
